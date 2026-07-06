@@ -75,7 +75,6 @@ export async function parseBody<T = any>(request: Request): Promise<T> {
 export function checkCsrf(request: Request): boolean {
   const method = request.method.toUpperCase();
   if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
-  if (process.env.NODE_ENV !== 'production') return true;
 
   const csrfToken = request.headers.get('x-csrf-token');
   const csrfCookie = (request as any).cookies?.get?.('csrf_token')?.value;

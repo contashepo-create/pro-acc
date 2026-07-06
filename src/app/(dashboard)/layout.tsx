@@ -6,6 +6,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { AnnouncementBar } from '@/components/AnnouncementBar';
+import { SubscriptionBanner } from '@/components/SubscriptionBanner';
 import { useSidebarStore } from '@/store/sidebar-store';
 
 const pageTitles: Record<string, string> = {
@@ -117,6 +118,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <main className="flex-1 overflow-auto">
           <PageContainer>
             <AnnouncementBar />
+            <SubscriptionBanner />
             {children}
           </PageContainer>
         </main>

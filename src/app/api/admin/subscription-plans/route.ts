@@ -5,7 +5,7 @@ import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 export async function GET() {
   try {
     const result = await query('SELECT * FROM subscription_plans ORDER BY sort_order');
-    return success(result.rows);
+    return success({ plans: result.rows });
   } catch (e: any) {
     return serverError(e);
   }

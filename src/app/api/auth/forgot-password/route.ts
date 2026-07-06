@@ -2,7 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { query } from '@/lib/db';
 import { forgotPasswordSchema } from '@/lib/validation';
-import { createHmac, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
+import { sendPasswordResetEmail } from '@/lib/email';
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,11 +32,19 @@ export async function POST(request: NextRequest) {
       [user.id, token, expiresAt]
     );
 
-    return success({
-      message: 'رابط إعادة تعيين كلمة المرور جاهز',
-      resetUrl: `${request.nextUrl.origin}/reset-password?token=${token}`,
-      email: user.email,
-    });
+    const resetUrl = `${request.nextUrl.origin}/reset-password?token=${token}`;
+
+    const emailSent = await sendPasswordResetEmail(email, resetUrl);
+
+    if (!emailSent && process.env.NODE_ENV !== 'production') {
+      return success({
+        message: 'رابط إعادة تعيين كلمة المرور جاهز',
+        resetUrl,
+        email: user.email,
+      });
+    }
+
+    return success({ message: 'تم إرسال رابط إعادة التعيين إلى بريدك الإلكتروني' });
   } catch (err) {
     return serverError(err);
   }

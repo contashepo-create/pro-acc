@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, Loader2, KeyRound, CheckCircle } from 'lucide-react';
 import Link from 'next/link';
 
-export default function ResetPasswordPage() {
+function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get('token') || '';
@@ -18,15 +18,12 @@ export default function ResetPasswordPage() {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    if (!token) {
-      setError('رابط إعادة التعيين غير صالح');
-    }
+    if (!token) setError('رابط إعادة التعيين غير صالح');
   }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
     if (!token) { setError('رابط إعادة التعيين غير صالح'); return; }
     if (!password || password.length < 6) { setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
     if (password !== confirmPassword) { setError('كلمة المرور غير متطابقة'); return; }
@@ -39,16 +36,11 @@ export default function ResetPasswordPage() {
         body: JSON.stringify({ token, password }),
       });
       const data = await res.json();
-      if (data.success) {
-        setDone(true);
-      } else {
-        setError(data.message || 'حدث خطأ');
-      }
+      if (data.success) setDone(true);
+      else setError(data.message || 'حدث خطأ');
     } catch {
       setError('حدث خطأ في الاتصال بالخادم');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   if (done) {
@@ -115,21 +107,11 @@ export default function ResetPasswordPage() {
         </div>
 
         {error && (
-          <div className="bg-danger-light/30 border border-danger/30 text-danger text-sm rounded-lg px-4 py-2.5">
-            {error}
-          </div>
+          <div className="bg-danger-light/30 border border-danger/30 text-danger text-sm rounded-lg px-4 py-2.5">{error}</div>
         )}
 
-        <button
-          type="submit"
-          disabled={loading || !token}
-          className="btn btn-primary w-full h-11 text-base"
-        >
-          {loading ? (
-            <Loader2 size={20} className="animate-spin" />
-          ) : (
-            <KeyRound size={20} />
-          )}
+        <button type="submit" disabled={loading || !token} className="btn btn-primary w-full h-11 text-base">
+          {loading ? <Loader2 size={20} className="animate-spin" /> : <KeyRound size={20} />}
           {loading ? 'جاري التغيير...' : 'تغيير كلمة المرور'}
         </button>
       </form>
@@ -140,5 +122,17 @@ export default function ResetPasswordPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={
+      <div className="glass rounded-2xl p-8 w-full shadow-modal flex items-center justify-center h-64">
+        <Loader2 size={32} className="animate-spin text-accent" />
+      </div>
+    }>
+      <ResetPasswordForm />
+    </Suspense>
   );
 }

@@ -90,20 +90,29 @@ export async function POST(request: NextRequest) {
     if (user.company_id) {
       try {
         const subRes = await query(
-          `SELECT end_date FROM subscriptions WHERE company_id = $1 AND status = 'active' ORDER BY end_date DESC LIMIT 1`,
+          `SELECT status, end_date FROM subscriptions WHERE company_id = $1 ORDER BY end_date DESC LIMIT 1`,
           [user.company_id]
         );
         if (subRes.rows.length > 0) {
-          const endDate = new Date(subRes.rows[0].end_date);
+          const sub = subRes.rows[0];
+          const endDate = new Date(sub.end_date);
           const today = new Date();
           today.setHours(0, 0, 0, 0);
-          if (endDate < today) {
+          if (endDate < today && sub.status !== 'trial') {
             subscriptionExpired = true;
           }
         }
       } catch {
         // Graceful degradation — do not block login on subscription check failure
       }
+    }
+
+    if (subscriptionExpired) {
+      await query(
+        `INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, false)`,
+        [user.company_id, email, ipAddress]
+      );
+      return error('انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول', 403);
     }
 
     const { password_hash: _, ...safeUser } = user;
@@ -122,7 +131,6 @@ export async function POST(request: NextRequest) {
         logo: user.logo,
       },
       token,
-      ...(subscriptionExpired && { subscription_expired: true }),
     });
 
     response.cookies.set('token', token, {

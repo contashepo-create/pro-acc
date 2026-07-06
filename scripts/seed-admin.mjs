@@ -14,12 +14,18 @@ async function seed() {
     process.exit(0);
   }
 
-  const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'zerocold@admin.com';
-  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+  const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
   const ADMIN_MASTER_PASSWORD = process.env.ADMIN_MASTER_PASSWORD || ADMIN_PASSWORD;
-  const TELEGRAM_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '';
-  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+  const TELEGRAM_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
+  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
   const ADMIN_NAME = process.env.ADMIN_NAME || 'مدير النظام';
+
+  if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+    console.error('❌ ADMIN_EMAIL and ADMIN_PASSWORD environment variables are required.');
+    console.error('   Example: ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=yourpassword node scripts/seed-admin.mjs');
+    process.exit(1);
+  }
 
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
     console.warn('⚠️  TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID not set. 2FA will not work.');
@@ -35,7 +41,6 @@ async function seed() {
   );
 
   console.log(`✓ Admin user created: ${ADMIN_EMAIL}`);
-  console.log('  Set passwords via ADMIN_PASSWORD and ADMIN_MASTER_PASSWORD env vars');
   process.exit(0);
 }
 

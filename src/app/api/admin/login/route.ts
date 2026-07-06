@@ -5,6 +5,7 @@ import { verifyPassword } from '@/lib/auth';
 import { adminLoginSchema } from '@/lib/validation';
 import { sendTelegramCode } from '@/lib/telegram';
 import { setSession, updateSession } from '@/lib/admin-session';
+import { randomInt } from 'crypto';
 
 export async function POST(request: NextRequest) {
   try {
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(randomInt(100000, 1000000));
 
     await setSession(admin.id, {
       email: admin.email,

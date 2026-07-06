@@ -1,6 +1,6 @@
 'use client';
 
-import React, { type ReactNode } from 'react';
+import React, { type ReactNode, type ElementType } from 'react';
 import { ArrowRight } from 'lucide-react';
 
 interface Breadcrumb {
@@ -14,6 +14,7 @@ interface PageHeaderProps {
   actions?: ReactNode;
   onBack?: () => void;
   breadcrumbs?: Breadcrumb[];
+  icon?: ElementType;
   className?: string;
 }
 
@@ -23,8 +24,10 @@ export function PageHeader({
   actions,
   onBack,
   breadcrumbs,
+  icon: Icon,
   className = '',
 }: PageHeaderProps) {
+
   return (
     <div className={`page-header ${className}`}>
       {breadcrumbs && breadcrumbs.length > 0 && (
@@ -58,9 +61,12 @@ export function PageHeader({
               <ArrowRight className="w-5 h-5" />
             </button>
           )}
-          <div>
-            <h1>{title}</h1>
-            {description && <p>{description}</p>}
+          <div className="flex items-center gap-2">
+            {Icon && <Icon size={22} className="text-accent shrink-0" />}
+            <div>
+              <h1>{title}</h1>
+              {description && <p>{description}</p>}
+            </div>
           </div>
         </div>
         {actions && (
@@ -70,3 +76,5 @@ export function PageHeader({
     </div>
   );
 }
+
+export default PageHeader;
