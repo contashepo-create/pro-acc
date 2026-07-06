@@ -2,14 +2,15 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Loader2, LogIn } from 'lucide-react';
-import { useAuthStore } from '@/store/auth-store';
+import { Eye, EyeOff, Loader2, UserPlus } from 'lucide-react';
 import Link from 'next/link';
 
-export default function LoginPage() {
+export default function RegisterPage() {
   const router = useRouter();
-  const login = useAuthStore((s) => s.login);
+  const [companyName, setCompanyName] = useState('');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -18,16 +19,23 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (!companyName.trim()) { setError('يرجى إدخال اسم الشركة'); return; }
+    if (!name.trim()) { setError('يرجى إدخال الاسم'); return; }
     if (!email.trim()) { setError('يرجى إدخال البريد الإلكتروني'); return; }
-    if (!password) { setError('يرجى إدخال كلمة المرور'); return; }
+    if (!password || password.length < 6) { setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
 
     setLoading(true);
     try {
-      const success = await login(email, password);
-      if (success) {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyName, name, email, phone, password }),
+      });
+      const data = await res.json();
+      if (data.success) {
         router.push('/dashboard');
       } else {
-        setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
+        setError(data.message || 'حدث خطأ');
       }
     } catch {
       setError('حدث خطأ في الاتصال بالخادم');
@@ -38,29 +46,59 @@ export default function LoginPage() {
 
   return (
     <div className="glass rounded-2xl p-8 w-full shadow-modal">
-      {/* Logo */}
       <div className="text-center mb-8">
         <div className="w-16 h-16 rounded-2xl bg-accent flex items-center justify-center mx-auto mb-4">
           <span className="text-3xl font-bold text-text-inverse">ب</span>
         </div>
-        <h1 className="text-2xl font-bold text-text-primary">
-          برو <span className="text-accent">أكاوننت</span>
-        </h1>
-        <p className="text-text-muted text-sm mt-1">نظام محاسبة متكامل</p>
+        <h1 className="text-2xl font-bold text-text-primary">إنشاء حساب جديد</h1>
+        <p className="text-text-muted text-sm mt-1">سجل شركتك وابدأ فوراً</p>
       </div>
 
-      {/* Form */}
       <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">اسم الشركة</label>
+          <input
+            type="text"
+            value={companyName}
+            onChange={(e) => setCompanyName(e.target.value)}
+            placeholder="شركة المحترف للمحاسبة"
+            className="input-base"
+            autoFocus
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">الاسم</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="أحمد محمد"
+            className="input-base"
+          />
+        </div>
+
         <div>
           <label className="block text-sm font-medium text-text-secondary mb-1.5">البريد الإلكتروني</label>
           <input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="admin@example.com"
+            placeholder="admin@company.com"
             className="input-base"
             dir="ltr"
-            autoFocus
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">رقم الجوال (اختياري)</label>
+          <input
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+966501234567"
+            className="input-base"
+            dir="ltr"
           />
         </div>
 
@@ -99,27 +137,17 @@ export default function LoginPage() {
           {loading ? (
             <Loader2 size={20} className="animate-spin" />
           ) : (
-            <LogIn size={20} />
+            <UserPlus size={20} />
           )}
-          {loading ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول'}
+          {loading ? 'جاري إنشاء الحساب...' : 'إنشاء حساب جديد'}
         </button>
       </form>
 
       <div className="mt-6 text-center space-y-2">
         <p className="text-sm text-text-muted">
-          ليس لديك حساب؟{' '}
-          <Link href="/register" className="text-accent hover:text-accent-hover font-medium transition-colors">
-            إنشاء حساب جديد
-          </Link>
-        </p>
-        <p className="text-xs text-text-muted">
-          <Link href="/forgot-password" className="hover:text-accent transition-colors">
-            نسيت كلمة المرور؟
-          </Link>
-        </p>
-        <p className="text-xs text-text-muted pt-2 border-t border-border">
-          <Link href="/setup" className="hover:text-accent transition-colors">
-            إعداد النظام (للمرة الأولى)
+          لديك حساب بالفعل؟{' '}
+          <Link href="/login" className="text-accent hover:text-accent-hover font-medium transition-colors">
+            تسجيل الدخول
           </Link>
         </p>
       </div>

@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { IBM_Plex_Sans_Arabic, Plus_Jakarta_Sans } from 'next/font/google';
 import Providers from '@/components/Providers';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
+import { VisitorTracker } from '@/components/VisitorTracker';
 import './globals.css';
 
 const ibmPlexSansArabic = IBM_Plex_Sans_Arabic({
@@ -37,6 +38,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <ThemeInitializer />
+        <VisitorTracker />
         <Providers>{children}</Providers>
       </body>
     </html>

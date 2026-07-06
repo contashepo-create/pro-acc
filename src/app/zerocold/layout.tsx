@@ -4,13 +4,17 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  ShieldAlert, LayoutDashboard, Building2, Users, Database, Activity, LogOut, Loader2
+  ShieldAlert, LayoutDashboard, Building2, Users, Database, Activity, LogOut, Loader2,
+  MessageSquare, MessageSquareWarning, Megaphone,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { href: '/zerocold', label: 'لوحة التحكم', icon: LayoutDashboard },
   { href: '/zerocold/companies', label: 'الشركات', icon: Building2 },
   { href: '/zerocold/users', label: 'المستخدمين', icon: Users },
+  { href: '/zerocold/messages', label: 'الرسائل', icon: MessageSquare },
+  { href: '/zerocold/complaints', label: 'الشكاوي', icon: MessageSquareWarning },
+  { href: '/zerocold/advertisements', label: 'الإعلانات', icon: Megaphone },
   { href: '/zerocold/database', label: 'قاعدة البيانات', icon: Database },
   { href: '/zerocold/logs', label: 'سجل الأحداث', icon: Activity },
 ];

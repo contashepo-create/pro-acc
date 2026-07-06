@@ -17,6 +17,23 @@ export const loginSchema = z.object({
   password: z.string().min(6, 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'),
 });
 
+export const registerSchema = z.object({
+  companyName: z.string().min(1, 'اسم الشركة مطلوب').max(200),
+  name: z.string().min(1, 'الاسم مطلوب').max(100),
+  email: z.string().email('البريد الإلكتروني غير صالح'),
+  password: z.string().min(6, 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'),
+  phone: z.string().optional(),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email('البريد الإلكتروني غير صالح'),
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1, 'الرمز مطلوب'),
+  password: z.string().min(6, 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'),
+});
+
 // --------------- Admin ---------------
 
 export const adminLoginSchema = z.object({

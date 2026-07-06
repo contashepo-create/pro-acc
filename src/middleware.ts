@@ -8,7 +8,6 @@ export function middleware(request: NextRequest) {
 
   // Admin panel middleware
   if (pathname.startsWith(`/${ADMIN_PATH}`)) {
-    // Allow login pages and static files
     if (pathname === `/${ADMIN_PATH}/login` ||
         pathname === `/${ADMIN_PATH}/verify-telegram` ||
         pathname === `/${ADMIN_PATH}/verify-master` ||
@@ -19,13 +18,11 @@ export function middleware(request: NextRequest) {
       return NextResponse.next();
     }
 
-    // Check admin authentication for protected admin routes
     const adminToken = request.cookies.get('admin_token')?.value;
     if (!adminToken) {
       return NextResponse.redirect(new URL(`/${ADMIN_PATH}/login`, request.url));
     }
 
-    // Validate token format (basic check - server validates fully)
     if (adminToken.length < 20) {
       return NextResponse.redirect(new URL(`/${ADMIN_PATH}/login`, request.url));
     }
@@ -34,9 +31,14 @@ export function middleware(request: NextRequest) {
   // Dashboard API authentication middleware
   if (pathname.startsWith('/api/') &&
       !pathname.startsWith('/api/auth/login') &&
+      !pathname.startsWith('/api/auth/register') &&
+      !pathname.startsWith('/api/auth/forgot-password') &&
+      !pathname.startsWith('/api/auth/reset-password') &&
       !pathname.startsWith('/api/auth/setup') &&
       !pathname.startsWith('/api/auth/me') &&
-      !pathname.startsWith('/api/admin/')) {
+      !pathname.startsWith('/api/admin/') &&
+      !pathname.startsWith('/api/visitors/') &&
+      !pathname.startsWith('/api/visitors')) {
     if (request.method === 'OPTIONS') {
       return NextResponse.next();
     }
@@ -51,7 +53,7 @@ export function middleware(request: NextRequest) {
   }
 
   // Auth page redirects
-  if (pathname === '/login') {
+  if (pathname === '/login' || pathname === '/register' || pathname === '/forgot-password' || pathname === '/reset-password') {
     const token = request.cookies.get('token')?.value;
     if (token) {
       return NextResponse.redirect(new URL('/', request.url));

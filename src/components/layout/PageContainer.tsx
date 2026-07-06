@@ -9,7 +9,7 @@ interface PageContainerProps {
 export function PageContainer({ children, className = '', maxWidth }: PageContainerProps) {
   return (
     <div
-      className={`page-enter p-6 ${maxWidth ? '' : ''} ${className}`}
+      className={`page-enter p-3 sm:p-4 md:p-6 ${maxWidth ? '' : ''} ${className}`}
       style={maxWidth ? { maxWidth, marginLeft: 'auto', marginRight: 'auto' } : undefined}
     >
       {children}

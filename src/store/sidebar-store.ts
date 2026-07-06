@@ -2,9 +2,11 @@ import { create } from 'zustand';
 
 interface SidebarState {
   isCollapsed: boolean;
+  mobileOpen: boolean;
   activeItem: string;
   toggle: () => void;
   setActive: (item: string) => void;
+  setMobileOpen: (open: boolean) => void;
 }
 
 const COLLAPSED_KEY = 'accweb_sidebar_collapsed';
@@ -17,6 +19,7 @@ function getStoredCollapsed(): boolean {
 
 export const useSidebarStore = create<SidebarState>((set, get) => ({
   isCollapsed: getStoredCollapsed(),
+  mobileOpen: false,
   activeItem: '',
 
   toggle: () => {
@@ -26,4 +29,6 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   setActive: (item) => set({ activeItem: item }),
+
+  setMobileOpen: (open) => set({ mobileOpen: open }),
 }));

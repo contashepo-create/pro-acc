@@ -4,10 +4,11 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Sun, Moon, Search, Bell, ChevronDown, LogOut, User, Settings,
-  Clock, Calendar,
+  Clock, Calendar, Menu,
 } from 'lucide-react';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
+import { useSidebarStore } from '@/store/sidebar-store';
 
 interface HeaderProps {
   title: string;
@@ -42,6 +43,7 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
   const router = useRouter();
   const { isDark, toggleMode } = useThemeStore();
   const { user, logout } = useAuthStore();
+  const { setMobileOpen, mobileOpen } = useSidebarStore();
   const [searchOpen, setSearchOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -69,13 +71,26 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
 
   return (
     <>
-      {/* Section accent bar */}
       <div className="section-bar shrink-0" />
 
-      <header className="glass-header h-14 shrink-0 px-4 md:px-6">
-        <div className="flex items-center justify-between h-full gap-2">
+      <header className="glass-header h-14 shrink-0 px-2 sm:px-4 md:px-6">
+        <div className="flex items-center justify-between h-full gap-1 sm:gap-2">
 
-          {/* Right: Clock + Date */}
+          {/* Mobile: Hamburger + Page title */}
+          <div className="flex items-center gap-2 lg:hidden ml-auto">
+            <h2 className="text-sm sm:text-base font-bold text-text-primary truncate max-w-[140px] sm:max-w-[200px]">
+              {title}
+            </h2>
+            <button
+              onClick={() => setMobileOpen(!mobileOpen)}
+              className="btn btn-ghost btn-icon"
+              title="القائمة"
+            >
+              <Menu size={20} />
+            </button>
+          </div>
+
+          {/* Desktop: Clock + Date */}
           <div className="hidden sm:flex items-center gap-3 ml-auto">
             <div className="flex items-center gap-1.5 text-text-muted">
               <Clock size={14} />
@@ -83,14 +98,14 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
                 {time}
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-text-muted border-r border-border pr-3">
+            <div className="hidden md:flex items-center gap-1.5 text-text-muted border-r border-border pr-3">
               <Calendar size={14} />
               <span className="text-xs text-text-secondary">{date}</span>
             </div>
           </div>
 
-          {/* Center: Page title */}
-          <div className="hidden md:flex items-center gap-2">
+          {/* Desktop: Page title */}
+          <div className="hidden lg:flex items-center gap-2">
             <h2 className="text-base font-bold text-text-primary">{title}</h2>
             {breadcrumbs && breadcrumbs.length > 0 && (
               <div className="flex items-center gap-1.5 text-xs text-text-muted mr-2 pr-2 border-r border-border">
@@ -108,10 +123,8 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
             )}
           </div>
 
-          {/* Left: Actions + User */}
+          {/* Actions + User */}
           <div className="flex items-center gap-1">
-
-            {/* Search */}
             <button
               onClick={() => setSearchOpen(!searchOpen)}
               className="btn btn-ghost btn-icon relative"
@@ -123,13 +136,12 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               <input
                 type="text"
                 placeholder="بحث..."
-                className="input-base w-36 md:w-48 animate-[fade-in_0.15s_ease-out]"
+                className="input-base w-28 sm:w-36 md:w-48 animate-[fade-in_0.15s_ease-out]"
                 autoFocus
                 onBlur={() => setTimeout(() => setSearchOpen(false), 200)}
               />
             )}
 
-            {/* Notifications */}
             <button
               onClick={() => router.push('/notifications')}
               className="btn btn-ghost btn-icon relative"
@@ -141,10 +153,8 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               </span>
             </button>
 
-            {/* Divider */}
             <div className="w-px h-6 bg-border mx-1" />
 
-            {/* Theme toggle */}
             <button
               onClick={toggleMode}
               className="btn btn-ghost btn-icon"
@@ -153,7 +163,6 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               {isDark ? <Sun size={17} /> : <Moon size={17} />}
             </button>
 
-            {/* User dropdown */}
             <div className="relative" ref={userMenuRef}>
               <button
                 onClick={() => setUserMenuOpen(!userMenuOpen)}
