@@ -79,7 +79,7 @@ function StatCard({
       <div className="flex items-start justify-between mb-3">
         <div
           className="w-10 h-10 rounded-xl flex items-center justify-center"
-          style={{ background: `${color}20` }}
+          style={{ background: `color-mix(in srgb, ${color} 12%, transparent)` }}
         >
           <Icon size={20} style={{ color }} />
         </div>

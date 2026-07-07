@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
-import { Toast } from '@/components/ui/Toast';
 import { useThemeStore } from '@/store/theme-store';
 import { themes } from '@/lib/themes';
 

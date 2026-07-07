@@ -11,6 +11,8 @@ export async function sendTelegramCode(code: string): Promise<boolean> {
 
   const message = `🔐 رمز التحقق للوحة المطور:\n\n<code>${escapeTelegram(code)}</code>\n\nصلاحية الرمز: 5 دقائق`;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const res = await fetch(`${TELEGRAM_API}/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -20,13 +22,16 @@ export async function sendTelegramCode(code: string): Promise<boolean> {
         text: message,
         parse_mode: 'HTML',
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
     if (!res.ok) {
       const body = await res.text();
       console.warn('Telegram sendCode failed:', res.status, body);
     }
     return res.ok;
   } catch (err) {
+    clearTimeout(timeout);
     console.warn('Telegram sendCode error:', err);
     return false;
   }

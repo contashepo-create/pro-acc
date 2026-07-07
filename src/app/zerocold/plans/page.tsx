@@ -132,11 +132,11 @@ export default function PlansPage() {
                 <input placeholder="الكود (مثال: premium)" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm" />
                 <input placeholder="اسم الخطة" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm" />
                 <input placeholder="الوصف" value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm" />
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <input type="number" placeholder="السعر شهرياً" value={form.price_monthly} onChange={(e) => setForm({...form, price_monthly: Number(e.target.value)})} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm" />
                   <input type="number" placeholder="السعر سنوياً" value={form.price_yearly} onChange={(e) => setForm({...form, price_yearly: Number(e.target.value)})} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm" />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <input type="number" placeholder="أقصى عدد مستخدمين" value={form.max_users} onChange={(e) => setForm({...form, max_users: Number(e.target.value)})} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm" />
                   <input type="number" placeholder="أقصى عدد مشاريع (0 = غير محدود)" value={form.max_projects} onChange={(e) => setForm({...form, max_projects: Number(e.target.value)})} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm" />
                 </div>

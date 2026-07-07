@@ -1,15 +1,24 @@
 'use client';
 
-import { useState, useEffect, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, FormEvent, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, Loader2, KeyRound, ArrowLeft, Lock } from 'lucide-react';
 
-const ADMIN_SESSION_KEY = 'zerocold_session';
 const MAX_ATTEMPTS = 3;
 const BLOCK_DURATION = 15 * 60 * 1000;
 
-export default function VerifyMasterPage() {
+export default function VerifyMasterPageWrapper() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 size={24} className="animate-spin text-amber-600" /></div>}>
+      <VerifyMasterPage />
+    </Suspense>
+  );
+}
+
+function VerifyMasterPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const email = searchParams.get('email') || '';
   const [masterPassword, setMasterPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -18,20 +27,11 @@ export default function VerifyMasterPage() {
   const [blockedUntil, setBlockedUntil] = useState<number | null>(null);
 
   useEffect(() => {
-    const session = sessionStorage.getItem(ADMIN_SESSION_KEY);
-    if (!session) {
+    if (!email) {
       router.replace('/zerocold/login');
       return;
     }
-    try {
-      const data = JSON.parse(session);
-      if (data.step !== 'telegram' || !data.telegramVerified) {
-        router.replace('/zerocold/login');
-      }
-    } catch {
-      router.replace('/zerocold/login');
-    }
-  }, [router]);
+  }, [email, router]);
 
   useEffect(() => {
     const blocked = localStorage.getItem('zerocold_master_blocked');
@@ -75,13 +75,6 @@ export default function VerifyMasterPage() {
 
     setLoading(true);
     try {
-      const session = sessionStorage.getItem(ADMIN_SESSION_KEY);
-      if (!session) {
-        router.replace('/zerocold/login');
-        return;
-      }
-      const { email } = JSON.parse(session);
-
       const res = await fetch('/api/admin/verify-master', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -91,30 +84,16 @@ export default function VerifyMasterPage() {
       const body = await res.json();
 
       if (!res.ok || !body.success) {
-        const apiMsg = body?.message || '';
-        if (apiMsg.includes('صلاحية') || apiMsg.includes('جلس')) {
-          setError(apiMsg);
-          localStorage.removeItem('zerocold_master_attempts');
-          return;
-        }
-        if (apiMsg.includes('تيليجرام')) {
-          setError(apiMsg);
-          return;
-        }
-        if (apiMsg.includes('غير صحيحة') || apiMsg.includes('غير صحيح')) {
-          const newAttempts = attempts + 1;
-          setAttempts(newAttempts);
-          localStorage.setItem('zerocold_master_attempts', String(newAttempts));
-          if (newAttempts >= MAX_ATTEMPTS) {
-            const until = Date.now() + BLOCK_DURATION;
-            setBlockedUntil(until);
-            localStorage.setItem('zerocold_master_blocked', String(until));
-            setError(`تم الحظر لمدة 15 دقيقة`);
-          } else {
-            setError(`المحاولات المتبقية: ${MAX_ATTEMPTS - newAttempts}`);
-          }
+        const newAttempts = attempts + 1;
+        setAttempts(newAttempts);
+        localStorage.setItem('zerocold_master_attempts', String(newAttempts));
+        if (newAttempts >= MAX_ATTEMPTS) {
+          const until = Date.now() + BLOCK_DURATION;
+          setBlockedUntil(until);
+          localStorage.setItem('zerocold_master_blocked', String(until));
+          setError('تم حظر المحاولة بسبب تجاوز عدد المحاولات المسموحة');
         } else {
-          setError(apiMsg || 'حدث خطأ');
+          setError(`كلمة السر غير صحيحة. المحاولات المتبقية: ${MAX_ATTEMPTS - newAttempts}`);
         }
 
         setMasterPassword('');
@@ -123,8 +102,6 @@ export default function VerifyMasterPage() {
 
       localStorage.removeItem('zerocold_master_attempts');
       localStorage.removeItem('zerocold_master_blocked');
-
-      sessionStorage.removeItem(ADMIN_SESSION_KEY);
 
       router.push('/zerocold/');
     } catch {
@@ -135,7 +112,6 @@ export default function VerifyMasterPage() {
   };
 
   const handleBack = () => {
-    sessionStorage.removeItem(ADMIN_SESSION_KEY);
     router.push('/zerocold/login');
   };
 

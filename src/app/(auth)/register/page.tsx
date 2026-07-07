@@ -4,9 +4,11 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2, UserPlus } from 'lucide-react';
 import Link from 'next/link';
+import { useAuthStore } from '@/store/auth-store';
 
 export default function RegisterPage() {
   const router = useRouter();
+  const checkSession = useAuthStore((s) => s.checkSession);
   const [companyName, setCompanyName] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -34,6 +36,7 @@ export default function RegisterPage() {
       const data = await res.json();
       if (data.success) {
         router.push('/dashboard');
+        checkSession();
       } else {
         setError(data.message || 'حدث خطأ');
       }

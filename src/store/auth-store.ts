@@ -8,7 +8,7 @@ interface AuthState {
   isLoading: boolean;
 
   login: (email: string, password: string) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
   setUser: (user: User | null) => void;
   setCompany: (company: Company | null) => void;
   checkSession: () => Promise<void>;
@@ -48,7 +48,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  logout: () => {
+  logout: async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
     set({ user: null, company: null, isAuthenticated: false });
   },
 

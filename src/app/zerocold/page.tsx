@@ -151,7 +151,7 @@ export default function ZerocoldDashboardPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
           {stats.map((stat) => (
             <div key={stat.label} className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-4 hover:border-[#3a2f1a] transition-all">
               <div className="flex items-center justify-between mb-3">
@@ -168,7 +168,7 @@ export default function ZerocoldDashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
           <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-5">
             <h2 className="text-sm font-bold text-amber-300/80 mb-3">الوصول السريع</h2>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {quickActions.map((action) => (
                 <Link
                   key={action.label}

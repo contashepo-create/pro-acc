@@ -8,8 +8,8 @@ export async function POST(request: NextRequest) {
   try {
     const { email, masterPassword } = await parseBody<{ email: string; masterPassword: string }>(request);
 
-    if (!masterPassword) {
-      return error('كلمة المرور الرئيسية مطلوبة');
+    if (!email || !masterPassword) {
+      return error('البريد الإلكتروني وكلمة المرور الرئيسية مطلوبة');
     }
 
     const adminId = request.cookies.get('admin_session')?.value;

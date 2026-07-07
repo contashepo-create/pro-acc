@@ -28,7 +28,7 @@ export function Tabs({
       className={`${
         direction === 'vertical'
           ? 'flex flex-col border-l border-border'
-          : 'flex border-b border-border'
+          : 'flex border-b border-border overflow-x-auto'
       } ${className}`}
       role="tablist"
     >
@@ -39,7 +39,7 @@ export function Tabs({
             key={item.id}
             role="tab"
             aria-selected={isActive}
-            className={`relative px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`relative shrink-0 px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap ${
               direction === 'vertical'
                 ? 'text-right border-r-2 -mr-[1px]'
                 : 'border-b-2 -mb-[1px]'

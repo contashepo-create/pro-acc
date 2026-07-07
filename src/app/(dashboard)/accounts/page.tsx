@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Search, FolderTree } from 'lucide-react';
+import { Plus, FolderTree } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -73,7 +73,7 @@ export default function AccountsPage() {
       )}
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة حساب جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="رمز الحساب" placeholder="مثال: 1130" />
           <Select label="النوع" options={[
             { value: 'asset', label: 'أصل' }, { value: 'liability', label: 'خصم' },

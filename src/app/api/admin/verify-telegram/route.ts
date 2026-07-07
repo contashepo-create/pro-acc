@@ -6,6 +6,10 @@ export async function POST(request: NextRequest) {
   try {
     const { email, code } = await parseBody<{ email: string; code: string }>(request);
 
+    if (!email || !code) {
+      return error('البريد الإلكتروني والرمز مطلوبان');
+    }
+
     if (!code || !/^\d{6}$/.test(code)) {
       return error('رمز التحقق غير صالح');
     }

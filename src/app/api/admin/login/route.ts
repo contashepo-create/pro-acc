@@ -49,7 +49,10 @@ export async function POST(request: NextRequest) {
       expiresAt: Date.now() + 30 * 60 * 1000,
     });
 
-    await sendTelegramCode(code);
+    const sent = await sendTelegramCode(code);
+    if (!sent) {
+      return error('فشل إرسال رمز التحقق. تأكد من إعداد بوت تيليجرام', 500);
+    }
 
     await updateSession(admin.id, { codeSent: true });
 

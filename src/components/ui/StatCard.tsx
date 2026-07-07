@@ -46,7 +46,7 @@ export function StatCard({
         {icon && (
           <span
             className="w-9 h-9 rounded-lg flex items-center justify-center"
-            style={{ background: `${accentColor}20`, color: accentColor }}
+            style={{ background: `color-mix(in srgb, ${accentColor} 12%, transparent)`, color: accentColor }}
           >
             {icon}
           </span>

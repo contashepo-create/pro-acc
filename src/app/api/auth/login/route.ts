@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, unauthorized, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { query } from '@/lib/db';
 import { verifyPassword, createToken } from '@/lib/auth';
 import { loginSchema } from '@/lib/validation';

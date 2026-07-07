@@ -1,14 +1,23 @@
 'use client';
 
-import { useState, useRef, useEffect, KeyboardEvent, ClipboardEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useRef, useEffect, KeyboardEvent, ClipboardEvent, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, MessageCircle, ArrowLeft } from 'lucide-react';
 
-const ADMIN_SESSION_KEY = 'zerocold_session';
 const RESEND_COOLDOWN = 60;
 
-export default function VerifyTelegramPage() {
+export default function VerifyTelegramPageWrapper() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 size={24} className="animate-spin text-sky-600" /></div>}>
+      <VerifyTelegramPage />
+    </Suspense>
+  );
+}
+
+function VerifyTelegramPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const email = searchParams.get('email') || '';
   const [code, setCode] = useState<string[]>(Array(6).fill(''));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -17,24 +26,12 @@ export default function VerifyTelegramPage() {
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
-    const session = sessionStorage.getItem(ADMIN_SESSION_KEY);
-    if (!session) {
+    if (!email) {
       router.replace('/zerocold/login');
       return;
     }
-    try {
-      const data = JSON.parse(session);
-      if (data.step !== 'login') {
-        router.replace('/zerocold/login');
-      }
-    } catch {
-      router.replace('/zerocold/login');
-    }
-  }, [router]);
-
-  useEffect(() => {
     inputRefs.current[0]?.focus();
-  }, []);
+  }, [email, router]);
 
   useEffect(() => {
     if (countdown > 0 && !canResend) {
@@ -46,35 +43,13 @@ export default function VerifyTelegramPage() {
     }
   }, [countdown, canResend]);
 
-  useEffect(() => {
-    const session = sessionStorage.getItem(ADMIN_SESSION_KEY);
-    if (session) {
-      try {
-        const data = JSON.parse(session);
-        if (data.telegramCodeSent) return;
-      } catch {}
-    }
-    sendTelegramCode();
-  }, []);
-
   const sendTelegramCode = async () => {
     try {
-      const session = sessionStorage.getItem(ADMIN_SESSION_KEY);
-      if (!session) return;
-      const { email } = JSON.parse(session);
-
-      const res = await fetch('/api/admin/send-telegram-code', {
+      await fetch('/api/admin/send-telegram-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
       });
-
-      const body = await res.json();
-      if (res.ok && body.success) {
-        const sessionData = JSON.parse(sessionStorage.getItem(ADMIN_SESSION_KEY) || '{}');
-        sessionData.telegramCodeSent = true;
-        sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(sessionData));
-      }
     } catch {}
   };
 
@@ -123,13 +98,6 @@ export default function VerifyTelegramPage() {
     setError('');
 
     try {
-      const session = sessionStorage.getItem(ADMIN_SESSION_KEY);
-      if (!session) {
-        router.replace('/zerocold/login');
-        return;
-      }
-      const { email } = JSON.parse(session);
-
       const res = await fetch('/api/admin/verify-telegram', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -145,12 +113,7 @@ export default function VerifyTelegramPage() {
         return;
       }
 
-      const sessionData = JSON.parse(sessionStorage.getItem(ADMIN_SESSION_KEY) || '{}');
-      sessionData.step = 'telegram';
-      sessionData.telegramVerified = true;
-      sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(sessionData));
-
-      router.push('/zerocold/verify-master');
+      router.push(`/zerocold/verify-master?email=${encodeURIComponent(email)}`);
     } catch {
       setError('حدث خطأ في الاتصال بالخادم');
     } finally {
@@ -168,7 +131,6 @@ export default function VerifyTelegramPage() {
   };
 
   const handleBack = () => {
-    sessionStorage.removeItem(ADMIN_SESSION_KEY);
     router.push('/zerocold/login');
   };
 
@@ -194,7 +156,7 @@ export default function VerifyTelegramPage() {
         </div>
 
         <div className="bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-6 shadow-2xl">
-          <div className="flex items-center justify-center gap-2.5 mb-6" dir="ltr">
+          <div className="flex items-center justify-center gap-1.5 sm:gap-2.5 mb-6" dir="ltr">
             {code.map((digit, index) => (
               <input
                 key={index}
@@ -208,7 +170,7 @@ export default function VerifyTelegramPage() {
                 onChange={(e) => handleChange(index, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(index, e)}
                 onPaste={index === 0 ? handlePaste : undefined}
-                className="w-11 h-14 text-center text-lg font-bold bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all"
+                className="w-10 h-12 sm:w-11 sm:h-14 text-center text-lg font-bold bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all"
               />
             ))}
           </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Eye, FileText } from 'lucide-react';
+import { Plus, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/Textarea';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 
 const mockEntries = [
   { id: '1', number: 1, date: '2026-06-22', description: 'قيد افتتاحي', type: 'opening_balance', lines: [] },
@@ -65,7 +65,7 @@ export default function JournalPage() {
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة قيد محاسبي" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" />
             <Select label="النوع" options={[
               { value: 'general', label: 'عام' },
@@ -74,7 +74,7 @@ export default function JournalPage() {
             ]} />
           </div>
           <Textarea label="البيان" placeholder="شرح القيد" />
-          <div className="border border-border rounded-lg overflow-hidden">
+          <div className="border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-bg-secondary">
                 <tr>
@@ -111,12 +111,12 @@ export default function JournalPage() {
       <Modal isOpen={!!showDetail} onClose={() => setShowDetail(null)} title={`قيد رقم #${showDetail?.number || ''}`} size="lg">
         {showDetail && (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
               <div><span className="text-text-muted">التاريخ:</span> {formatDate(showDetail.date)}</div>
               <div><span className="text-text-muted">النوع:</span> {showDetail.type}</div>
               <div className="col-span-2"><span className="text-text-muted">البيان:</span> {showDetail.description}</div>
             </div>
-            <div className="border border-border rounded-lg overflow-hidden">
+            <div className="border border-border rounded-lg overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-bg-secondary">
                   <tr><th className="p-2 text-right">الحساب</th><th className="p-2 text-right">مدين</th><th className="p-2 text-right">دائن</th></tr>

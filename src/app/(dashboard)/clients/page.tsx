@@ -40,7 +40,7 @@ export default function ClientsPage() {
         <DataTable columns={columns} data={mockClients} searchable searchKeys={['name', 'phone']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عميل" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="الاسم" className="col-span-2" />
           <Input label="الجوال" /><Input label="البريد الإلكتروني" type="email" />
           <Input label="الرقم الضريبي" /><Input label="الحد الائتماني" type="number" />

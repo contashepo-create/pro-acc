@@ -546,6 +546,10 @@ tr:hover td { background: var(--color-bg-hover); }
   from { opacity: 0; transform: translateY(-12px); }
   to { opacity: 1; transform: translateY(0); }
 }
+@keyframes toast-exit {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-20px); }
+}
 .toast-success { background: var(--color-success); color: #FFFFFF; }
 .toast-error { background: var(--color-danger); color: #FFFFFF; }
 .toast-info { background: var(--color-info); color: #FFFFFF; }

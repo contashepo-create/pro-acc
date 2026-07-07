@@ -4,8 +4,6 @@ import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2, ShieldAlert } from 'lucide-react';
 
-const ADMIN_SESSION_KEY = 'zerocold_session';
-
 export default function ZerocoldLoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -42,8 +40,7 @@ export default function ZerocoldLoginPage() {
         return;
       }
 
-      sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify({ email: email.trim(), step: 'login' }));
-      router.push('/zerocold/verify-telegram');
+      router.push(`/zerocold/verify-telegram?email=${encodeURIComponent(body.email)}`);
     } catch {
       setError('حدث خطأ في الاتصال بالخادم');
     } finally {

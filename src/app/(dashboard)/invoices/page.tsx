@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, FileText, Eye } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -76,14 +76,14 @@ export default function InvoicesPage() {
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة فاتورة جديدة" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" />
             <Input label="تاريخ الاستحقاق" type="date" />
             <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
             <Select label="المشروع" options={[{ value: '', label: 'اختياري' }]} className="col-span-2" />
           </div>
           <Textarea label="ملاحظات" placeholder="ملاحظات الفاتورة" />
-          <div className="border border-border rounded-lg overflow-hidden">
+          <div className="border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-bg-secondary">
                 <tr><th className="p-2 text-right">البيان</th><th className="p-2 text-right">الكمية</th><th className="p-2 text-right">سعر الوحدة</th><th className="p-2 text-right">الإجمالي</th></tr>
