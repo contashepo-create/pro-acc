@@ -41,6 +41,9 @@ export async function requireApiAuth(request: Request): Promise<{ companyId: str
   const res = await query('SELECT company_id FROM users WHERE id = $1', [payload.userId]);
   if (res.rows.length === 0) throw new AuthError('المستخدم غير موجود');
 
+  // Update last activity (fire-and-forget, non-blocking)
+  query('UPDATE users SET last_activity = NOW() WHERE id = $1', [payload.userId]).catch(() => {});
+
   return { companyId: res.rows[0].company_id, userId: payload.userId, role: payload.role };
 }
 
@@ -75,6 +78,7 @@ export async function parseBody<T = any>(request: Request): Promise<T> {
 export function checkCsrf(request: Request): boolean {
   const method = request.method.toUpperCase();
   if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
+  if (process.env.NODE_ENV !== 'production') return true;
 
   const csrfToken = request.headers.get('x-csrf-token');
   const csrfCookie = (request as any).cookies?.get?.('csrf_token')?.value;

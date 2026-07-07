@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     }
 
     const res = await query(
-      `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.is_active, u.company_id,
+      `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.is_active, u.company_id, u.email_verified,
               c.name as company_name, c.commercial_registration, c.tax_number,
               c.vat_number, c.address, c.phone, c.email as company_email,
               c.logo, c.is_active as company_active
@@ -74,10 +74,14 @@ export async function POST(request: NextRequest) {
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
+    if (!user.email_verified) {
+      return error('يرجى تأكيد بريدك الإلكتروني أولاً. تحقق من بريدك الإلكتروني', 403);
+    }
+
     const token = createToken(user.id, user.role);
 
     await query(
-      `UPDATE users SET last_login = NOW()::timestamp WHERE id = $1`,
+      `UPDATE users SET last_login = NOW()::timestamp, last_activity = NOW() WHERE id = $1`,
       [user.id]
     );
 
