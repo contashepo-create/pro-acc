@@ -39,6 +39,7 @@ export function middleware(request: NextRequest) {
       !pathname.startsWith('/api/auth/logout') &&
       !pathname.startsWith('/api/auth/verify-email') &&
       !pathname.startsWith('/api/auth/cleanup-inactive') &&
+      !pathname.startsWith('/api/debug') &&
       !pathname.startsWith('/api/admin/') &&
       !pathname.startsWith('/api/visitors/') &&
       !pathname.startsWith('/api/visitors')) {
