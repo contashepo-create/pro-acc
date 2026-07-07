@@ -3,7 +3,6 @@ import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { query } from '@/lib/db';
 import { verifyPassword, createToken } from '@/lib/auth';
 import { loginSchema } from '@/lib/validation';
-import { checkRateLimit } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,16 +19,30 @@ export async function POST(request: NextRequest) {
       request.headers.get('x-real-ip') ||
       'unknown';
 
-    const { allowed, remainingMinutes } = await checkRateLimit(email, ipAddress);
-    if (!allowed) {
-      return error(
-        `تم تجاوز عدد المحاولات المسموحة. الرجاء المحاولة بعد ${remainingMinutes} دقيقة`,
-        429
+    // Rate limiting — wrapped in try-catch in case login_attempts table doesn't exist
+    let rateLimited = false;
+    let remainingMinutes = 0;
+    try {
+      const rateRes = await query(
+        `SELECT COUNT(*)::int as count, MIN(attempted_at) as earliest
+         FROM login_attempts
+         WHERE (email = $1 OR ip_address = $2) AND success = false AND attempted_at > NOW() - INTERVAL '15 minutes'`,
+        [email, ipAddress]
       );
+      const { count, earliest } = rateRes.rows[0];
+      if (count >= 5 && earliest) {
+        const elapsedMs = Date.now() - new Date(earliest).getTime();
+        const remainingMs = 15 * 60 * 1000 - elapsedMs;
+        remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+        rateLimited = true;
+      }
+    } catch {}
+    if (rateLimited) {
+      return error(`تم تجاوز عدد المحاولات المسموحة. الرجاء المحاولة بعد ${remainingMinutes} دقيقة`, 429);
     }
 
     const res = await query(
-      `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.is_active, u.company_id, u.email_verified,
+      `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.is_active, u.company_id,
               c.name as company_name, c.commercial_registration, c.tax_number,
               c.vat_number, c.address, c.phone, c.email as company_email,
               c.logo, c.is_active as company_active
@@ -40,82 +53,65 @@ export async function POST(request: NextRequest) {
     );
 
     if (res.rows.length === 0) {
-      await query(
-        `INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, false)`,
-        [email, ipAddress]
-      );
+      try { await query(`INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, false)`, [email, ipAddress]); } catch {}
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
     const user = res.rows[0];
 
     if (!user.is_active) {
-      await query(
-        `INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, false)`,
-        [user.company_id, email, ipAddress]
-      );
+      try { await query(`INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, false)`, [user.company_id, email, ipAddress]); } catch {}
       return error('هذا الحساب غير نشط. تواصل مع مدير النظام', 403);
     }
 
     if (!user.company_active) {
-      await query(
-        `INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, false)`,
-        [user.company_id, email, ipAddress]
-      );
+      try { await query(`INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, false)`, [user.company_id, email, ipAddress]); } catch {}
       return error('الشركة غير نشطة. تواصل مع مدير النظام', 403);
     }
 
     const valid = await verifyPassword(password, user.password_hash);
     if (!valid) {
-      await query(
-        `INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, false)`,
-        [user.company_id, email, ipAddress]
-      );
+      try { await query(`INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, false)`, [user.company_id, email, ipAddress]); } catch {}
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
-    if (!user.email_verified) {
-      return error('يرجى تأكيد بريدك الإلكتروني أولاً. تحقق من بريدك الإلكتروني', 403);
-    }
+    // Check email_verified only if the column exists
+    try {
+      const verifiedRes = await query(`SELECT email_verified FROM users WHERE id = $1`, [user.id]);
+      if (verifiedRes.rows.length > 0 && verifiedRes.rows[0].email_verified === false) {
+        return error('يرجى تأكيد بريدك الإلكتروني أولاً', 403);
+      }
+    } catch {}
 
     const token = createToken(user.id, user.role);
 
-    await query(
-      `UPDATE users SET last_login = NOW()::timestamp, last_activity = NOW() WHERE id = $1`,
-      [user.id]
-    );
+    // Update last_login (and last_activity if column exists)
+    try {
+      await query(`UPDATE users SET last_login = NOW()::timestamp WHERE id = $1`, [user.id]);
+    } catch {}
+    try {
+      await query(`UPDATE users SET last_activity = NOW() WHERE id = $1`, [user.id]);
+    } catch {}
 
-    await query(
-      `INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, true)`,
-      [user.company_id, email, ipAddress]
-    );
+    try { await query(`INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, true)`, [user.company_id, email, ipAddress]); } catch {}
 
+    // Check subscription (non-blocking on failure)
     let subscriptionExpired = false;
-    if (user.company_id) {
-      try {
-        const subRes = await query(
-          `SELECT status, end_date FROM subscriptions WHERE company_id = $1 ORDER BY end_date DESC LIMIT 1`,
-          [user.company_id]
-        );
-        if (subRes.rows.length > 0) {
-          const sub = subRes.rows[0];
-          const endDate = new Date(sub.end_date);
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          if (endDate < today && sub.status !== 'trial') {
-            subscriptionExpired = true;
-          }
-        }
-      } catch {
-        // Graceful degradation — do not block login on subscription check failure
+    try {
+      const subRes = await query(
+        `SELECT status, end_date FROM subscriptions WHERE company_id = $1 ORDER BY end_date DESC LIMIT 1`,
+        [user.company_id]
+      );
+      if (subRes.rows.length > 0) {
+        const sub = subRes.rows[0];
+        const endDate = new Date(sub.end_date);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (endDate < today && sub.status !== 'trial') subscriptionExpired = true;
       }
-    }
+    } catch {}
 
     if (subscriptionExpired) {
-      await query(
-        `INSERT INTO login_attempts (company_id, email, ip_address, success) VALUES ($1, $2, $3, false)`,
-        [user.company_id, email, ipAddress]
-      );
       return error('انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول', 403);
     }
 

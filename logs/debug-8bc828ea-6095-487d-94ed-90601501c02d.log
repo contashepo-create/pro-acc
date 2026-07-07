@@ -1,0 +1,4 @@
+CODELY_STARTUP_TRACE args_parsed=339.4114ms
+CODELY_STARTUP_TRACE unity_lsp_start=342.526ms
+CODELY_STARTUP_TRACE unity_lsp_done=343.7534ms
+CODELY_STARTUP_TRACE extensions_loaded=344.159ms

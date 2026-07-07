@@ -22,9 +22,7 @@ export function validationError(errors: Record<string, string[]> | string) {
 
 export function serverError(err: unknown) {
   console.error('Server error:', err);
-  const isDev = process.env.NODE_ENV !== 'production';
-  const showErrors = process.env.SHOW_ERRORS === 'true';
-  const message = (isDev || showErrors)
+  const message = process.env.NODE_ENV !== 'production' || process.env.SHOW_ERRORS === 'true'
     ? (err instanceof Error ? err.message : 'Internal server error')
     : 'حدث خطأ في الخادم';
   return NextResponse.json({ success: false, message }, { status: 500 });
@@ -43,8 +41,8 @@ export async function requireApiAuth(request: Request): Promise<{ companyId: str
   const res = await query('SELECT company_id FROM users WHERE id = $1', [payload.userId]);
   if (res.rows.length === 0) throw new AuthError('المستخدم غير موجود');
 
-  // Update last activity (fire-and-forget, non-blocking)
-  query('UPDATE users SET last_activity = NOW() WHERE id = $1', [payload.userId]).catch(() => {});
+  // Update last activity if column exists (fire-and-forget)
+  try { query('UPDATE users SET last_activity = NOW() WHERE id = $1', [payload.userId]); } catch {}
 
   return { companyId: res.rows[0].company_id, userId: payload.userId, role: payload.role };
 }
