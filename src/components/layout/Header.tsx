@@ -180,7 +180,10 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               </button>
 
               {userMenuOpen && (
-                <div className="absolute left-0 top-full mt-2 w-56 bg-bg-card border border-border rounded-xl shadow-dropdown py-1 z-[100] animate-[fade-in_0.15s_ease-out]" style={{ backgroundColor: 'var(--color-bg-card)' }}>
+                <div className="fixed inset-0 z-[9998]" onClick={() => setUserMenuOpen(false)} />
+              )}
+              {userMenuOpen && (
+                <div className="absolute left-0 top-full mt-2 w-56 border border-border rounded-xl shadow-2xl py-1 z-[9999] animate-[fade-in_0.15s_ease-out]" style={{ backgroundColor: 'var(--color-bg-card)' }}>
                   <div className="px-4 py-3 border-b border-border">
                     <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
                     <div className="text-xs text-text-muted">{user?.email || ''}</div>
@@ -195,7 +198,7 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
                     <Settings size={16} />
                     الإعدادات
                   </button>
-                  {user?.email === 'conta.moha@gmail.com' && (
+                  {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
                     <button
                       onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
                       className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
