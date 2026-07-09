@@ -1,11 +1,19 @@
 import { NextRequest } from 'next/server';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET() {
   try {
-    const result = await query('SELECT * FROM subscription_plans ORDER BY sort_order');
-    return success({ plans: result.rows });
+    const s = sb();
+    const { data, error: err } = await s.from('subscription_plans')
+      .select('*')
+      .order('sort_order');
+    if (err) throw err;
+
+    return success({ plans: data || [] });
   } catch (e: any) {
     return serverError(e);
   }
@@ -17,12 +25,21 @@ export async function POST(req: NextRequest) {
     const { code, name, description, priceMonthly, priceYearly, maxUsers, maxProjects, features } = body;
     if (!code || !name) return error('code and name are required');
 
-    const result = await query(
-      `INSERT INTO subscription_plans (code, name, description, price_monthly, price_yearly, max_users, max_projects, features)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [code, name, description || '', priceMonthly || 0, priceYearly || null, maxUsers || 1, maxProjects || null, JSON.stringify(features || [])]
-    );
-    return success(result.rows[0]);
+    const s = sb();
+    const { data, error: insertErr } = await s.from('subscription_plans').insert({
+      code,
+      name,
+      description: description || '',
+      price_monthly: priceMonthly || 0,
+      price_yearly: priceYearly || null,
+      max_users: maxUsers || 1,
+      max_projects: maxProjects || null,
+      features: JSON.stringify(features || []),
+    }).select().single();
+
+    if (insertErr) throw insertErr;
+
+    return success(data);
   } catch (e: any) {
     return serverError(e);
   }

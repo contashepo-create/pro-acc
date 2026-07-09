@@ -1,19 +1,25 @@
 import { NextRequest } from 'next/server';
-import { success, unauthorized, error, serverError, parseBody } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
-import { verifyAdminToken, verifyMasterPassword } from '@/lib/admin-auth';
+import { getSupabase } from '@/lib/supabase-client';
+import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { verifyToken } from '@/lib/auth';
+import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function POST(request: NextRequest) {
   try {
-    const admin = await verifyAdminToken(request);
-    if (!admin) return unauthorized();
+    const token = request.cookies.get('admin_token')?.value;
+    if (!token) return error('Unauthorized', 401);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
 
     const masterHeader = request.headers.get('x-master-password');
     if (!masterHeader) {
       return error('كلمة المرور الرئيسية مطلوبة في ترويسة x-master-password', 401);
     }
 
-    const valid = await verifyMasterPassword(admin.userId, masterHeader);
+    const valid = await verifyMasterPassword(payload.userId, masterHeader);
     if (!valid) {
       return error('كلمة المرور الرئيسية غير صحيحة', 401);
     }
@@ -23,34 +29,28 @@ export async function POST(request: NextRequest) {
       return error('userId و is_active مطلوبان');
     }
 
-    const userRes = await query(
-      `SELECT id, name, email, is_active FROM users WHERE id = $1`,
-      [body.userId]
-    );
+    const s = sb();
+    const { data: user, error: userErr } = await s.from('users')
+      .select('id, name, email, is_active')
+      .eq('id', body.userId)
+      .single();
 
-    if (userRes.rows.length === 0) {
+    if (userErr || !user) {
       return error('المستخدم غير موجود', 404);
     }
 
-    const user = userRes.rows[0];
+    const { error: updateErr } = await s.from('users')
+      .update({ is_active: body.is_active, updated_at: new Date().toISOString() })
+      .eq('id', body.userId);
+    if (updateErr) throw updateErr;
 
-    await transaction(async (client) => {
-      await client.query(
-        `UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2`,
-        [body.is_active, body.userId]
-      );
-
-      await client.query(
-        `INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, details)
-         VALUES ($1, $2, 'user', $3, $4)`,
-        [
-          admin.userId,
-          body.is_active ? 'activate_user' : 'deactivate_user',
-          body.userId,
-          JSON.stringify({ userName: user.name, userEmail: user.email, previousState: user.is_active }),
-        ]
-      );
-    });
+    await auditLog(
+      payload.userId,
+      body.is_active ? 'activate_user' : 'deactivate_user',
+      JSON.stringify({ userName: user.name, userEmail: user.email, previousState: user.is_active }),
+      'user',
+      body.userId
+    );
 
     return success({
       message: body.is_active ? 'تم تفعيل المستخدم بنجاح' : 'تم إيقاف المستخدم بنجاح',

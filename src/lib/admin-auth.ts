@@ -1,12 +1,14 @@
 import { NextRequest } from 'next/server';
-import { verifyToken } from '@/lib/auth';
-import { query } from '@/lib/db';
-import { verifyPassword } from '@/lib/auth';
+import { verifyToken, verifyPassword } from '@/lib/auth';
+import { getSupabase } from '@/lib/supabase-client';
 
 export interface AdminPayload {
   userId: string;
   role: string;
 }
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function verifyAdminToken(request: NextRequest): Promise<AdminPayload | null> {
   const token = request.cookies.get('admin_token')?.value;
@@ -17,12 +19,13 @@ export async function verifyAdminToken(request: NextRequest): Promise<AdminPaylo
 }
 
 export async function verifyMasterPassword(adminId: string, masterPassword: string): Promise<boolean> {
-  const res = await query(
-    `SELECT master_password_hash FROM admin_users WHERE id = $1`,
-    [adminId]
-  );
-  if (res.rows.length === 0) return false;
-  return verifyPassword(masterPassword, res.rows[0].master_password_hash);
+  const s = sb();
+  const { data, error } = await s.from('admin_users')
+    .select('master_password_hash')
+    .eq('id', adminId)
+    .single();
+  if (error || !data) return false;
+  return verifyPassword(masterPassword, data.master_password_hash);
 }
 
 export async function auditLog(
@@ -32,9 +35,12 @@ export async function auditLog(
   targetType?: string,
   targetId?: string
 ): Promise<void> {
-  await query(
-    `INSERT INTO admin_audit_log (admin_id, action, details, target_type, target_id)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [adminId, action, details || null, targetType || null, targetId || null]
-  );
+  const s = sb();
+  await s.from('admin_audit_log').insert({
+    admin_id: adminId,
+    action,
+    details: details || null,
+    target_type: targetType || null,
+    target_id: targetId || null,
+  });
 }

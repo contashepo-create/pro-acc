@@ -1,49 +1,59 @@
 import { NextRequest } from 'next/server';
-import { success, unauthorized, serverError, getPaginationParams } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
-import { verifyAdminToken } from '@/lib/admin-auth';
+import { getSupabase } from '@/lib/supabase-client';
+import { success, error, serverError, getPaginationParams } from '@/lib/api-helpers';
+import { verifyToken } from '@/lib/auth';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
-    const admin = await verifyAdminToken(request);
-    if (!admin) return unauthorized();
+    const token = request.cookies.get('admin_token')?.value;
+    if (!token) return error('Unauthorized', 401);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
 
     const { page, pageSize } = getPaginationParams(request.url);
     const companyId = request.nextUrl.searchParams.get('company_id');
+    const s = sb();
 
-    let whereClause = '';
-    const params: any[] = [];
-    let paramIdx = 1;
+    let countBuilder = s.from('users').select('*', { count: 'exact', head: true });
+    if (companyId) {
+      countBuilder = countBuilder.eq('company_id', companyId);
+    }
+    const { count: total, error: countErr } = await countBuilder;
+    if (countErr) throw countErr;
+
+    let dataBuilder = s.from('users')
+      .select('id, name, email, role, is_active, last_login, created_at, company_id')
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
 
     if (companyId) {
-      whereClause = `WHERE u.company_id = $${paramIdx}`;
-      params.push(companyId);
-      paramIdx++;
+      dataBuilder = dataBuilder.eq('company_id', companyId);
     }
 
-    const countRes = await query(
-      `SELECT COUNT(*)::int as total FROM users u ${whereClause}`,
-      params
-    );
-    const total = countRes.rows[0].total;
+    const { data: users, error: err } = await dataBuilder;
+    if (err) throw err;
 
-    params.push(pageSize, (page - 1) * pageSize);
+    // Get company names
+    const companyIds = (users || []).map((u: any) => u.company_id).filter(Boolean);
+    let companyMap: Record<string, string> = {};
+    if (companyIds.length > 0) {
+      const { data: companies } = await s.from('companies')
+        .select('id, name')
+        .in('id', [...new Set(companyIds)]);
+      (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
+    }
 
-    const res = await query(
-      `SELECT u.id, u.name, u.email, u.role, u.is_active, u.last_login,
-              u.created_at, u.company_id,
-              c.name as company_name
-       FROM users u
-       JOIN companies c ON c.id = u.company_id
-       ${whereClause}
-       ORDER BY u.created_at DESC
-       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
-      params
-    );
+    const result = (users || []).map((u: any) => ({
+      ...u,
+      company_name: companyMap[u.company_id] || null,
+    }));
 
     return success({
-      users: res.rows,
-      total,
+      users: result,
+      total: total || 0,
       page,
       pageSize,
     });

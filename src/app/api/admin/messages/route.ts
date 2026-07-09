@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
+import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, requireAdminAuth, handleApiError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
@@ -8,21 +11,35 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const companyId = searchParams.get('companyId');
 
-    let sql = `SELECT m.id, m.subject, m.body, m.direction, m.is_read, m.created_at,
-               c.name as company_name
-               FROM messages m
-               JOIN companies c ON c.id = m.company_id`;
-    const params: any[] = [];
+    const s = sb();
+    let queryBuilder = s.from('messages')
+      .select('id, subject, body, direction, is_read, created_at, company_id')
+      .order('created_at', { ascending: false })
+      .limit(100);
 
     if (companyId) {
-      sql += ' WHERE m.company_id = $1';
-      params.push(companyId);
+      queryBuilder = queryBuilder.eq('company_id', companyId);
     }
 
-    sql += ' ORDER BY m.created_at DESC LIMIT 100';
+    const { data: messages, error: err } = await queryBuilder;
+    if (err) throw err;
 
-    const res = await query(sql, params);
-    return success(res.rows);
+    // Get company names
+    const companyIds = (messages || []).map((m: any) => m.company_id).filter(Boolean);
+    let companyMap: Record<string, string> = {};
+    if (companyIds.length > 0) {
+      const { data: companies } = await s.from('companies')
+        .select('id, name')
+        .in('id', [...new Set(companyIds)]);
+      (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
+    }
+
+    const result = (messages || []).map((m: any) => ({
+      ...m,
+      company_name: companyMap[m.company_id] || null,
+    }));
+
+    return success(result);
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);
@@ -38,13 +55,18 @@ export async function POST(request: NextRequest) {
     if (!body.subject?.trim()) return error('عنوان الرسالة مطلوب');
     if (!body.body?.trim()) return error('نص الرسالة مطلوب');
 
-    const res = await query(
-      `INSERT INTO messages (company_id, admin_id, subject, body, direction)
-       VALUES ($1, $2, $3, $4, 'admin_to_company') RETURNING id`,
-      [body.companyId, admin.userId, body.subject.trim(), body.body.trim()]
-    );
+    const s = sb();
+    const { data, error: insertErr } = await s.from('messages').insert({
+      company_id: body.companyId,
+      admin_id: admin.userId,
+      subject: body.subject.trim(),
+      body: body.body.trim(),
+      direction: 'admin_to_company',
+    }).select('id').single();
 
-    return success({ id: res.rows[0].id }, 201);
+    if (insertErr) throw insertErr;
+
+    return success({ id: data.id }, 201);
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);

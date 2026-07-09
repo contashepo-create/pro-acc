@@ -1,38 +1,56 @@
 import { NextRequest } from 'next/server';
-import { success, unauthorized, serverError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
-import { verifyAdminToken, auditLog } from '@/lib/admin-auth';
+import { getSupabase } from '@/lib/supabase-client';
+import { success, error, serverError } from '@/lib/api-helpers';
+import { verifyToken } from '@/lib/auth';
+import { auditLog } from '@/lib/admin-auth';
 import { sendAdminNotification } from '@/lib/telegram';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
+
+// Known tables in the database
+const KNOWN_TABLES = [
+  'activation_codes', 'admin_audit_log', 'admin_users', 'advertisements',
+  'companies', 'complaints', 'messages', 'payment_transactions',
+  'subscription_plans', 'subscriptions', 'users',
+];
 
 export async function POST(request: NextRequest) {
   try {
-    const admin = await verifyAdminToken(request);
-    if (!admin) return unauthorized();
+    const token = request.cookies.get('admin_token')?.value;
+    if (!token) return error('Unauthorized', 401);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
 
-    const tablesRes = await query(
-      `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`
+    const s = sb();
+
+    // Get row counts for each known table
+    const tableCounts = await Promise.all(
+      KNOWN_TABLES.map(async (tableName) => {
+        const { count } = await s.from(tableName).select('*', { count: 'exact', head: true });
+        return { tablename: tableName, count: count || 0 };
+      })
     );
 
     let sqlDump = `-- AccWeb Database Backup\n-- Generated: ${new Date().toISOString()}\n\n`;
 
-    for (const { tablename } of tablesRes.rows) {
+    for (const { tablename, count } of tableCounts) {
       sqlDump += `\n-- Table: ${tablename}\n`;
-      const countRes = await query(`SELECT COUNT(*) FROM "${tablename}"`);
-      sqlDump += `-- Rows: ${countRes.rows[0].count}\n`;
+      sqlDump += `-- Rows: ${count}\n`;
     }
 
     await sendAdminNotification(
       `💾 تم إنشاء نسخة احتياطية من قاعدة البيانات\n` +
-      `الجداول: ${tablesRes.rows.length}\n` +
+      `الجداول: ${KNOWN_TABLES.length}\n` +
       `الحجم: ${JSON.stringify(sqlDump.length)} bytes\n` +
-      `بواسطة: ${admin.userId}`
+      `بواسطة: ${payload.userId}`
     );
 
-    await auditLog(admin.userId, 'backup', `Database backup created, ${tablesRes.rows.length} tables`);
+    await auditLog(payload.userId, 'backup', `Database backup created, ${KNOWN_TABLES.length} tables`);
 
     return success({
       message: 'تم إنشاء النسخة الاحتياطية بنجاح',
-      tables: tablesRes.rows.length,
+      tables: KNOWN_TABLES.length,
     });
   } catch (err) {
     return serverError(err);

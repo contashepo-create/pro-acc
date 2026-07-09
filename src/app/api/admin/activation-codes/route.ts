@@ -1,7 +1,10 @@
 import { NextRequest } from 'next/server';
 import { createHmac } from 'crypto';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 if (!process.env.PRO_ACCOUNTANT_LICENSE_SALT) {
   throw new Error('PRO_ACCOUNTANT_LICENSE_SALT environment variable is required');
@@ -10,16 +13,36 @@ const SALT = process.env.PRO_ACCOUNTANT_LICENSE_SALT;
 
 export async function GET(req: NextRequest) {
   try {
+    const s = sb();
     const used = req.nextUrl.searchParams.get('used');
-    let sql = `SELECT a.*, c.name as company_name
-               FROM activation_codes a
-               LEFT JOIN companies c ON c.id = a.used_by`;
-    const params: any[] = [];
-    if (used === 'true') { sql += ' WHERE a.is_used = true'; }
-    else if (used === 'false') { sql += ' WHERE a.is_used = false'; }
-    sql += ' ORDER BY a.created_at DESC';
-    const result = await query(sql, params);
-    return success(result.rows);
+
+    let queryBuilder = s.from('activation_codes').select('*');
+    if (used === 'true') {
+      queryBuilder = queryBuilder.eq('is_used', true);
+    } else if (used === 'false') {
+      queryBuilder = queryBuilder.eq('is_used', false);
+    }
+    queryBuilder = queryBuilder.order('created_at', { ascending: false });
+
+    const { data: codes, error: err } = await queryBuilder;
+    if (err) throw err;
+
+    // Fetch company names for used_by
+    const companyIds = (codes || []).map((c: any) => c.used_by).filter(Boolean);
+    let companyMap: Record<string, string> = {};
+    if (companyIds.length > 0) {
+      const { data: companies } = await s.from('companies')
+        .select('id, name')
+        .in('id', companyIds);
+      (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
+    }
+
+    const result = (codes || []).map((c: any) => ({
+      ...c,
+      company_name: c.used_by ? companyMap[c.used_by] || null : null,
+    }));
+
+    return success(result);
   } catch (e: any) {
     return serverError(e);
   }
@@ -39,10 +62,14 @@ export async function POST(req: NextRequest) {
     const endDate = new Date();
     endDate.setMonth(endDate.getMonth() + durationMonths);
 
-    await query(
-      `INSERT INTO activation_codes (code, plan_code, duration_months, expires_at) VALUES ($1, $2, $3, $4)`,
-      [code, planCode, durationMonths, endDate.toISOString().split('T')[0]]
-    );
+    const s = sb();
+    const { error: insertErr } = await s.from('activation_codes').insert({
+      code,
+      plan_code: planCode,
+      duration_months: durationMonths,
+      expires_at: endDate.toISOString().split('T')[0],
+    });
+    if (insertErr) throw insertErr;
 
     return success({ code, planCode, durationMonths });
   } catch (e: any) {

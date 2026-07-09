@@ -1,23 +1,32 @@
 import { NextRequest } from 'next/server';
+import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, requireAdminAuth, handleApiError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const activeOnly = searchParams.get('active') === 'true';
 
-    let sql = 'SELECT * FROM advertisements';
-    const params: any[] = [];
+    const s = sb();
+    let queryBuilder = s.from('advertisements').select('*');
 
     if (activeOnly) {
-      sql += ` WHERE is_active = true AND (expires_at IS NULL OR expires_at > NOW()) AND starts_at <= NOW()`;
+      const now = new Date().toISOString();
+      queryBuilder = queryBuilder
+        .eq('is_active', true)
+        .or(`expires_at.is.null,expires_at.gt.${now}`)
+        .lte('starts_at', now);
     }
 
-    sql += ' ORDER BY created_at DESC';
+    queryBuilder = queryBuilder.order('created_at', { ascending: false });
 
-    const res = await query(sql, params);
-    return success(res.rows);
+    const { data, error: err } = await queryBuilder;
+    if (err) throw err;
+
+    return success(data || []);
   } catch (err) {
     return serverError(err);
   }
@@ -37,18 +46,21 @@ export async function POST(request: NextRequest) {
     const type = body.type || 'announcement';
     if (!['announcement', 'banner', 'promotion'].includes(type)) return error('نوع غير صالح');
 
-    const res = await query(
-      `INSERT INTO advertisements (title, body, type, starts_at, expires_at, link_url, link_text)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [
-        body.title.trim(), body.body.trim(), type,
-        body.startsAt || new Date().toISOString(),
-        body.expiresAt || null,
-        body.linkUrl || null, body.linkText || null,
-      ]
-    );
+    const s = sb();
+    const insertData: any = {
+      title: body.title.trim(),
+      body: body.body.trim(),
+      type,
+      starts_at: body.startsAt || new Date().toISOString(),
+      expires_at: body.expiresAt || null,
+      link_url: body.linkUrl || null,
+      link_text: body.linkText || null,
+    };
 
-    return success(res.rows[0], 201);
+    const { data, error: insertErr } = await s.from('advertisements').insert(insertData).select().single();
+    if (insertErr) throw insertErr;
+
+    return success(data, 201);
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);
@@ -62,21 +74,20 @@ export async function PATCH(request: NextRequest) {
 
     if (!body.id) return error('المعرف مطلوب');
 
-    const updates: string[] = [];
-    const params: any[] = [];
-    let idx = 1;
+    const update: any = {};
+    if (body.title !== undefined) update.title = body.title;
+    if (body.body !== undefined) update.body = body.body;
+    if (body.isActive !== undefined) update.is_active = body.isActive;
+    if (body.expiresAt !== undefined) update.expires_at = body.expiresAt;
 
-    if (body.title !== undefined) { updates.push(`title = $${idx++}`); params.push(body.title); }
-    if (body.body !== undefined) { updates.push(`body = $${idx++}`); params.push(body.body); }
-    if (body.isActive !== undefined) { updates.push(`is_active = $${idx++}`); params.push(body.isActive); }
-    if (body.expiresAt !== undefined) { updates.push(`expires_at = $${idx++}`); params.push(body.expiresAt); }
+    if (Object.keys(update).length === 0) return success({ message: 'لا توجد تحديثات' });
 
-    if (updates.length === 0) return success({ message: 'لا توجد تحديثات' });
+    update.updated_at = new Date().toISOString();
 
-    updates.push('updated_at = NOW()');
-    params.push(body.id);
+    const s = sb();
+    const { error: updateErr } = await s.from('advertisements').update(update).eq('id', body.id);
+    if (updateErr) throw updateErr;
 
-    await query(`UPDATE advertisements SET ${updates.join(', ')} WHERE id = $${idx}`, params);
     return success({ ok: true });
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
@@ -90,7 +101,10 @@ export async function DELETE(request: NextRequest) {
     const body = await parseBody<{ id: string }>(request);
 
     if (!body.id) return error('المعرف مطلوب');
-    await query('DELETE FROM advertisements WHERE id = $1', [body.id]);
+    const s = sb();
+    const { error: deleteErr } = await s.from('advertisements').delete().eq('id', body.id);
+    if (deleteErr) throw deleteErr;
+
     return success({ ok: true });
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);

@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
+import { getSupabase } from '@/lib/supabase-client';
 import { success, serverError, requireAdminAuth, handleApiError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
@@ -8,21 +11,37 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') || '';
 
-    let sql = `SELECT c.id, c.type, c.subject, c.body, c.status, c.admin_reply, c.created_at,
-               co.name as company_name
-               FROM complaints c
-               JOIN companies co ON co.id = c.company_id`;
-    const params: any[] = [];
+    const s = sb();
+
+    // Get complaints
+    let queryBuilder = s.from('complaints')
+      .select('id, type, subject, body, status, admin_reply, created_at, company_id')
+      .order('created_at', { ascending: false })
+      .limit(100);
 
     if (status && ['pending', 'read', 'replied', 'closed'].includes(status)) {
-      sql += ' WHERE c.status = $1';
-      params.push(status);
+      queryBuilder = queryBuilder.eq('status', status);
     }
 
-    sql += ' ORDER BY c.created_at DESC LIMIT 100';
+    const { data: complaints, error: err } = await queryBuilder;
+    if (err) throw err;
 
-    const res = await query(sql, params);
-    return success(res.rows);
+    // Get company names
+    const companyIds = (complaints || []).map((c: any) => c.company_id).filter(Boolean);
+    let companyMap: Record<string, string> = {};
+    if (companyIds.length > 0) {
+      const { data: companies } = await s.from('companies')
+        .select('id, name')
+        .in('id', [...new Set(companyIds)]);
+      (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
+    }
+
+    const result = (complaints || []).map((c: any) => ({
+      ...c,
+      company_name: companyMap[c.company_id] || null,
+    }));
+
+    return success(result);
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);
@@ -38,32 +57,25 @@ export async function PATCH(request: NextRequest) {
       return success({ message: 'حالة غير صالحة' }, 400);
     }
 
-    const updates: string[] = [];
-    const params: any[] = [];
-    let idx = 1;
+    const update: any = {};
 
     if (body.status) {
-      updates.push(`status = $${idx++}`);
-      params.push(body.status);
+      update.status = body.status;
     }
 
     if (body.adminReply !== undefined) {
-      updates.push(`admin_reply = $${idx++}`);
-      updates.push(`replied_by = $${idx++}`);
-      updates.push(`replied_at = NOW()`);
-      params.push(body.adminReply);
-      params.push(admin.userId);
+      update.admin_reply = body.adminReply;
+      update.replied_by = admin.userId;
+      update.replied_at = new Date().toISOString();
     }
 
-    if (updates.length === 0) return success({ message: 'لا توجد تحديثات' });
+    if (Object.keys(update).length === 0) return success({ message: 'لا توجد تحديثات' });
 
-    updates.push(`updated_at = NOW()`);
-    params.push(body.id);
+    update.updated_at = new Date().toISOString();
 
-    await query(
-      `UPDATE complaints SET ${updates.join(', ')} WHERE id = $${idx}`,
-      params
-    );
+    const s = sb();
+    const { error: updateErr } = await s.from('complaints').update(update).eq('id', body.id);
+    if (updateErr) throw updateErr;
 
     return success({ ok: true });
   } catch (err) {

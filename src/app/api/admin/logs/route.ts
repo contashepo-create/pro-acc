@@ -1,68 +1,76 @@
 import { NextRequest } from 'next/server';
-import { success, error, unauthorized, serverError, parseBody, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
-import { verifyAdminToken, verifyMasterPassword, auditLog } from '@/lib/admin-auth';
+import { getSupabase } from '@/lib/supabase-client';
+import { success, error, serverError, parseBody, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
+import { verifyToken } from '@/lib/auth';
+import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
-    const admin = await verifyAdminToken(request);
-    if (!admin) return unauthorized();
+    const token = request.cookies.get('admin_token')?.value;
+    if (!token) return error('Unauthorized', 401);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
 
     const { page, pageSize } = getPaginationParams(request.url);
     const { from, to } = getDateRangeParams(request.url);
     const search = request.nextUrl.searchParams.get('search') || '';
     const action = request.nextUrl.searchParams.get('action') || '';
 
-    let whereClause = 'WHERE 1=1';
-    const params: any[] = [];
-    let paramIdx = 1;
+    const s = sb();
+
+    let countBuilder = s.from('admin_audit_log').select('*', { count: 'exact', head: true });
 
     if (search) {
-      whereClause += ` AND (action ILIKE $${paramIdx} OR details ILIKE $${paramIdx})`;
-      params.push(`%${search}%`);
-      paramIdx++;
+      countBuilder = countBuilder.or(`action.ilike.%${search}%,details.ilike.%${search}%`);
     }
     if (action) {
-      whereClause += ` AND action = $${paramIdx}`;
-      params.push(action);
-      paramIdx++;
+      countBuilder = countBuilder.eq('action', action);
     }
     if (from) {
-      whereClause += ` AND created_at >= $${paramIdx}`;
-      params.push(from);
-      paramIdx++;
+      countBuilder = countBuilder.gte('created_at', from);
     }
     if (to) {
-      whereClause += ` AND created_at <= $${paramIdx}::date + 1`;
-      params.push(to);
-      paramIdx++;
+      const toDate = new Date(to + 'T23:59:59');
+      countBuilder = countBuilder.lte('created_at', toDate.toISOString());
     }
 
-    const countRes = await query(
-      `SELECT COUNT(*)::int as total FROM admin_audit_log ${whereClause}`,
-      params
-    );
-    const total = countRes.rows[0].total;
+    const { count: total, error: countErr } = await countBuilder;
+    if (countErr) throw countErr;
 
-    params.push(pageSize, (page - 1) * pageSize);
+    let dataBuilder = s.from('admin_audit_log')
+      .select('id, action, details, ip_address, target_type, target_id, created_at')
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
 
-    const res = await query(
-      `SELECT id, action, details, ip_address, target_type, target_id, created_at
-       FROM admin_audit_log ${whereClause}
-       ORDER BY created_at DESC
-       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
-      params
-    );
+    if (search) {
+      dataBuilder = dataBuilder.or(`action.ilike.%${search}%,details.ilike.%${search}%`);
+    }
+    if (action) {
+      dataBuilder = dataBuilder.eq('action', action);
+    }
+    if (from) {
+      dataBuilder = dataBuilder.gte('created_at', from);
+    }
+    if (to) {
+      const toDate = new Date(to + 'T23:59:59');
+      dataBuilder = dataBuilder.lte('created_at', toDate.toISOString());
+    }
+
+    const { data: logs, error: dataErr } = await dataBuilder;
+    if (dataErr) throw dataErr;
 
     return success({
-      logs: res.rows.map((row: any) => ({
+      logs: (logs || []).map((row: any) => ({
         id: row.id,
         timestamp: new Date(row.created_at).toLocaleString('ar-SA'),
         action: row.action,
         details: row.details || '',
         ip: row.ip_address || '',
       })),
-      total,
+      total: total || 0,
       page,
       pageSize,
     });
@@ -73,21 +81,26 @@ export async function GET(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const admin = await verifyAdminToken(request);
-    if (!admin) return unauthorized();
+    const token = request.cookies.get('admin_token')?.value;
+    if (!token) return error('Unauthorized', 401);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
 
     const body = await parseBody<{ masterPassword: string }>(request);
     if (!body.masterPassword) {
       return error('كلمة السر الرئيسية مطلوبة', 401);
     }
 
-    const valid = await verifyMasterPassword(admin.userId, body.masterPassword);
+    const valid = await verifyMasterPassword(payload.userId, body.masterPassword);
     if (!valid) {
       return error('كلمة السر الرئيسية غير صحيحة', 401);
     }
 
-    await query('DELETE FROM admin_audit_log');
-    await auditLog(admin.userId, 'clear_logs', 'Cleared all audit logs');
+    const s = sb();
+    const { error: deleteErr } = await s.from('admin_audit_log').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (deleteErr) throw deleteErr;
+
+    await auditLog(payload.userId, 'clear_logs', 'Cleared all audit logs');
 
     return success({ message: 'تم مسح سجل الأحداث بنجاح' });
   } catch (err) {

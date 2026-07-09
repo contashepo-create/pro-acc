@@ -1,32 +1,54 @@
 import { NextRequest } from 'next/server';
-import { success, unauthorized, serverError, getPaginationParams } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
-import { verifyAdminToken } from '@/lib/admin-auth';
+import { getSupabase } from '@/lib/supabase-client';
+import { success, error, serverError, getPaginationParams } from '@/lib/api-helpers';
+import { verifyToken } from '@/lib/auth';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
-    const admin = await verifyAdminToken(request);
-    if (!admin) return unauthorized();
+    const token = request.cookies.get('admin_token')?.value;
+    if (!token) return error('Unauthorized', 401);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
 
     const { page, pageSize } = getPaginationParams(request.url);
+    const s = sb();
 
-    const countRes = await query('SELECT COUNT(*)::int as total FROM companies');
-    const total = countRes.rows[0].total;
+    const { count: total, error: countErr } = await s.from('companies')
+      .select('*', { count: 'exact', head: true });
+    if (countErr) throw countErr;
 
-    const res = await query(
-      `SELECT c.id, c.name, c.commercial_registration, c.tax_number,
-              c.address, c.phone, c.email, c.is_active,
-              c.created_at,
-              (SELECT COUNT(*) FROM users WHERE company_id = c.id)::int as user_count
-       FROM companies c
-       ORDER BY c.created_at DESC
-       LIMIT $1 OFFSET $2`,
-      [pageSize, (page - 1) * pageSize]
-    );
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    const { data: companies, error: err } = await s.from('companies')
+      .select('id, name, commercial_registration, tax_number, address, phone, email, is_active, created_at')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (err) throw err;
+
+    // Get user counts per company
+    const companyIds = (companies || []).map((c: any) => c.id);
+    let userCountMap: Record<string, number> = {};
+    if (companyIds.length > 0) {
+      const { data: users } = await s.from('users')
+        .select('company_id')
+        .in('company_id', companyIds);
+      (users || []).forEach((u: any) => {
+        userCountMap[u.company_id] = (userCountMap[u.company_id] || 0) + 1;
+      });
+    }
+
+    const result = (companies || []).map((c: any) => ({
+      ...c,
+      user_count: userCountMap[c.id] || 0,
+    }));
 
     return success({
-      companies: res.rows,
-      total,
+      companies: result,
+      total: total || 0,
       page,
       pageSize,
     });
