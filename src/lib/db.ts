@@ -1,6 +1,23 @@
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
-import { setDefaultResultOrder } from 'dns';
-setDefaultResultOrder('ipv4first');
+import { lookup } from 'dns';
+
+// Custom lookup that tries both IPv4 and IPv6
+function dnsLookup(hostname: string, options: any, callback: any) {
+  lookup(hostname, { all: true, family: 0 }, (err, addresses) => {
+    if (err) return callback(err);
+    if (!addresses || addresses.length === 0) {
+      return callback(new Error(`No addresses found for ${hostname}`));
+    }
+    // Try each address until one works
+    const tryAddress = (index: number) => {
+      if (index >= addresses.length) {
+        return callback(new Error(`All addresses failed for ${hostname}`));
+      }
+      callback(null, addresses[index].address, addresses[index].family);
+    };
+    tryAddress(0);
+  });
+}
 
 let _pool: Pool | null = null;
 
@@ -18,6 +35,8 @@ function getPool(): Pool {
     ssl: connectionString.includes('supabase')
       ? { rejectUnauthorized: false }
       : undefined,
+    // @ts-ignore — pg accepts dns lookup override
+    lookup: dnsLookup,
   });
 
   _pool.on('error', (err) => {
