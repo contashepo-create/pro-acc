@@ -25,13 +25,10 @@ export async function POST(request: NextRequest) {
     if (!u.is_active) return error('هذا الحساب غير نشط. تواصل مع مدير النظام', 403);
 
     const { data: company, error: companyErr } = await s.from('companies')
-      .select('id, name, commercial_registration, tax_number, address, phone, email, logo, is_active')
+      .select('id, name, commercial_registration, tax_number, address, phone, email, is_active')
       .eq('id', u.company_id).single();
     const c: any = company;
-    if (!c || !c.is_active) {
-      const detail = companyErr ? JSON.stringify(companyErr) : 'company: ' + JSON.stringify(c);
-      return error('الشركة غير نشطة. ' + detail, 403);
-    }
+    if (!c || !c.is_active) return error('الشركة غير نشطة. تواصل مع مدير النظام', 403);
 
     const valid = await verifyPassword(password, u.password_hash);
     if (!valid) return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
@@ -65,7 +62,7 @@ export async function POST(request: NextRequest) {
         id: c.id, name: c.name,
         registrationNumber: c.commercial_registration,
         taxNumber: c.tax_number, vatNumber: c.vat_number || c.tax_number,
-        address: c.address, phone: c.phone, email: c.email, logo: c.logo,
+        address: c.address, phone: c.phone, email: c.email, logo: null,
       },
       token,
     });
