@@ -1,13 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+function clean(s: string): string {
+  return (s || '').replace(/^\uFEFF/, '').trim();
+}
 
 let _client: ReturnType<typeof createClient> | null = null;
 
 export function getSupabase() {
   if (!_client) {
-    _client = createClient(supabaseUrl, serviceKey, {
+    const url = clean(process.env.NEXT_PUBLIC_SUPABASE_URL || '');
+    const key = clean(process.env.SUPABASE_SERVICE_ROLE_KEY || '');
+    _client = createClient(url, key, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
   }
