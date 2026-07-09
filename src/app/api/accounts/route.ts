@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { success, error, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { accountSchema } from '@/lib/validation';
@@ -32,7 +32,8 @@ export async function GET(request: NextRequest) {
 
     return success({ accounts: roots });
   } catch (err) {
-    return handleApiError(err);
+    const msg = err instanceof Error ? err.message : JSON.stringify(err);
+    return NextResponse.json({ success: false, message: 'Accounts error: ' + msg }, { status: 500 });
   }
 }
 
