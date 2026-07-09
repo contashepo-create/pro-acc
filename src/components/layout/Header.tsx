@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Sun, Moon, Search, Bell, ChevronDown, LogOut, User, Settings,
-  Clock, Calendar, Menu,
+  Clock, Calendar, Menu, ShieldAlert,
 } from 'lucide-react';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
@@ -194,6 +194,13 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
                   >
                     <Settings size={16} />
                     الإعدادات
+                  </button>
+                  <button
+                    onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
+                    className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
+                  >
+                    <ShieldAlert size={16} />
+                    لوحة المطور
                   </button>
                   <div className="border-t border-border mt-1 pt-1">
                     <button
