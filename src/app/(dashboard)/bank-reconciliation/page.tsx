@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Eye, Search, CheckCircle2, XCircle } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -12,14 +12,31 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 
-const mockReconciliations = [
-  { id: '1', bank_safe_name: 'البنك الأهلي', date: '2026-06-01', closing_balance: 150000, status: 'completed', difference: 0 },
-  { id: '2', bank_safe_name: 'خزينة رئيسية', date: '2026-05-01', closing_balance: 50000, status: 'pending', difference: 1200 },
-];
-
 export default function BankReconciliationPage() {
-  const [loading] = useState(false);
+  const [reconciliations, setReconciliations] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/bank-reconciliation');
+        const json = await res.json();
+        if (json.success) {
+          setReconciliations(json.data || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'bank_safe_name', label: 'البنك/الخزينة', sortable: true },
@@ -43,6 +60,17 @@ export default function BankReconciliationPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="تسوية البنوك" description="مطابقة كشوف الحساب البنكي مع القيود المحاسبية"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>تسوية جديدة</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -52,10 +80,10 @@ export default function BankReconciliationPage() {
           <Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>تسوية جديدة</Button>
         }
       />
-      {mockReconciliations.length === 0 ? (
+      {reconciliations.length === 0 ? (
         <EmptyState title="لا توجد تسويات" actionLabel="تسوية جديدة" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockReconciliations} searchable searchKeys={['bank_safe_name']} />
+        <DataTable columns={columns} data={reconciliations} searchable searchKeys={['bank_safe_name']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="تسوية بنكية جديدة" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button>حفظ التسوية</Button></div>}>
         <div className="space-y-4">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Lock, Unlock } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -12,14 +12,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate } from '@/lib/utils';
 
-const mockFiscal = [
-  { id: '1', name: '2026', start_date: '2026-01-01', end_date: '2026-12-31', status: 'open' },
-  { id: '2', name: '2025', start_date: '2025-01-01', end_date: '2025-12-31', status: 'closed', closed_at: '2026-01-01' },
-];
-
 export default function FiscalPage() {
-  const [loading] = useState(false);
+  const [fiscalYears, setFiscalYears] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/fiscal');
+        const json = await res.json();
+        if (json.success) {
+          setFiscalYears(json.data?.fiscalYears || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
@@ -42,15 +59,26 @@ export default function FiscalPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="السنوات المالية" description="إدارة الفترات المالية وإقفال السنة"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة سنة مالية</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="السنوات المالية" description="إدارة الفترات المالية وإقفال السنة"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة سنة مالية</Button>}
       />
-      {mockFiscal.length === 0 ? (
+      {fiscalYears.length === 0 ? (
         <EmptyState title="لا توجد سنوات مالية" actionLabel="إضافة سنة مالية" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockFiscal} />
+        <DataTable columns={columns} data={fiscalYears} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة سنة مالية" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

@@ -38,11 +38,8 @@ export async function requireApiAuth(request: Request): Promise<{ companyId: str
   const payload = verifyToken(token);
   if (!payload) throw new AuthError('غير مصرح به');
 
-  const res = await query('SELECT company_id FROM users WHERE id = $1', [payload.userId]);
-  if (res.rows.length === 0) throw new AuthError('المستخدم غير موجود');
-
-  // Update last activity if column exists (fire-and-forget)
-  try { query('UPDATE users SET last_activity = NOW() WHERE id = $1', [payload.userId]); } catch {}
+  const res = await query('SELECT company_id FROM users WHERE id = $1 AND is_active = true', [payload.userId]);
+  if (res.rows.length === 0) throw new AuthError('المستخدم غير موجود أو غير نشط');
 
   return { companyId: res.rows[0].company_id, userId: payload.userId, role: payload.role };
 }

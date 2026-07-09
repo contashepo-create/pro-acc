@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -12,14 +12,31 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 
-const mockCategories = [
-  { id: '1', name: 'مصروفات إدارية', type: 'expense', account_name: 'مصروفات عمومية' },
-  { id: '2', name: 'إيرادات استشارات', type: 'revenue', account_name: 'إيرادات أخرى' },
-];
-
 export default function CategoriesPage() {
-  const [loading] = useState(false);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/categories');
+        const json = await res.json();
+        if (json.success) {
+          setCategories(json.data?.categories || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
@@ -29,15 +46,26 @@ export default function CategoriesPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="تصنيفات المعاملات" description="إدارة تصنيفات الإيرادات والمصروفات"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة تصنيف</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="تصنيفات المعاملات" description="إدارة تصنيفات الإيرادات والمصروفات"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة تصنيف</Button>}
       />
-      {mockCategories.length === 0 ? (
+      {categories.length === 0 ? (
         <EmptyState title="لا توجد تصنيفات" actionLabel="إضافة تصنيف" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockCategories} searchable searchKeys={['name', 'account_name']} />
+        <DataTable columns={columns} data={categories} searchable searchKeys={['name', 'account_name']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة تصنيف" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

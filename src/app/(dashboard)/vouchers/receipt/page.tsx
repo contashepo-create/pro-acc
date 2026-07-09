@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Search } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,14 +13,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockReceipts = [
-  { id: '1', number: 1, date: '2026-06-22', receipt_type: 'client', contact_name: 'شركة النخيل', amount: 50000, bank_name: 'البنك الأهلي' },
-  { id: '2', number: 2, date: '2026-06-21', receipt_type: 'general', contact_name: '', amount: 10000, bank_name: 'صندوق 1' },
-];
-
 export default function ReceiptPage() {
-  const [loading] = useState(false);
+  const [receipts, setReceipts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/vouchers/receipt');
+        const json = await res.json();
+        if (json.success) {
+          setReceipts(json.data?.receipts || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'success' | 'info' | 'accent'; label: string }> = {
@@ -43,6 +60,17 @@ export default function ReceiptPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="سندات القبض" description="تسجيل المقبوضات النقدية"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة سند قبض</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -55,10 +83,10 @@ export default function ReceiptPage() {
         }
       />
 
-      {mockReceipts.length === 0 ? (
+      {receipts.length === 0 ? (
         <EmptyState title="لا توجد سندات قبض" description="أضف سند قبض جديد" actionLabel="إضافة سند قبض" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockReceipts} searchable searchKeys={['number', 'contact_name']} />
+        <DataTable columns={columns} data={receipts} searchable searchKeys={['number', 'contact_name']} />
       )}
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة سند قبض" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>

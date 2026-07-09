@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -14,14 +14,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockPI = [
-  { id: '1', invoice_number: 1, date: '2026-06-20', supplier_name: 'شركة المواد', total: 45000, paid_amount: 45000 },
-  { id: '2', invoice_number: 2, date: '2026-06-15', supplier_name: 'مؤسسة البناء', total: 78000, paid_amount: 30000 },
-];
-
 export default function PurchaseInvoicesPage() {
-  const [loading] = useState(false);
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/purchases/invoices');
+        const json = await res.json();
+        if (json.success) {
+          setInvoices(json.data?.invoices || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'invoice_number', label: 'الرقم', sortable: true },
@@ -32,6 +49,17 @@ export default function PurchaseInvoicesPage() {
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="فواتير المشتريات" description="إدارة فواتير الشراء"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة فاتورة</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -45,10 +73,10 @@ export default function PurchaseInvoicesPage() {
         }
       />
 
-      {mockPI.length === 0 ? (
+      {invoices.length === 0 ? (
         <EmptyState title="لا توجد فواتير مشتريات" description="أضف فاتورة مشتريات جديدة" actionLabel="إضافة فاتورة" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockPI} searchable searchKeys={['supplier_name', 'invoice_number']} />
+        <DataTable columns={columns} data={invoices} searchable searchKeys={['supplier_name', 'invoice_number']} />
       )}
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة فاتورة مشتريات" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>

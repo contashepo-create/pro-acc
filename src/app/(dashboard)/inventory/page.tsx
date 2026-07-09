@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -14,14 +14,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatCurrency } from '@/lib/utils';
 
-const mockItems = [
-  { id: '1', code: 'ITM-001', name: 'أسمنت', unit: 'كيس', quantity: 500, unit_price: 15, warehouse_name: 'المستودع الرئيسي' },
-  { id: '2', code: 'ITM-002', name: 'حديد', unit: 'طن', quantity: 100, unit_price: 2500, warehouse_name: 'المستودع الرئيسي' },
-];
-
 export default function InventoryPage() {
-  const [loading] = useState(false);
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/inventory');
+        const json = await res.json();
+        if (json.success) {
+          setItems(json.data?.items || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'code', label: 'الكود', sortable: true },
@@ -33,6 +50,17 @@ export default function InventoryPage() {
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="المخزون" description="إدارة أصناف المخزون"
+          actions={<div className="flex gap-2"><Button variant="secondary" leftIcon={<Eye size={18} />}>الحركات</Button><Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة صنف</Button></div>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -47,10 +75,10 @@ export default function InventoryPage() {
         }
       />
 
-      {mockItems.length === 0 ? (
+      {items.length === 0 ? (
         <EmptyState title="لا توجد أصناف" description="أضف صنفاً جديداً للمخزون" actionLabel="إضافة صنف" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockItems} searchable searchKeys={['name', 'code']} />
+        <DataTable columns={columns} data={items} searchable searchKeys={['name', 'code']} />
       )}
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة صنف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>

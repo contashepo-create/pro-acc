@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,14 +13,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockEmployees = [
-  { id: '1', name: 'أحمد محمد', phone: '0555000111', salary: 12000, department: 'المحاسبة', position: 'محاسب', hire_date: '2024-01-15', is_active: true },
-  { id: '2', name: 'سارة خالد', phone: '0555000222', salary: 15000, department: 'المشاريع', position: 'مهندس', hire_date: '2024-03-01', is_active: true },
-];
-
 export default function EmployeesPage() {
-  const [loading] = useState(false);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/employees');
+        const json = await res.json();
+        if (json.success) {
+          setEmployees(json.data?.employees || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
@@ -34,15 +51,26 @@ export default function EmployeesPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="الموظفين" description="إدارة بيانات الموظفين"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة موظف</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="الموظفين" description="إدارة بيانات الموظفين"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة موظف</Button>}
       />
-      {mockEmployees.length === 0 ? (
+      {employees.length === 0 ? (
         <EmptyState title="لا توجد موظفين" description="أضف موظفاً جديداً" actionLabel="إضافة موظف" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockEmployees} searchable searchKeys={['name', 'phone', 'department']} />
+        <DataTable columns={columns} data={employees} searchable searchKeys={['name', 'phone', 'department']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة موظف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

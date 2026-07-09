@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,14 +13,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatCurrency } from '@/lib/utils';
 
-const mockBanks = [
-  { id: '1', name: 'البنك الأهلي', type: 'bank', account_number: 'SA123456789', opening_balance: 500000, is_active: true },
-  { id: '2', name: 'صندوق رئيسي', type: 'safe', account_number: '', opening_balance: 50000, is_active: true },
-];
-
 export default function BanksPage() {
-  const [loading] = useState(false);
+  const [banks, setBanks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/banks');
+        const json = await res.json();
+        if (json.success) {
+          setBanks(json.data?.banks || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
@@ -32,15 +49,26 @@ export default function BanksPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="البنوك والخزائن" description="إدارة الحسابات البنكية والخزائن النقدية"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة بنك/خزينة</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="البنوك والخزائن" description="إدارة الحسابات البنكية والخزائن النقدية"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة بنك/خزينة</Button>}
       />
-      {mockBanks.length === 0 ? (
+      {banks.length === 0 ? (
         <EmptyState title="لا توجد بنوك أو خزائن" actionLabel="إضافة بنك/خزينة" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockBanks} searchable searchKeys={['name', 'account_number']} />
+        <DataTable columns={columns} data={banks} searchable searchKeys={['name', 'account_number']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة بنك/خزينة" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

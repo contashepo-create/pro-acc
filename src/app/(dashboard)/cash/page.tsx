@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,17 +13,34 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockTxns = [
-  { id: '1', date: '2026-06-22', type: 'revenue', account_name: 'إيرادات', amount: 85000, reason: 'دفعة فاتورة' },
-  { id: '2', date: '2026-06-22', type: 'expense', account_name: 'مصروفات', amount: 12000, reason: 'مشتريات' },
-];
-
 export default function CashPage() {
-  const [loading] = useState(false);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [typeTab, setTypeTab] = useState('all');
 
-  const filtered = typeTab === 'all' ? mockTxns : mockTxns.filter(t => t.type === typeTab);
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/cash');
+        const json = await res.json();
+        if (json.success) {
+          setTransactions(json.data?.rows || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  const filtered = typeTab === 'all' ? transactions : transactions.filter(t => t.type === typeTab);
 
   const columns = [
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
@@ -36,6 +53,17 @@ export default function CashPage() {
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="النقدية" description="إدارة المعاملات النقدية"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة معاملة</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -14,18 +14,33 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockContracts = [
-  { id: '1', contract_number: 'SC-001', subcontractor_name: 'مؤسسة البناء', contract_value: 500000, status: 'active', start_date: '2026-03-01' },
-];
-
-const mockCertificates = [
-  { id: '1', certificate_number: 'CERT-001', contract_number: 'SC-001', subcontractor_name: 'مؤسسة البناء', gross_amount: 100000, net_amount: 95000, date: '2026-04-15' },
-];
-
 export default function SubcontractorsPage() {
-  const [loading] = useState(false);
+  const [contracts, setContracts] = useState<any[]>([]);
+  const [certificates, setCertificates] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [tab, setTab] = useState('contracts');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/subcontractors/contracts');
+        const json = await res.json();
+        if (json.success) {
+          setContracts(json.data?.contracts || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const contractCols = [
     { key: 'contract_number', label: 'رقم العقد', sortable: true },
@@ -45,6 +60,17 @@ export default function SubcontractorsPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="مقاولو الباطن" description="إدارة عقود وشهادات مقاولي الباطن"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عقد</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="مقاولو الباطن" description="إدارة عقود وشهادات مقاولي الباطن"
@@ -52,9 +78,9 @@ export default function SubcontractorsPage() {
       />
       <Tabs items={[{ id: 'contracts', label: 'العقود' }, { id: 'certificates', label: 'الشهادات' }]} activeTab={tab} onChange={setTab} />
       {tab === 'contracts' ? (
-        mockContracts.length === 0 ? <EmptyState title="لا توجد عقود" actionLabel="إضافة عقد" onAction={() => setShowModal(true)} /> : <DataTable columns={contractCols} data={mockContracts} searchable searchKeys={['contract_number', 'subcontractor_name']} />
+        contracts.length === 0 ? <EmptyState title="لا توجد عقود" actionLabel="إضافة عقد" onAction={() => setShowModal(true)} /> : <DataTable columns={contractCols} data={contracts} searchable searchKeys={['contract_number', 'subcontractor_name']} />
       ) : (
-        mockCertificates.length === 0 ? <EmptyState title="لا توجد شهادات" actionLabel="إضافة شهادة" onAction={() => setShowModal(true)} /> : <DataTable columns={certCols} data={mockCertificates} searchable searchKeys={['certificate_number', 'subcontractor_name']} />
+        certificates.length === 0 ? <EmptyState title="لا توجد شهادات" actionLabel="إضافة شهادة" onAction={() => setShowModal(true)} /> : <DataTable columns={certCols} data={certificates} searchable searchKeys={['certificate_number', 'subcontractor_name']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={tab === 'contracts' ? 'إضافة عقد' : 'إضافة شهادة'} size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button>حفظ</Button></div>}>
         {tab === 'contracts' ? (

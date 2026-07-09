@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -15,15 +15,32 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockInvoices = [
-  { id: '1', number: 1, date: '2026-06-22', contact_name: 'شركة النخيل', total: 50000, status: 'unpaid', paid_amount: 0 },
-  { id: '2', number: 2, date: '2026-06-20', contact_name: 'مؤسسة الورود', total: 75000, status: 'partial', paid_amount: 30000 },
-];
-
 export default function InvoicesPage() {
-  const [loading] = useState(false);
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [statusTab, setStatusTab] = useState('all');
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/invoices');
+        const json = await res.json();
+        if (json.success) {
+          setInvoices(json.data?.invoices || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const statusBadge = (status: string) => {
     const map: Record<string, { variant: 'success' | 'warning' | 'danger' | 'info'; label: string }> = {
@@ -36,7 +53,7 @@ export default function InvoicesPage() {
     return <Badge variant={m.variant}>{m.label}</Badge>;
   };
 
-  const filtered = statusTab === 'all' ? mockInvoices : mockInvoices.filter(i => i.status === statusTab);
+  const filtered = statusTab === 'all' ? invoices : invoices.filter(i => i.status === statusTab);
 
   const columns = [
     { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => `#${row.number}` },
@@ -48,6 +65,17 @@ export default function InvoicesPage() {
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="الفواتير" description="إدارة فواتير المبيعات"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة فاتورة</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

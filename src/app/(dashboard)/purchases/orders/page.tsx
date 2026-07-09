@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -15,14 +15,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockOrders = [
-  { id: '1', po_number: 1, date: '2026-06-20', supplier_name: 'شركة المواد', total: 45000, status: 'pending' },
-  { id: '2', po_number: 2, date: '2026-06-18', supplier_name: 'مؤسسة البناء', total: 78000, status: 'received' },
-];
-
 export default function PurchaseOrdersPage() {
-  const [loading] = useState(false);
+  const [orders, setOrders] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/purchases/orders');
+        const json = await res.json();
+        if (json.success) {
+          setOrders(json.data?.orders || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const statusBadge = (status: string) => {
     const map: Record<string, { variant: 'warning' | 'success' | 'info' | 'danger'; label: string }> = {
@@ -45,6 +62,17 @@ export default function PurchaseOrdersPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="أوامر الشراء" description="إدارة أوامر الشراء"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة أمر شراء</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -57,10 +85,10 @@ export default function PurchaseOrdersPage() {
         }
       />
 
-      {mockOrders.length === 0 ? (
+      {orders.length === 0 ? (
         <EmptyState title="لا توجد أوامر شراء" description="أضف أمر شراء جديد" actionLabel="إضافة أمر شراء" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockOrders} searchable searchKeys={['supplier_name', 'po_number']} />
+        <DataTable columns={columns} data={orders} searchable searchKeys={['supplier_name', 'po_number']} />
       )}
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة أمر شراء" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>

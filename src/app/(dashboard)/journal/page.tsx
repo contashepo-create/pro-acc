@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -14,16 +14,33 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { formatDate } from '@/lib/utils';
 
-const mockEntries = [
-  { id: '1', number: 1, date: '2026-06-22', description: 'قيد افتتاحي', type: 'opening_balance', lines: [] },
-  { id: '2', number: 2, date: '2026-06-22', description: 'فاتورة مبيعات #1', type: 'general', lines: [] },
-];
-
 export default function JournalPage() {
-  const [loading] = useState(false);
+  const [entries, setEntries] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [showDetail, setShowDetail] = useState<any>(null);
   const [lines, setLines] = useState([{ account_id: '', debit: 0, credit: 0, description: '' }]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/journal');
+        const json = await res.json();
+        if (json.success) {
+          setEntries(json.data?.entries || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'number', label: 'الرقم', sortable: true },
@@ -45,6 +62,17 @@ export default function JournalPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="القيود المحاسبية" description="إدخال وعرض القيود اليومية"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة قيد</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -57,10 +85,10 @@ export default function JournalPage() {
         }
       />
 
-      {mockEntries.length === 0 ? (
+      {entries.length === 0 ? (
         <EmptyState title="لا توجد قيود" description="أضف قيداً محاسبياً جديداً" actionLabel="إضافة قيد" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockEntries} searchable searchKeys={['description', 'number']} />
+        <DataTable columns={columns} data={entries} searchable searchKeys={['description', 'number']} />
       )}
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة قيد محاسبي" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>

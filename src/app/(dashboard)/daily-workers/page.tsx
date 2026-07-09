@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,14 +13,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockRecords = [
-  { id: '1', date: '2026-06-15', worker_name: 'محمد علي', worker_type: 'worker', daily_rate: 150, hours_worked: 8, total_amount: 150, project_name: 'مشروع النخيل' },
-  { id: '2', date: '2026-06-15', worker_name: 'خالد حسن', worker_type: 'foreman', daily_rate: 250, hours_worked: 8, total_amount: 250, project_name: 'مشروع النخيل' },
-];
-
 export default function DailyWorkersPage() {
-  const [loading] = useState(false);
+  const [records, setRecords] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/daily-workers');
+        const json = await res.json();
+        if (json.success) {
+          setRecords(json.data?.records || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
@@ -34,15 +51,26 @@ export default function DailyWorkersPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="العمال اليوميون" description="تسجيل العمال اليوميين في المشاريع"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عامل</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="العمال اليوميون" description="تسجيل العمال اليوميين في المشاريع"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عامل</Button>}
       />
-      {mockRecords.length === 0 ? (
+      {records.length === 0 ? (
         <EmptyState title="لا توجد سجلات" actionLabel="إضافة عامل" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockRecords} searchable searchKeys={['worker_name', 'project_name']} />
+        <DataTable columns={columns} data={records} searchable searchKeys={['worker_name', 'project_name']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="تسجيل عامل يومي" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

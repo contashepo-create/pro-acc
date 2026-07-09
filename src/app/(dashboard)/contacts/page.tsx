@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -12,14 +12,31 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 
-const mockContacts = [
-  { id: '1', name: 'شركة النخيل', type: 'client', phone: '0555000111', email: 'info@nakhil.com', is_active: true },
-  { id: '2', name: 'مؤسسة المواد', type: 'supplier', phone: '0555000222', email: 'info@mawad.com', is_active: true },
-];
-
 export default function ContactsPage() {
-  const [loading] = useState(false);
+  const [contacts, setContacts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/contacts');
+        const json = await res.json();
+        if (json.success) {
+          setContacts(json.data?.contacts || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
@@ -31,15 +48,26 @@ export default function ContactsPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="جهات الاتصال" description="إدارة جهات الاتصال"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة جهة اتصال</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="جهات الاتصال" description="إدارة جهات الاتصال"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة جهة اتصال</Button>}
       />
-      {mockContacts.length === 0 ? (
+      {contacts.length === 0 ? (
         <EmptyState title="لا توجد جهات اتصال" actionLabel="إضافة جهة اتصال" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockContacts} searchable searchKeys={['name', 'phone', 'email']} />
+        <DataTable columns={columns} data={contacts} searchable searchKeys={['name', 'phone', 'email']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة جهة اتصال" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

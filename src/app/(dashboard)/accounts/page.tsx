@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, FolderTree } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -12,30 +12,42 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 
-const mockAccounts = [
-  { id: '1', code: '1000', name: 'الأصول', type: 'asset', children: [
-    { id: '2', code: '1110', name: 'النقدية', type: 'asset', children: [] },
-    { id: '3', code: '1120', name: 'البنوك', type: 'asset', children: [] },
-  ]},
-  { id: '4', code: '2000', name: 'الخصوم', type: 'liability', children: [
-    { id: '5', code: '2110', name: 'الدائنون', type: 'liability', children: [] },
-  ]},
-];
-
 export default function AccountsPage() {
-  const [loading] = useState(false);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
-  const flattenAccounts = (accounts: any[], depth = 0): any[] => {
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/accounts');
+        const json = await res.json();
+        if (json.success) {
+          setAccounts(json.data?.accounts || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  const flattenAccounts = (accs: any[], depth = 0): any[] => {
     const result: any[] = [];
-    for (const acc of accounts) {
+    for (const acc of accs) {
       result.push({ ...acc, depth, parent_name: acc.parent_name || '' });
       if (acc.children) result.push(...flattenAccounts(acc.children, depth + 1));
     }
     return result;
   };
 
-  const flatData = flattenAccounts(mockAccounts);
+  const flatData = flattenAccounts(accounts);
 
   const columns = [
     { key: 'code', label: 'الرمز', sortable: true },
@@ -53,6 +65,17 @@ export default function AccountsPage() {
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="دليل الحسابات" description="إدارة شجرة الحسابات المحاسبية"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة حساب</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
@@ -14,21 +14,36 @@ import { StatCard } from '@/components/ui/StatCard';
 import { formatCurrency } from '@/lib/utils';
 import { Download, FileText } from 'lucide-react';
 
-const mockTB = [
-  { id: '1', code: '1110', name: 'النقدية', type: 'asset', total_debit: 500000, total_credit: 100000, balance: 400000 },
-  { id: '2', code: '2110', name: 'الدائنون', type: 'liability', total_debit: 0, total_credit: 200000, balance: -200000 },
-  { id: '3', code: '4100', name: 'إيرادات العقود', type: 'revenue', total_debit: 0, total_credit: 500000, balance: -500000 },
-];
-
-const mockIncome = {
-  revenue: [{ id: '1', code: '4100', name: 'إيرادات العقود', amount: 500000 }],
-  expenses: [{ id: '2', code: '5100', name: 'تكاليف مباشرة', amount: 300000 }],
-  total_revenue: 500000, total_expenses: 300000, net_income: 200000,
-};
-
 export default function ReportsPage() {
-  const [loading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [tab, setTab] = useState('trial_balance');
+  const [trialBalance, setTrialBalance] = useState<any[]>([]);
+  const [incomeStatement, setIncomeStatement] = useState<any>(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`/api/reports/financial?type=${tab === 'income_statement' ? 'income_statement' : 'trial_balance'}`);
+        const json = await res.json();
+        if (json.success) {
+          if (tab === 'income_statement') {
+            setIncomeStatement(json.data || null);
+          } else {
+            setTrialBalance(json.data?.accounts || []);
+          }
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, [tab]);
 
   const tbCols = [
     { key: 'code', label: 'الكود', sortable: true },
@@ -45,6 +60,17 @@ export default function ReportsPage() {
   ];
 
   if (loading) return <LoadingSkeleton variant="card" count={4} />;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="التقارير" description="التقارير المالية والمحاسبية"
+          actions={<Button variant="secondary" leftIcon={<Download size={16} />}>تصدير</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -67,19 +93,29 @@ export default function ReportsPage() {
             <Input label="من تاريخ" type="date" />
             <Input label="إلى تاريخ" type="date" />
           </div>
-          <Table columns={tbCols} data={mockTB} />
+          {trialBalance.length === 0 ? (
+            <p className="text-text-muted text-center py-8">لا توجد بيانات</p>
+          ) : (
+            <Table columns={tbCols} data={trialBalance} />
+          )}
         </div>
       )}
 
       {tab === 'income_statement' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-3 gap-4">
-            <StatCard title="إجمالي الإيرادات" value={formatCurrency(mockIncome.total_revenue)} accentColor="var(--color-success)" />
-            <StatCard title="إجمالي المصروفات" value={formatCurrency(mockIncome.total_expenses)} accentColor="var(--color-danger)" />
-            <StatCard title="صافي الدخل" value={formatCurrency(mockIncome.net_income)} accentColor="var(--color-accent)" />
-          </div>
-          <Card title="الإيرادات"><Table columns={incomeCols} data={mockIncome.revenue} /></Card>
-          <Card title="المصروفات"><Table columns={incomeCols} data={mockIncome.expenses} /></Card>
+          {incomeStatement ? (
+            <>
+              <div className="grid grid-cols-3 gap-4">
+                <StatCard title="إجمالي الإيرادات" value={formatCurrency(incomeStatement.total_revenue || 0)} accentColor="var(--color-success)" />
+                <StatCard title="إجمالي المصروفات" value={formatCurrency(incomeStatement.total_expenses || 0)} accentColor="var(--color-danger)" />
+                <StatCard title="صافي الدخل" value={formatCurrency(incomeStatement.net_income || 0)} accentColor="var(--color-accent)" />
+              </div>
+              <Card title="الإيرادات"><Table columns={incomeCols} data={incomeStatement.revenue || []} /></Card>
+              <Card title="المصروفات"><Table columns={incomeCols} data={incomeStatement.expenses || []} /></Card>
+            </>
+          ) : (
+            <p className="text-text-muted text-center py-8">لا توجد بيانات</p>
+          )}
         </div>
       )}
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,14 +13,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockClaims = [
-  { id: '1', claim_number: 'PB-001', project_name: 'مشروع النخيل', gross_amount: 200000, retention_amount: 10000, net_amount: 190000, date: '2026-05-15', status: 'approved' },
-  { id: '2', claim_number: 'PB-002', project_name: 'مشروع الورود', gross_amount: 150000, retention_amount: 7500, net_amount: 142500, date: '2026-06-01', status: 'approved' },
-];
-
 export default function ProgressBillingPage() {
-  const [loading] = useState(false);
+  const [claims, setClaims] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/progress-billing');
+        const json = await res.json();
+        if (json.success) {
+          setClaims(json.data?.claims || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'claim_number', label: 'رقم الفاتورة', sortable: true },
@@ -34,15 +51,26 @@ export default function ProgressBillingPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="الفواتير المرحلية" description="إدارة فواتير المبيعات المرحلية"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة فاتورة مرحلية</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="الفواتير المرحلية" description="إدارة فواتير المبيعات المرحلية"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة فاتورة مرحلية</Button>}
       />
-      {mockClaims.length === 0 ? (
+      {claims.length === 0 ? (
         <EmptyState title="لا توجد فواتير مرحلية" actionLabel="إضافة فاتورة" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockClaims} searchable searchKeys={['claim_number', 'project_name']} />
+        <DataTable columns={columns} data={claims} searchable searchKeys={['claim_number', 'project_name']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة فاتورة مرحلية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

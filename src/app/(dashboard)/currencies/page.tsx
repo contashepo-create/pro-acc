@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Search } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -11,15 +11,31 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 
-const mockCurrencies = [
-  { id: '1', code: 'SAR', name: 'ريال سعودي', rate: 1, is_base: true },
-  { id: '2', code: 'USD', name: 'دولار أمريكي', rate: 3.75, is_base: false },
-  { id: '3', code: 'EUR', name: 'يورو', rate: 4.05, is_base: false },
-];
-
 export default function CurrenciesPage() {
-  const [loading] = useState(false);
+  const [currencies, setCurrencies] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/currencies');
+        const json = await res.json();
+        if (json.success) {
+          setCurrencies(json.data || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'code', label: 'الكود', sortable: true },
@@ -34,6 +50,17 @@ export default function CurrenciesPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="العملات" description="إدارة العملات وأسعار الصرف"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عملة</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -43,10 +70,10 @@ export default function CurrenciesPage() {
           <Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عملة</Button>
         }
       />
-      {mockCurrencies.length === 0 ? (
+      {currencies.length === 0 ? (
         <EmptyState title="لا توجد عملات" actionLabel="إضافة عملة" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockCurrencies} searchable searchKeys={['code', 'name']} />
+        <DataTable columns={columns} data={currencies} searchable searchKeys={['code', 'name']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عملة" size="sm" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button>حفظ</Button></div>}>
         <div className="space-y-4">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,14 +13,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockDisbursements = [
-  { id: '1', number: 1, date: '2026-06-22', disbursement_type: 'supplier', contact_name: 'مورد مواد', amount: 34000, bank_name: 'البنك الأهلي' },
-  { id: '2', number: 2, date: '2026-06-21', disbursement_type: 'employee_advance', employee_name: 'أحمد محمد', amount: 5000, bank_name: 'صندوق 1' },
-];
-
 export default function DisbursementPage() {
-  const [loading] = useState(false);
+  const [disbursements, setDisbursements] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/vouchers/disbursement');
+        const json = await res.json();
+        if (json.success) {
+          setDisbursements(json.data?.disbursements || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'danger' | 'warning' | 'info' | 'accent'; label: string }> = {
@@ -45,6 +62,17 @@ export default function DisbursementPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="سندات الصرف" description="تسجيل المدفوعات النقدية"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة سند صرف</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -57,10 +85,10 @@ export default function DisbursementPage() {
         }
       />
 
-      {mockDisbursements.length === 0 ? (
+      {disbursements.length === 0 ? (
         <EmptyState title="لا توجد سندات صرف" description="أضف سند صرف جديد" actionLabel="إضافة سند صرف" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockDisbursements} searchable searchKeys={['number', 'contact_name', 'employee_name']} />
+        <DataTable columns={columns} data={disbursements} searchable searchKeys={['number', 'contact_name', 'employee_name']} />
       )}
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة سند صرف" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>

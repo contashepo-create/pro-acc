@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -14,15 +14,32 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockProjects = [
-  { id: '1', name: 'مشروع النخيل', client_name: 'شركة النخيل', contract_value: 1200000, status: 'active', start_date: '2026-01-15' },
-  { id: '2', name: 'مشروع الورود', client_name: 'مؤسسة الورود', contract_value: 850000, status: 'active', start_date: '2026-03-01' },
-];
-
 export default function ProjectsPage() {
-  const [loading] = useState(false);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [statusTab, setStatusTab] = useState('all');
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/projects');
+        const json = await res.json();
+        if (json.success) {
+          setProjects(json.data?.rows || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const statusBadge = (status: string) => {
     const map: Record<string, { variant: 'success' | 'warning' | 'danger'; label: string }> = {
@@ -34,7 +51,7 @@ export default function ProjectsPage() {
     return <Badge variant={m.variant}>{m.label}</Badge>;
   };
 
-  const filtered = statusTab === 'all' ? mockProjects : mockProjects.filter(p => p.status === statusTab);
+  const filtered = statusTab === 'all' ? projects : projects.filter(p => p.status === statusTab);
 
   const columns = [
     { key: 'name', label: 'اسم المشروع', sortable: true },
@@ -45,6 +62,17 @@ export default function ProjectsPage() {
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="المشاريع" description="إدارة المشاريع"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة مشروع</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

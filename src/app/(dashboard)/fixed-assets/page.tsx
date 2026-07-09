@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -14,14 +14,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockAssets = [
-  { id: '1', name: 'سيارة', code: 'FA-001', category: 'مركبات', purchase_cost: 120000, accumulated_depreciation: 20000, net_book_value: 100000, status: 'active', purchase_date: '2025-01-15' },
-  { id: '2', name: 'حاسوب', code: 'FA-002', category: 'أجهزة', purchase_cost: 15000, accumulated_depreciation: 5000, net_book_value: 10000, status: 'active', purchase_date: '2025-06-01' },
-];
-
 export default function FixedAssetsPage() {
-  const [loading] = useState(false);
+  const [assets, setAssets] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/fixed-assets');
+        const json = await res.json();
+        if (json.success) {
+          setAssets(json.data?.assets || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'code', label: 'الكود', sortable: true },
@@ -35,15 +52,26 @@ export default function FixedAssetsPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="الأصول الثابتة" description="إدارة الأصول الثابتة والإهلاكات"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة أصل</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="الأصول الثابتة" description="إدارة الأصول الثابتة والإهلاكات"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة أصل</Button>}
       />
-      {mockAssets.length === 0 ? (
+      {assets.length === 0 ? (
         <EmptyState title="لا توجد أصول ثابتة" actionLabel="إضافة أصل" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockAssets} searchable searchKeys={['name', 'code', 'category']} />
+        <DataTable columns={columns} data={assets} searchable searchKeys={['name', 'code', 'category']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة أصل ثابت" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

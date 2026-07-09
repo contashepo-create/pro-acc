@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Bell, Search, CheckCheck, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -8,19 +8,46 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 
-const mockNotifications = [
-  { id: '1', type: 'info', title: 'فاتورة جديدة', message: 'تم إضافة فاتورة جديدة للمشروع', is_read: false, created_at: '2026-06-23T08:00:00Z' },
-  { id: '2', type: 'warning', title: 'رصيد منخفض', message: 'رصيد الخزينة الرئيسية أقل من 10,000 ريال', is_read: false, created_at: '2026-06-22T10:00:00Z' },
-  { id: '3', type: 'success', title: 'تمت التسوية', message: 'تمت تسوية كشف الحساب البنكي لشهر مايو', is_read: true, created_at: '2026-06-20T14:00:00Z' },
-];
-
 const typeIcons: Record<string, string> = { info: '🔵', warning: '🟡', success: '🟢', error: '🔴' };
 const typeVariants: Record<string, string> = { info: 'info', warning: 'warning', success: 'success', error: 'danger' };
 
 export default function NotificationsPage() {
-  const [loading] = useState(false);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/notifications');
+        const json = await res.json();
+        if (json.success) {
+          setNotifications(json.data || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="الإشعارات" description="جميع الإشعارات والتنبيهات"
+          actions={<div className="flex gap-2"><Button variant="ghost" leftIcon={<CheckCheck size={18} />}>تحديد الكل مقروء</Button></div>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -33,11 +60,11 @@ export default function NotificationsPage() {
           </div>
         }
       />
-      {mockNotifications.length === 0 ? (
+      {notifications.length === 0 ? (
         <EmptyState title="لا توجد إشعارات" description="سيتم عرض الإشعارات هنا عند حدوثها" />
       ) : (
         <div className="space-y-2">
-          {mockNotifications.map((n) => (
+          {notifications.map((n) => (
             <div key={n.id} className={`flex items-start gap-4 p-4 rounded-xl border transition-colors ${n.is_read ? 'bg-bg-card border-border' : 'bg-bg-card border-accent/30'}`}>
               <span className="text-xl mt-0.5">{typeIcons[n.type] || '🔵'}</span>
               <div className="flex-1 min-w-0">

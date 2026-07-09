@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,14 +13,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatCurrency } from '@/lib/utils';
 
-const mockBoq = [
-  { id: '1', item_code: 'B001', description: 'خرسانة مسلحة', unit: 'م³', quantity: 500, unit_price: 350, total: 175000, project_name: 'مشروع النخيل' },
-  { id: '2', item_code: 'B002', description: 'حديد تسليح', unit: 'طن', quantity: 50, unit_price: 2500, total: 125000, project_name: 'مشروع النخيل' },
-];
-
 export default function BoqPage() {
-  const [loading] = useState(false);
+  const [boqItems, setBoqItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/boq');
+        const json = await res.json();
+        if (json.success) {
+          setBoqItems(json.data?.boqItems || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'item_code', label: 'الكود', sortable: true },
@@ -34,15 +51,26 @@ export default function BoqPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="بنود الكميات" description="إدارة بنود الكميات للمشاريع"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة بند</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="بنود الكميات" description="إدارة بنود الكميات للمشاريع"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة بند</Button>}
       />
-      {mockBoq.length === 0 ? (
+      {boqItems.length === 0 ? (
         <EmptyState title="لا توجد بنود كميات" actionLabel="إضافة بند" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockBoq} searchable searchKeys={['item_code', 'description', 'project_name']} />
+        <DataTable columns={columns} data={boqItems} searchable searchKeys={['item_code', 'description', 'project_name']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة بند كمية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,14 +13,31 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
-const mockCustodies = [
-  { id: '1', employee_name: 'أحمد محمد', date: '2026-06-01', amount: 10000, description: 'عهدة مشتريات', status: 'open' },
-  { id: '2', employee_name: 'سارة خالد', date: '2026-06-10', amount: 5000, description: 'عهدة سفر', status: 'settled' },
-];
-
 export default function CustodiesPage() {
-  const [loading] = useState(false);
+  const [custodies, setCustodies] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch('/api/custodies');
+        const json = await res.json();
+        if (json.success) {
+          setCustodies(json.data?.custodies || []);
+        } else {
+          setError(json.message || 'فشل تحميل البيانات');
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const columns = [
     { key: 'employee_name', label: 'الموظف', sortable: true },
@@ -32,15 +49,26 @@ export default function CustodiesPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="العهد" description="إدارة عهد الموظفين"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عهدة</Button>}
+        />
+        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader title="العهد" description="إدارة عهد الموظفين"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عهدة</Button>}
       />
-      {mockCustodies.length === 0 ? (
+      {custodies.length === 0 ? (
         <EmptyState title="لا توجد عهد" description="أضف عهدة جديدة" actionLabel="إضافة عهدة" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={mockCustodies} searchable searchKeys={['employee_name', 'description']} />
+        <DataTable columns={columns} data={custodies} searchable searchKeys={['employee_name', 'description']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عهدة" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
