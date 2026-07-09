@@ -71,6 +71,14 @@ const navGroups: NavGroup[] = [
     items: [{ id: 'subcontractors', label: 'مقاولو الباطن' }],
   },
   {
+    label: 'العملاء والموردون',
+    icon: Users,
+    items: [
+      { id: 'clients', label: 'العملاء' },
+      { id: 'contacts', label: 'جهات الاتصال' },
+    ],
+  },
+  {
     label: 'الموارد البشرية',
     icon: UsersRound,
     items: [
@@ -103,8 +111,6 @@ const navGroups: NavGroup[] = [
       { id: 'subscription', label: 'الباقات والاشتراك' },
       { id: 'messages', label: 'الرسائل' },
       { id: 'complaints', label: 'الشكاوي والاقتراحات' },
-      { id: 'contacts', label: 'جهات الاتصال' },
-      { id: 'clients', label: 'العملاء' },
       { id: 'fiscal', label: 'السنوات المالية' },
       { id: 'notifications', label: 'الإشعارات' },
     ],
