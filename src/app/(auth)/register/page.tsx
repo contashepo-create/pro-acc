@@ -35,7 +35,7 @@ export default function RegisterPage() {
       });
       const data = await res.json();
       if (data.success) {
-        router.push('/dashboard');
+        router.push('/');
         checkSession();
       } else {
         setError(data.message || 'حدث خطأ');
