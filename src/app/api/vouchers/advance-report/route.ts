@@ -1,45 +1,70 @@
+// @ts-nocheck
 import { NextRequest } from 'next/server';
 import { success, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
 
-    const advAccRes = await query(
-      `SELECT id FROM accounts WHERE code = '2180' AND company_id = $1 LIMIT 1`,
-      [auth.companyId]
-    );
+    const { data: advAccount } = await s.from('accounts')
+      .select('id')
+      .eq('code', '2180')
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (advAccRes.rows.length === 0) {
+    if (!advAccount) {
       return success([]);
     }
 
-    const advAccountId = advAccRes.rows[0].id;
+    const advAccountId = advAccount.id;
 
-    const reportRes = await query(
-      `SELECT jl.contact_id, c.name AS contact_name,
-              COALESCE(SUM(jl.credit) - SUM(jl.debit), 0) AS balance
-       FROM journal_lines jl
-       LEFT JOIN contacts c ON c.id = jl.contact_id
-       WHERE jl.account_id = $1
-         AND jl.contact_id IS NOT NULL
-         AND jl.journal_entry_id IN (
-           SELECT je.id FROM journal_entries je WHERE je.company_id = $2
-         )
-       GROUP BY jl.contact_id, c.name
-       HAVING COALESCE(SUM(jl.credit) - SUM(jl.debit), 0) > 0.01
-       ORDER BY c.name`,
-      [advAccountId, auth.companyId]
-    );
+    const { data: jeIds } = await s.from('journal_entries')
+      .select('id')
+      .eq('company_id', auth.companyId);
 
-    return success(
-      reportRes.rows.map((r) => ({
-        contact_id: r.contact_id,
-        contact_name: r.contact_name || '',
-        balance: parseFloat(r.balance),
-      }))
-    );
+    const jeIdList = (jeIds || []).map((je) => je.id);
+
+    if (jeIdList.length === 0) {
+      return success([]);
+    }
+
+    const { data: lines } = await s.from('journal_lines')
+      .select('contact_id, debit, credit')
+      .eq('account_id', advAccountId)
+      .in('journal_entry_id', jeIdList)
+      .not('contact_id', 'is', null);
+
+    // Aggregate by contact_id
+    const balances = {};
+    const contactIds = [...new Set((lines || []).map((l) => l.contact_id))];
+
+    for (const cid of contactIds) {
+      const contactLines = (lines || []).filter((l) => l.contact_id === cid);
+      const totalCredit = contactLines.reduce((sum, l) => sum + (parseFloat(l.credit) || 0), 0);
+      const totalDebit = contactLines.reduce((sum, l) => sum + (parseFloat(l.debit) || 0), 0);
+      const balance = totalCredit - totalDebit;
+
+      if (balance > 0.01) {
+        const { data: contact } = await s.from('contacts')
+          .select('name')
+          .eq('id', cid)
+          .maybeSingle();
+        balances[cid] = {
+          contact_id: cid,
+          contact_name: contact?.name || '',
+          balance,
+        };
+      }
+    }
+
+    const result = Object.values(balances).sort((a, b) => a.contact_name.localeCompare(b.contact_name));
+
+    return success(result);
   } catch (err) {
     return handleApiError(err);
   }

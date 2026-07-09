@@ -1,4 +1,7 @@
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export interface SubscriptionInfo {
   id: string;
@@ -14,18 +17,27 @@ export interface SubscriptionInfo {
 }
 
 export async function getCompanySubscription(companyId: string): Promise<SubscriptionInfo | null> {
-  const res = await query(
-    `SELECT s.*, sp.name as plan_name
-     FROM subscriptions s
-     LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
-     WHERE s.company_id = $1
-     ORDER BY s.created_at DESC LIMIT 1`,
-    [companyId]
-  );
+  const s = sb();
 
-  if (res.rows.length === 0) return null;
+  const { data: sub, error } = await s.from('subscriptions')
+    .select('id, company_id, plan_id, plan_code, status, start_date, end_date, created_at')
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
 
-  const sub = res.rows[0];
+  if (error || !sub) return null;
+
+  // Get plan name separately
+  let planName: string | null = null;
+  if (sub.plan_id) {
+    const { data: plan } = await s.from('subscription_plans')
+      .select('name')
+      .eq('id', sub.plan_id)
+      .single();
+    if (plan) planName = plan.name;
+  }
+
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const endDate = new Date(sub.end_date);
@@ -36,7 +48,7 @@ export async function getCompanySubscription(companyId: string): Promise<Subscri
     id: sub.id,
     company_id: sub.company_id,
     plan_code: sub.plan_code,
-    plan_name: sub.plan_name,
+    plan_name: planName,
     status: sub.status,
     start_date: sub.start_date,
     end_date: sub.end_date,

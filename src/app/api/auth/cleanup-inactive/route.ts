@@ -1,43 +1,83 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 // GET /api/auth/cleanup-inactive — called by Vercel Cron daily at 3am
 // POST /api/auth/cleanup-inactive — called manually with x-cron-secret header
 // Deletes free/trial accounts inactive for 15+ days
 
 async function doCleanup() {
-  const inactiveRes = await query(
-    `SELECT DISTINCT u.company_id
-     FROM users u
-     JOIN subscriptions s ON s.company_id = u.company_id
-     WHERE s.plan_code IN ('trial', 'free', 'starter')
-       AND s.status IN ('trial', 'expired', 'cancelled')
-       AND (u.last_activity IS NULL OR u.last_activity < NOW() - INTERVAL '15 days')
-       AND u.last_login IS NOT NULL`
-  );
+  const s = sb();
+  const fifteenDaysAgo = new Date(Date.now() - 15 * 86400000).toISOString();
 
-  const inactiveCompanyIds = inactiveRes.rows.map((r: any) => r.company_id);
+  // Get subscriptions matching criteria
+  const { data: subs } = await s.from('subscriptions')
+    .select('company_id')
+    .in('plan_code', ['trial', 'free', 'starter'])
+    .in('status', ['trial', 'expired', 'cancelled']);
+
+  const subCompanyIds = [...new Set((subs || []).map((s: any) => s.company_id))];
+
+  if (subCompanyIds.length === 0) {
+    return success({
+      message: 'تم تنظيف الحسابات غير النشطة',
+      deletedCompanies: 0,
+      deletedUsers: 0,
+    });
+  }
+
+  // Get inactive users for those companies
+  const { data: users } = await s.from('users')
+    .select('company_id, last_activity, last_login')
+    .in('company_id', subCompanyIds)
+    .not('last_login', 'is', null);
+
+  // Filter inactive users
+  const inactiveCompanyIds = [...new Set(
+    (users || [])
+      .filter((u: any) => !u.last_activity || new Date(u.last_activity) < new Date(fifteenDaysAgo))
+      .map((u: any) => u.company_id)
+  )];
+
   let deletedCompanies = 0;
   let deletedUsers = 0;
 
+  const tablesToClean = [
+    'journal_lines',
+    'journal_entries',
+    'invoices',
+    'clients',
+    'contacts',
+    'accounts',
+    'transactions',
+    'subscriptions',
+    'login_attempts',
+    'settings',
+    'notifications',
+  ];
+
   for (const companyId of inactiveCompanyIds) {
-    await query('DELETE FROM journal_lines WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM journal_entries WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM invoices WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM clients WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM contacts WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM accounts WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM transactions WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM subscriptions WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM login_attempts WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM settings WHERE company_id = $1', [companyId]).catch(() => {});
-    await query('DELETE FROM notifications WHERE company_id = $1', [companyId]).catch(() => {});
+    // Delete from all related tables (best-effort)
+    for (const table of tablesToClean) {
+      await s.from(table).delete().eq('company_id', companyId).then(
+        () => {},
+        () => {}
+      );
+    }
 
-    const userRes = await query('DELETE FROM users WHERE company_id = $1 RETURNING id', [companyId]);
-    deletedUsers += userRes.rowCount || 0;
+    // Delete users and count
+    const { data: deletedUserRows } = await s.from('users')
+      .delete()
+      .eq('company_id', companyId)
+      .select('id');
 
-    await query('DELETE FROM companies WHERE id = $1', [companyId]);
+    deletedUsers += (deletedUserRows || []).length;
+
+    // Delete company
+    await s.from('companies').delete().eq('id', companyId);
     deletedCompanies++;
   }
 
@@ -50,10 +90,9 @@ async function doCleanup() {
 
 export async function GET(request: NextRequest) {
   try {
-    // Vercel Cron sends Authorization: Bearer <CRON_SECRET>
     const authHeader = request.headers.get('authorization') || '';
     const cronSecret = authHeader.replace('Bearer ', '') || request.headers.get('x-cron-secret');
-    
+
     if (cronSecret !== process.env.CRON_SECRET) {
       return error('غير مصرح', 401);
     }

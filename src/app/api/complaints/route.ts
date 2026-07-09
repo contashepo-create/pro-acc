@@ -1,19 +1,22 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
     const { companyId } = await requireApiAuth(request);
+    const s = sb();
 
-    const res = await query(
-      `SELECT id, type, subject, body, status, admin_reply, created_at, updated_at
-       FROM complaints WHERE company_id = $1
-       ORDER BY created_at DESC LIMIT 50`,
-      [companyId]
-    );
+    const { data: complaints } = await s.from('complaints')
+      .select('id, type, subject, body, status, admin_reply, created_at, updated_at')
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false })
+      .limit(50);
 
-    return success(res.rows);
+    return success(complaints || []);
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);
@@ -29,13 +32,20 @@ export async function POST(request: NextRequest) {
     if (!body.subject?.trim()) return error('العنوان مطلوب');
     if (!body.body?.trim()) return error('النص مطلوب');
 
-    const res = await query(
-      `INSERT INTO complaints (company_id, user_id, type, subject, body)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
-      [companyId, userId, body.type, body.subject.trim(), body.body.trim()]
-    );
+    const s = sb();
+    const { data: result, error: insertError } = await s.from('complaints')
+      .insert({
+        company_id: companyId,
+        user_id: userId,
+        type: body.type,
+        subject: body.subject.trim(),
+        body: body.body.trim(),
+      })
+      .select('id, created_at')
+      .single();
 
-    return success(res.rows[0], 201);
+    if (insertError) throw insertError;
+    return success(result, 201);
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);

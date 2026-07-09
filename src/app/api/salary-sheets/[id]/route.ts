@@ -1,20 +1,32 @@
 import { NextRequest } from 'next/server';
-import { query } from '@/lib/db';
 import { success, error, parseBody } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const sheet = await query('SELECT * FROM salary_sheets WHERE id = $1', [id]);
-    if (sheet.rows.length === 0) return error('Not found', 404);
-    const items = await query(
-      `SELECT si.*, e.name as employee_name
-       FROM salary_items si
-       LEFT JOIN employees e ON e.id = si.employee_id
-       WHERE si.sheet_id = $1`,
-      [id]
-    );
-    return success({ ...sheet.rows[0], items: items.rows });
+    const s = sb();
+
+    const { data: sheet, error: sheetError } = await s.from('salary_sheets')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (sheetError || !sheet) return error('Not found', 404);
+
+    const { data: items } = await s.from('salary_items')
+      .select('*, employees(name)')
+      .eq('sheet_id', id);
+
+    const itemsWithNames = (items || []).map((si: any) => ({
+      ...si,
+      employee_name: si.employees?.name || '',
+    }));
+
+    return success({ ...sheet, items: itemsWithNames });
   } catch (e: any) {
     return error(e.message);
   }
@@ -24,13 +36,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const { id } = await params;
     const body = await parseBody(req);
-    const result = await query(
-      `UPDATE salary_sheets SET name = COALESCE($1, name), status = COALESCE($2, status)
-       WHERE id = $3 RETURNING *`,
-      [body.name, body.status, id]
-    );
-    if (result.rows.length === 0) return error('Not found', 404);
-    return success(result.rows[0]);
+    const s = sb();
+
+    const updateData: any = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.status !== undefined) updateData.status = body.status;
+
+    const { data: result, error: updateError } = await s.from('salary_sheets')
+      .update(updateData)
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+
+    if (updateError || !result) return error('Not found', 404);
+    return success(result);
   } catch (e: any) {
     return error(e.message);
   }
@@ -39,9 +58,17 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    await query('DELETE FROM salary_items WHERE sheet_id = $1', [id]);
-    const result = await query('DELETE FROM salary_sheets WHERE id = $1 RETURNING id', [id]);
-    if (result.rows.length === 0) return error('Not found', 404);
+    const s = sb();
+
+    await s.from('salary_items').delete().eq('sheet_id', id);
+
+    const { data: result, error: deleteError } = await s.from('salary_sheets')
+      .delete()
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+
+    if (deleteError || !result) return error('Not found', 404);
     return success({ deleted: true });
   } catch (e: any) {
     return error(e.message);

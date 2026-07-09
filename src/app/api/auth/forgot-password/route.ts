@@ -1,9 +1,12 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
 import { forgotPasswordSchema } from '@/lib/validation';
 import { randomBytes } from 'crypto';
 import { sendPasswordResetEmail } from '@/lib/email';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,25 +15,26 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const { email } = parsed.data;
+    const s = sb();
 
-    const userRes = await query(
-      'SELECT id, name, email FROM users WHERE email = LOWER($1) AND is_active = true',
-      [email]
-    );
+    const { data: user, error: queryError } = await s.from('users')
+      .select('id, name, email')
+      .eq('email', email.toLowerCase())
+      .eq('is_active', true)
+      .maybeSingle();
 
-    if (userRes.rows.length === 0) {
+    if (queryError || !user) {
       return success({ message: 'إذا كان البريد الإلكتروني مسجلاً، ستتلقى رابط إعادة التعيين' });
     }
 
-    const user = userRes.rows[0];
     const token = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 3600000).toISOString();
 
-    await query(
-      `INSERT INTO password_reset_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, $3)`,
-      [user.id, token, expiresAt]
-    );
+    await s.from('password_reset_tokens').insert({
+      user_id: user.id,
+      token,
+      expires_at: expiresAt,
+    });
 
     const resetUrl = `${request.nextUrl.origin}/reset-password?token=${token}`;
 

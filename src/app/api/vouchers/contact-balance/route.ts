@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,16 +15,17 @@ export async function GET(request: NextRequest) {
       return error('رقم الطرف مطلوب');
     }
 
-    const contactRes = await query(
-      `SELECT id, account_id, type FROM contacts WHERE id = $1 AND company_id = $2`,
-      [contactId, auth.companyId]
-    );
+    const s = sb();
 
-    if (contactRes.rows.length === 0) {
+    const { data: contact, error: contactError } = await s.from('contacts')
+      .select('id, account_id, type')
+      .eq('id', contactId)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+
+    if (contactError || !contact) {
       return error('الطرف غير موجود');
     }
-
-    const contact = contactRes.rows[0];
 
     if (!contact.account_id) {
       return success({
@@ -32,17 +36,19 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const balRes = await query(
-      `SELECT COALESCE(SUM(debit), 0) AS total_debit, COALESCE(SUM(credit), 0) AS total_credit
-       FROM journal_lines
-       WHERE account_id = $1 AND journal_entry_id IN (
-         SELECT je.id FROM journal_entries je WHERE je.company_id = $2
-       )`,
-      [contact.account_id, auth.companyId]
-    );
+    const { data: jeIds } = await s.from('journal_entries')
+      .select('id')
+      .eq('company_id', auth.companyId);
 
-    const totalDebit = parseFloat(balRes.rows[0].total_debit);
-    const totalCredit = parseFloat(balRes.rows[0].total_credit);
+    const jeIdList = (jeIds || []).map((je: any) => je.id);
+
+    const { data: lines } = await s.from('journal_lines')
+      .select('debit, credit')
+      .eq('account_id', contact.account_id)
+      .in('journal_entry_id', jeIdList.length > 0 ? jeIdList : ['00000000-0000-0000-0000-000000000000']);
+
+    const totalDebit = (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
+    const totalCredit = (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.credit) || 0), 0);
     const netBalance = totalDebit - totalCredit;
 
     if (contact.type === 'supplier' || contact.type === 'subcontractor') {

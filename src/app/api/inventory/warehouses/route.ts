@@ -1,17 +1,21 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
-    const url = new URL(req.url);
+    const s = sb();
 
-    const warehouses = await query(
-      `SELECT * FROM warehouses WHERE company_id = $1 ORDER BY name`,
-      [auth.companyId]
-    );
-    return success({ warehouses: warehouses.rows });
+    const { data: warehouses } = await s.from('warehouses')
+      .select('*')
+      .eq('company_id', auth.companyId)
+      .order('name');
+
+    return success({ warehouses: warehouses || [] });
   } catch (err) {
     return handleApiError(err);
   }
@@ -25,13 +29,19 @@ export async function POST(req: NextRequest) {
 
     if (!name) return error('name is required');
 
-    const result = await query(
-      `INSERT INTO warehouses (company_id, name, location, is_active)
-       VALUES ($1, $2, $3, true) RETURNING *`,
-      [auth.companyId, name, location || null]
-    );
+    const s = sb();
+    const { data: result, error: insertError } = await s.from('warehouses')
+      .insert({
+        company_id: auth.companyId,
+        name,
+        location: location || null,
+        is_active: true,
+      })
+      .select('*')
+      .single();
 
-    return success(result.rows[0], 201);
+    if (insertError) throw insertError;
+    return success(result, 201);
   } catch (err) {
     return handleApiError(err);
   }

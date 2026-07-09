@@ -1,79 +1,100 @@
 import { NextRequest } from 'next/server';
-import { query } from '@/lib/db';
 import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
     const projectId = req.nextUrl.searchParams.get('projectId');
     const type = req.nextUrl.searchParams.get('type') || 'project-costs';
+    const s = sb();
 
     if (type === 'project-costs' && projectId) {
-      // Material costs from inventory
-      const materials = await query(
-        `SELECT SUM(total_value) as total FROM inventory_transactions
-         WHERE company_id = $1 AND project_id = $2 AND type = 'issue'`,
-        [auth.companyId, projectId]
-      );
+      // Material costs
+      const { data: materials } = await s.from('inventory_transactions')
+        .select('total_value')
+        .eq('company_id', auth.companyId)
+        .eq('project_id', projectId)
+        .eq('type', 'issue');
+
+      const materialTotal = (materials || []).reduce((sum: number, m: any) => sum + (parseFloat(m.total_value) || 0), 0);
 
       // Worker costs
-      const workers = await query(
-        `SELECT SUM(wage * days) as total FROM daily_worker_records
-         WHERE company_id = $1 AND project_id = $2`,
-        [auth.companyId, projectId]
-      );
+      const { data: workers } = await s.from('daily_worker_records')
+        .select('wage, days')
+        .eq('company_id', auth.companyId)
+        .eq('project_id', projectId);
+
+      const workerTotal = (workers || []).reduce((sum: number, w: any) => sum + ((parseFloat(w.wage) || 0) * (parseFloat(w.days) || 0)), 0);
 
       // Purchase costs
-      const purchases = await query(
-        `SELECT SUM(total) as total FROM purchase_invoices
-         WHERE company_id = $1 AND project_id = $2 AND status != 'cancelled'`,
-        [auth.companyId, projectId]
-      );
+      const { data: purchases } = await s.from('purchase_invoices')
+        .select('total')
+        .eq('company_id', auth.companyId)
+        .eq('project_id', projectId)
+        .neq('status', 'cancelled');
+
+      const purchaseTotal = (purchases || []).reduce((sum: number, p: any) => sum + (parseFloat(p.total) || 0), 0);
 
       // Subcontractor costs
-      const subcontractors = await query(
-        `SELECT SUM(amount) as total FROM subcontractor_certificates sc
-         JOIN subcontractor_contracts sct ON sct.id = sc.contract_id
-         WHERE sct.company_id = $1 AND sct.project_id = $2 AND sc.status = 'paid'`,
-        [auth.companyId, projectId]
-      );
+      const { data: contracts } = await s.from('subcontractor_contracts')
+        .select('id')
+        .eq('company_id', auth.companyId)
+        .eq('project_id', projectId);
+
+      const contractIds = (contracts || []).map((c: any) => c.id);
+      let subTotal = 0;
+
+      if (contractIds.length > 0) {
+        const { data: certs } = await s.from('subcontractor_certificates')
+          .select('amount')
+          .in('contract_id', contractIds)
+          .eq('status', 'paid');
+
+        subTotal = (certs || []).reduce((sum: number, sc: any) => sum + (parseFloat(sc.amount) || 0), 0);
+      }
 
       return success({
-        materials: materials.rows[0]?.total || 0,
-        workers: workers.rows[0]?.total || 0,
-        purchases: purchases.rows[0]?.total || 0,
-        subcontractors: subcontractors.rows[0]?.total || 0,
-        total: (materials.rows[0]?.total || 0) + (workers.rows[0]?.total || 0) +
-               (purchases.rows[0]?.total || 0) + (subcontractors.rows[0]?.total || 0),
+        materials: materialTotal,
+        workers: workerTotal,
+        purchases: purchaseTotal,
+        subcontractors: subTotal,
+        total: materialTotal + workerTotal + purchaseTotal + subTotal,
       });
     }
 
     if (type === 'material-issuances') {
-      const result = await query(
-        `SELECT it.*, i.name as item_name, i.code as item_code, p.name as project_name
-         FROM inventory_transactions it
-         LEFT JOIN inventory_items i ON i.id = it.item_id
-         LEFT JOIN projects p ON p.id = it.project_id
-         WHERE it.company_id = $1 AND it.type IN ('issue', 'return')
-         ORDER BY it.date DESC LIMIT 100`,
-        [auth.companyId]
-      );
-      return success(result.rows);
+      const { data: result } = await s.from('inventory_transactions')
+        .select('*, inventory_items(name, code), projects(name)')
+        .eq('company_id', auth.companyId)
+        .in('type', ['issue', 'return'])
+        .order('date', { ascending: false })
+        .limit(100);
+
+      return success((result || []).map((it: any) => ({
+        ...it,
+        item_name: it.inventory_items?.name || null,
+        item_code: it.inventory_items?.code || null,
+        project_name: it.projects?.name || null,
+      })));
     }
 
     if (type === 'inventory-transfers') {
-      const result = await query(
-        `SELECT it.*, i.name as item_name, i.code as item_code,
-         w1.name as from_warehouse, w2.name as to_warehouse
-         FROM inventory_transactions it
-         LEFT JOIN inventory_items i ON i.id = it.item_id
-         LEFT JOIN warehouses w1 ON w1.id = it.warehouse_id
-         LEFT JOIN warehouses w2 ON w2.id = it.reference_id::uuid
-         WHERE it.company_id = $1 AND it.type = 'transfer'
-         ORDER BY it.date DESC LIMIT 100`,
-        [auth.companyId]
-      );
-      return success(result.rows);
+      const { data: result } = await s.from('inventory_transactions')
+        .select('*, inventory_items(name, code)')
+        .eq('company_id', auth.companyId)
+        .eq('type', 'transfer')
+        .order('date', { ascending: false })
+        .limit(100);
+
+      return success((result || []).map((it: any) => ({
+        ...it,
+        item_name: it.inventory_items?.name || null,
+        item_code: it.inventory_items?.code || null,
+      })));
     }
 
     return error('Invalid type or missing projectId');

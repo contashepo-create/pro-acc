@@ -1,41 +1,61 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
-    const url = new URL(req.url);
+    const s = sb();
 
-    const projects = await query(
-      `SELECT p.id, p.name, p.contract_value, c.name as client_name, p.status
-       FROM projects p
-       LEFT JOIN contacts c ON p.client_id = c.id
-       WHERE p.company_id = $1
-       ORDER BY p.name`,
-      [auth.companyId]
-    );
+    const { data: projects } = await s.from('projects')
+      .select('id, name, contract_value, client_id, status, contacts!client_id(name)')
+      .eq('company_id', auth.companyId)
+      .order('name');
 
     const result: any[] = [];
-    for (const project of projects.rows) {
-      const costs = await query(
-        `SELECT COALESCE(SUM(jl.debit), 0) as total_costs
-         FROM journal_lines jl
-         JOIN accounts a ON jl.account_id = a.id
-         WHERE (jl.project_id = $1 OR jl.journal_entry_id IN (SELECT id FROM journal_entries WHERE project_id = $1))
-         AND a.type = 'expense'`,
-        [project.id]
-      );
-      const totalCosts = parseFloat(costs.rows[0].total_costs) || 0;
+    for (const project of (projects || [])) {
+      // Get project costs from journal_lines linked via project_id in journal_entries
+      const { data: jeIds } = await s.from('journal_entries')
+        .select('id')
+        .eq('company_id', auth.companyId)
+        .or(`project_id.eq.${project.id}`);
+
+      const jeIdList = (jeIds || []).map((je: any) => je.id);
+
+      let totalCosts = 0;
+      if (jeIdList.length > 0) {
+        // Get expense account IDs
+        const { data: expenseAccounts } = await s.from('accounts')
+          .select('id')
+          .eq('company_id', auth.companyId)
+          .eq('type', 'expense');
+
+        const expAccountIds = (expenseAccounts || []).map((a: any) => a.id);
+
+        if (expAccountIds.length > 0) {
+          const { data: lines } = await s.from('journal_lines')
+            .select('debit')
+            .in('account_id', expAccountIds)
+            .in('journal_entry_id', jeIdList);
+
+          totalCosts = (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
+        }
+      }
+
+      const contractValue = parseFloat(project.contract_value) || 0;
+      const profit = contractValue - totalCosts;
+      const profitMargin = contractValue > 0 ? (profit / contractValue) * 100 : 0;
 
       result.push({
         ...project,
-        contract_value: parseFloat(project.contract_value) || 0,
+        client_name: (project as any).contacts?.name || null,
+        contract_value: contractValue,
         total_costs: totalCosts,
-        profit: (parseFloat(project.contract_value) || 0) - totalCosts,
-        profit_margin: (parseFloat(project.contract_value) || 0) > 0
-          ? (((parseFloat(project.contract_value) || 0) - totalCosts) / (parseFloat(project.contract_value) || 0)) * 100
-          : 0,
+        profit,
+        profit_margin: profitMargin,
       });
     }
 

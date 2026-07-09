@@ -1,43 +1,41 @@
 import { NextRequest } from 'next/server';
 import { success, error, unauthorized, serverError, notFound, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
-import { getCompanyContext } from '@/lib/auth';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await getCompanyContext(request);
-  if (!ctx) return unauthorized();
-
   try {
+    const { requireApiAuth } = await import('@/lib/api-helpers');
+    const ctx = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const voucherRes = await query(
-      `SELECT vr.*, c.name AS contact_name, bs.name AS bank_safe_name, je.sequence_number AS journal_entry_number
-       FROM voucher_receipts vr
-       LEFT JOIN contacts c ON c.id = vr.contact_id
-       LEFT JOIN banks_safes bs ON bs.id = vr.bank_safe_id
-       LEFT JOIN journal_entries je ON je.id = vr.journal_entry_id
-       WHERE vr.id = $1 AND vr.company_id = $2`,
-      [id, ctx.companyId]
-    );
+    const { data: voucher } = await s.from('voucher_receipts')
+      .select('*, contacts!contact_id(name), banks_safes!bank_safe_id(name), journal_entries!journal_entry_id(sequence_number)')
+      .eq('id', id)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle();
 
-    if (voucherRes.rows.length === 0) {
-      return notFound();
-    }
+    if (!voucher) return notFound();
 
-    const invoiceItemsRes = await query(
-      `SELECT rii.*, i.number AS invoice_number
-       FROM receipt_invoice_items rii
-       LEFT JOIN invoices i ON i.id = rii.invoice_id
-       WHERE rii.voucher_receipt_id = $1`,
-      [id]
-    );
+    const { data: invoiceItems } = await s.from('receipt_invoice_items')
+      .select('*, invoices!invoice_id(number)')
+      .eq('voucher_receipt_id', id);
 
     return success({
-      ...voucherRes.rows[0],
-      invoice_items: invoiceItemsRes.rows,
+      ...voucher,
+      contact_name: (voucher as any).contacts?.name || null,
+      bank_safe_name: (voucher as any).banks_safes?.name || null,
+      journal_entry_number: (voucher as any).journal_entries?.sequence_number || null,
+      invoice_items: (invoiceItems || []).map((ri: any) => ({
+        ...ri,
+        invoice_number: ri.invoices?.number || null,
+      })),
     });
   } catch (err) {
     return handleApiError(err);
@@ -48,54 +46,41 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await getCompanyContext(request);
-  if (!ctx) return unauthorized();
-
   try {
+    const { requireApiAuth } = await import('@/lib/api-helpers');
+    const ctx = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const voucherRes = await query(
-      `SELECT vr.* FROM voucher_receipts vr WHERE vr.id = $1 AND vr.company_id = $2`,
-      [id, ctx.companyId]
-    );
+    const { data: voucher } = await s.from('voucher_receipts')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle();
 
-    if (voucherRes.rows.length === 0) {
-      return notFound();
-    }
+    if (!voucher) return notFound();
 
-    const voucher = voucherRes.rows[0];
+    const { data: depRes } = await s.from('cash_transactions')
+      .select('id')
+      .eq('voucher_receipt_id', id)
+      .limit(1);
 
-    const depRes = await query(
-      `SELECT id FROM cash_transactions WHERE voucher_receipt_id = $1 LIMIT 1`,
-      [id]
-    );
-
-    if (depRes.rows.length > 0) {
+    if (depRes && depRes.length > 0) {
       return error('لا يمكن حذف سند القبض لأنه مرتبط بحركات نقدية');
     }
 
-    await transaction(async (client) => {
-      await client.query(
-        `DELETE FROM receipt_invoice_items WHERE voucher_receipt_id = $1`,
-        [id]
-      );
+    await s.from('receipt_invoice_items').delete().eq('voucher_receipt_id', id);
 
-      if (voucher.journal_entry_id) {
-        await client.query(
-          `DELETE FROM journal_lines WHERE journal_entry_id = $1`,
-          [voucher.journal_entry_id]
-        );
-        await client.query(
-          `DELETE FROM journal_entries WHERE id = $1`,
-          [voucher.journal_entry_id]
-        );
-      }
+    if ((voucher as any).journal_entry_id) {
+      await s.from('journal_lines')
+        .delete()
+        .eq('journal_entry_id', (voucher as any).journal_entry_id);
+      await s.from('journal_entries')
+        .delete()
+        .eq('id', (voucher as any).journal_entry_id);
+    }
 
-      await client.query(
-        `DELETE FROM voucher_receipts WHERE id = $1`,
-        [id]
-      );
-    });
+    await s.from('voucher_receipts').delete().eq('id', id);
 
     return success({ deleted: true });
   } catch (err) {

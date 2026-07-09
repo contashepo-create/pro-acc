@@ -1,17 +1,28 @@
 import { NextRequest } from 'next/server';
-import { query } from '@/lib/db';
-import { success, error, parseBody } from '@/lib/api-helpers';
+import { success, error } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const rec = await query('SELECT * FROM bank_reconciliation WHERE id = $1', [id]);
-    if (rec.rows.length === 0) return error('Not found', 404);
-    const items = await query(
-      'SELECT * FROM bank_reconciliation_items WHERE reconciliation_id = $1 ORDER BY date',
-      [id]
-    );
-    return success({ ...rec.rows[0], items: items.rows });
+    const s = sb();
+
+    const { data: rec, error: recError } = await s.from('bank_reconciliation')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (recError || !rec) return error('Not found', 404);
+
+    const { data: items } = await s.from('bank_reconciliation_items')
+      .select('*')
+      .eq('reconciliation_id', id)
+      .order('date');
+
+    return success({ ...rec, items: items || [] });
   } catch (e: any) {
     return error(e.message);
   }
@@ -20,14 +31,21 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const body = await parseBody(req);
-    const result = await query(
-      `UPDATE bank_reconciliation SET closing_balance = COALESCE($1, closing_balance),
-       status = COALESCE($2, status) WHERE id = $3 RETURNING *`,
-      [body.closingBalance, body.status, id]
-    );
-    if (result.rows.length === 0) return error('Not found', 404);
-    return success(result.rows[0]);
+    const body = await req.json();
+    const s = sb();
+
+    const updateData: any = {};
+    if (body.closingBalance !== undefined) updateData.closing_balance = body.closingBalance;
+    if (body.status !== undefined) updateData.status = body.status;
+
+    const { data: result, error: updateError } = await s.from('bank_reconciliation')
+      .update(updateData)
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+
+    if (updateError || !result) return error('Not found', 404);
+    return success(result);
   } catch (e: any) {
     return error(e.message);
   }
@@ -36,9 +54,17 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    await query('DELETE FROM bank_reconciliation_items WHERE reconciliation_id = $1', [id]);
-    const result = await query('DELETE FROM bank_reconciliation WHERE id = $1 RETURNING id', [id]);
-    if (result.rows.length === 0) return error('Not found', 404);
+    const s = sb();
+
+    await s.from('bank_reconciliation_items').delete().eq('reconciliation_id', id);
+
+    const { data: result, error: deleteError } = await s.from('bank_reconciliation')
+      .delete()
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+
+    if (deleteError || !result) return error('Not found', 404);
     return success({ deleted: true });
   } catch (e: any) {
     return error(e.message);

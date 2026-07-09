@@ -14,11 +14,7 @@ export async function GET(request: NextRequest) {
     let queryBuilder = s.from('advertisements').select('*');
 
     if (activeOnly) {
-      const now = new Date().toISOString();
-      queryBuilder = queryBuilder
-        .eq('is_active', true)
-        .or(`expires_at.is.null,expires_at.gt.${now}`)
-        .lte('starts_at', now);
+      queryBuilder = queryBuilder.eq('is_active', true);
     }
 
     queryBuilder = queryBuilder.order('created_at', { ascending: false });
@@ -26,7 +22,18 @@ export async function GET(request: NextRequest) {
     const { data, error: err } = await queryBuilder;
     if (err) throw err;
 
-    return success(data || []);
+    // Filter by date in JS if activeOnly
+    let result = data || [];
+    if (activeOnly) {
+      const now = new Date();
+      result = result.filter((item: any) => {
+        if (item.starts_at && new Date(item.starts_at) > now) return false;
+        if (item.expires_at && new Date(item.expires_at) < now) return false;
+        return true;
+      });
+    }
+
+    return success(result);
   } catch (err) {
     return serverError(err);
   }

@@ -1,23 +1,32 @@
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function checkRateLimit(
   email: string,
   ipAddress: string
 ): Promise<{ allowed: boolean; remainingMinutes: number }> {
-  const res = await query(
-    `SELECT COUNT(*)::int as count,
-            MIN(attempted_at) as earliest_attempt
-     FROM login_attempts
-     WHERE (email = $1 OR ip_address = $2)
-       AND success = false
-       AND attempted_at > NOW() - INTERVAL '15 minutes'`,
-    [email, ipAddress]
-  );
+  const s = sb();
+  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60000).toISOString();
 
-  const { count, earliest_attempt } = res.rows[0];
+  const { data: attempts, error } = await s.from('login_attempts')
+    .select('attempted_at')
+    .or(`email.eq.${email},ip_address.eq.${ipAddress}`)
+    .eq('success', false)
+    .gte('attempted_at', fifteenMinutesAgo)
+    .order('attempted_at');
 
-  if (count >= 5 && earliest_attempt) {
-    const elapsedMs = Date.now() - new Date(earliest_attempt).getTime();
+  if (error) {
+    console.error('Rate limit check error:', error);
+    return { allowed: true, remainingMinutes: 0 };
+  }
+
+  const count = (attempts || []).length;
+  const earliest = attempts?.[0]?.attempted_at;
+
+  if (count >= 5 && earliest) {
+    const elapsedMs = Date.now() - new Date(earliest).getTime();
     const remainingMs = 15 * 60 * 1000 - elapsedMs;
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
     return { allowed: false, remainingMinutes };

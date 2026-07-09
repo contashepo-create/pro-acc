@@ -1,29 +1,40 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
     const { companyId } = await requireApiAuth(request);
+    const s = sb();
 
-    const plansRes = await query(
-      `SELECT id, code, name, description, duration_days, price, currency, is_active
-       FROM subscription_plans WHERE is_active = true ORDER BY price ASC`
-    );
+    const { data: plans } = await s.from('subscription_plans')
+      .select('id, code, name, description, duration_days, price, currency, is_active')
+      .eq('is_active', true)
+      .order('price', { ascending: true });
 
-    const subRes = await query(
-      `SELECT s.id, s.plan_id, s.plan_code, s.status, s.start_date, s.end_date, s.trial_end_date, s.auto_renew,
-              sp.name as plan_name, sp.price, sp.duration_days
-       FROM subscriptions s
-       LEFT JOIN subscription_plans sp ON sp.id = s.plan_id
-       WHERE s.company_id = $1
-       ORDER BY s.created_at DESC LIMIT 1`,
-      [companyId]
-    );
+    const { data: subscription } = await s.from('subscriptions')
+      .select('id, plan_id, plan_code, status, start_date, end_date, trial_end_date, auto_renew, subscription_plans(name, price, duration_days)')
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let subData = null;
+    if (subscription) {
+      subData = {
+        ...subscription,
+        plan_name: (subscription as any).subscription_plans?.name || null,
+        price: (subscription as any).subscription_plans?.price || null,
+        duration_days: (subscription as any).subscription_plans?.duration_days || null,
+      };
+    }
 
     return success({
-      plans: plansRes.rows,
-      subscription: subRes.rows[0] || null,
+      plans: plans || [],
+      subscription: subData,
     });
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);

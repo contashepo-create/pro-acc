@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,21 +15,21 @@ export async function GET(request: NextRequest) {
       return error('رقم العميل مطلوب');
     }
 
-    const invoicesRes = await query(
-      `SELECT id, number, date, total, paid_amount, status,
-              (total - COALESCE(paid_amount, 0)) AS remaining
-       FROM invoices
-       WHERE contact_id = $1 AND company_id = $2 AND status IN ('unpaid', 'partial')
-       ORDER BY date DESC`,
-      [contactId, auth.companyId]
-    );
+    const s = sb();
+
+    const { data: invoices } = await s.from('invoices')
+      .select('id, number, date, total, paid_amount, status')
+      .eq('contact_id', contactId)
+      .eq('company_id', auth.companyId)
+      .in('status', ['unpaid', 'partial'])
+      .order('date', { ascending: false });
 
     return success({
-      invoices: invoicesRes.rows.map((inv) => ({
+      invoices: (invoices || []).map((inv: any) => ({
         ...inv,
         total: parseFloat(inv.total),
         paid_amount: parseFloat(inv.paid_amount || '0'),
-        remaining: parseFloat(inv.remaining),
+        remaining: parseFloat(inv.total) - parseFloat(inv.paid_amount || '0'),
       })),
     });
   } catch (err) {

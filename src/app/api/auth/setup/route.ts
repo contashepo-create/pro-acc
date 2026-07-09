@@ -1,7 +1,10 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword, createToken } from '@/lib/auth';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 const DEFAULT_ACCOUNTS = [
   { code: '1000', name: 'الأصول', type: 'asset' },
@@ -66,8 +69,10 @@ export async function POST(request: NextRequest) {
       return error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
     }
 
-    const existing = await query('SELECT id FROM companies LIMIT 1');
-    if (existing.rows.length > 0) {
+    const s = sb();
+    const { count } = await s.from('companies').select('*', { count: 'exact', head: true });
+
+    if ((count || 0) > 0) {
       return error('تم إعداد النظام مسبقاً. لا يمكن إعادة الإعداد', 409);
     }
 
@@ -76,69 +81,88 @@ export async function POST(request: NextRequest) {
       return error('رمز الإعداد غير صحيح', 403);
     }
 
-    const result = await transaction(async (client) => {
-      const companyRes = await client.query(
-        `INSERT INTO companies (name, commercial_registration, tax_number, is_active)
-         VALUES ($1, $2, $3, true)
-         RETURNING id`,
-        [companyData.name, companyData.commercialRegistration || null, companyData.taxNumber || null]
-      );
-      const companyId = companyRes.rows[0].id;
+    // Create company
+    const { data: company, error: companyErr } = await s.from('companies')
+      .insert({
+        name: companyData.name,
+        commercial_registration: companyData.commercialRegistration || null,
+        tax_number: companyData.taxNumber || null,
+        is_active: true,
+      })
+      .select('id')
+      .single();
 
-      const passwordHash = await hashPassword(userData.password);
+    if (companyErr) throw companyErr;
+    const companyId = company.id;
 
-      const userRes = await client.query(
-        `INSERT INTO users (company_id, name, email, password_hash, role, is_active)
-         VALUES ($1, $2, LOWER($3), $4, 'admin', true)
-         RETURNING id, name, email, role`,
-        [companyId, userData.name, userData.email, passwordHash]
-      );
+    // Create admin user
+    const passwordHash = await hashPassword(userData.password);
+    const { data: user, error: userErr } = await s.from('users')
+      .insert({
+        company_id: companyId,
+        name: userData.name,
+        email: userData.email.toLowerCase(),
+        password_hash: passwordHash,
+        role: 'admin',
+        is_active: true,
+      })
+      .select('id, name, email, role')
+      .single();
 
-      const inserted: Array<{ code: string; id: string }> = [];
-      for (const acc of DEFAULT_ACCOUNTS) {
-        if (!acc.parentCode) {
-          const r = await client.query(
-            `INSERT INTO accounts (company_id, code, name, type, is_active)
-             VALUES ($1, $2, $3, $4, true)
-             RETURNING id, code`,
-            [companyId, acc.code, acc.name, acc.type]
-          );
-          inserted.push(r.rows[0]);
-        }
+    if (userErr) {
+      // Cleanup company on user creation failure
+      await s.from('companies').delete().eq('id', companyId);
+      throw userErr;
+    }
+
+    // Create parent accounts
+    const parentIds: Record<string, string> = {};
+    for (const acc of DEFAULT_ACCOUNTS.filter(a => !a.parentCode)) {
+      const { data: created, error: accErr } = await s.from('accounts')
+        .insert({
+          company_id: companyId,
+          code: acc.code,
+          name: acc.name,
+          type: acc.type,
+          is_active: true,
+        })
+        .select('id, code')
+        .single();
+
+      if (!accErr && created) {
+        parentIds[acc.code] = created.id;
       }
+    }
 
-      const parentMap = new Map(DEFAULT_ACCOUNTS.filter(a => !a.parentCode).map(a => [a.code, a]));
-      for (const acc of DEFAULT_ACCOUNTS) {
-        if (acc.parentCode) {
-          const parentAcc = parentMap.get(acc.parentCode);
-          if (!parentAcc) continue;
-          const parentRow = inserted.find(i => i.code === acc.parentCode);
-          if (!parentRow) continue;
-          await client.query(
-            `INSERT INTO accounts (company_id, code, name, type, parent_id, is_active)
-             VALUES ($1, $2, $3, $4, $5, true)`,
-            [companyId, acc.code, acc.name, acc.type, parentRow.id]
-          );
-        }
-      }
+    // Create child accounts
+    for (const acc of DEFAULT_ACCOUNTS.filter(a => a.parentCode)) {
+      const parentId = parentIds[acc.parentCode];
+      if (!parentId) continue;
+      await s.from('accounts').insert({
+        company_id: companyId,
+        code: acc.code,
+        name: acc.name,
+        type: acc.type,
+        parent_id: parentId,
+        is_active: true,
+      });
+    }
 
-      for (const s of DEFAULT_SETTINGS) {
-        await client.query(
-          `INSERT INTO settings (company_id, key, value)
-           VALUES ($1, $2, $3)`,
-          [companyId, s.key, s.value]
-        );
-      }
+    // Create default settings
+    for (const setting of DEFAULT_SETTINGS) {
+      await s.from('settings').insert({
+        company_id: companyId,
+        key: setting.key,
+        value: setting.value,
+      });
+    }
 
-      return { companyId, user: userRes.rows[0] };
-    });
-
-    const token = createToken(result.user.id, 'admin');
+    const token = createToken(user.id, 'admin');
 
     const response = success({
       message: 'تم إعداد النظام بنجاح',
-      companyId: result.companyId,
-      user: result.user,
+      companyId,
+      user,
       token,
       setupProtected: !!process.env.NEXT_PUBLIC_SETUP_TOKEN,
     }, 201);

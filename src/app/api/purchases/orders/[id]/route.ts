@@ -1,25 +1,33 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireApiAuth(req);
     const { id } = await params;
-    const po = await query(
-      `SELECT po.*, c.name as supplier_name FROM purchase_orders po
-       LEFT JOIN contacts c ON po.supplier_id = c.id WHERE po.id = $1`,
-      [id]
-    );
-    if (po.rows.length === 0) return notFound();
+    const s = sb();
 
-    const items = await query(
-      `SELECT * FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id`,
-      [id]
-    );
-    po.rows[0].items = items.rows;
+    const { data: po, error: poError } = await s.from('purchase_orders')
+      .select('*, contacts!supplier_id(name)')
+      .eq('id', id)
+      .maybeSingle();
 
-    return success(po.rows[0]);
+    if (poError || !po) return notFound();
+
+    const { data: items } = await s.from('purchase_order_items')
+      .select('*')
+      .eq('purchase_order_id', id)
+      .order('id');
+
+    return success({
+      ...po,
+      supplier_name: (po as any).contacts?.name || null,
+      items: items || [],
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -30,34 +38,46 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const auth = await requireApiAuth(req);
     const { id } = await params;
     const data = await parseBody(req);
+    const s = sb();
 
-    const existing = await query(`SELECT status FROM purchase_orders WHERE id = $1`, [id]);
-    if (existing.rows.length === 0) return notFound();
-    if (existing.rows[0].status !== 'pending') return error('لا يمكن تعديل أمر شراء تم استلامه');
+    const { data: existing } = await s.from('purchase_orders')
+      .select('status, total')
+      .eq('id', id)
+      .maybeSingle();
 
-    const result = await transaction(async (client) => {
+    if (!existing) return notFound();
+    if (existing.status !== 'pending') return error('لا يمكن تعديل أمر شراء تم استلامه');
+
+    // Delete old items, insert new
+    if (data.items) {
+      await s.from('purchase_order_items').delete().eq('purchase_order_id', id);
       let total = 0;
-      if (data.items) {
-        await client.query(`DELETE FROM purchase_order_items WHERE purchase_order_id = $1`, [id]);
-        for (const item of data.items) {
-          total += (item.quantity || 0) * (item.unit_price || 0);
-          await client.query(
-            `INSERT INTO purchase_order_items (purchase_order_id, description, quantity, unit_price, total)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [id, item.description, item.quantity, item.unit_price, item.quantity * item.unit_price]
-          );
-        }
+      for (const item of data.items) {
+        total += (item.quantity || 0) * (item.unit_price || 0);
+        await s.from('purchase_order_items').insert({
+          purchase_order_id: id,
+          description: item.description,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total: item.quantity * item.unit_price,
+        });
       }
+      data.total = total;
+    }
 
-      const updated = await client.query(
-        `UPDATE purchase_orders SET supplier_id = COALESCE($1, supplier_id), date = COALESCE($2, date),
-         total = $3, notes = COALESCE($4, notes), updated_at = NOW()
-         WHERE id = $5 RETURNING *`,
-        [data.supplier_id, data.date, total || existing.rows[0].total, data.notes, id]
-      );
-      return updated.rows[0];
-    });
+    const updateData: any = { updated_at: new Date().toISOString() };
+    if (data.supplier_id !== undefined) updateData.supplier_id = data.supplier_id;
+    if (data.date !== undefined) updateData.date = data.date;
+    if (data.total !== undefined) updateData.total = data.total;
+    if (data.notes !== undefined) updateData.notes = data.notes;
 
+    const { data: result, error: updateError } = await s.from('purchase_orders')
+      .update(updateData)
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+
+    if (updateError || !result) return notFound();
     return success(result);
   } catch (err) {
     return handleApiError(err);
@@ -69,77 +89,132 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const auth = await requireApiAuth(req);
     const { id } = await params;
     const data = await parseBody(req);
+    const s = sb();
 
-    const result = await transaction(async (client) => {
-      const po = await client.query(`SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [id]);
-      if (po.rows.length === 0) throw new Error('Not found');
-      if (po.rows[0].status === 'cancelled') throw new Error('أمر الشراء ملغي');
+    const { data: po } = await s.from('purchase_orders')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
 
-      const items = await client.query(
-        `SELECT * FROM purchase_order_items WHERE purchase_order_id = $1`, [id]
-      );
+    if (!po) throw new Error('Not found');
+    if (po.status === 'cancelled') return error('أمر الشراء ملغي');
 
-      for (const item of items.rows) {
-        const receivedQty = parseFloat(item.received_quantity) || 0;
-        const qty = parseFloat(item.quantity) || 0;
-        if (receivedQty >= qty) continue;
+    const { data: items } = await s.from('purchase_order_items')
+      .select('*')
+      .eq('purchase_order_id', id);
 
-        const receiveQty = data.quantities?.[item.id] || (qty - receivedQty);
-        const newReceived = Math.min(receivedQty + receiveQty, qty);
+    for (const item of (items || [])) {
+      const receivedQty = parseFloat(item.received_quantity) || 0;
+      const qty = parseFloat(item.quantity) || 0;
+      if (receivedQty >= qty) continue;
 
-        await client.query(
-          `UPDATE purchase_order_items SET received_quantity = $1 WHERE id = $2`,
-          [newReceived, item.id]
-        );
+      const receiveQty = data.quantities?.[item.id] || (qty - receivedQty);
+      const newReceived = Math.min(receivedQty + receiveQty, qty);
 
-        const invItem = await client.query(
-          `SELECT id, quantity, unit_price FROM inventory_items
-           WHERE company_id = $1 AND code = $2 LIMIT 1`,
-          [po.rows[0].company_id, item.description]
-        );
+      await s.from('purchase_order_items')
+        .update({ received_quantity: newReceived })
+        .eq('id', item.id);
 
-        if (invItem.rows.length > 0) {
-          const curQty = parseFloat(invItem.rows[0].quantity) || 0;
-          const curPrice = parseFloat(invItem.rows[0].unit_price) || 0;
-          const newQty = curQty + receiveQty;
-          const newPrice = curQty === 0 ? item.unit_price : ((curQty * curPrice) + (receiveQty * item.unit_price)) / newQty;
+      // Update inventory
+      const { data: invItem } = await s.from('inventory_items')
+        .select('id, quantity, unit_price')
+        .eq('company_id', (po as any).company_id)
+        .eq('code', item.description)
+        .maybeSingle();
 
-          await client.query(
-            `UPDATE inventory_items SET quantity = $1, unit_price = $2 WHERE id = $3`,
-            [newQty, newPrice, invItem.rows[0].id]
-          );
-        } else {
-          await client.query(
-            `INSERT INTO inventory_items (company_id, code, name, unit, warehouse_id, quantity, unit_price, is_active)
-             VALUES ($1, $2, $3, 'وحدة', (SELECT id FROM warehouses WHERE company_id = $1 LIMIT 1), $4, $5, true)`,
-            [po.rows[0].company_id, item.description, item.description, receiveQty, item.unit_price]
-          );
+      if (invItem) {
+        const curQty = parseFloat(invItem.quantity) || 0;
+        const curPrice = parseFloat(invItem.unit_price) || 0;
+        const newQty = curQty + receiveQty;
+        const newPrice = curQty === 0 ? item.unit_price : ((curQty * curPrice) + (receiveQty * item.unit_price)) / newQty;
+
+        await s.from('inventory_items')
+          .update({ quantity: newQty, unit_price: newPrice })
+          .eq('id', invItem.id);
+
+        // Get warehouse for transaction
+        const { data: wh } = await s.from('inventory_items')
+          .select('warehouse_id')
+          .eq('id', invItem.id)
+          .maybeSingle();
+
+        await s.from('inventory_transactions').insert({
+          company_id: (po as any).company_id,
+          item_id: invItem.id,
+          warehouse_id: wh?.warehouse_id || null,
+          type: 'add',
+          quantity: receiveQty,
+          unit_price: item.unit_price,
+          total_value: receiveQty * item.unit_price,
+          date: data.date || po.date,
+          reference_type: 'purchase_order',
+          reference_id: id,
+          created_by: auth.userId,
+        });
+      } else {
+        // Create new inventory item
+        const { data: wh } = await s.from('warehouses')
+          .select('id')
+          .eq('company_id', (po as any).company_id)
+          .limit(1)
+          .maybeSingle();
+
+        const { data: newItem, error: newItemErr } = await s.from('inventory_items')
+          .insert({
+            company_id: (po as any).company_id,
+            code: item.description,
+            name: item.description,
+            unit: 'وحدة',
+            warehouse_id: wh?.id || null,
+            quantity: receiveQty,
+            unit_price: item.unit_price,
+            is_active: true,
+          })
+          .select('id')
+          .single();
+
+        if (!newItemErr && newItem) {
+          await s.from('inventory_transactions').insert({
+            company_id: (po as any).company_id,
+            item_id: newItem.id,
+            warehouse_id: wh?.id || null,
+            type: 'add',
+            quantity: receiveQty,
+            unit_price: item.unit_price,
+            total_value: receiveQty * item.unit_price,
+            date: data.date || po.date,
+            reference_type: 'purchase_order',
+            reference_id: id,
+            created_by: auth.userId,
+          });
         }
-
-        await client.query(
-          `INSERT INTO inventory_transactions (company_id, item_id, warehouse_id, type, quantity, unit_price, total_value, date, reference_type, reference_id, created_by)
-           VALUES ($1, $2, (SELECT warehouse_id FROM inventory_items WHERE id = $2), 'add', $3, $4, $5, $6, 'purchase_order', $7, $8)`,
-          [po.rows[0].company_id, invItem.rows[0]?.id, receiveQty, item.unit_price, receiveQty * item.unit_price,
-           data.date || po.rows[0].date, id, auth.userId]
-        );
       }
+    }
 
-      const allReceived = await client.query(
-        `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE received_quantity >= quantity) as done
-         FROM purchase_order_items WHERE purchase_order_id = $1`, [id]
-      );
-      const { total: t, done } = allReceived.rows[0];
-      const newStatus = parseInt(done, 10) === parseInt(t, 10) ? 'received' : 'partial';
+    // Update status
+    const { data: receivedCheck } = await s.from('purchase_order_items')
+      .select('quantity, received_quantity')
+      .eq('purchase_order_id', id);
 
-      const updated = await client.query(
-        `UPDATE purchase_orders SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-        [newStatus, id]
-      );
-      return updated.rows[0];
-    });
+    let allReceived = true;
+    for (const rc of (receivedCheck || [])) {
+      if ((parseFloat(rc.received_quantity) || 0) < (parseFloat(rc.quantity) || 0)) {
+        allReceived = false;
+        break;
+      }
+    }
 
-    return success(result);
-  } catch (err) {
+    const newStatus = allReceived ? 'received' : 'partial';
+    const { data: updated, error: updErr } = await s.from('purchase_orders')
+      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+
+    if (updErr) throw updErr;
+    return success(updated);
+  } catch (err: any) {
+    if (err.message === 'Not found') return notFound();
     return handleApiError(err);
   }
 }
@@ -148,16 +223,27 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   try {
     const auth = await requireApiAuth(req);
     const { id } = await params;
-    const po = await query(`SELECT status FROM purchase_orders WHERE id = $1`, [id]);
-    if (po.rows.length === 0) return notFound();
+    const s = sb();
 
-    const received = await query(
-      `SELECT id FROM purchase_order_items WHERE purchase_order_id = $1 AND received_quantity > 0 LIMIT 1`,
-      [id]
-    );
-    if (received.rows.length > 0) return error('لا يمكن إلغاء أمر شراء تم استلام جزء منه');
+    const { data: po } = await s.from('purchase_orders')
+      .select('status')
+      .eq('id', id)
+      .maybeSingle();
 
-    await query(`UPDATE purchase_orders SET status = 'cancelled' WHERE id = $1`, [id]);
+    if (!po) return notFound();
+
+    const { data: received } = await s.from('purchase_order_items')
+      .select('id')
+      .eq('purchase_order_id', id)
+      .gt('received_quantity', 0)
+      .limit(1);
+
+    if (received && received.length > 0) return error('لا يمكن إلغاء أمر شراء تم استلام جزء منه');
+
+    await s.from('purchase_orders')
+      .update({ status: 'cancelled' })
+      .eq('id', id);
+
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);

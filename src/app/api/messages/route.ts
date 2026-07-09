@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
@@ -9,21 +12,20 @@ export async function GET(request: NextRequest) {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
     const limit = 50;
     const offset = (page - 1) * limit;
+    const s = sb();
 
-    const countRes = await query(
-      'SELECT COUNT(*) FROM messages WHERE company_id = $1',
-      [companyId]
-    );
-    const total = parseInt(countRes.rows[0].count);
+    const { count } = await s.from('messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('company_id', companyId);
 
-    const res = await query(
-      `SELECT id, subject, body, direction, is_read, created_at
-       FROM messages WHERE company_id = $1
-       ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-      [companyId, limit, offset]
-    );
+    const { data: messages } = await s.from('messages')
+      .select('id, subject, body, direction, is_read, created_at')
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    return success({ messages: res.rows, total, page, pages: Math.ceil(total / limit) });
+    const total = count || 0;
+    return success({ messages: messages || [], total, page, pages: Math.ceil(total / limit) });
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);
@@ -38,13 +40,19 @@ export async function POST(request: NextRequest) {
     if (!body.subject?.trim()) return error('عنوان الرسالة مطلوب');
     if (!body.body?.trim()) return error('نص الرسالة مطلوب');
 
-    const res = await query(
-      `INSERT INTO messages (company_id, subject, body, direction)
-       VALUES ($1, $2, $3, 'company_to_admin') RETURNING id, created_at`,
-      [companyId, body.subject.trim(), body.body.trim()]
-    );
+    const s = sb();
+    const { data: result, error: insertError } = await s.from('messages')
+      .insert({
+        company_id: companyId,
+        subject: body.subject.trim(),
+        body: body.body.trim(),
+        direction: 'company_to_admin',
+      })
+      .select('id, created_at')
+      .single();
 
-    return success({ message: res.rows[0] }, 201);
+    if (insertError) throw insertError;
+    return success({ message: result }, 201);
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);

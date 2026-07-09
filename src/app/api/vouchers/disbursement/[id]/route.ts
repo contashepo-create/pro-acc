@@ -1,35 +1,35 @@
 import { NextRequest } from 'next/server';
 import { success, error, unauthorized, serverError, notFound, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
-import { getCompanyContext } from '@/lib/auth';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await getCompanyContext(request);
-  if (!ctx) return unauthorized();
-
   try {
+    const { requireApiAuth } = await import('@/lib/api-helpers');
+    const ctx = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const voucherRes = await query(
-      `SELECT vd.*, c.name AS contact_name, bs.name AS bank_safe_name, je.sequence_number AS journal_entry_number,
-              e.name AS employee_name
-       FROM voucher_disbursements vd
-       LEFT JOIN contacts c ON c.id = vd.contact_id
-       LEFT JOIN banks_safes bs ON bs.id = vd.bank_safe_id
-       LEFT JOIN journal_entries je ON je.id = vd.journal_entry_id
-       LEFT JOIN employees e ON e.id = vd.employee_id
-       WHERE vd.id = $1 AND vd.company_id = $2`,
-      [id, ctx.companyId]
-    );
+    const { data: voucher } = await s.from('voucher_disbursements')
+      .select('*, contacts!contact_id(name), banks_safes!bank_safe_id(name), journal_entries!journal_entry_id(sequence_number), employees!employee_id(name)')
+      .eq('id', id)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle();
 
-    if (voucherRes.rows.length === 0) {
-      return notFound();
-    }
+    if (!voucher) return notFound();
 
-    return success(voucherRes.rows[0]);
+    return success({
+      ...voucher,
+      contact_name: (voucher as any).contacts?.name || null,
+      bank_safe_name: (voucher as any).banks_safes?.name || null,
+      journal_entry_number: (voucher as any).journal_entries?.sequence_number || null,
+      employee_name: (voucher as any).employees?.name || null,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -39,56 +39,46 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await getCompanyContext(request);
-  if (!ctx) return unauthorized();
-
   try {
+    const { requireApiAuth } = await import('@/lib/api-helpers');
+    const ctx = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const voucherRes = await query(
-      `SELECT vd.* FROM voucher_disbursements vd WHERE vd.id = $1 AND vd.company_id = $2`,
-      [id, ctx.companyId]
-    );
+    const { data: voucher } = await s.from('voucher_disbursements')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle();
 
-    if (voucherRes.rows.length === 0) {
-      return notFound();
-    }
+    if (!voucher) return notFound();
 
-    const voucher = voucherRes.rows[0];
+    const { data: depRes } = await s.from('cash_transactions')
+      .select('id')
+      .eq('voucher_disbursement_id', id)
+      .limit(1);
 
-    const depRes = await query(
-      `SELECT id FROM cash_transactions WHERE voucher_disbursement_id = $1 LIMIT 1`,
-      [id]
-    );
-
-    if (depRes.rows.length > 0) {
+    if (depRes && depRes.length > 0) {
       return error('لا يمكن حذف سند الصرف لأنه مرتبط بحركات نقدية');
     }
 
-    await transaction(async (client) => {
-      if (voucher.disbursement_type === 'employee_advance' && voucher.employee_id) {
-        await client.query(
-          `DELETE FROM employee_advances WHERE journal_entry_id = $1`,
-          [voucher.journal_entry_id]
-        );
-      }
+    // Sequential deletes (was a transaction)
+    if ((voucher as any).disbursement_type === 'employee_advance' && (voucher as any).employee_id) {
+      await s.from('employee_advances')
+        .delete()
+        .eq('journal_entry_id', (voucher as any).journal_entry_id);
+    }
 
-      if (voucher.journal_entry_id) {
-        await client.query(
-          `DELETE FROM journal_lines WHERE journal_entry_id = $1`,
-          [voucher.journal_entry_id]
-        );
-        await client.query(
-          `DELETE FROM journal_entries WHERE id = $1`,
-          [voucher.journal_entry_id]
-        );
-      }
+    if ((voucher as any).journal_entry_id) {
+      await s.from('journal_lines')
+        .delete()
+        .eq('journal_entry_id', (voucher as any).journal_entry_id);
+      await s.from('journal_entries')
+        .delete()
+        .eq('id', (voucher as any).journal_entry_id);
+    }
 
-      await client.query(
-        `DELETE FROM voucher_disbursements WHERE id = $1`,
-        [id]
-      );
-    });
+    await s.from('voucher_disbursements').delete().eq('id', id);
 
     return success({ deleted: true });
   } catch (err) {

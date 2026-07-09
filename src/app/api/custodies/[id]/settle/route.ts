@@ -1,81 +1,127 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody, notFound } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { success, error, serverError, notFound, handleApiError, requireApiAuth, parseBody } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const { id } = (await params);
+    const auth = await requireApiAuth(req);
+    const { id } = await params;
     const data = await parseBody(req);
     const { settlement_amount, description, created_by } = data;
 
     if (!settlement_amount) return error('settlement_amount is required');
 
-    const result = await transaction(async (client) => {
-      const custody = await client.query(`SELECT * FROM custodies WHERE id = $1 FOR UPDATE`, [id]);
-      if (custody.rows.length === 0) throw new Error('Not found');
-      if (custody.rows[0].status !== 'open') throw new Error('العهدة مقفلة بالفعل');
+    const s = sb();
 
-      const amount = parseFloat(custody.rows[0].amount);
-      const settlement = parseFloat(settlement_amount);
-      const shortage = amount - settlement;
+    // Get custody
+    const { data: custody, error: custodyErr } = await s.from('custodies')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
 
-      await client.query(
-        `UPDATE custodies SET settlement_amount = $1, settlement_date = $2, status = 'settled',
-         settlement_description = $3, updated_at = NOW() WHERE id = $4`,
-        [settlement, data.date || new Date().toISOString().split('T')[0], description, id]
-      );
+    if (custodyErr || !custody) throw new Error('Not found');
+    if (custody.status !== 'open') throw new Error('العهدة مقفلة بالفعل');
 
-      const expenseAccount = await client.query(
-        `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-        [custody.rows[0].company_id, ACCOUNT_CODES.EMPLOYEE_CUSTODIES]
-      );
+    const amount = parseFloat(custody.amount);
+    const settlement = parseFloat(settlement_amount);
+    const shortage = amount - settlement;
 
-      const je = await client.query(
-        `INSERT INTO journal_entries (company_id, number, date, type, description, created_by)
-         VALUES ($1, (SELECT COALESCE(MAX(number),0)+1 FROM journal_entries WHERE company_id=$1),
-         $2, 'general', $3, $4) RETURNING *`,
-        [custody.rows[0].company_id, data.date || new Date().toISOString().split('T')[0],
-         `تسوية عهدة: ${custody.rows[0].description || ''}`, created_by]
-      );
-      const jeId = je.rows[0].id;
+    // Update custody
+    await s.from('custodies')
+      .update({
+        settlement_amount: settlement,
+        settlement_date: data.date || new Date().toISOString().split('T')[0],
+        status: 'settled',
+        settlement_description: description,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id);
 
-      if (settlement > 0) {
-        const bankAccount = await client.query(
-          `SELECT account_id FROM banks_safes WHERE id = $1`,
-          [custody.rows[0].bank_safe_id]
-        );
-        if (bankAccount.rows.length > 0) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [jeId, bankAccount.rows[0].account_id, settlement]
-          );
-        }
+    // Get expense account
+    const { data: expenseAccount } = await s.from('accounts')
+      .select('id')
+      .eq('company_id', custody.company_id)
+      .eq('code', ACCOUNT_CODES.EMPLOYEE_CUSTODIES)
+      .maybeSingle();
+
+    if (!expenseAccount) throw new Error('الحساب غير موجود');
+
+    // Get next JE number
+    const { data: maxJe } = await s.from('journal_entries')
+      .select('number')
+      .eq('company_id', custody.company_id)
+      .order('number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const nextNumber = (maxJe?.number || 0) + 1;
+
+    // Create journal entry
+    const { data: je, error: jeErr } = await s.from('journal_entries')
+      .insert({
+        company_id: custody.company_id,
+        number: nextNumber,
+        date: data.date || new Date().toISOString().split('T')[0],
+        type: 'general',
+        description: `تسوية عهدة: ${custody.description || ''}`,
+        created_by: created_by || auth.userId,
+      })
+      .select('*')
+      .single();
+
+    if (jeErr) throw jeErr;
+    const jeId = je.id;
+
+    // Settlement credit to bank
+    if (settlement > 0) {
+      const { data: bankAccount } = await s.from('banks_safes')
+        .select('account_id')
+        .eq('id', custody.bank_safe_id)
+        .maybeSingle();
+
+      if (bankAccount) {
+        await s.from('journal_lines').insert({
+          journal_entry_id: jeId,
+          account_id: bankAccount.account_id,
+          debit: settlement,
+          credit: 0,
+        });
       }
+    }
 
-      await client.query(
-        `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-        [jeId, expenseAccount.rows[0].id, amount]
-      );
-
-      if (shortage > 0) {
-        const shortageAcct = await client.query(
-          `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-          [custody.rows[0].company_id, ACCOUNT_CODES.DIRECT_COSTS]
-        );
-        if (shortageAcct.rows.length > 0) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [jeId, shortageAcct.rows[0].id, shortage]
-          );
-        }
-      }
-
-      return { ...custody.rows[0], settlement_amount: settlement, status: 'settled' };
+    // Debit expense account for full amount
+    await s.from('journal_lines').insert({
+      journal_entry_id: jeId,
+      account_id: expenseAccount.id,
+      debit: 0,
+      credit: amount,
     });
 
-    return success(result);
-  } catch (e) {
+    // Shortage
+    if (shortage > 0) {
+      const { data: shortageAcct } = await s.from('accounts')
+        .select('id')
+        .eq('company_id', custody.company_id)
+        .eq('code', ACCOUNT_CODES.DIRECT_COSTS)
+        .maybeSingle();
+
+      if (shortageAcct) {
+        await s.from('journal_lines').insert({
+          journal_entry_id: jeId,
+          account_id: shortageAcct.id,
+          debit: shortage,
+          credit: 0,
+        });
+      }
+    }
+
+    return success({ ...custody, settlement_amount: settlement, status: 'settled' });
+  } catch (e: any) {
+    if (e.message === 'Not found') return notFound();
     return serverError(e);
   }
 }

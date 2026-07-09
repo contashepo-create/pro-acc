@@ -1,16 +1,20 @@
 import { NextRequest } from 'next/server';
 import { success, serverError, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { companyId } = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    await query(
-      `UPDATE messages SET is_read = true WHERE id = $1 AND company_id = $2`,
-      [id, companyId]
-    );
+    await s.from('messages')
+      .update({ is_read: true })
+      .eq('id', id)
+      .eq('company_id', companyId);
 
     return success({ ok: true });
   } catch (err) {

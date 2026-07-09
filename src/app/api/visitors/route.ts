@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
-import { success, serverError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { success } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function POST(request: NextRequest) {
   try {
@@ -8,23 +11,42 @@ export async function POST(request: NextRequest) {
                request.headers.get('x-real-ip') || 'unknown';
     const ua = request.headers.get('user-agent') || '';
     const { path } = await request.json().catch(() => ({ path: '/' }));
+    const s = sb();
 
-    await query(
-      `INSERT INTO visitor_logs (ip_address, user_agent, path) VALUES ($1, $2, $3)`,
-      [ip, ua, path || '/']
-    );
+    await s.from('visitor_logs').insert({
+      ip_address: ip,
+      user_agent: ua,
+      path: path || '/',
+    });
 
-    await query(
-      `INSERT INTO visitor_stats (date, visits, unique_visitors)
-       VALUES (CURRENT_DATE, 1, 1)
-       ON CONFLICT (date) DO UPDATE SET
-         visits = visitor_stats.visits + 1,
-         unique_visitors = (
-           SELECT COUNT(DISTINCT ip_address) FROM visitor_logs
-           WHERE created_at >= CURRENT_DATE
-         ),
-         updated_at = NOW()`
-    );
+    // Update visitor stats
+    const today = new Date().toISOString().split('T')[0];
+
+    // Count unique visitors today
+    const { count: uniqueCount } = await s.from('visitor_logs')
+      .select('ip_address', { count: 'exact', head: true })
+      .gte('created_at', today);
+
+    const { data: existing } = await s.from('visitor_stats')
+      .select('visits')
+      .eq('date', today)
+      .maybeSingle();
+
+    if (existing) {
+      await s.from('visitor_stats')
+        .update({
+          visits: existing.visits + 1,
+          unique_visitors: uniqueCount || 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('date', today);
+    } else {
+      await s.from('visitor_stats').insert({
+        date: today,
+        visits: 1,
+        unique_visitors: uniqueCount || 1,
+      });
+    }
 
     return success({ ok: true });
   } catch {
@@ -34,21 +56,27 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   try {
-    const today = await query(
-      `SELECT visits, unique_visitors FROM visitor_stats WHERE date = CURRENT_DATE`
-    );
+    const s = sb();
+    const today = new Date().toISOString().split('T')[0];
 
-    const totalRes = await query('SELECT COUNT(*) as count FROM visitor_logs');
-    const totalVisits = parseInt(totalRes.rows[0].count);
+    const { data: todayStats } = await s.from('visitor_stats')
+      .select('visits, unique_visitors')
+      .eq('date', today)
+      .maybeSingle();
 
-    const weeklyRes = await query(
-      `SELECT date, visits FROM visitor_stats WHERE date >= CURRENT_DATE - INTERVAL '7 days' ORDER BY date`
-    );
+    const { count: totalVisits } = await s.from('visitor_logs')
+      .select('*', { count: 'exact', head: true });
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+    const { data: weekly } = await s.from('visitor_stats')
+      .select('date, visits')
+      .gte('date', sevenDaysAgo)
+      .order('date');
 
     return success({
-      today: today.rows[0] || { visits: 0, unique_visitors: 0 },
-      totalVisits,
-      weekly: weeklyRes.rows,
+      today: todayStats || { visits: 0, unique_visitors: 0 },
+      totalVisits: totalVisits || 0,
+      weekly: weekly || [],
     });
   } catch {
     return success({
