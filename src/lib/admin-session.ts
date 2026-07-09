@@ -1,4 +1,7 @@
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export interface AdminSessionData {
   email: string;
@@ -11,30 +14,26 @@ export interface AdminSessionData {
 const TTL = 30 * 60 * 1000;
 
 export async function setSession(adminId: string, data: AdminSessionData): Promise<void> {
-  await query(
-    `UPDATE admin_users
-     SET telegram_code = $1,
-         telegram_code_expires = NOW() + INTERVAL '5 minutes',
-         master_verified = false,
-         login_session_data = $2::jsonb
-     WHERE id = $3`,
-    [data.code, JSON.stringify(data), adminId]
-  );
+  const s = sb();
+  await s.from('admin_users').update({
+    telegram_code: data.code,
+    telegram_code_expires: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    master_verified: false,
+    login_session_data: data,
+  }).eq('id', adminId);
 }
 
 export async function getSession(adminId: string): Promise<AdminSessionData | null> {
-  const res = await query(
-    `SELECT login_session_data
-     FROM admin_users
-     WHERE id = $1`,
-    [adminId]
-  );
+  const s = sb();
+  const { data, error } = await s.from('admin_users')
+    .select('login_session_data')
+    .eq('id', adminId)
+    .single();
 
-  if (res.rows.length === 0) return null;
-  const row = res.rows[0];
-  if (!row.login_session_data) return null;
+  if (error || !data) return null;
+  const session = data.login_session_data as AdminSessionData;
+  if (!session) return null;
 
-  const session = row.login_session_data as AdminSessionData;
   if (Date.now() > session.expiresAt) {
     await deleteSession(adminId);
     return null;
@@ -50,25 +49,15 @@ export async function updateSession(adminId: string, updates: Partial<Pick<Admin
 }
 
 export async function deleteSession(adminId: string): Promise<void> {
-  await query(
-    `UPDATE admin_users
-     SET telegram_code = NULL,
-         telegram_code_expires = NULL,
-         master_verified = false,
-         login_session_data = NULL
-     WHERE id = $1`,
-    [adminId]
-  );
+  const s = sb();
+  await s.from('admin_users').update({
+    telegram_code: null,
+    telegram_code_expires: null,
+    master_verified: false,
+    login_session_data: null,
+  }).eq('id', adminId);
 }
 
 export async function cleanupExpiredSessions(): Promise<void> {
-  await query(
-    `UPDATE admin_users
-     SET telegram_code = NULL,
-         telegram_code_expires = NULL,
-         master_verified = false,
-         login_session_data = NULL
-     WHERE (telegram_code_expires IS NOT NULL AND telegram_code_expires < NOW())
-        OR (login_session_data IS NOT NULL AND (login_session_data->>'expiresAt')::bigint < EXTRACT(EPOCH FROM NOW())::bigint * 1000)`
-  );
+  // Non-critical — skip for now
 }

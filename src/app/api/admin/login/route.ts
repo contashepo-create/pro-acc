@@ -1,11 +1,17 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
 import { verifyPassword } from '@/lib/auth';
 import { adminLoginSchema } from '@/lib/validation';
 import { sendTelegramCode } from '@/lib/telegram';
 import { setSession, updateSession } from '@/lib/admin-session';
+import { getSupabase } from '@/lib/supabase-client';
 import { randomInt } from 'crypto';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
+
+// Only this email can access the developer panel
+const DEV_EMAIL = 'conta.moha@gmail.com';
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,32 +23,37 @@ export async function POST(request: NextRequest) {
 
     const { email, password } = parsed.data;
 
-    const res = await query(
-      `SELECT id, name, email, password_hash, is_active
-       FROM admin_users
-       WHERE email = LOWER($1)`,
-      [email]
-    );
+    // Only allow the developer email
+    if (email.toLowerCase() !== DEV_EMAIL) {
+      return error('هذه اللوحة مخصصة للمطور فقط', 403);
+    }
 
-    if (res.rows.length === 0) {
+    const s = sb();
+
+    const { data: admin, error: queryErr } = await s.from('admin_users')
+      .select('id, name, email, password_hash, is_active')
+      .eq('email', email.toLowerCase())
+      .single();
+
+    if (queryErr || !admin) {
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
-    const admin = res.rows[0];
-
-    if (!admin.is_active) {
+    const a: any = admin;
+    if (!a.is_active) {
       return error('هذا الحساب غير نشط', 403);
     }
 
-    const valid = await verifyPassword(password, admin.password_hash);
+    const valid = await verifyPassword(password, a.password_hash);
     if (!valid) {
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
+    // Generate 2FA code
     const code = String(randomInt(100000, 1000000));
 
-    await setSession(admin.id, {
-      email: admin.email,
+    await setSession(a.id, {
+      email: a.email,
       code,
       step: 'code_sent',
       codeSent: false,
@@ -54,14 +65,14 @@ export async function POST(request: NextRequest) {
       return error('فشل إرسال رمز التحقق. تأكد من إعداد بوت تيليجرام', 500);
     }
 
-    await updateSession(admin.id, { codeSent: true });
+    await updateSession(a.id, { codeSent: true });
 
     const response = success({
       message: 'تم إرسال رمز التحقق إلى تيليجرام',
-      email: admin.email,
+      email: a.email,
     });
 
-    response.cookies.set('admin_session', admin.id, {
+    response.cookies.set('admin_session', a.id, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',

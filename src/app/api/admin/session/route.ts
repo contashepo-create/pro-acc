@@ -1,43 +1,42 @@
 import { NextRequest } from 'next/server';
 import { success, error } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get('authorization') || '';
-  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  const token = bearerToken || request.cookies.get('admin_token')?.value || '';
+  const token = request.cookies.get('admin_token')?.value || '';
 
   if (!token) {
     return error('Unauthorized', 401);
   }
 
   const payload = verifyToken(token);
-  if (!payload) {
+  if (!payload || payload.role !== 'superadmin') {
     return error('Invalid or expired token', 401);
   }
 
-  const res = await query(
-    `SELECT id, name, email, is_active
-     FROM admin_users
-     WHERE id = $1`,
-    [payload.userId]
-  );
+  const s = sb();
+  const { data: admin, error: queryErr } = await s.from('admin_users')
+    .select('id, name, email, is_active')
+    .eq('id', payload.userId)
+    .single();
 
-  if (res.rows.length === 0) {
+  if (queryErr || !admin) {
     return error('Admin not found', 401);
   }
 
-  const admin = res.rows[0];
-
-  if (!admin.is_active) {
+  const a: any = admin;
+  if (!a.is_active) {
     return error('Account inactive', 403);
   }
 
   return success({
-    id: admin.id,
-    name: admin.name,
-    email: admin.email,
+    id: a.id,
+    name: a.name,
+    email: a.email,
     role: payload.role,
   });
 }

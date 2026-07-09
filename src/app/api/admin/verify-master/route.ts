@@ -1,8 +1,11 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
 import { verifyPassword, createToken } from '@/lib/auth';
 import { getSession, deleteSession } from '@/lib/admin-session';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,44 +33,36 @@ export async function POST(request: NextRequest) {
       return error('يرجى التحقق من رمز تيليجرام أولاً', 401);
     }
 
-    const res = await query(
-      `SELECT id, name, email, master_password_hash, is_active
-       FROM admin_users
-       WHERE email = LOWER($1)`,
-      [session.email]
-    );
+    const s = sb();
+    const { data: admin, error: queryErr } = await s.from('admin_users')
+      .select('id, name, email, master_password_hash, is_active')
+      .eq('email', session.email)
+      .single();
 
-    if (res.rows.length === 0) {
+    if (queryErr || !admin) {
       return error('المستخدم غير موجود', 401);
     }
 
-    const admin = res.rows[0];
-
-    if (!admin.is_active) {
+    const a: any = admin;
+    if (!a.is_active) {
       return error('هذا الحساب غير نشط', 403);
     }
 
-    if (!admin.master_password_hash) {
+    if (!a.master_password_hash) {
       return error('لم يتم تعيين كلمة مرور رئيسية لهذا الحساب', 403);
     }
 
-    const valid = await verifyPassword(masterPassword, admin.master_password_hash);
+    const valid = await verifyPassword(masterPassword, a.master_password_hash);
     if (!valid) {
       return error('كلمة المرور الرئيسية غير صحيحة', 401);
     }
 
-    const token = createToken(admin.id, 'superadmin');
-
+    const token = createToken(a.id, 'superadmin');
     await deleteSession(adminId);
 
     const response = success({
       message: 'تم تسجيل الدخول بنجاح',
-      admin: {
-        id: admin.id,
-        name: admin.name,
-        email: admin.email,
-        role: 'superadmin',
-      },
+      admin: { id: a.id, name: a.name, email: a.email, role: 'superadmin' },
       token,
     });
 

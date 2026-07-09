@@ -195,13 +195,15 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
                     <Settings size={16} />
                     الإعدادات
                   </button>
-                  <button
-                    onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
-                    className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
-                  >
-                    <ShieldAlert size={16} />
-                    لوحة المطور
-                  </button>
+                  {user?.email === 'conta.moha@gmail.com' && (
+                    <button
+                      onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
+                      className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
+                    >
+                      <ShieldAlert size={16} />
+                      لوحة المطور
+                    </button>
+                  )}
                   <div className="border-t border-border mt-1 pt-1">
                     <button
                       onClick={() => { setUserMenuOpen(false); handleLogout(); }}
