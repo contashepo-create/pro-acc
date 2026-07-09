@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { success, error, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { accountSchema } from '@/lib/validation';
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const s = sb();
 
     const { data, error: queryError } = await s.from('accounts')
-      .select('id, code, name, name_en, type, parent_id, is_active, currency, created_at')
+      .select('id, code, name, name_en, type, parent_id, is_active, created_at')
       .eq('company_id', auth.companyId)
       .order('code');
 
@@ -32,8 +32,7 @@ export async function GET(request: NextRequest) {
 
     return success({ accounts: roots });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : JSON.stringify(err);
-    return NextResponse.json({ success: false, message: 'Accounts error: ' + msg }, { status: 500 });
+    return handleApiError(err);
   }
 }
 
@@ -48,7 +47,7 @@ export async function POST(request: NextRequest) {
       return error(parsed.error.issues[0].message);
     }
 
-    const { code, name, nameEn, type, parentId, isActive, currency } = parsed.data;
+    const { code, name, nameEn, type, parentId, isActive } = parsed.data;
 
     const depthLimit = 10;
     if (parentId) {
@@ -96,9 +95,8 @@ export async function POST(request: NextRequest) {
         type,
         parent_id: parentId || null,
         is_active: isActive ?? true,
-        currency: currency || null,
       })
-      .select('id, code, name, name_en, type, parent_id, is_active, currency, created_at')
+      .select('id, code, name, name_en, type, parent_id, is_active, created_at')
       .single();
 
     if (insertError) throw insertError;
