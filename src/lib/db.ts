@@ -7,7 +7,8 @@ let _pool: Pool | null = null;
 function getPool(): Pool {
   if (_pool) return _pool;
 
-  const connectionString = process.env.DATABASE_URL || '';
+  // Strip BOM character that PowerShell/vercel CLI may add
+  const connectionString = (process.env.DATABASE_URL || '').replace(/^\uFEFF/, '').trim();
   
   _pool = new Pool({
     connectionString,

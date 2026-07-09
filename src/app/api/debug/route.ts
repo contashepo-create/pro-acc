@@ -5,16 +5,15 @@ import { query } from '@/lib/db';
 export async function GET(request: NextRequest) {
   const results: Record<string, any> = {};
   
-  // Show full DATABASE_URL host
-  const dbUrl = process.env.DATABASE_URL || 'NOT SET';
+  // Strip BOM and show DB URL details
+  const rawUrl = (process.env.DATABASE_URL || '').replace(/^\uFEFF/, '').trim();
+  results.raw_db_url = rawUrl;
   try {
-    const url = new URL(dbUrl);
+    const url = new URL(rawUrl);
     results.db_host = url.hostname;
     results.db_port = url.port;
-    results.db_user = url.username;
   } catch {
     results.db_host = 'PARSE ERROR';
-    results.raw_db_url = dbUrl;
   }
 
   // Test DB
@@ -33,7 +32,7 @@ export async function GET(request: NextRequest) {
     results.users = 'ERROR: ' + e.message;
   }
 
-  // Test register
+  // Test companies table
   try {
     const r = await query('SELECT id FROM companies LIMIT 1');
     results.companies = 'OK';
