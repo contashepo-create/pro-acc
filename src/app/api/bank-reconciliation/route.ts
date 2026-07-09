@@ -1,51 +1,45 @@
 import { NextRequest } from 'next/server';
-import { query } from '@/lib/db';
 import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
-    const result = await query(
-      `SELECT r.*, b.name as bank_safe_name
-       FROM bank_reconciliation r
-       LEFT JOIN banks_safes b ON b.id = r.bank_safe_id
-       WHERE r.company_id = $1
-       ORDER BY r.date DESC`,
-      [auth.companyId]
-    );
-    return success(result.rows);
-  } catch (err) {
-    return handleApiError(err);
-  }
+    const s = sb();
+    const { data, error: queryError } = await s.from('bank_reconciliation')
+      .select('*, banks_safes(name)').eq('company_id', auth.companyId).order('date', { ascending: false });
+    if (queryError) throw queryError;
+
+    const reconciliations = (data || []).map((r: any) => ({ ...r, bank_safe_name: r.banks_safes?.name || null }));
+    return success(reconciliations);
+  } catch (err) { return handleApiError(err); }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const { bankSafeId, date, closingBalance, items } = await parseBody(req);
-    if (!auth.companyId || !bankSafeId || !date || closingBalance === undefined) {
-      return error('companyId, bankSafeId, date, closingBalance are required');
-    }
+    if (!bankSafeId || !date || closingBalance === undefined)
+      return error('bankSafeId, date, closingBalance are required');
 
-    const result = await query(
-      `INSERT INTO bank_reconciliation (company_id, bank_safe_id, date, closing_balance)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [auth.companyId, bankSafeId, date, closingBalance]
-    );
-    const rec = result.rows[0];
+    const { data: rec, error: recErr } = await s.from('bank_reconciliation')
+      .insert({ company_id: auth.companyId, bank_safe_id: bankSafeId, date, closing_balance: closingBalance })
+      .select('*').single();
+    if (recErr) throw recErr;
 
     if (items && items.length > 0) {
       for (const item of items) {
-        await query(
-          `INSERT INTO bank_reconciliation_items (company_id, reconciliation_id, transaction_type, amount, date, is_cleared)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [auth.companyId, rec.id, item.transactionType, item.amount, item.date ?? date, item.isCleared ?? false]
-        );
+        await s.from('bank_reconciliation_items').insert({
+          company_id: auth.companyId, reconciliation_id: rec.id,
+          transaction_type: item.transactionType, amount: item.amount,
+          date: item.date ?? date, is_cleared: item.isCleared ?? false,
+        });
       }
     }
-
     return success(rec);
-  } catch (err) {
-    return handleApiError(err);
-  }
+  } catch (err) { return handleApiError(err); }
 }

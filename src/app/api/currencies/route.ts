@@ -1,15 +1,18 @@
 import { NextRequest } from 'next/server';
-import { query } from '@/lib/db';
 import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
-    const result = await query(
-      'SELECT * FROM currencies WHERE company_id = $1 ORDER BY is_base DESC, code',
-      [auth.companyId]
-    );
-    return success(result.rows);
+    const s = sb();
+    const { data, error: queryError } = await s.from('currencies')
+      .select('*').eq('company_id', auth.companyId).order('is_base', { ascending: false }).order('code');
+    if (queryError) throw queryError;
+    return success(data || []);
   } catch (err) {
     return handleApiError(err);
   }
@@ -18,16 +21,14 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const { code, name, rate, isBase } = await parseBody(req);
-    const companyId = auth.companyId;
     if (!code || !name) return error('code and name are required');
-
-    const result = await query(
-      `INSERT INTO currencies (company_id, code, name, rate, is_base)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [companyId, code, name, rate ?? 1, isBase ?? false]
-    );
-    return success(result.rows[0]);
+    const { data: result, error: insertError } = await s.from('currencies')
+      .insert({ company_id: auth.companyId, code, name, rate: rate ?? 1, is_base: isBase ?? false })
+      .select('*').single();
+    if (insertError) throw insertError;
+    return success(result);
   } catch (err) {
     return handleApiError(err);
   }

@@ -1,11 +1,15 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
     const dateFrom = url.searchParams.get('date_from');
@@ -14,59 +18,37 @@ export async function GET(request: NextRequest) {
     const accountId = url.searchParams.get('account_id');
     const contactId = url.searchParams.get('contact_id');
 
-    let whereClause = 'WHERE ct.company_id = $1';
-    const params: any[] = [auth.companyId];
-    let paramIdx = 2;
+    let query = s.from('cash_transactions')
+      .select('*, banks_safes(name), accounts(name), contacts(name), journal_entries(number)', { count: 'exact' })
+      .eq('company_id', auth.companyId);
 
-    if (dateFrom) {
-      whereClause += ` AND ct.date >= $${paramIdx++}`;
-      params.push(dateFrom);
-    }
-    if (dateTo) {
-      whereClause += ` AND ct.date <= $${paramIdx++}`;
-      params.push(dateTo);
-    }
-    if (type) {
-      whereClause += ` AND ct.type = $${paramIdx++}`;
-      params.push(type);
-    }
-    if (accountId) {
-      whereClause += ` AND ct.account_id = $${paramIdx++}`;
-      params.push(accountId);
-    }
-    if (contactId) {
-      whereClause += ` AND ct.contact_id = $${paramIdx++}`;
-      params.push(contactId);
-    }
-
-    const countRes = await query(
-      `SELECT COUNT(*) AS total FROM cash_transactions ct ${whereClause}`,
-      params
-    );
-    const total = parseInt(countRes.rows[0].total, 10);
+    if (dateFrom) query = query.gte('date', dateFrom);
+    if (dateTo) query = query.lte('date', dateTo);
+    if (type) query = query.eq('type', type);
+    if (accountId) query = query.eq('account_id', accountId);
+    if (contactId) query = query.eq('contact_id', contactId);
 
     const offset = (page - 1) * pageSize;
-    params.push(pageSize);
-    params.push(offset);
+    const { data, error: queryError, count } = await query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + pageSize - 1);
 
-    const rowsRes = await query(
-      `SELECT ct.*, bs.name AS bank_safe_name, a.name AS account_name, c.name AS contact_name
-       FROM cash_transactions ct
-       LEFT JOIN banks_safes bs ON bs.id = ct.bank_safe_id
-       LEFT JOIN accounts a ON a.id = ct.account_id
-       LEFT JOIN contacts c ON c.id = ct.contact_id
-       ${whereClause}
-       ORDER BY ct.created_at DESC
-       LIMIT $${paramIdx++} OFFSET $${paramIdx}`,
-      params
-    );
+    if (queryError) throw queryError;
+
+    const rows = (data || []).map((ct: any) => ({
+      ...ct,
+      bank_safe_name: ct.banks_safes?.name || null,
+      account_name: ct.accounts?.name || null,
+      contact_name: ct.contacts?.name || null,
+      journal_entry_number: ct.journal_entries?.number || null,
+    }));
 
     return success({
-      rows: rowsRes.rows,
-      total,
+      rows,
+      total: count || 0,
       page,
       pageSize,
-      totalPages: Math.ceil(total / pageSize),
+      totalPages: Math.ceil((count || 0) / pageSize),
     });
   } catch (err) {
     return handleApiError(err);
@@ -76,6 +58,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
     const body = await parseBody<{
       date: string;
       type: string;
@@ -95,80 +78,122 @@ export async function POST(request: NextRequest) {
       return error('المبلغ يجب أن يكون أكبر من صفر');
     }
 
-    const result = await transaction(async (client) => {
-      const txId = generateId();
-      const jeId = generateId();
+    const txId = generateId();
+    const jeId = generateId();
 
-      const seqRes = await client.query(
-        `SELECT COALESCE(MAX(sequence_number), 0) + 1 AS next_seq FROM journal_entries WHERE company_id = $1`,
-        [auth.companyId]
-      );
-      const nextSeq = seqRes.rows[0].next_seq;
+    // Get next journal entry number
+    const { data: maxJe } = await s.from('journal_entries')
+      .select('number')
+      .eq('company_id', auth.companyId)
+      .order('number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextSeq = ((maxJe as any)?.number || 0) + 1;
 
-      let bankAccountId: string | null = null;
-      if (body.bank_safe_id) {
-        const bankRes = await client.query(
-          `SELECT account_id FROM banks_safes WHERE id = $1 AND company_id = $2`,
-          [body.bank_safe_id, auth.companyId]
-        );
-        if (bankRes.rows.length === 0 || !bankRes.rows[0].account_id) {
-          throw new Error('الخزينة/البنك غير موجود');
-        }
-        bankAccountId = bankRes.rows[0].account_id;
+    let bankAccountId: string | null = null;
+    if (body.bank_safe_id) {
+      const { data: bank } = await s.from('banks_safes')
+        .select('account_id')
+        .eq('id', body.bank_safe_id)
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
+      if (!bank || !bank.account_id) {
+        return error('الخزينة/البنك غير موجود');
       }
+      bankAccountId = bank.account_id;
+    }
 
-      const desc = `${body.type === 'receipt' ? 'قبض' : 'صرف'}: ${body.reason}`;
+    const desc = `${body.type === 'receipt' ? 'قبض' : 'صرف'}: ${body.reason}`;
 
-      await client.query(
-        `INSERT INTO journal_entries (id, company_id, sequence_number, date, type, description, project_id, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-        [jeId, auth.companyId, nextSeq, body.date, 'cash', desc, body.project_id || null, auth.userId]
-      );
+    const { error: jeError } = await s.from('journal_entries')
+      .insert({
+        id: jeId,
+        company_id: auth.companyId,
+        number: nextSeq,
+        date: body.date,
+        type: 'cash',
+        description: desc,
+        project_id: body.project_id || null,
+        created_by: auth.userId,
+      });
+    if (jeError) throw jeError;
 
-      if (body.type === 'receipt') {
-        await client.query(
-          `INSERT INTO journal_lines (id, journal_entry_id, account_id, debit, credit, description, project_id, contact_id)
-           VALUES ($1, $2, $3, $4, 0, $6, $7, $8), ($9, $2, $10, 0, $11, $6, $7, $8)`,
-          [
-            generateId(), jeId, bankAccountId || body.account_id, body.amount, body.reason,
-            body.project_id || null, body.contact_id || null,
-            generateId(), jeId, body.account_id, body.amount
-          ]
-        );
-      } else {
-        await client.query(
-          `INSERT INTO journal_lines (id, journal_entry_id, account_id, debit, credit, description, project_id, contact_id)
-           VALUES ($1, $2, $3, $4, 0, $6, $7, $8), ($9, $2, $10, 0, $11, $6, $7, $8)`,
-          [
-            generateId(), jeId, body.account_id, body.amount, body.reason,
-            body.project_id || null, body.contact_id || null,
-            generateId(), jeId, bankAccountId || body.account_id, body.amount
-          ]
-        );
-      }
+    if (body.type === 'receipt') {
+      const { error: l1Err } = await s.from('journal_lines').insert({
+        id: generateId(),
+        journal_entry_id: jeId,
+        account_id: bankAccountId || body.account_id,
+        debit: body.amount,
+        credit: 0,
+        description: body.reason,
+        project_id: body.project_id || null,
+        contact_id: body.contact_id || null,
+      });
+      if (l1Err) throw l1Err;
 
-      await client.query(
-        `INSERT INTO cash_transactions (id, company_id, date, type, amount, account_id, bank_safe_id, contact_id, project_id, category_id, reason, journal_entry_id, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())`,
-        [
-          txId, auth.companyId, body.date, body.type, body.amount, body.account_id,
-          body.bank_safe_id || null, body.contact_id || null, body.project_id || null,
-          body.category_id || null, body.reason, jeId, auth.userId
-        ]
-      );
+      const { error: l2Err } = await s.from('journal_lines').insert({
+        id: generateId(),
+        journal_entry_id: jeId,
+        account_id: body.account_id,
+        debit: 0,
+        credit: body.amount,
+        description: body.reason,
+        project_id: body.project_id || null,
+        contact_id: body.contact_id || null,
+      });
+      if (l2Err) throw l2Err;
+    } else {
+      const { error: l1Err } = await s.from('journal_lines').insert({
+        id: generateId(),
+        journal_entry_id: jeId,
+        account_id: body.account_id,
+        debit: body.amount,
+        credit: 0,
+        description: body.reason,
+        project_id: body.project_id || null,
+        contact_id: body.contact_id || null,
+      });
+      if (l1Err) throw l1Err;
 
-      const txRes = await client.query(
-        `SELECT ct.*, je.sequence_number AS journal_entry_number
-         FROM cash_transactions ct
-         LEFT JOIN journal_entries je ON je.id = ct.journal_entry_id
-         WHERE ct.id = $1`,
-        [txId]
-      );
+      const { error: l2Err } = await s.from('journal_lines').insert({
+        id: generateId(),
+        journal_entry_id: jeId,
+        account_id: bankAccountId || body.account_id,
+        debit: 0,
+        credit: body.amount,
+        description: body.reason,
+        project_id: body.project_id || null,
+        contact_id: body.contact_id || null,
+      });
+      if (l2Err) throw l2Err;
+    }
 
-      return txRes.rows[0];
-    });
+    const { data: txData, error: txError } = await s.from('cash_transactions')
+      .insert({
+        id: txId,
+        company_id: auth.companyId,
+        date: body.date,
+        type: body.type,
+        amount: body.amount,
+        account_id: body.account_id,
+        bank_safe_id: body.bank_safe_id || null,
+        contact_id: body.contact_id || null,
+        project_id: body.project_id || null,
+        category_id: body.category_id || null,
+        reason: body.reason,
+        journal_entry_id: jeId,
+        created_by: auth.userId,
+      })
+      .select('*, journal_entries(number)')
+      .single();
 
-    return success(result, 201);
+    if (txError) throw txError;
+
+    const result: any = txData;
+    return success({
+      ...result,
+      journal_entry_number: result.journal_entries?.number || null,
+    }, 201);
   } catch (err) {
     return handleApiError(err);
   }

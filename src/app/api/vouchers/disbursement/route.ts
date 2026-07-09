@@ -1,51 +1,40 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
     const { from, to } = getDateRangeParams(url);
     const disbType = url.searchParams.get('disbursementType');
 
-    const conditions = ['vd.company_id = $1'];
-    const params: any[] = [auth.companyId];
-    let idx = 2;
-    if (from) { conditions.push(`vd.date >= $${idx}`); params.push(from); idx++; }
-    if (to) { conditions.push(`vd.date <= $${idx}`); params.push(to); idx++; }
-    if (disbType) { conditions.push(`vd.disbursement_type = $${idx}`); params.push(disbType); idx++; }
+    let query = s.from('voucher_disbursements')
+      .select('*, contacts(name), employees(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
+      .eq('company_id', auth.companyId);
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
+    if (disbType) query = query.eq('disbursement_type', disbType);
 
-    const where = conditions.join(' AND ');
-    const total = await query(`SELECT COUNT(*) as cnt FROM voucher_disbursements vd WHERE ${where}`, params);
     const offset = (page - 1) * pageSize;
-    params.push(pageSize, offset);
+    const { data, error: queryError, count } = await query
+      .order('date', { ascending: false }).order('number', { ascending: false })
+      .range(offset, offset + pageSize - 1);
 
-    const disbursements = await query(
-      `SELECT vd.*, c.name as contact_name, e.name as employee_name, b.name as bank_name, je.number as journal_entry_number
-       FROM voucher_disbursements vd
-       LEFT JOIN contacts c ON vd.contact_id = c.id
-       LEFT JOIN employees e ON vd.employee_id = e.id
-       LEFT JOIN banks_safes b ON vd.bank_safe_id = b.id
-       LEFT JOIN journal_entries je ON vd.journal_entry_id = je.id
-       WHERE ${where} ORDER BY vd.date DESC, vd.number DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
-      params
-    );
+    if (queryError) throw queryError;
 
-    const summary = await query(
-      `SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total_amount
-       FROM voucher_disbursements vd WHERE ${conditions.join(' AND ')}`,
-      params.slice(0, idx - 2)
-    );
+    const disbursements = (data || []).map((vd: any) => ({
+      ...vd, contact_name: vd.contacts?.name || null, employee_name: vd.employees?.name || null,
+      bank_name: vd.banks_safes?.name || null, journal_entry_number: vd.journal_entries?.number || null,
+    }));
 
-    return success({
-      disbursements: disbursements.rows,
-      total: parseInt(total.rows[0].cnt, 10), page, pageSize,
-      summary: summary.rows[0],
-    });
+    return success({ disbursements, total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
   }
@@ -54,122 +43,63 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
     const data = await parseBody(request);
-    const { date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, invoice_items } = data;
+    const { date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, invoice_items, account_id } = data;
 
-    if (!date || !disbursement_type || !amount || !bank_safe_id || !reason) {
+    if (!date || !disbursement_type || !amount || !bank_safe_id || !reason)
       return error('date, disbursement_type, amount, bank_safe_id, reason are required');
-    }
 
     const companyId = auth.companyId;
     const userId = auth.userId;
 
-    const result = await transaction(async (client) => {
-      const seq = await client.query(
-        `SELECT COALESCE(MAX(number), 0) + 1 as next_num FROM voucher_disbursements WHERE company_id = $1`,
-        [companyId]
-      );
-      const nextNum = seq.rows[0].next_num;
+    const { data: maxVd } = await s.from('voucher_disbursements')
+      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+    const nextNum = ((maxVd as any)?.number || 0) + 1;
 
-      const bankAccount = await client.query(
-        `SELECT account_id FROM banks_safes WHERE id = $1`, [bank_safe_id]
-      );
+    const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
+    const { data: maxJe } = await s.from('journal_entries')
+      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+    const jeNum = ((maxJe as any)?.number || 0) + 1;
+    const { data: je } = await s.from('journal_entries')
+      .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `سند صرف: ${reason}`, created_by: userId })
+      .select('id').single();
+    const jeId = je.id;
 
-      const je = await client.query(
-        `INSERT INTO journal_entries (company_id, number, date, type, description, created_by)
-         VALUES ($1, (SELECT COALESCE(MAX(number),0)+1 FROM journal_entries WHERE company_id=$1),
-         $2, 'general', $3, $4) RETURNING *`,
-        [companyId, date, `سند صرف: ${reason}`, userId]
-      );
-      const jeId = je.rows[0].id;
+    const jl: any[] = [];
+    if (bankAcc?.account_id) jl.push({ journal_entry_id: jeId, account_id: bankAcc.account_id, debit: 0, credit: amount });
 
-      if (bankAccount.rows.length > 0) {
-        await client.query(
-          `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-          [jeId, bankAccount.rows[0].account_id, amount]
-        );
+    if (disbursement_type === 'supplier' || disbursement_type === 'supplier_advance') {
+      const { data: apAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
+      if (apAcc) jl.push({ journal_entry_id: jeId, account_id: apAcc.id, debit: amount, credit: 0 });
+    } else if (disbursement_type === 'client_refund') {
+      const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE).maybeSingle();
+      if (arAcc) jl.push({ journal_entry_id: jeId, account_id: arAcc.id, debit: amount, credit: 0 });
+    } else if (disbursement_type === 'employee_advance') {
+      const { data: advAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_ADVANCES).maybeSingle();
+      if (advAcc) jl.push({ journal_entry_id: jeId, account_id: advAcc.id, debit: amount, credit: 0 });
+      if (employee_id) {
+        await s.from('employee_advances').insert({ company_id: companyId, employee_id, date, type: 'advance', amount, description: reason });
       }
+    } else if (disbursement_type === 'subcontractor') {
+      const { data: subAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES).maybeSingle();
+      if (subAcc) jl.push({ journal_entry_id: jeId, account_id: subAcc.id, debit: amount, credit: 0 });
+    } else {
+      if (account_id) jl.push({ journal_entry_id: jeId, account_id: account_id, debit: amount, credit: 0 });
+    }
+    if (jl.length > 0) await s.from('journal_lines').insert(jl);
 
-      if (disbursement_type === 'supplier' || disbursement_type === 'supplier_advance') {
-        const apAccount = await client.query(
-          `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-          [companyId, ACCOUNT_CODES.ACCOUNTS_PAYABLE]
-        );
-        if (apAccount.rows.length > 0) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [jeId, apAccount.rows[0].id, amount]
-          );
-        }
-      } else if (disbursement_type === 'client_refund') {
-        const arAccount = await client.query(
-          `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-          [companyId, ACCOUNT_CODES.ACCOUNTS_RECEIVABLE]
-        );
-        if (arAccount.rows.length > 0) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [jeId, arAccount.rows[0].id, amount]
-          );
-        }
-      } else if (disbursement_type === 'employee_advance') {
-        const advAccount = await client.query(
-          `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-          [companyId, ACCOUNT_CODES.EMPLOYEE_ADVANCES]
-        );
-        if (advAccount.rows.length > 0) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [jeId, advAccount.rows[0].id, amount]
-          );
-        }
-        if (employee_id) {
-          await client.query(
-            `INSERT INTO employee_advances (company_id, employee_id, date, type, amount, description)
-             VALUES ($1, $2, $3, 'advance', $4, $5)`,
-            [companyId, employee_id, date, amount, reason]
-          );
-        }
-      } else if (disbursement_type === 'subcontractor') {
-        const subAccount = await client.query(
-          `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-          [companyId, ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES]
-        );
-        if (subAccount.rows.length > 0) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [jeId, subAccount.rows[0].id, amount]
-          );
-        }
-      } else {
-        const expenseAccount = data.account_id;
-        if (expenseAccount) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [jeId, expenseAccount, amount]
-          );
-        }
+    if (disbursement_type === 'supplier' && invoice_items && invoice_items.length > 0) {
+      for (const item of invoice_items) {
+        await s.from('disbursement_invoice_items').insert({ disbursement_voucher_id: nextNum, purchase_invoice_id: item.purchase_invoice_id, amount: item.amount });
       }
+    }
 
-      if (disbursement_type === 'supplier' && invoice_items && invoice_items.length > 0) {
-        for (const item of invoice_items) {
-          await client.query(
-            `INSERT INTO disbursement_invoice_items (disbursement_voucher_id, purchase_invoice_id, amount)
-             VALUES ($1, $2, $3)`,
-            [nextNum, item.purchase_invoice_id, item.amount]
-          );
-        }
-      }
-
-      return (await client.query(
-        `INSERT INTO voucher_disbursements (company_id, number, date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, journal_entry_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-        [companyId, nextNum, date, disbursement_type, contact_id || null, employee_id || null,
-         amount, bank_safe_id, reason, jeId, userId]
-      )).rows[0];
-    });
-
-    return success(result, 201);
+    const { data: vd, error: vdErr } = await s.from('voucher_disbursements')
+      .insert({ company_id: companyId, number: nextNum, date, disbursement_type, contact_id: contact_id || null, employee_id: employee_id || null, amount, bank_safe_id, reason, journal_entry_id: jeId, created_by: userId })
+      .select('*').single();
+    if (vdErr) throw vdErr;
+    return success(vd, 201);
   } catch (err) {
     return handleApiError(err);
   }
@@ -178,30 +108,25 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
     const url = new URL(request.url);
     const id = url.searchParams.get('id');
     if (!id) return error('id is required');
 
-    const vd = await query(
-      `SELECT * FROM voucher_disbursements WHERE id = $1 AND company_id = $2`,
-      [id, auth.companyId]
-    );
-    if (vd.rows.length === 0) return error('سند الصرف غير موجود');
+    const { data: vd } = await s.from('voucher_disbursements')
+      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!vd) return error('سند الصرف غير موجود');
 
-    await transaction(async (client) => {
-      if (vd.rows[0].journal_entry_id) {
-        await client.query(`DELETE FROM journal_lines WHERE journal_entry_id = $1`, [vd.rows[0].journal_entry_id]);
-        await client.query(`DELETE FROM journal_entries WHERE id = $1`, [vd.rows[0].journal_entry_id]);
-      }
-      if (vd.rows[0].employee_id && vd.rows[0].disbursement_type === 'employee_advance') {
-        await client.query(
-          `DELETE FROM employee_advances WHERE employee_id = $1 AND amount = $2 AND type = 'advance' LIMIT 1`,
-          [vd.rows[0].employee_id, vd.rows[0].amount]
-        );
-      }
-      await client.query(`DELETE FROM voucher_disbursements WHERE id = $1`, [id]);
-    });
-
+    if (vd.journal_entry_id) {
+      await s.from('journal_lines').delete().eq('journal_entry_id', vd.journal_entry_id);
+      await s.from('journal_entries').delete().eq('id', vd.journal_entry_id);
+    }
+    if (vd.employee_id && vd.disbursement_type === 'employee_advance') {
+      const { data: adv } = await s.from('employee_advances')
+        .select('id').eq('employee_id', vd.employee_id).eq('amount', vd.amount).eq('type', 'advance').limit(1).maybeSingle();
+      if (adv) await s.from('employee_advances').delete().eq('id', adv.id);
+    }
+    await s.from('voucher_disbursements').delete().eq('id', id);
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);

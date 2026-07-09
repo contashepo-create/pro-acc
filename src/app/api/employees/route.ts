@@ -1,22 +1,27 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, parseBody, getPaginationParams, requireApiAuth } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
 
-    const total = await query(`SELECT COUNT(*) as cnt FROM employees WHERE company_id = $1`, [auth.companyId]);
     const offset = (page - 1) * pageSize;
+    const { data, error: queryError, count } = await s.from('employees')
+      .select('*', { count: 'exact' })
+      .eq('company_id', auth.companyId)
+      .order('name')
+      .range(offset, offset + pageSize - 1);
 
-    const employees = await query(
-      `SELECT * FROM employees WHERE company_id = $1 ORDER BY name LIMIT $2 OFFSET $3`,
-      [auth.companyId, pageSize, offset]
-    );
+    if (queryError) throw queryError;
 
-    return success({ employees: employees.rows, total: parseInt(total.rows[0].cnt, 10), page, pageSize });
+    return success({ employees: data || [], total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
   }
@@ -25,21 +30,32 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const data = await parseBody(req);
     const { name, phone, email, salary, department, position, hire_date } = data;
-    const company_id = auth.companyId;
 
     if (!name || !hire_date) {
       return error('name and hire_date are required');
     }
 
-    const result = await query(
-      `INSERT INTO employees (company_id, name, phone, email, salary, department, position, hire_date, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true) RETURNING *`,
-      [company_id, name, phone || null, email || null, salary || 0, department || null, position || null, hire_date]
-    );
+    const { data: result, error: insertError } = await s.from('employees')
+      .insert({
+        company_id: auth.companyId,
+        name,
+        phone: phone || null,
+        email: email || null,
+        salary: salary || 0,
+        department: department || null,
+        position: position || null,
+        hire_date,
+        is_active: true,
+      })
+      .select('*')
+      .single();
 
-    return success(result.rows[0], 201);
+    if (insertError) throw insertError;
+
+    return success(result, 201);
   } catch (err) {
     return handleApiError(err);
   }

@@ -1,50 +1,41 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+import { generateId } from '@/lib/utils';
 import { ACCOUNT_CODES } from '@/lib/constants';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
     const { from, to } = getDateRangeParams(url);
     const receiptType = url.searchParams.get('receiptType');
 
-    const conditions = ['vr.company_id = $1'];
-    const params: any[] = [auth.companyId];
-    let idx = 2;
-    if (from) { conditions.push(`vr.date >= $${idx}`); params.push(from); idx++; }
-    if (to) { conditions.push(`vr.date <= $${idx}`); params.push(to); idx++; }
-    if (receiptType) { conditions.push(`vr.receipt_type = $${idx}`); params.push(receiptType); idx++; }
+    let query = s.from('voucher_receipts')
+      .select('*, contacts(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
+      .eq('company_id', auth.companyId);
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
+    if (receiptType) query = query.eq('receipt_type', receiptType);
 
-    const where = conditions.join(' AND ');
-    const total = await query(`SELECT COUNT(*) as cnt FROM voucher_receipts vr WHERE ${where}`, params);
     const offset = (page - 1) * pageSize;
-    params.push(pageSize, offset);
+    const { data, error: queryError, count } = await query
+      .order('date', { ascending: false }).order('number', { ascending: false })
+      .range(offset, offset + pageSize - 1);
 
-    const receipts = await query(
-      `SELECT vr.*, c.name as contact_name, b.name as bank_name, je.number as journal_entry_number
-       FROM voucher_receipts vr
-       LEFT JOIN contacts c ON vr.contact_id = c.id
-       LEFT JOIN banks_safes b ON vr.bank_safe_id = b.id
-       LEFT JOIN journal_entries je ON vr.journal_entry_id = je.id
-       WHERE ${where} ORDER BY vr.date DESC, vr.number DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
-      params
-    );
+    if (queryError) throw queryError;
 
-    const summary = await query(
-      `SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total_amount
-       FROM voucher_receipts vr WHERE ${conditions.join(' AND ')}`,
-      params.slice(0, idx - 2)
-    );
+    const receipts = (data || []).map((vr: any) => ({
+      ...vr, contact_name: vr.contacts?.name || null, bank_name: vr.banks_safes?.name || null,
+      journal_entry_number: vr.journal_entries?.number || null,
+    }));
 
-    return success({
-      receipts: receipts.rows,
-      total: parseInt(total.rows[0].cnt, 10), page, pageSize,
-      summary: summary.rows[0],
-    });
+    return success({ receipts, total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
   }
@@ -53,156 +44,109 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
     const data = await parseBody(request);
-    const { date, receipt_type, contact_id, amount, bank_safe_id, reason, reference_type, reference_id, invoice_items } = data;
+    const { date, receipt_type, contact_id, amount, bank_safe_id, reason, reference_type, reference_id, invoice_items, account_id } = data;
 
-    if (!date || !receipt_type || !amount || !bank_safe_id || !reason) {
+    if (!date || !receipt_type || !amount || !bank_safe_id || !reason)
       return error('date, receipt_type, amount, bank_safe_id, reason are required');
-    }
 
     const companyId = auth.companyId;
     const userId = auth.userId;
 
-    const result = await transaction(async (client) => {
-      const seq = await client.query(
-        `SELECT COALESCE(MAX(number), 0) + 1 as next_num FROM voucher_receipts WHERE company_id = $1`,
-        [companyId]
-      );
-      const nextNum = seq.rows[0].next_num;
+    const { data: maxVr } = await s.from('voucher_receipts')
+      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+    const nextNum = ((maxVr as any)?.number || 0) + 1;
 
-      if (receipt_type === 'client') {
-        let totalAllocated = 0;
-        if (invoice_items && invoice_items.length > 0) {
-          for (const item of invoice_items) {
-            totalAllocated += parseFloat(item.amount) || 0;
-            const inv = await client.query(`SELECT * FROM invoices WHERE id = $1`, [item.invoice_id]);
-            if (inv.rows.length === 0) throw new Error(`الفاتورة ${item.invoice_id} غير موجودة`);
+    if (receipt_type === 'client') {
+      let totalAllocated = 0;
+      if (invoice_items && invoice_items.length > 0) {
+        for (const item of invoice_items) {
+          totalAllocated += parseFloat(item.amount) || 0;
+          const { data: inv } = await s.from('invoices').select('id, total, number').eq('id', item.invoice_id).maybeSingle();
+          if (!inv) throw new Error(`الفاتورة ${item.invoice_id} غير موجودة`);
 
-            const paidSoFar = await client.query(
-              `SELECT COALESCE(SUM(amount), 0) as paid FROM receipt_invoice_items WHERE invoice_id = $1`,
-              [item.invoice_id]
-            );
-            const newPaid = parseFloat(paidSoFar.rows[0].paid) + parseFloat(item.amount);
-            const total = parseFloat(inv.rows[0].total);
-            const newStatus = newPaid >= total ? 'paid' : 'partial';
+          const { data: paidItems } = await s.from('receipt_invoice_items')
+            .select('amount').eq('invoice_id', item.invoice_id);
+          const paidSoFar = (paidItems || []).reduce((s: number, r: any) => s + (parseFloat(r.amount) || 0), 0);
+          const newPaid = paidSoFar + parseFloat(item.amount);
+          const total = parseFloat(inv.total);
+          const newStatus = newPaid >= total ? 'paid' : 'partial';
+          await s.from('invoices').update({ paid_amount: newPaid, status: newStatus }).eq('id', item.invoice_id);
 
-            await client.query(`UPDATE invoices SET paid_amount = $1, status = $2 WHERE id = $3`,
-              [newPaid, newStatus, item.invoice_id]);
+          const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE).maybeSingle();
+          const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
 
-            const arAccount = await client.query(
-              `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-              [companyId, ACCOUNT_CODES.ACCOUNTS_RECEIVABLE]
-            );
-            const bankAccount = await client.query(
-              `SELECT account_id FROM banks_safes WHERE id = $1`, [bank_safe_id]
-            );
-
-            if (arAccount.rows.length > 0 && bankAccount.rows.length > 0) {
-              const je = await client.query(
-                `INSERT INTO journal_entries (company_id, number, date, type, description, reference_type, reference_id, created_by)
-                 VALUES ($1, (SELECT COALESCE(MAX(number),0)+1 FROM journal_entries WHERE company_id=$1),
-                 $2, 'general', $3, 'invoice', $4, $5) RETURNING *`,
-                [companyId, date, `دفع فاتورة #${inv.rows[0].number}`, item.invoice_id, userId]
-              );
-              await client.query(
-                `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-                [je.rows[0].id, bankAccount.rows[0].account_id, item.amount]
-              );
-              await client.query(
-                `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-                [je.rows[0].id, arAccount.rows[0].id, item.amount]
-              );
-            }
+          if (arAccount && bankAccount?.account_id) {
+            const { data: maxJe } = await s.from('journal_entries')
+              .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+            const jeNum = ((maxJe as any)?.number || 0) + 1;
+            const { data: je } = await s.from('journal_entries')
+              .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `دفع فاتورة #${inv.number}`, reference_type: 'invoice', reference_id: item.invoice_id, created_by: userId })
+              .select('id').single();
+            await s.from('journal_lines').insert([
+              { journal_entry_id: je.id, account_id: bankAccount.account_id, debit: item.amount, credit: 0 },
+              { journal_entry_id: je.id, account_id: arAccount.id, debit: 0, credit: item.amount },
+            ]);
           }
         }
+      }
 
-        const vr = await client.query(
-          `INSERT INTO voucher_receipts (company_id, number, date, receipt_type, contact_id, amount, bank_safe_id, reason, reference_type, reference_id, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-          [companyId, nextNum, date, receipt_type, contact_id, totalAllocated, bank_safe_id, reason, reference_type, reference_id, userId]
-        );
+      const { data: vr, error: vrErr } = await s.from('voucher_receipts')
+        .insert({ company_id: companyId, number: nextNum, date, receipt_type, contact_id, amount: totalAllocated, bank_safe_id, reason, reference_type: reference_type || null, reference_id: reference_id || null, created_by: userId })
+        .select('*').single();
+      if (vrErr) throw vrErr;
 
-        if (invoice_items && invoice_items.length > 0) {
-          for (const item of invoice_items) {
-            await client.query(
-              `INSERT INTO receipt_invoice_items (voucher_receipt_id, invoice_id, amount)
-               VALUES ($1, $2, $3)`,
-              [vr.rows[0].id, item.invoice_id, item.amount]
-            );
-          }
+      if (invoice_items && invoice_items.length > 0) {
+        for (const item of invoice_items) {
+          await s.from('receipt_invoice_items').insert({ voucher_receipt_id: vr.id, invoice_id: item.invoice_id, amount: item.amount });
         }
-
-        return vr.rows[0];
       }
+      return success(vr, 201);
+    }
 
-      if (receipt_type === 'supplier_refund') {
-        const bankAccount = await client.query(
-          `SELECT account_id FROM banks_safes WHERE id = $1`, [bank_safe_id]
-        );
-        const apAccount = await client.query(
-          `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-          [companyId, ACCOUNT_CODES.ACCOUNTS_PAYABLE]
-        );
-        const je = await client.query(
-          `INSERT INTO journal_entries (company_id, number, date, type, description, created_by)
-           VALUES ($1, (SELECT COALESCE(MAX(number),0)+1 FROM journal_entries WHERE company_id=$1),
-           $2, 'general', $3, $4) RETURNING *`,
-          [companyId, date, `استرداد من مورد: ${reason}`, userId]
-        );
-        if (bankAccount.rows.length > 0) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [je.rows[0].id, bankAccount.rows[0].account_id, amount]
-          );
-        }
-        if (apAccount.rows.length > 0) {
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-            [je.rows[0].id, apAccount.rows[0].id, amount]
-          );
-        }
+    if (receipt_type === 'supplier_refund') {
+      const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
+      const { data: apAccount } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
+      const { data: maxJe } = await s.from('journal_entries')
+        .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+      const jeNum = ((maxJe as any)?.number || 0) + 1;
+      const { data: je } = await s.from('journal_entries')
+        .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `استرداد من مورد: ${reason}`, created_by: userId })
+        .select('id').single();
 
-        return (await client.query(
-          `INSERT INTO voucher_receipts (company_id, number, date, receipt_type, contact_id, amount, bank_safe_id, reason, journal_entry_id, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-          [companyId, nextNum, date, receipt_type, contact_id, amount, bank_safe_id, reason, je.rows[0].id, userId]
-        )).rows[0];
-      }
+      const jl: any[] = [];
+      if (bankAccount?.account_id) jl.push({ journal_entry_id: je.id, account_id: bankAccount.account_id, debit: amount, credit: 0 });
+      if (apAccount) jl.push({ journal_entry_id: je.id, account_id: apAccount.id, debit: 0, credit: amount });
+      if (jl.length > 0) await s.from('journal_lines').insert(jl);
 
-      const generalAccount = data.account_id;
+      const { data: vr, error: vrErr } = await s.from('voucher_receipts')
+        .insert({ company_id: companyId, number: nextNum, date, receipt_type, contact_id, amount, bank_safe_id, reason, journal_entry_id: je.id, created_by: userId })
+        .select('*').single();
+      if (vrErr) throw vrErr;
+      return success(vr, 201);
+    }
 
-      const bankAccount = await client.query(
-        `SELECT account_id FROM banks_safes WHERE id = $1`, [bank_safe_id]
-      );
-      const je = await client.query(
-        `INSERT INTO journal_entries (company_id, number, date, type, description, created_by)
-         VALUES ($1, (SELECT COALESCE(MAX(number),0)+1 FROM journal_entries WHERE company_id=$1),
-         $2, 'general', $3, $4) RETURNING *`,
-        [companyId, date, `سند قبض: ${reason}`, userId]
-      );
+    // General receipt
+    const generalAccount = account_id;
+    const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
+    const { data: maxJe } = await s.from('journal_entries')
+      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+    const jeNum = ((maxJe as any)?.number || 0) + 1;
+    const { data: je } = await s.from('journal_entries')
+      .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `سند قبض: ${reason}`, created_by: userId })
+      .select('id').single();
 
-      if (bankAccount.rows.length > 0) {
-        await client.query(
-          `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-          [je.rows[0].id, bankAccount.rows[0].account_id, amount]
-        );
-      }
-      if (generalAccount) {
-        await client.query(
-          `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-          [je.rows[0].id, generalAccount, amount]
-        );
-      }
+    const jl: any[] = [];
+    if (bankAccount?.account_id) jl.push({ journal_entry_id: je.id, account_id: bankAccount.account_id, debit: amount, credit: 0 });
+    if (generalAccount) jl.push({ journal_entry_id: je.id, account_id: generalAccount, debit: 0, credit: amount });
+    if (jl.length > 0) await s.from('journal_lines').insert(jl);
 
-      return (await client.query(
-        `INSERT INTO voucher_receipts (company_id, number, date, receipt_type, contact_id, amount, bank_safe_id, reason, reference_type, reference_id, journal_entry_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-        [companyId, nextNum, date, receipt_type, contact_id || null, amount, bank_safe_id, reason,
-         reference_type || null, reference_id || null, je.rows[0].id, userId]
-      )).rows[0];
-    });
-
-    return success(result, 201);
+    const { data: vr, error: vrErr } = await s.from('voucher_receipts')
+      .insert({ company_id: companyId, number: nextNum, date, receipt_type, contact_id: contact_id || null, amount, bank_safe_id, reason, reference_type: reference_type || null, reference_id: reference_id || null, journal_entry_id: je.id, created_by: userId })
+      .select('*').single();
+    if (vrErr) throw vrErr;
+    return success(vr, 201);
   } catch (err) {
     return handleApiError(err);
   }
@@ -211,30 +155,23 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
+    const s = sb();
     const url = new URL(request.url);
     const id = url.searchParams.get('id');
     if (!id) return error('id is required');
 
-    const vr = await query(
-      `SELECT * FROM voucher_receipts WHERE id = $1 AND company_id = $2`,
-      [id, auth.companyId]
-    );
-    if (vr.rows.length === 0) return error('سند القبض غير موجود');
+    const { data: vr } = await s.from('voucher_receipts')
+      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!vr) return error('سند القبض غير موجود');
 
-    const deps = await query(
-      `SELECT id FROM receipt_invoice_items WHERE voucher_receipt_id = $1 LIMIT 1`,
-      [id]
-    );
-    if (deps.rows.length > 0) return error('لا يمكن حذف سند قبض مرتبط بفواتير');
+    const { data: deps } = await s.from('receipt_invoice_items').select('id').eq('voucher_receipt_id', id).limit(1);
+    if (deps && deps.length > 0) return error('لا يمكن حذف سند قبض مرتبط بفواتير');
 
-    await transaction(async (client) => {
-      if (vr.rows[0].journal_entry_id) {
-        await client.query(`DELETE FROM journal_lines WHERE journal_entry_id = $1`, [vr.rows[0].journal_entry_id]);
-        await client.query(`DELETE FROM journal_entries WHERE id = $1`, [vr.rows[0].journal_entry_id]);
-      }
-      await client.query(`DELETE FROM voucher_receipts WHERE id = $1`, [id]);
-    });
-
+    if (vr.journal_entry_id) {
+      await s.from('journal_lines').delete().eq('journal_entry_id', vr.journal_entry_id);
+      await s.from('journal_entries').delete().eq('id', vr.journal_entry_id);
+    }
+    await s.from('voucher_receipts').delete().eq('id', id);
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);

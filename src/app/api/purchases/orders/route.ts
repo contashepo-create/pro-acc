@@ -1,87 +1,63 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
     const status = url.searchParams.get('status');
 
-    const conditions = ['po.company_id = $1'];
-    const params: any[] = [auth.companyId];
-    let idx = 2;
-    if (status) { conditions.push(`po.status = $${idx}`); params.push(status); idx++; }
+    let query = s.from('purchase_orders')
+      .select('*, contacts(name)', { count: 'exact' }).eq('company_id', auth.companyId);
+    if (status) query = query.eq('status', status);
 
-    const where = conditions.join(' AND ');
-    const total = await query(`SELECT COUNT(*) as cnt FROM purchase_orders po WHERE ${where}`, params);
     const offset = (page - 1) * pageSize;
-    params.push(pageSize, offset);
+    const { data, error: queryError, count } = await query
+      .order('date', { ascending: false }).order('id', { ascending: false }).range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
 
-    const orders = await query(
-      `SELECT po.*, c.name as supplier_name FROM purchase_orders po
-       LEFT JOIN contacts c ON po.supplier_id = c.id
-       WHERE ${where} ORDER BY po.date DESC, po.id DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
-      params
-    );
-
-    for (const order of orders.rows) {
-      const items = await query(
-        `SELECT * FROM purchase_order_items WHERE purchase_order_id = $1 ORDER BY id`,
-        [order.id]
-      );
-      order.items = items.rows;
+    const orders = (data || []).map((po: any) => ({ ...po, supplier_name: po.contacts?.name || null }));
+    for (const o of orders) {
+      const { data: items } = await s.from('purchase_order_items').select('*').eq('purchase_order_id', o.id).order('id');
+      o.items = items || [];
     }
-
-    return success({ orders: orders.rows, total: parseInt(total.rows[0].cnt, 10), page, pageSize });
-  } catch (err) {
-    return handleApiError(err);
-  }
+    return success({ orders, total: count || 0, page, pageSize });
+  } catch (err) { return handleApiError(err); }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const data = await parseBody(req);
     const { date, supplier_id, items, notes } = data;
+    if (!date || !supplier_id || !items || items.length === 0)
+      return error('date, supplier_id, items are required');
 
-    if (!auth.companyId || !date || !supplier_id || !items || items.length === 0) {
-      return error('company_id, date, supplier_id, items are required');
+    const { data: maxPo } = await s.from('purchase_orders')
+      .select('po_number').eq('company_id', auth.companyId).order('po_number', { ascending: false }).limit(1).maybeSingle();
+    const nextNum = ((maxPo as any)?.po_number || 0) + 1;
+
+    let total = 0;
+    for (const item of items) total += (item.quantity || 0) * (item.unit_price || 0);
+
+    const { data: po, error: poErr } = await s.from('purchase_orders')
+      .insert({ company_id: auth.companyId, po_number: nextNum, date, supplier_id, total, status: 'pending', notes, created_by: auth.userId })
+      .select('*').single();
+    if (poErr) throw poErr;
+
+    for (const item of items) {
+      await s.from('purchase_order_items').insert({
+        purchase_order_id: po.id, description: item.description, quantity: item.quantity,
+        unit_price: item.unit_price, total: item.quantity * item.unit_price,
+      });
     }
-
-    const result = await transaction(async (client) => {
-      const seq = await client.query(
-        `SELECT COALESCE(MAX(po_number), 0) + 1 as next_num FROM purchase_orders WHERE company_id = $1`,
-        [auth.companyId]
-      );
-      const nextNum = seq.rows[0].next_num;
-
-      let total = 0;
-      for (const item of items) {
-        total += (item.quantity || 0) * (item.unit_price || 0);
-      }
-
-      const po = await client.query(
-        `INSERT INTO purchase_orders (company_id, po_number, date, supplier_id, total, status, notes, created_by)
-         VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7) RETURNING *`,
-        [auth.companyId, nextNum, date, supplier_id, total, notes, auth.userId]
-      );
-
-      for (const item of items) {
-        await client.query(
-          `INSERT INTO purchase_order_items (purchase_order_id, description, quantity, unit_price, total)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [po.rows[0].id, item.description, item.quantity, item.unit_price, item.quantity * item.unit_price]
-        );
-      }
-
-      return po.rows[0];
-    });
-
-    return success(result, 201);
-  } catch (err) {
-    return handleApiError(err);
-  }
+    return success(po, 201);
+  } catch (err) { return handleApiError(err); }
 }

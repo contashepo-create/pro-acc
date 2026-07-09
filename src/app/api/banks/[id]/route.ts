@@ -1,46 +1,54 @@
 import { NextRequest } from 'next/server';
-import { success, error, unauthorized, serverError, notFound, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
-import { getCompanyContext } from '@/lib/auth';
+import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await getCompanyContext(request);
-  if (!ctx) return unauthorized();
-
   try {
+    const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const bankRes = await query(
-      `SELECT bs.*, a.code AS account_code, a.name AS account_name
-       FROM banks_safes bs
-       LEFT JOIN accounts a ON a.id = bs.account_id
-       WHERE bs.id = $1 AND bs.company_id = $2`,
-      [id, ctx.companyId]
-    );
+    const { data: bankRes, error: queryError } = await s.from('banks_safes')
+      .select('*, accounts(code, name)')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (bankRes.rows.length === 0) {
+    if (queryError || !bankRes) {
       return notFound();
     }
 
-    const bank = bankRes.rows[0];
-
+    const bank: any = bankRes;
     let balance = 0;
+
     if (bank.account_id) {
-      const balRes = await query(
-        `SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS balance
-         FROM journal_lines jl
-         WHERE jl.account_id = $1 AND jl.journal_entry_id IN (
-           SELECT je.id FROM journal_entries je WHERE je.company_id = $2
-         )`,
-        [bank.account_id, ctx.companyId]
-      );
-      balance = parseFloat(balRes.rows[0].balance);
+      const { data: jes } = await s.from('journal_entries')
+        .select('id')
+        .eq('company_id', auth.companyId);
+      const jeIds = (jes || []).map((je: any) => je.id);
+      if (jeIds.length > 0) {
+        const { data: lines } = await s.from('journal_lines')
+          .select('debit, credit')
+          .eq('account_id', bank.account_id)
+          .in('journal_entry_id', jeIds);
+        const totalDebit = (lines || []).reduce((s: number, l: any) => s + (parseFloat(l.debit) || 0), 0);
+        const totalCredit = (lines || []).reduce((s: number, l: any) => s + (parseFloat(l.credit) || 0), 0);
+        balance = totalDebit - totalCredit;
+      }
     }
 
-    return success({ ...bank, balance });
+    return success({
+      ...bank,
+      account_code: bank.accounts?.code || null,
+      account_name: bank.accounts?.name || null,
+      balance,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -50,62 +58,48 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await getCompanyContext(request);
-  if (!ctx) return unauthorized();
-
   try {
+    const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
     const body = await request.json();
 
-    const bankRes = await query(
-      `SELECT bs.* FROM banks_safes bs WHERE bs.id = $1 AND bs.company_id = $2`,
-      [id, ctx.companyId]
-    );
+    const { data: bankRes } = await s.from('banks_safes')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (bankRes.rows.length === 0) {
+    if (!bankRes) {
       return notFound();
     }
 
-    await transaction(async (client) => {
-      const updates: string[] = [];
-      const updateParams: any[] = [];
-      let paramIdx = 1;
+    const updateData: Record<string, any> = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.type !== undefined) updateData.type = body.type;
+    if (body.account_number !== undefined) updateData.account_number = body.account_number;
+    if (body.is_active !== undefined) updateData.is_active = body.is_active;
 
-      if (body.name !== undefined) {
-        updates.push(`name = $${paramIdx++}`);
-        updateParams.push(body.name);
-      }
-      if (body.type !== undefined) {
-        updates.push(`type = $${paramIdx++}`);
-        updateParams.push(body.type);
-      }
-      if (body.account_number !== undefined) {
-        updates.push(`account_number = $${paramIdx++}`);
-        updateParams.push(body.account_number);
-      }
-      if (body.is_active !== undefined) {
-        updates.push(`is_active = $${paramIdx++}`);
-        updateParams.push(body.is_active);
-      }
+    if (Object.keys(updateData).length > 0) {
+      const { error: updateError } = await s.from('banks_safes')
+        .update(updateData)
+        .eq('id', id);
+      if (updateError) throw updateError;
+    }
 
-      if (updates.length > 0) {
-        updateParams.push(id);
-        await client.query(
-          `UPDATE banks_safes SET ${updates.join(', ')} WHERE id = $${paramIdx}`,
-          updateParams
-        );
-      }
+    const { data: updated, error: fetchError } = await s.from('banks_safes')
+      .select('*, accounts(code, name)')
+      .eq('id', id)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    const u: any = updated;
+    return success({
+      ...u,
+      account_code: u.accounts?.code || null,
+      account_name: u.accounts?.name || null,
     });
-
-    const updated = await query(
-      `SELECT bs.*, a.code AS account_code, a.name AS account_name
-       FROM banks_safes bs
-       LEFT JOIN accounts a ON a.id = bs.account_id
-       WHERE bs.id = $1`,
-      [id]
-    );
-
-    return success(updated.rows[0]);
   } catch (err) {
     return handleApiError(err);
   }
@@ -115,48 +109,49 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const ctx = await getCompanyContext(request);
-  if (!ctx) return unauthorized();
-
   try {
+    const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const bankRes = await query(
-      `SELECT bs.* FROM banks_safes bs WHERE bs.id = $1 AND bs.company_id = $2`,
-      [id, ctx.companyId]
-    );
+    const { data: bankRes } = await s.from('banks_safes')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (bankRes.rows.length === 0) {
+    if (!bankRes) {
       return notFound();
     }
 
-    const txDepRes = await query(
-      `SELECT id FROM cash_transactions WHERE bank_safe_id = $1 LIMIT 1`,
-      [id]
-    );
-    if (txDepRes.rows.length > 0) {
+    const { data: txDep } = await s.from('cash_transactions')
+      .select('id')
+      .eq('bank_safe_id', id)
+      .limit(1);
+    if (txDep && txDep.length > 0) {
       return error('لا يمكن حذف الخزينة/البنك لأنه مرتبط بحركات نقدية');
     }
 
-    const vouchDepRes = await query(
-      `SELECT id FROM voucher_receipts WHERE bank_safe_id = $1 LIMIT 1`,
-      [id]
-    );
-    if (vouchDepRes.rows.length > 0) {
+    const { data: vouchDep } = await s.from('voucher_receipts')
+      .select('id')
+      .eq('bank_safe_id', id)
+      .limit(1);
+    if (vouchDep && vouchDep.length > 0) {
       return error('لا يمكن حذف الخزينة/البنك لأنه مرتبط بسندات قبض');
     }
 
-    const vouchDisDepRes = await query(
-      `SELECT id FROM voucher_disbursements WHERE bank_safe_id = $1 LIMIT 1`,
-      [id]
-    );
-    if (vouchDisDepRes.rows.length > 0) {
+    const { data: vouchDisDep } = await s.from('voucher_disbursements')
+      .select('id')
+      .eq('bank_safe_id', id)
+      .limit(1);
+    if (vouchDisDep && vouchDisDep.length > 0) {
       return error('لا يمكن حذف الخزينة/البنك لأنه مرتبط بسندات صرف');
     }
 
-    await transaction(async (client) => {
-      await client.query(`DELETE FROM banks_safes WHERE id = $1`, [id]);
-    });
+    const { error: deleteError } = await s.from('banks_safes')
+      .delete()
+      .eq('id', id);
+    if (deleteError) throw deleteError;
 
     return success({ deleted: true });
   } catch (err) {

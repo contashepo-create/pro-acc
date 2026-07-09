@@ -1,18 +1,21 @@
 import { NextRequest } from 'next/server';
-import { query } from '@/lib/db';
 import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireApiAuth(req);
     const { id } = await params;
+    const s = sb();
     const body = await parseBody(req);
-    const result = await query(
-      `UPDATE notifications SET is_read = COALESCE($1, is_read) WHERE id = $2 RETURNING *`,
-      [body.isRead ?? true, id]
-    );
-    if (result.rows.length === 0) return error('Not found', 404);
-    return success(result.rows[0]);
+    const { data: result, error: updateError } = await s.from('notifications')
+      .update({ is_read: body.isRead ?? true }).eq('id', id).select('*').maybeSingle();
+    if (updateError) throw updateError;
+    if (!result) return error('Not found', 404);
+    return success(result);
   } catch (err) {
     return handleApiError(err);
   }
@@ -22,8 +25,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   try {
     const auth = await requireApiAuth(req);
     const { id } = await params;
-    const result = await query('DELETE FROM notifications WHERE id = $1 RETURNING id', [id]);
-    if (result.rows.length === 0) return error('Not found', 404);
+    const s = sb();
+    const { data: result } = await s.from('notifications').delete().eq('id', id).select('id');
+    if (!result || result.length === 0) return error('Not found', 404);
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);

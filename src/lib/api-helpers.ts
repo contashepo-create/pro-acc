@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { verifyToken } from '@/lib/auth';
+import { getSupabase } from '@/lib/supabase-client';
 
 export function success<T>(data: T, status = 200) {
   return NextResponse.json({ success: true, data }, { status });
@@ -28,24 +30,32 @@ export function serverError(err: unknown) {
   return NextResponse.json({ success: false, message }, { status: 500 });
 }
 
+export class AuthError extends Error {
+  constructor(message: string) { super(message); this.name = 'AuthError'; }
+}
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
+
 export async function requireApiAuth(request: Request): Promise<{ companyId: string; userId: string; role: string }> {
   const { extractToken, verifyToken } = await import('@/lib/auth');
-  const { query } = await import('@/lib/db');
-
   const token = extractToken(request);
   if (!token) throw new AuthError('غير مصرح به');
 
   const payload = verifyToken(token);
   if (!payload) throw new AuthError('غير مصرح به');
 
-  const res = await query('SELECT company_id FROM users WHERE id = $1 AND is_active = true', [payload.userId]);
-  if (res.rows.length === 0) throw new AuthError('المستخدم غير موجود أو غير نشط');
+  const s = sb();
+  const { data: user, error: userErr } = await s.from('users')
+    .select('company_id, is_active')
+    .eq('id', payload.userId)
+    .single();
 
-  return { companyId: res.rows[0].company_id, userId: payload.userId, role: payload.role };
-}
+  if (userErr || !user) throw new AuthError('المستخدم غير موجود');
+  const u: any = user;
+  if (!u.is_active) throw new AuthError('المستخدم غير نشط');
 
-export class AuthError extends Error {
-  constructor(message: string) { super(message); this.name = 'AuthError'; }
+  return { companyId: u.company_id, userId: payload.userId, role: payload.role };
 }
 
 export async function requireAdminAuth(request: Request): Promise<{ userId: string; email: string }> {

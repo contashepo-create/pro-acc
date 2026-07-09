@@ -1,48 +1,44 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody, notFound } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const auth = await requireApiAuth(req);
     const { id } = await params;
-    const data = await parseBody(req);
-    const { created_by } = data;
+    const s = sb();
 
-    const result = await transaction(async (client) => {
-      const fy = await client.query(`SELECT * FROM fiscal_years WHERE id = $1 FOR UPDATE`, [id]);
-      if (fy.rows.length === 0) throw new Error('Not found');
-      if (fy.rows[0].status !== 'closed') throw new Error('السنة المالية غير مقفلة');
+    const { data: fy } = await s.from('fiscal_years').select('*').eq('id', id).maybeSingle();
+    if (!fy) return notFound();
+    if (fy.status !== 'closed') return error('السنة المالية غير مقفلة');
 
-      const companyId = fy.rows[0].company_id;
+    const companyId = fy.company_id;
 
-      const newerClosed = await client.query(
-        `SELECT id FROM fiscal_years WHERE company_id = $1 AND status = 'closed' AND start_date > $2 ORDER BY start_date`,
-        [companyId, fy.rows[0].start_date]
-      );
+    const { data: newerClosed } = await s.from('fiscal_years')
+      .select('id').eq('company_id', companyId).eq('status', 'closed').gt('start_date', fy.start_date);
 
-      for (const newer of newerClosed.rows) {
-        await client.query(`UPDATE fiscal_years SET status = 'open', closed_at = NULL, closed_by = NULL WHERE id = $1`,
-          [newer.id]);
-      }
+    for (const newer of (newerClosed || [])) {
+      await s.from('fiscal_years').update({ status: 'open', closed_at: null, closed_by: null }).eq('id', newer.id);
+    }
 
-      await client.query(`DELETE FROM journal_lines WHERE journal_entry_id IN
-        (SELECT id FROM journal_entries WHERE company_id = $1 AND date >= $2 AND date <= $3 AND type = 'closing')`,
-        [companyId, fy.rows[0].start_date, fy.rows[0].end_date]);
+    const { data: closingJes } = await s.from('journal_entries')
+      .select('id').eq('company_id', companyId).eq('type', 'closing').gte('date', fy.start_date).lte('date', fy.end_date);
+    const closingJeIds = (closingJes || []).map((je: any) => je.id);
 
-      await client.query(`DELETE FROM journal_entries WHERE company_id = $1 AND date >= $2 AND date <= $3 AND type = 'closing'`,
-        [companyId, fy.rows[0].start_date, fy.rows[0].end_date]);
+    if (closingJeIds.length > 0) {
+      await s.from('journal_lines').delete().in('journal_entry_id', closingJeIds);
+      await s.from('journal_entries').delete().in('id', closingJeIds);
+    }
 
-      await client.query(
-        `UPDATE fiscal_years SET status = 'open', closed_at = NULL, closed_by = NULL WHERE id = $1`,
-        [id]
-      );
+    const { error: updErr } = await s.from('fiscal_years')
+      .update({ status: 'open', closed_at: null, closed_by: null }).eq('id', id);
+    if (updErr) throw updErr;
 
-      return { ...fy.rows[0], status: 'open' };
-    });
-
-    return success(result);
-  } catch (e: any) {
-    if (e.message?.includes('Not found')) return notFound();
-    return error(e.message || 'خطأ في فتح السنة المالية');
+    return success({ ...fy, status: 'open' });
+  } catch (err) {
+    return handleApiError(err);
   }
 }

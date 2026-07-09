@@ -1,26 +1,15 @@
 import { NextRequest } from 'next/server';
-import { success, error, unauthorized, serverError, parseBody } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
 
-async function getCompanyAndUser(request: NextRequest): Promise<{ companyId: string; userId: string } | null> {
-  const token = request.cookies.get('token')?.value;
-  if (!token) return null;
-  const payload = verifyToken(token);
-  if (!payload) return null;
-  const res = await query(
-    'SELECT company_id, id as user_id FROM users WHERE id = $1 AND is_active = true',
-    [payload.userId]
-  );
-  return res.rows.length > 0 ? { companyId: res.rows[0].company_id, userId: res.rows[0].user_id } : null;
-}
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
-    const ctx = await getCompanyAndUser(request);
-    if (!ctx) return unauthorized();
-
+    const auth = await requireApiAuth(request);
+    const s = sb();
     const url = request.nextUrl;
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
     const pageSize = Math.min(500, Math.max(1, parseInt(url.searchParams.get('pageSize') || '50', 10) || 50));
@@ -29,188 +18,108 @@ export async function GET(request: NextRequest) {
     const dateFrom = url.searchParams.get('from');
     const dateTo = url.searchParams.get('to');
 
-    const conditions: string[] = ['company_id = $1'];
-    const params: any[] = [ctx.companyId];
-    let paramIdx = 2;
+    let query = s.from('invoices')
+      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, created_at, contacts(name)', { count: 'exact' })
+      .eq('company_id', auth.companyId);
+    if (status) query = query.eq('status', status);
+    if (clientId) query = query.eq('contact_id', clientId);
+    if (dateFrom) query = query.gte('date', dateFrom);
+    if (dateTo) query = query.lte('date', dateTo);
 
-    if (status) {
-      conditions.push(`status = $${paramIdx++}`);
-      params.push(status);
-    }
-    if (clientId) {
-      conditions.push(`contact_id = $${paramIdx++}`);
-      params.push(clientId);
-    }
-    if (dateFrom) {
-      conditions.push(`date >= $${paramIdx++}`);
-      params.push(dateFrom);
-    }
-    if (dateTo) {
-      conditions.push(`date <= $${paramIdx++}`);
-      params.push(dateTo);
-    }
+    const offset = (page - 1) * pageSize;
+    const { data, error: queryError, count } = await query
+      .order('date', { ascending: false }).order('number', { ascending: false })
+      .range(offset, offset + pageSize - 1);
 
-    const whereClause = conditions.join(' AND ');
+    if (queryError) throw queryError;
 
-    const countRes = await query(
-      `SELECT COUNT(*)::int as total FROM invoices WHERE ${whereClause}`,
-      params
-    );
-    const total = countRes.rows[0].total;
+    const invoices = (data || []).map((i: any) => ({
+      ...i, client_name: i.contacts?.name || '',
+    }));
 
-    params.push(pageSize, (page - 1) * pageSize);
-
-    const res = await query(
-      `SELECT i.id, i.number, i.contact_id, i.project_id, i.date, i.due_date,
-              i.subtotal, i.vat_rate, i.vat_amount, i.total, i.status,
-              i.notes, i.journal_entry_id, i.created_at,
-              COALESCE(c.name, '') as client_name
-       FROM invoices i
-       LEFT JOIN contacts c ON c.id = i.contact_id
-       WHERE ${whereClause}
-       ORDER BY i.date DESC, i.number DESC
-       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
-      params
-    );
-
-    return success({
-      invoices: res.rows,
-      total,
-      page,
-      pageSize,
-      totalPages: Math.ceil(total / pageSize) || 1,
-    });
+    return success({ invoices, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) || 1 });
   } catch (err) {
-    return serverError(err);
+    return handleApiError(err);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const ctx = await getCompanyAndUser(request);
-    if (!ctx) return unauthorized();
-
+    const auth = await requireApiAuth(request);
+    const s = sb();
     const body = await parseBody(request);
     const parsed = invoiceSchema.safeParse(body);
-    if (!parsed.success) {
-      return error(parsed.error.issues[0].message);
-    }
+    if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes } = parsed.data;
+    const year = date.substring(0, 4);
 
-    const result = await transaction(async (client) => {
-      const year = date.substring(0, 4);
-
-      await client.query(
-        `INSERT INTO invoice_sequences (company_id, year, last_number)
-         VALUES ($1, $2, 1)
-         ON CONFLICT (company_id, year) DO NOTHING`,
-        [ctx.companyId, year]
-      );
-
-      const seqRes = await client.query(
-        `UPDATE invoice_sequences
-         SET last_number = last_number + 1
-         WHERE company_id = $1 AND year = $2
-         RETURNING last_number`,
-        [ctx.companyId, year]
-      );
-      const number = seqRes.rows[0].last_number;
-
-      const computedVat = vatAmount ?? subtotal * vatRate;
-      const computedTotal = total ?? subtotal + computedVat;
-
-      const invoiceRes = await client.query(
-        `INSERT INTO invoices (company_id, number, contact_id, project_id, date, due_date,
-                               subtotal, vat_rate, vat_amount, total, status, notes, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'unpaid', $11, $12)
-         RETURNING id, number, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes`,
-        [ctx.companyId, number, clientId, projectId || null, date, dueDate,
-         subtotal, vatRate, computedVat, computedTotal, notes || null, ctx.userId]
-      );
-      const invoice = invoiceRes.rows[0];
-
-      for (const item of items) {
-        const itemTotal = item.total ?? item.quantity * item.unitPrice;
-        await client.query(
-          `INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, total)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [invoice.id, item.description, item.quantity, item.unitPrice, itemTotal]
-        );
-      }
-
-      const arAccountRes = await client.query(
-        `SELECT id FROM accounts WHERE company_id = $1 AND code = '1130'`,
-        [ctx.companyId]
-      );
-
-      const revenueAccountRes = await client.query(
-        `SELECT id FROM accounts WHERE company_id = $1 AND code = '4100'`,
-        [ctx.companyId]
-      );
-
-      const vatAccountRes = await client.query(
-        `SELECT id FROM accounts WHERE company_id = $1 AND code = '2120'`,
-        [ctx.companyId]
-      );
-
-      if (arAccountRes.rows.length === 0 || revenueAccountRes.rows.length === 0) {
-        throw new Error('الحسابات الأساسية مفقودة. يرجى التأكد من وجود حسابات العملاء (1130) والإيرادات (4100)');
-      }
-
-      const jeRes = await client.query(
-        `INSERT INTO journal_entries (company_id, number, date, type, description, reference, created_by)
-         VALUES ($1, $2, $3, 'general', $4, $5, $6)
-         RETURNING id`,
-        [
-          ctx.companyId,
-          number,
-          date,
-          `فاتورة مبيعات رقم ${number}`,
-          `INV-${number}`,
-          ctx.userId,
-        ]
-      );
-      const journalEntryId = jeRes.rows[0].id;
-
-      await client.query(
-        `INSERT INTO journal_lines (journal_entry_id, account_id, account_code, debit, credit, description)
-         VALUES ($1, $2, '1130', $3, 0, 'فاتورة مبيعات رقم ${number}')`,
-        [journalEntryId, arAccountRes.rows[0].id, computedTotal]
-      );
-
-      await client.query(
-        `INSERT INTO journal_lines (journal_entry_id, account_id, account_code, debit, credit, description)
-         VALUES ($1, $2, '4100', 0, $3, 'إيراد فاتورة رقم ${number}')`,
-        [journalEntryId, revenueAccountRes.rows[0].id, subtotal]
-      );
-
-      if (computedVat > 0 && vatAccountRes.rows.length > 0) {
-        await client.query(
-          `INSERT INTO journal_lines (journal_entry_id, account_id, account_code, debit, credit, description)
-           VALUES ($1, $2, '2120', 0, $3, 'ضريبة فاتورة رقم ${number}')`,
-          [journalEntryId, vatAccountRes.rows[0].id, computedVat]
-        );
-      }
-
-      await client.query(
-        `UPDATE invoices SET journal_entry_id = $1 WHERE id = $2`,
-        [journalEntryId, invoice.id]
-      );
-
-      const itemsRes = await client.query(
-        `SELECT id, description, quantity, unit_price, total FROM invoice_items WHERE invoice_id = $1`,
-        [invoice.id]
-      );
-
-      return { ...invoice, items: itemsRes.rows, journalEntryId };
-    });
-
-    return success(result, 201);
-  } catch (err: any) {
-    if (err.message?.includes('مفقودة')) {
-      return error(err.message);
+    const { data: seqExisting } = await s.from('invoice_sequences')
+      .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
+    let number;
+    if (seqExisting) {
+      number = seqExisting.last_number + 1;
+      await s.from('invoice_sequences').update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
+    } else {
+      number = 1;
+      await s.from('invoice_sequences').insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
     }
-    return serverError(err);
+
+    const computedVat = vatAmount ?? subtotal * vatRate;
+    const computedTotal = total ?? subtotal + computedVat;
+
+    const { data: invoiceRes, error: invErr } = await s.from('invoices')
+      .insert({
+        company_id: auth.companyId, number, contact_id: clientId, project_id: projectId || null,
+        date, due_date: dueDate, subtotal, vat_rate: vatRate, vat_amount: computedVat,
+        total: computedTotal, status: 'unpaid', notes: notes || null, created_by: auth.userId,
+      })
+      .select('id, number, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes')
+      .single();
+    if (invErr) throw invErr;
+    const invoice = invoiceRes;
+
+    for (const item of items) {
+      const itemTotal = item.total ?? item.quantity * item.unitPrice;
+      await s.from('invoice_items').insert({
+        invoice_id: invoice.id, description: item.description, quantity: item.quantity,
+        unit_price: item.unitPrice, total: itemTotal,
+      });
+    }
+
+    const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle();
+    const { data: revenueAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
+    const { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle();
+
+    if (!arAccount || !revenueAccount) {
+      throw new Error('الحسابات الأساسية مفقودة. يرجى التأكد من وجود حسابات العملاء (1130) والإيرادات (4100)');
+    }
+
+    const { data: jeRes, error: jeErr } = await s.from('journal_entries')
+      .insert({
+        company_id: auth.companyId, number, date, type: 'general',
+        description: `فاتورة مبيعات رقم ${number}`, reference: `INV-${number}`, created_by: auth.userId,
+      }).select('id').single();
+    if (jeErr) throw jeErr;
+    const journalEntryId = jeRes.id;
+
+    const journalLines: any[] = [
+      { journal_entry_id: journalEntryId, account_id: arAccount.id, account_code: '1130', debit: computedTotal, credit: 0, description: `فاتورة مبيعات رقم ${number}` },
+      { journal_entry_id: journalEntryId, account_id: revenueAccount.id, account_code: '4100', debit: 0, credit: subtotal, description: `إيراد فاتورة رقم ${number}` },
+    ];
+    if (computedVat > 0 && vatAccount) {
+      journalLines.push({ journal_entry_id: journalEntryId, account_id: vatAccount.id, account_code: '2120', debit: 0, credit: computedVat, description: `ضريبة فاتورة رقم ${number}` });
+    }
+    await s.from('journal_lines').insert(journalLines);
+
+    await s.from('invoices').update({ journal_entry_id: journalEntryId }).eq('id', invoice.id);
+
+    const { data: itemsRes } = await s.from('invoice_items')
+      .select('id, description, quantity, unit_price, total').eq('invoice_id', invoice.id);
+
+    return success({ ...invoice, items: itemsRes || [], journalEntryId }, 201);
+  } catch (err: any) {
+    if (err.message?.includes('مفقودة')) return error(err.message);
+    return handleApiError(err);
   }
 }

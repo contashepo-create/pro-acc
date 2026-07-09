@@ -1,7 +1,10 @@
 import { NextRequest } from 'next/server';
-import { success, error, unauthorized, serverError, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(
   request: NextRequest,
@@ -10,62 +13,59 @@ export async function GET(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const projectRes = await query(
-      `SELECT p.*, c.name AS client_name
-       FROM projects p
-       LEFT JOIN contacts c ON c.id = p.client_id
-       WHERE p.id = $1 AND p.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data: projectRes, error: pErr } = await s.from('projects')
+      .select('*, contacts(name)').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (pErr || !projectRes) return notFound();
+    const project: any = projectRes;
 
-    if (projectRes.rows.length === 0) {
-      return notFound();
+    // Get journal entries for this project
+    const { data: jes } = await s.from('journal_entries')
+      .select('id').eq('project_id', id).eq('company_id', auth.companyId);
+    const jeIds = (jes || []).map((je: any) => je.id);
+
+    let totalCost = 0;
+    let totalRevenue = 0;
+
+    if (jeIds.length > 0) {
+      const { data: lines } = await s.from('journal_lines')
+        .select('debit, credit, accounts(type)')
+        .in('journal_entry_id', jeIds);
+      for (const l of (lines || [])) {
+        const accType = (l.accounts as any)?.type;
+        const debit = parseFloat(l.debit) || 0;
+        const credit = parseFloat(l.credit) || 0;
+        if (accType === 'expense') totalCost += debit - credit;
+        if (accType === 'revenue') totalRevenue += credit - debit;
+      }
     }
 
-    const project = projectRes.rows[0];
+    // Also check journal_lines with project_id directly
+    const { data: directLines } = await s.from('journal_lines')
+      .select('debit, credit, accounts(type)')
+      .eq('project_id', id);
+    for (const l of (directLines || [])) {
+      const accType = (l.accounts as any)?.type;
+      const debit = parseFloat(l.debit) || 0;
+      const credit = parseFloat(l.credit) || 0;
+      if (accType === 'expense') totalCost += debit - credit;
+      if (accType === 'revenue') totalRevenue += credit - debit;
+    }
 
-    const costRes = await query(
-      `SELECT COALESCE(SUM(jl.debit), 0) AS total_cost
-       FROM journal_lines jl
-       JOIN accounts a ON a.id = jl.account_id
-       WHERE (jl.project_id = $1 OR jl.journal_entry_id IN (
-         SELECT id FROM journal_entries WHERE project_id = $1
-       ))
-       AND a.type = 'expense'
-       AND jl.journal_entry_id IN (
-         SELECT je.id FROM journal_entries je WHERE je.company_id = $2
-       )`,
-      [id, auth.companyId]
-    );
-
-    const revenueRes = await query(
-      `SELECT COALESCE(SUM(jl.credit), 0) AS total_revenue
-       FROM journal_lines jl
-       JOIN accounts a ON a.id = jl.account_id
-       WHERE (jl.project_id = $1 OR jl.journal_entry_id IN (
-         SELECT id FROM journal_entries WHERE project_id = $1
-       ))
-       AND a.type = 'revenue'
-       AND jl.journal_entry_id IN (
-         SELECT je.id FROM journal_entries je WHERE je.company_id = $2
-       )`,
-      [id, auth.companyId]
-    );
-
-    const invRes = await query(
-      `SELECT id, number, total, paid_amount, status FROM invoices WHERE project_id = $1 AND company_id = $2 ORDER BY created_at DESC`,
-      [id, auth.companyId]
-    );
+    const { data: invRes } = await s.from('invoices')
+      .select('id, number, total, paid_amount, status')
+      .eq('project_id', id).eq('company_id', auth.companyId).order('created_at', { ascending: false });
 
     return success({
       ...project,
+      client_name: project.contacts?.name || null,
       cost_summary: {
-        total_cost: parseFloat(costRes.rows[0].total_cost),
-        total_revenue: parseFloat(revenueRes.rows[0].total_revenue),
-        net_profit: parseFloat(project.contract_value) - parseFloat(costRes.rows[0].total_cost),
+        total_cost: totalCost,
+        total_revenue: totalRevenue,
+        net_profit: parseFloat(project.contract_value) - totalCost,
       },
-      invoices: invRes.rows.map((inv) => ({
+      invoices: (invRes || []).map((inv: any) => ({
         ...inv,
         total: parseFloat(inv.total),
         paid_amount: parseFloat(inv.paid_amount || '0'),
@@ -83,145 +83,83 @@ export async function PUT(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
     const body = await request.json();
 
-    const projectRes = await query(
-      `SELECT p.* FROM projects p WHERE p.id = $1 AND p.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data: projectRes } = await s.from('projects')
+      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!projectRes) return notFound();
+    const existing: any = projectRes;
 
-    if (projectRes.rows.length === 0) {
-      return notFound();
+    const updateData: Record<string, any> = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.client_id !== undefined) updateData.client_id = body.client_id;
+    if (body.contract_value !== undefined) updateData.contract_value = body.contract_value;
+    if (body.start_date !== undefined) updateData.start_date = body.start_date;
+    if (body.end_date !== undefined) updateData.end_date = body.end_date;
+    if (body.status !== undefined) updateData.status = body.status;
+    if (body.description !== undefined) updateData.description = body.description;
+    if (body.location !== undefined) updateData.location = body.location;
+
+    if (Object.keys(updateData).length > 0) {
+      const { error: updErr } = await s.from('projects').update(updateData).eq('id', id);
+      if (updErr) throw updErr;
     }
 
-    const existing = projectRes.rows[0];
+    // Contract value adjustment with journal entry
+    if (body.contract_value !== undefined && parseFloat(body.contract_value) !== parseFloat(existing.contract_value)) {
+      const { data: invRes } = await s.from('invoices')
+        .select('id, status, journal_entry_id')
+        .eq('project_id', id).eq('company_id', auth.companyId)
+        .not('status', 'in', '("paid","cancelled")').limit(1).maybeSingle();
 
-    await transaction(async (client) => {
-      const updates: string[] = [];
-      const updateParams: any[] = [];
-      let paramIdx = 1;
+      if (invRes) {
+        const inv: any = invRes;
+        const oldValue = parseFloat(existing.contract_value);
+        const newValue = parseFloat(body.contract_value);
+        const diff = newValue - oldValue;
 
-      if (body.name !== undefined) {
-        updates.push(`name = $${paramIdx++}`);
-        updateParams.push(body.name);
-      }
-      if (body.client_id !== undefined) {
-        updates.push(`client_id = $${paramIdx++}`);
-        updateParams.push(body.client_id);
-      }
-      if (body.contract_value !== undefined) {
-        updates.push(`contract_value = $${paramIdx++}`);
-        updateParams.push(body.contract_value);
-      }
-      if (body.start_date !== undefined) {
-        updates.push(`start_date = $${paramIdx++}`);
-        updateParams.push(body.start_date);
-      }
-      if (body.end_date !== undefined) {
-        updates.push(`end_date = $${paramIdx++}`);
-        updateParams.push(body.end_date);
-      }
-      if (body.status !== undefined) {
-        updates.push(`status = $${paramIdx++}`);
-        updateParams.push(body.status);
-      }
-      if (body.description !== undefined) {
-        updates.push(`description = $${paramIdx++}`);
-        updateParams.push(body.description);
-      }
-      if (body.location !== undefined) {
-        updates.push(`location = $${paramIdx++}`);
-        updateParams.push(body.location);
-      }
+        await s.from('invoices').update({ total: newValue, subtotal: newValue }).eq('id', inv.id);
 
-      if (updates.length > 0) {
-        updateParams.push(id);
-        await client.query(
-          `UPDATE projects SET ${updates.join(', ')} WHERE id = $${paramIdx}`,
-          updateParams
-        );
-      }
+        if (inv.journal_entry_id) {
+          const { data: arContact } = await s.from('contacts').select('account_id').eq('id', existing.client_id).maybeSingle();
+          const { data: revAcc } = await s.from('accounts').select('id').eq('code', '4100').eq('company_id', auth.companyId).maybeSingle();
 
-      if (
-        body.contract_value !== undefined &&
-        parseFloat(body.contract_value) !== parseFloat(existing.contract_value)
-      ) {
-        const invRes = await client.query(
-          `SELECT id, status, journal_entry_id FROM invoices
-          WHERE project_id = $1 AND company_id = $2 AND status NOT IN ('paid', 'cancelled')
-          LIMIT 1`,
-          [id, auth.companyId]
-        );
+          if (arContact?.account_id && revAcc) {
+            const adjJeId = generateId();
+            const { data: maxJe } = await s.from('journal_entries')
+              .select('number').eq('company_id', auth.companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+            const adjSeq = ((maxJe as any)?.number || 0) + 1;
 
-        if (invRes.rows.length > 0) {
-          const inv = invRes.rows[0];
-          const oldValue = parseFloat(existing.contract_value);
-          const newValue = parseFloat(body.contract_value);
-          const diff = newValue - oldValue;
+            await s.from('journal_entries').insert({
+              id: adjJeId, company_id: auth.companyId, number: adjSeq,
+              date: body.start_date || existing.start_date, type: 'adjustment',
+              description: `تعديل قيمة العقد للمشروع: ${existing.name}`, project_id: id, created_by: auth.userId,
+            });
 
-          await client.query(
-            `UPDATE invoices SET total = $1, subtotal = $1 WHERE id = $2`,
-            [newValue, inv.id]
-          );
-
-          if (inv.journal_entry_id) {
-            const arRes = await client.query(
-              `SELECT account_id FROM contacts WHERE id = $1`,
-              [existing.client_id]
-            );
-            const revRes = await client.query(
-              `SELECT id FROM accounts WHERE code = '4100' AND company_id = $1 LIMIT 1`,
-              [auth.companyId]
-            );
-
-            if (arRes.rows[0]?.account_id && revRes.rows.length > 0) {
-              const adjJeId = generateId();
-              const seqRes = await client.query(
-                `SELECT COALESCE(MAX(sequence_number), 0) + 1 AS next_seq FROM journal_entries WHERE company_id = $1`,
-                [auth.companyId]
-              );
-              const adjSeq = seqRes.rows[0].next_seq;
-
-              await client.query(
-                `INSERT INTO journal_entries (id, company_id, sequence_number, date, type, description, project_id, created_by, created_at)
-                 VALUES ($1, $2, $3, $4, 'adjustment', $5, $6, $7, NOW())`,
-                [adjJeId, auth.companyId, adjSeq, body.start_date || existing.start_date,
-                 `تعديل قيمة العقد للمشروع: ${existing.name}`, id, auth.userId]
-              );
-
-              if (diff > 0) {
-                await client.query(
-                  `INSERT INTO journal_lines (id, journal_entry_id, account_id, debit, credit, description, project_id)
-                   VALUES ($1, $2, $3, $4, 0, $6, $7), ($8, $2, $9, 0, $10, $6, $7)`,
-                  [generateId(), adjJeId, arRes.rows[0].account_id, diff,
-                   `تعديل قيمة العقد (+${diff})`, id,
-                   generateId(), adjJeId, revRes.rows[0].id, diff]
-                );
-              } else {
-                const absDiff = Math.abs(diff);
-                await client.query(
-                  `INSERT INTO journal_lines (id, journal_entry_id, account_id, debit, credit, description, project_id)
-                   VALUES ($1, $2, $3, 0, $4, $6, $7), ($8, $2, $9, $10, 0, $6, $7)`,
-                  [generateId(), adjJeId, arRes.rows[0].account_id, absDiff,
-                   `تعديل قيمة العقد (${diff})`, id,
-                   generateId(), adjJeId, revRes.rows[0].id, absDiff]
-                );
-              }
+            if (diff > 0) {
+              await s.from('journal_lines').insert([
+                { id: generateId(), journal_entry_id: adjJeId, account_id: arContact.account_id, debit: diff, credit: 0, description: `تعديل قيمة العقد (+${diff})`, project_id: id },
+                { id: generateId(), journal_entry_id: adjJeId, account_id: revAcc.id, debit: 0, credit: diff, description: `تعديل قيمة العقد (+${diff})`, project_id: id },
+              ]);
+            } else {
+              const absDiff = Math.abs(diff);
+              await s.from('journal_lines').insert([
+                { id: generateId(), journal_entry_id: adjJeId, account_id: arContact.account_id, debit: 0, credit: absDiff, description: `تعديل قيمة العقد (${diff})`, project_id: id },
+                { id: generateId(), journal_entry_id: adjJeId, account_id: revAcc.id, debit: absDiff, credit: 0, description: `تعديل قيمة العقد (${diff})`, project_id: id },
+              ]);
             }
           }
         }
       }
-    });
+    }
 
-    const updated = await query(
-      `SELECT p.*, c.name AS client_name
-       FROM projects p
-       LEFT JOIN contacts c ON c.id = p.client_id
-       WHERE p.id = $1`,
-      [id]
-    );
+    const { data: updated, error: fetchErr } = await s.from('projects')
+      .select('*, contacts(name)').eq('id', id).single();
+    if (fetchErr) throw fetchErr;
 
-    return success(updated.rows[0]);
+    const result: any = updated;
+    return success({ ...result, client_name: result.contacts?.name || null });
   } catch (err) {
     return handleApiError(err);
   }
@@ -234,39 +172,26 @@ export async function DELETE(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const projectRes = await query(
-      `SELECT p.* FROM projects p WHERE p.id = $1 AND p.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data: projectRes } = await s.from('projects')
+      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!projectRes) return notFound();
 
-    if (projectRes.rows.length === 0) {
-      return notFound();
-    }
-
-    const depRes = await query(
-      `SELECT id FROM invoices WHERE project_id = $1 AND status NOT IN ('cancelled') LIMIT 1`,
-      [id]
-    );
-    if (depRes.rows.length > 0) {
+    const { data: depRes } = await s.from('invoices')
+      .select('id').eq('project_id', id).neq('status', 'cancelled').limit(1);
+    if (depRes && depRes.length > 0) {
       return error('لا يمكن حذف المشروع لأنه مرتبط بفواتير غير ملغاة');
     }
 
-    const jeDepRes = await query(
-      `SELECT id FROM journal_entries WHERE project_id = $1 LIMIT 1`,
-      [id]
-    );
+    const { data: jeDeps } = await s.from('journal_entries').select('id').eq('project_id', id);
+    for (const je of (jeDeps || [])) {
+      await s.from('journal_lines').delete().eq('journal_entry_id', je.id);
+      await s.from('journal_entries').delete().eq('id', je.id);
+    }
 
-    await transaction(async (client) => {
-      if (jeDepRes.rows.length > 0) {
-        for (const je of jeDepRes.rows) {
-          await client.query(`DELETE FROM journal_lines WHERE journal_entry_id = $1`, [je.id]);
-          await client.query(`DELETE FROM journal_entries WHERE id = $1`, [je.id]);
-        }
-      }
-
-      await client.query(`UPDATE projects SET status = 'cancelled' WHERE id = $1`, [id]);
-    });
+    const { error: updErr } = await s.from('projects').update({ status: 'cancelled' }).eq('id', id);
+    if (updErr) throw updErr;
 
     return success({ message: 'تم إلغاء المشروع بنجاح' });
   } catch (err) {

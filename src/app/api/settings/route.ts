@@ -1,21 +1,19 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, parseBody, requireApiAuth } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
-
-    const settings = await query(
-      `SELECT key, value FROM settings WHERE company_id = $1`,
-      [auth.companyId]
-    );
-
+    const s = sb();
+    const { data, error: queryError } = await s.from('settings')
+      .select('key, value').eq('company_id', auth.companyId);
+    if (queryError) throw queryError;
     const map: Record<string, string> = {};
-    for (const row of settings.rows) {
-      map[row.key] = row.value;
-    }
-
+    for (const row of (data || [])) { map[row.key] = row.value; }
     return success({ settings: map });
   } catch (err) {
     return handleApiError(err);
@@ -25,20 +23,20 @@ export async function GET(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const data = await parseBody(req);
     const { settings } = data;
-
     if (!settings) return error('settings are required');
 
     for (const [key, value] of Object.entries(settings)) {
-      await query(
-        `INSERT INTO settings (company_id, key, value)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (company_id, key) DO UPDATE SET value = $3`,
-        [auth.companyId, key, String(value)]
-      );
+      const { data: existing } = await s.from('settings')
+        .select('id').eq('company_id', auth.companyId).eq('key', key).maybeSingle();
+      if (existing) {
+        await s.from('settings').update({ value: String(value) }).eq('id', existing.id);
+      } else {
+        await s.from('settings').insert({ company_id: auth.companyId, key, value: String(value) });
+      }
     }
-
     return success({ updated: true });
   } catch (err) {
     return handleApiError(err);

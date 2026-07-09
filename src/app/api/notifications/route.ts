@@ -1,16 +1,19 @@
 import { NextRequest } from 'next/server';
-import { query } from '@/lib/db';
 import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const limit = parseInt(req.nextUrl.searchParams.get('limit') || '50');
-    const result = await query(
-      'SELECT * FROM notifications WHERE company_id = $1 ORDER BY created_at DESC LIMIT $2',
-      [auth.companyId, limit]
-    );
-    return success(result.rows);
+    const { data, error: queryError } = await s.from('notifications')
+      .select('*').eq('company_id', auth.companyId).order('created_at', { ascending: false }).limit(limit);
+    if (queryError) throw queryError;
+    return success(data || []);
   } catch (err) {
     return handleApiError(err);
   }
@@ -19,16 +22,14 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const { type, title, message, link } = await parseBody(req);
-    if (!auth.companyId || !type || !title || !message) {
-      return error('companyId, type, title, message are required');
-    }
-    const result = await query(
-      `INSERT INTO notifications (company_id, user_id, type, title, message, link)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [auth.companyId, auth.userId, type, title, message, link || null]
-    );
-    return success(result.rows[0]);
+    if (!type || !title || !message) return error('type, title, message are required');
+    const { data: result, error: insertError } = await s.from('notifications')
+      .insert({ company_id: auth.companyId, user_id: auth.userId, type, title, message, link: link || null })
+      .select('*').single();
+    if (insertError) throw insertError;
+    return success(result);
   } catch (err) {
     return handleApiError(err);
   }

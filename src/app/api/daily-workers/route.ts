@@ -1,60 +1,49 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
     const { from, to } = getDateRangeParams(url);
     const projectId = url.searchParams.get('projectId');
 
-    const conditions = ['dw.company_id = $1'];
-    const params: any[] = [auth.companyId];
-    let idx = 2;
-    if (from) { conditions.push(`dw.date >= $${idx}`); params.push(from); idx++; }
-    if (to) { conditions.push(`dw.date <= $${idx}`); params.push(to); idx++; }
-    if (projectId) { conditions.push(`dw.project_id = $${idx}`); params.push(projectId); idx++; }
+    let query = s.from('daily_workers')
+      .select('*, projects(name)', { count: 'exact' }).eq('company_id', auth.companyId);
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
+    if (projectId) query = query.eq('project_id', projectId);
 
-    const where = conditions.join(' AND ');
-    const total = await query(`SELECT COUNT(*) as cnt FROM daily_workers dw WHERE ${where}`, params);
     const offset = (page - 1) * pageSize;
-    params.push(pageSize, offset);
+    const { data, error: queryError, count } = await query
+      .order('date', { ascending: false }).order('id', { ascending: false }).range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
 
-    const records = await query(
-      `SELECT dw.*, p.name as project_name FROM daily_workers dw
-       LEFT JOIN projects p ON dw.project_id = p.id
-       WHERE ${where} ORDER BY dw.date DESC, dw.id DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
-      params
-    );
-
-    return success({ records: records.rows, total: parseInt(total.rows[0].cnt, 10), page, pageSize });
-  } catch (err) {
-    return handleApiError(err);
-  }
+    const records = (data || []).map((dw: any) => ({ ...dw, project_name: dw.projects?.name || null }));
+    return success({ records, total: count || 0, page, pageSize });
+  } catch (err) { return handleApiError(err); }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const data = await parseBody(req);
     const { project_id, date, worker_name, worker_type, daily_rate, hours_worked, notes } = data;
+    if (!project_id || !date || !worker_name || !daily_rate)
+      return error('project_id, date, worker_name, daily_rate are required');
 
-    if (!auth.companyId || !project_id || !date || !worker_name || !daily_rate) {
-      return error('company_id, project_id, date, worker_name, daily_rate are required');
-    }
-
-    const result = await query(
-      `INSERT INTO daily_workers (company_id, project_id, date, worker_name, worker_type, daily_rate, hours_worked, total_amount, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [auth.companyId, project_id, date, worker_name, worker_type || 'worker', daily_rate,
-       hours_worked || 8, daily_rate * (hours_worked || 8) / 8, notes, auth.userId]
-    );
-
-    return success(result.rows[0], 201);
-  } catch (err) {
-    return handleApiError(err);
-  }
+    const hw = hours_worked || 8;
+    const { data: result, error: insertError } = await s.from('daily_workers')
+      .insert({ company_id: auth.companyId, project_id, date, worker_name, worker_type: worker_type || 'worker', daily_rate, hours_worked: hw, total_amount: daily_rate * hw / 8, notes, created_by: auth.userId })
+      .select('*').single();
+    if (insertError) throw insertError;
+    return success(result, 201);
+  } catch (err) { return handleApiError(err); }
 }

@@ -1,7 +1,10 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(
   request: NextRequest,
@@ -10,41 +13,43 @@ export async function GET(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const contactRes = await query(
-      `SELECT c.*, a.code AS account_code, a.name AS account_name
-       FROM contacts c
-       LEFT JOIN accounts a ON a.id = c.account_id
-       WHERE c.id = $1 AND c.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data: contact, error: queryError } = await s.from('contacts')
+      .select('*, accounts(code, name)')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (contactRes.rows.length === 0) {
+    if (queryError || !contact) {
       return notFound();
     }
 
-    const contact = contactRes.rows[0];
-
+    const c: any = contact;
     let balance = 0;
     let balanceType: string | null = null;
 
-    if (contact.account_id) {
-      const balRes = await query(
-        `SELECT COALESCE(SUM(debit), 0) AS total_debit, COALESCE(SUM(credit), 0) AS total_credit
-         FROM journal_lines
-         WHERE account_id = $1 AND journal_entry_id IN (
-           SELECT je.id FROM journal_entries je WHERE je.company_id = $2
-         )`,
-        [contact.account_id, auth.companyId]
-      );
-      const debit = parseFloat(balRes.rows[0].total_debit);
-      const credit = parseFloat(balRes.rows[0].total_credit);
-      balance = debit - credit;
-      balanceType = balance >= 0 ? 'debit' : 'credit';
+    if (c.account_id) {
+      const { data: jes } = await s.from('journal_entries')
+        .select('id')
+        .eq('company_id', auth.companyId);
+      const jeIds = (jes || []).map((je: any) => je.id);
+      if (jeIds.length > 0) {
+        const { data: lines } = await s.from('journal_lines')
+          .select('debit, credit')
+          .eq('account_id', c.account_id)
+          .in('journal_entry_id', jeIds);
+        const totalDebit = (lines || []).reduce((s: number, l: any) => s + (parseFloat(l.debit) || 0), 0);
+        const totalCredit = (lines || []).reduce((s: number, l: any) => s + (parseFloat(l.credit) || 0), 0);
+        balance = totalDebit - totalCredit;
+        balanceType = balance >= 0 ? 'debit' : 'credit';
+      }
     }
 
     return success({
-      ...contact,
+      ...c,
+      account_code: c.accounts?.code || null,
+      account_name: c.accounts?.name || null,
       balance: Math.abs(balance),
       balance_type: balanceType,
     });
@@ -60,93 +65,82 @@ export async function PUT(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
     const body = await request.json();
 
-    const contactRes = await query(
-      `SELECT c.* FROM contacts c WHERE c.id = $1 AND c.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data: contactRes } = await s.from('contacts')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (contactRes.rows.length === 0) {
+    if (!contactRes) {
       return notFound();
     }
 
-    await transaction(async (client) => {
-      const updates: string[] = [];
-      const updateParams: any[] = [];
-      let paramIdx = 1;
+    const contact: any = contactRes;
 
-      if (body.name !== undefined) {
-        updates.push(`name = $${paramIdx++}`);
-        updateParams.push(body.name);
-      }
-      if (body.type !== undefined) {
-        updates.push(`type = $${paramIdx++}`);
-        updateParams.push(body.type);
-      }
-      if (body.phone !== undefined) {
-        updates.push(`phone = $${paramIdx++}`);
-        updateParams.push(body.phone);
-      }
-      if (body.email !== undefined) {
-        updates.push(`email = $${paramIdx++}`);
-        updateParams.push(body.email);
-      }
-      if (body.tax_number !== undefined) {
-        updates.push(`tax_number = $${paramIdx++}`);
-        updateParams.push(body.tax_number);
-      }
-      if (body.address !== undefined) {
-        updates.push(`address = $${paramIdx++}`);
-        updateParams.push(body.address);
-      }
+    const updateData: Record<string, any> = {};
+    if (body.name !== undefined) updateData.name = body.name;
+    if (body.type !== undefined) updateData.type = body.type;
+    if (body.phone !== undefined) updateData.phone = body.phone;
+    if (body.email !== undefined) updateData.email = body.email;
+    if (body.tax_number !== undefined) updateData.tax_number = body.tax_number;
+    if (body.address !== undefined) updateData.address = body.address;
 
-      if (updates.length > 0) {
-        updateParams.push(id);
-        await client.query(
-          `UPDATE contacts SET ${updates.join(', ')} WHERE id = $${paramIdx}`,
-          updateParams
-        );
+    if (Object.keys(updateData).length > 0) {
+      const { error: updateError } = await s.from('contacts')
+        .update(updateData)
+        .eq('id', id);
+      if (updateError) throw updateError;
+    }
+
+    if (!contact.account_id) {
+      let accountCode: string;
+      let accountType: string;
+      const type = body.type || contact.type;
+      if (type === 'client') {
+        accountCode = '1130';
+        accountType = 'asset';
+      } else if (type === 'supplier') {
+        accountCode = '2110';
+        accountType = 'liability';
+      } else {
+        accountCode = '2150';
+        accountType = 'liability';
       }
 
-      if (!contactRes.rows[0].account_id) {
-        let accountCode: string;
-        let accountType: string;
-        const type = body.type || contactRes.rows[0].type;
-        if (type === 'client') {
-          accountCode = '1130';
-          accountType = 'asset';
-        } else if (type === 'supplier') {
-          accountCode = '2110';
-          accountType = 'liability';
-        } else {
-          accountCode = '2150';
-          accountType = 'liability';
-        }
+      const newAccountId = generateId();
+      const { error: accErr } = await s.from('accounts')
+        .insert({
+          id: newAccountId,
+          company_id: auth.companyId,
+          code: accountCode,
+          name: body.name || contact.name,
+          type: accountType,
+          is_active: true,
+        });
+      if (accErr) throw accErr;
 
-        const newAccountId = generateId();
-        await client.query(
-          `INSERT INTO accounts (id, company_id, code, name, type, is_active, created_at)
-           VALUES ($1, $2, $3, $4, $5, true, NOW())`,
-          [newAccountId, auth.companyId, accountCode, body.name || contactRes.rows[0].name, accountType]
-        );
+      const { error: linkErr } = await s.from('contacts')
+        .update({ account_id: newAccountId })
+        .eq('id', id);
+      if (linkErr) throw linkErr;
+    }
 
-        await client.query(
-          `UPDATE contacts SET account_id = $1 WHERE id = $2`,
-          [newAccountId, id]
-        );
-      }
+    const { data: updated, error: fetchError } = await s.from('contacts')
+      .select('*, accounts(code, name)')
+      .eq('id', id)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    const u: any = updated;
+    return success({
+      ...u,
+      account_code: u.accounts?.code || null,
+      account_name: u.accounts?.name || null,
     });
-
-    const updated = await query(
-      `SELECT c.*, a.code AS account_code, a.name AS account_name
-       FROM contacts c
-       LEFT JOIN accounts a ON a.id = c.account_id
-       WHERE c.id = $1`,
-      [id]
-    );
-
-    return success(updated.rows[0]);
   } catch (err) {
     return handleApiError(err);
   }
@@ -159,47 +153,47 @@ export async function DELETE(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const contactRes = await query(
-      `SELECT c.* FROM contacts c WHERE c.id = $1 AND c.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data: contactRes } = await s.from('contacts')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (contactRes.rows.length === 0) {
+    if (!contactRes) {
       return notFound();
     }
 
-    const contact = contactRes.rows[0];
+    const contact: any = contactRes;
 
-    const depRes = await query(
-      `SELECT id FROM invoices WHERE contact_id = $1 LIMIT 1`,
-      [id]
-    );
-    if (depRes.rows.length > 0) {
+    const { data: invDep } = await s.from('invoices')
+      .select('id')
+      .eq('contact_id', id)
+      .limit(1);
+    if (invDep && invDep.length > 0) {
       return error('لا يمكن حذف الطرف لأنه مرتبط بفواتير');
     }
 
-    const projDepRes = await query(
-      `SELECT id FROM projects WHERE client_id = $1 LIMIT 1`,
-      [id]
-    );
-    if (projDepRes.rows.length > 0) {
+    const { data: projDep } = await s.from('projects')
+      .select('id')
+      .eq('client_id', id)
+      .limit(1);
+    if (projDep && projDep.length > 0) {
       return error('لا يمكن حذف الطرف لأنه مرتبط بمشاريع');
     }
 
-    await transaction(async (client) => {
-      if (contact.account_id) {
-        await client.query(
-          `UPDATE accounts SET is_active = false WHERE id = $1`,
-          [contact.account_id]
-        );
-      }
+    if (contact.account_id) {
+      const { error: accErr } = await s.from('accounts')
+        .update({ is_active: false })
+        .eq('id', contact.account_id);
+      if (accErr) throw accErr;
+    }
 
-      await client.query(
-        `DELETE FROM contacts WHERE id = $1`,
-        [id]
-      );
-    });
+    const { error: deleteError } = await s.from('contacts')
+      .delete()
+      .eq('id', id);
+    if (deleteError) throw deleteError;
 
     return success({ deleted: true });
   } catch (err) {

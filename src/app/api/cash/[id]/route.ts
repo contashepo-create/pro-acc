@@ -1,7 +1,10 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(
   request: NextRequest,
@@ -10,24 +13,26 @@ export async function GET(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const txRes = await query(
-      `SELECT ct.*, bs.name AS bank_safe_name, a.name AS account_name, c.name AS contact_name,
-              je.sequence_number AS journal_entry_number
-       FROM cash_transactions ct
-       LEFT JOIN banks_safes bs ON bs.id = ct.bank_safe_id
-       LEFT JOIN accounts a ON a.id = ct.account_id
-       LEFT JOIN contacts c ON c.id = ct.contact_id
-       LEFT JOIN journal_entries je ON je.id = ct.journal_entry_id
-       WHERE ct.id = $1 AND ct.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data, error: queryError } = await s.from('cash_transactions')
+      .select('*, banks_safes(name), accounts(name), contacts(name), journal_entries(number)')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (txRes.rows.length === 0) {
+    if (queryError || !data) {
       return notFound();
     }
 
-    return success(txRes.rows[0]);
+    const ct: any = data;
+    return success({
+      ...ct,
+      bank_safe_name: ct.banks_safes?.name || null,
+      account_name: ct.accounts?.name || null,
+      contact_name: ct.contacts?.name || null,
+      journal_entry_number: ct.journal_entries?.number || null,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -40,89 +45,63 @@ export async function PUT(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
     const body = await request.json();
 
-    const txRes = await query(
-      `SELECT ct.* FROM cash_transactions ct WHERE ct.id = $1 AND ct.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data: txRes } = await s.from('cash_transactions')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (txRes.rows.length === 0) {
+    if (!txRes) {
       return notFound();
     }
 
-    const existing = txRes.rows[0];
+    const existing: any = txRes;
 
-    await transaction(async (client) => {
-      const updates: string[] = [];
-      const updateParams: any[] = [];
-      let paramIdx = 1;
+    const updateData: Record<string, any> = {};
+    if (body.date !== undefined) updateData.date = body.date;
+    if (body.type !== undefined) updateData.type = body.type;
+    if (body.amount !== undefined) updateData.amount = body.amount;
+    if (body.account_id !== undefined) updateData.account_id = body.account_id;
+    if (body.bank_safe_id !== undefined) updateData.bank_safe_id = body.bank_safe_id;
+    if (body.contact_id !== undefined) updateData.contact_id = body.contact_id;
+    if (body.project_id !== undefined) updateData.project_id = body.project_id;
+    if (body.category_id !== undefined) updateData.category_id = body.category_id;
+    if (body.reason !== undefined) updateData.reason = body.reason;
 
-      if (body.date !== undefined) {
-        updates.push(`date = $${paramIdx++}`);
-        updateParams.push(body.date);
-      }
-      if (body.type !== undefined) {
-        updates.push(`type = $${paramIdx++}`);
-        updateParams.push(body.type);
-      }
-      if (body.amount !== undefined) {
-        updates.push(`amount = $${paramIdx++}`);
-        updateParams.push(body.amount);
-      }
-      if (body.account_id !== undefined) {
-        updates.push(`account_id = $${paramIdx++}`);
-        updateParams.push(body.account_id);
-      }
-      if (body.bank_safe_id !== undefined) {
-        updates.push(`bank_safe_id = $${paramIdx++}`);
-        updateParams.push(body.bank_safe_id);
-      }
-      if (body.contact_id !== undefined) {
-        updates.push(`contact_id = $${paramIdx++}`);
-        updateParams.push(body.contact_id);
-      }
-      if (body.project_id !== undefined) {
-        updates.push(`project_id = $${paramIdx++}`);
-        updateParams.push(body.project_id);
-      }
-      if (body.category_id !== undefined) {
-        updates.push(`category_id = $${paramIdx++}`);
-        updateParams.push(body.category_id);
-      }
-      if (body.reason !== undefined) {
-        updates.push(`reason = $${paramIdx++}`);
-        updateParams.push(body.reason);
-      }
+    if (Object.keys(updateData).length > 0) {
+      const { error: updateError } = await s.from('cash_transactions')
+        .update(updateData)
+        .eq('id', id);
+      if (updateError) throw updateError;
+    }
 
-      if (updates.length > 0) {
-        updateParams.push(id);
-        await client.query(
-          `UPDATE cash_transactions SET ${updates.join(', ')} WHERE id = $${paramIdx}`,
-          updateParams
-        );
-      }
-
-      const auditId = generateId();
-      await client.query(
-        `INSERT INTO audit_log (id, company_id, user_id, action, entity_type, entity_id, old_values, new_values, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-        [
-          auditId, auth.companyId, auth.userId, 'update', 'cash_transaction', id,
-          JSON.stringify(existing), JSON.stringify(body)
-        ]
-      );
+    const auditId = generateId();
+    await s.from('audit_log').insert({
+      id: auditId,
+      company_id: auth.companyId,
+      user_id: auth.userId,
+      action: 'update',
+      entity_type: 'cash_transaction',
+      entity_id: id,
+      old_values: JSON.stringify(existing),
+      new_values: JSON.stringify(body),
     });
 
-    const updated = await query(
-      `SELECT ct.*, je.sequence_number AS journal_entry_number
-       FROM cash_transactions ct
-       LEFT JOIN journal_entries je ON je.id = ct.journal_entry_id
-       WHERE ct.id = $1`,
-      [id]
-    );
+    const { data: updated, error: fetchError } = await s.from('cash_transactions')
+      .select('*, journal_entries(number)')
+      .eq('id', id)
+      .single();
 
-    return success(updated.rows[0]);
+    if (fetchError) throw fetchError;
+
+    const result: any = updated;
+    return success({
+      ...result,
+      journal_entry_number: result.journal_entries?.number || null,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -135,42 +114,47 @@ export async function DELETE(
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const txRes = await query(
-      `SELECT ct.* FROM cash_transactions ct WHERE ct.id = $1 AND ct.company_id = $2`,
-      [id, auth.companyId]
-    );
+    const { data: txRes } = await s.from('cash_transactions')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
 
-    if (txRes.rows.length === 0) {
+    if (!txRes) {
       return notFound();
     }
 
-    const tx = txRes.rows[0];
+    const tx: any = txRes;
 
-    await transaction(async (client) => {
-      if (tx.journal_entry_id) {
-        await client.query(
-          `DELETE FROM journal_lines WHERE journal_entry_id = $1`,
-          [tx.journal_entry_id]
-        );
-        await client.query(
-          `DELETE FROM journal_entries WHERE id = $1`,
-          [tx.journal_entry_id]
-        );
-      }
+    if (tx.journal_entry_id) {
+      const { error: lErr } = await s.from('journal_lines')
+        .delete()
+        .eq('journal_entry_id', tx.journal_entry_id);
+      if (lErr) throw lErr;
 
-      const auditId = generateId();
-      await client.query(
-        `INSERT INTO audit_log (id, company_id, user_id, action, entity_type, entity_id, old_values, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-        [auditId, auth.companyId, auth.userId, 'delete', 'cash_transaction', id, JSON.stringify(tx)]
-      );
+      const { error: jeErr } = await s.from('journal_entries')
+        .delete()
+        .eq('id', tx.journal_entry_id);
+      if (jeErr) throw jeErr;
+    }
 
-      await client.query(
-        `DELETE FROM cash_transactions WHERE id = $1`,
-        [id]
-      );
+    const auditId = generateId();
+    await s.from('audit_log').insert({
+      id: auditId,
+      company_id: auth.companyId,
+      user_id: auth.userId,
+      action: 'delete',
+      entity_type: 'cash_transaction',
+      entity_id: id,
+      old_values: JSON.stringify(tx),
     });
+
+    const { error: deleteError } = await s.from('cash_transactions')
+      .delete()
+      .eq('id', id);
+    if (deleteError) throw deleteError;
 
     return success({ deleted: true });
   } catch (err) {

@@ -1,156 +1,108 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
+import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+import { generateId } from '@/lib/utils';
 import { ACCOUNT_CODES } from '@/lib/constants';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireApiAuth(request);
     const { id } = await params;
+    const s = sb();
 
-    const result = await transaction(async (client) => {
-      const fy = await client.query(`SELECT * FROM fiscal_years WHERE id = $1 FOR UPDATE`, [id]);
-      if (fy.rows.length === 0) throw new Error('Not found');
-      if (fy.rows[0].status === 'closed') throw new Error('السنة المالية مقفلة بالفعل');
+    const { data: fy } = await s.from('fiscal_years').select('*').eq('id', id).maybeSingle();
+    if (!fy) return notFound();
+    if (fy.status === 'closed') return error('السنة المالية مقفلة بالفعل');
 
-      const companyId = fy.rows[0].company_id;
-      const endDate = fy.rows[0].end_date;
+    const companyId = fy.company_id;
+    const endDate = fy.end_date;
+    if (companyId !== auth.companyId) return error('غير مصرح به');
 
-      // Verify the fiscal year belongs to the authed company
-      if (companyId !== auth.companyId) throw new Error('غير مصرح به');
+    const { data: openCustodies } = await s.from('custodies')
+      .select('id').eq('company_id', companyId).eq('status', 'open').limit(1);
+    if (openCustodies && openCustodies.length > 0) return error('لا يمكن إقفال السنة والعُهد مفتوحة');
 
-      const openCustodies = await client.query(
-        `SELECT id FROM custodies WHERE company_id = $1 AND status = 'open' LIMIT 1`,
-        [companyId]
-      );
-      if (openCustodies.rows.length > 0) throw new Error('لا يمكن إقفال السنة والعُهد مفتوحة');
+    const warnings: string[] = [];
 
-      const unposted = await client.query(
-        `SELECT id FROM journal_entries WHERE company_id = $1 AND date <= $2 AND type != 'closing' AND (reversal_of IS NULL) LIMIT 1`,
-        [companyId, endDate]
-      );
+    const { data: activeProjects } = await s.from('projects')
+      .select('id').eq('company_id', companyId).eq('status', 'active').limit(1);
+    if (activeProjects && activeProjects.length > 0) warnings.push('هناك مشاريع نشطة');
 
-      const openAdvances = await client.query(
-        `SELECT ea.id FROM employee_advances ea
-         JOIN employees e ON ea.employee_id = e.id
-         WHERE e.company_id = $1 AND ea.type = 'advance'
-         AND (ea.id NOT IN (SELECT reference_id FROM journal_lines WHERE account_id IN
-           (SELECT id FROM accounts WHERE code = $2))) LIMIT 1`,
-        [companyId, ACCOUNT_CODES.EMPLOYEE_ADVANCES]
-      );
+    const { data: revenueAccounts } = await s.from('accounts')
+      .select('id').eq('company_id', companyId).eq('type', 'revenue');
+    const { data: expenseAccounts } = await s.from('accounts')
+      .select('id').eq('company_id', companyId).eq('type', 'expense');
 
-      const warnings: string[] = [];
-      const subcontractorDue = await client.query(
-        `SELECT id FROM subcon_certificates WHERE status = 'approved' AND paid_amount < net_amount LIMIT 1`,
-        []
-      );
-      if (subcontractorDue.rows.length > 0) warnings.push('هناك شهادات مقاولي باطن غير مدفوعة');
+    // Get all journal entries for this company up to endDate, excluding closing
+    const { data: jes } = await s.from('journal_entries')
+      .select('id').eq('company_id', companyId).lte('date', endDate).neq('type', 'closing');
+    const jeIds = (jes || []).map((je: any) => je.id);
 
-      const activeProjects = await client.query(
-        `SELECT id FROM projects WHERE company_id = $1 AND status = 'active' LIMIT 1`,
-        [companyId]
-      );
-      if (activeProjects.rows.length > 0) warnings.push('هناك مشاريع نشطة');
+    let totalRevenue = 0;
+    let totalExpenses = 0;
+    const accountBalances: Record<string, number> = {};
 
-      const revenueAccounts = await client.query(
-        `SELECT id FROM accounts WHERE company_id = $1 AND type = 'revenue'`,
-        [companyId]
-      );
-      const expenseAccounts = await client.query(
-        `SELECT id FROM accounts WHERE company_id = $1 AND type = 'expense'`,
-        [companyId]
-      );
-
-      let totalRevenue = 0;
-      for (const acc of revenueAccounts.rows) {
-        const res = await client.query(
-          `SELECT COALESCE(SUM(credit) - SUM(debit), 0) as balance FROM journal_lines
-           WHERE account_id = $1 AND journal_entry_id IN
-           (SELECT id FROM journal_entries WHERE company_id = $2 AND date <= $3 AND type != 'closing')`,
-          [acc.id, companyId, endDate]
-        );
-        totalRevenue += parseFloat(res.rows[0].balance) || 0;
+    if (jeIds.length > 0) {
+      const { data: lines } = await s.from('journal_lines')
+        .select('account_id, debit, credit').in('journal_entry_id', jeIds);
+      for (const l of (lines || [])) {
+        const debit = parseFloat(l.debit) || 0;
+        const credit = parseFloat(l.credit) || 0;
+        if (!accountBalances[l.account_id]) accountBalances[l.account_id] = 0;
+        accountBalances[l.account_id] += debit - credit;
       }
+    }
 
-      let totalExpenses = 0;
-      for (const acc of expenseAccounts.rows) {
-        const res = await client.query(
-          `SELECT COALESCE(SUM(debit) - SUM(credit), 0) as balance FROM journal_lines
-           WHERE account_id = $1 AND journal_entry_id IN
-           (SELECT id FROM journal_entries WHERE company_id = $2 AND date <= $3 AND type != 'closing')`,
-          [acc.id, companyId, endDate]
-        );
-        totalExpenses += parseFloat(res.rows[0].balance) || 0;
-      }
+    for (const acc of (revenueAccounts || [])) {
+      const bal = accountBalances[acc.id] || 0;
+      totalRevenue += -bal; // revenue balance = credit - debit = -net
+    }
+    for (const acc of (expenseAccounts || [])) {
+      const bal = accountBalances[acc.id] || 0;
+      totalExpenses += bal; // expense balance = debit - credit = net
+    }
 
-      const netIncome = totalRevenue - totalExpenses;
-      const retainedAccount = await client.query(
-        `SELECT id FROM accounts WHERE company_id = $1 AND code = $2 LIMIT 1`,
-        [companyId, ACCOUNT_CODES.RETAINED_EARNINGS]
-      );
+    const netIncome = totalRevenue - totalExpenses;
+    const { data: retainedAccount } = await s.from('accounts')
+      .select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.RETAINED_EARNINGS).maybeSingle();
 
-      if (netIncome !== 0 && retainedAccount.rows.length > 0) {
-        const closingJe = await client.query(
-          `INSERT INTO journal_entries (company_id, number, date, type, description, created_by)
-           VALUES ($1, (SELECT COALESCE(MAX(number),0)+1 FROM journal_entries WHERE company_id=$1),
-           $2, 'closing', 'قيد إقفال السنة المالية', $3) RETURNING *`,
-          [companyId, endDate, auth.userId]
-        );
-        const jeId = closingJe.rows[0].id;
+    if (netIncome !== 0 && retainedAccount) {
+      const { data: maxJe } = await s.from('journal_entries')
+        .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+      const closingNumber = ((maxJe as any)?.number || 0) + 1;
 
-        if (netIncome > 0) {
-          for (const acc of revenueAccounts.rows) {
-            const res = await client.query(
-              `SELECT COALESCE(SUM(credit) - SUM(debit), 0) as balance FROM journal_lines
-               WHERE account_id = $1 AND journal_entry_id IN
-               (SELECT id FROM journal_entries WHERE company_id = $2 AND date <= $3 AND type != 'closing')`,
-              [acc.id, companyId, endDate]
-            );
-            const bal = parseFloat(res.rows[0].balance) || 0;
-            if (bal > 0) {
-              await client.query(
-                `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-                [jeId, acc.id, bal]
-              );
-            }
-          }
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-            [jeId, retainedAccount.rows[0].id, netIncome]
-          );
-        } else {
-          const loss = Math.abs(netIncome);
-          for (const acc of expenseAccounts.rows) {
-            const res = await client.query(
-              `SELECT COALESCE(SUM(debit) - SUM(credit), 0) as balance FROM journal_lines
-               WHERE account_id = $1 AND journal_entry_id IN
-               (SELECT id FROM journal_entries WHERE company_id = $2 AND date <= $3 AND type != 'closing')`,
-              [acc.id, companyId, endDate]
-            );
-            const bal = parseFloat(res.rows[0].balance) || 0;
-            if (bal > 0) {
-              await client.query(
-                `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, 0, $3)`,
-                [jeId, acc.id, bal]
-              );
-            }
-          }
-          await client.query(
-            `INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit) VALUES ($1, $2, $3, 0)`,
-            [jeId, retainedAccount.rows[0].id, loss]
-          );
+      const { data: closingJe, error: jeErr } = await s.from('journal_entries')
+        .insert({ company_id: companyId, number: closingNumber, date: endDate, type: 'closing', description: 'قيد إقفال السنة المالية', created_by: auth.userId })
+        .select('id').single();
+      if (jeErr) throw jeErr;
+      const jeId = closingJe.id;
+
+      const closingLines: any[] = [];
+      if (netIncome > 0) {
+        for (const acc of (revenueAccounts || [])) {
+          const bal = -(accountBalances[acc.id] || 0);
+          if (bal > 0) closingLines.push({ journal_entry_id: jeId, account_id: acc.id, debit: bal, credit: 0 });
         }
+        closingLines.push({ journal_entry_id: jeId, account_id: retainedAccount.id, debit: 0, credit: netIncome });
+      } else {
+        const loss = Math.abs(netIncome);
+        for (const acc of (expenseAccounts || [])) {
+          const bal = accountBalances[acc.id] || 0;
+          if (bal > 0) closingLines.push({ journal_entry_id: jeId, account_id: acc.id, debit: 0, credit: bal });
+        }
+        closingLines.push({ journal_entry_id: jeId, account_id: retainedAccount.id, debit: loss, credit: 0 });
       }
+      if (closingLines.length > 0) await s.from('journal_lines').insert(closingLines);
+    }
 
-      await client.query(
-        `UPDATE fiscal_years SET status = 'closed', closed_at = NOW(), closed_by = $1 WHERE id = $2`,
-        [auth.userId, id]
-      );
+    const { error: updErr } = await s.from('fiscal_years')
+      .update({ status: 'closed', closed_at: new Date().toISOString(), closed_by: auth.userId }).eq('id', id);
+    if (updErr) throw updErr;
 
-      return { ...fy.rows[0], status: 'closed', warnings };
-    });
-
-    return success(result);
+    return success({ ...fy, status: 'closed', warnings });
   } catch (err) {
     return handleApiError(err);
   }

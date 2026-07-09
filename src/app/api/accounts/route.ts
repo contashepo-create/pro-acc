@@ -1,38 +1,26 @@
 import { NextRequest } from 'next/server';
-import { success, error, unauthorized, serverError, parseBody } from '@/lib/api-helpers';
-import { query } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { success, error, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
 import { accountSchema } from '@/lib/validation';
 
-async function getCompanyId(request: NextRequest): Promise<string | null> {
-  const token = request.cookies.get('token')?.value;
-  if (!token) return null;
-  const payload = verifyToken(token);
-  if (!payload) return null;
-  const res = await query('SELECT company_id FROM users WHERE id = $1 AND is_active = true', [payload.userId]);
-  return res.rows.length > 0 ? res.rows[0].company_id : null;
-}
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(request: NextRequest) {
   try {
-    const companyId = await getCompanyId(request);
-    if (!companyId) return unauthorized();
+    const auth = await requireApiAuth(request);
+    const s = sb();
 
-    const res = await query(
-      `SELECT id, code, name, name_en, type, parent_id, is_active, currency, created_at
-       FROM accounts
-       WHERE company_id = $1
-       ORDER BY code`,
-      [companyId]
-    );
+    const { data, error: queryError } = await s.from('accounts')
+      .select('id, code, name, name_en, type, parent_id, is_active, currency, created_at')
+      .eq('company_id', auth.companyId)
+      .order('code');
 
-    const accounts = res.rows.map(a => ({
-      ...a,
-      children: [] as any[],
-    }));
+    if (queryError) throw queryError;
 
-    const accountMap = new Map(accounts.map(a => [a.id, a]));
-    const roots: typeof accounts = [];
+    const accounts: any[] = (data || []).map((a: any) => ({ ...a, children: [] as any[] }));
+    const accountMap = new Map(accounts.map((a: any) => [a.id, a]));
+    const roots: any[] = [];
 
     for (const acc of accounts) {
       if (acc.parent_id && accountMap.has(acc.parent_id)) {
@@ -44,14 +32,14 @@ export async function GET(request: NextRequest) {
 
     return success({ accounts: roots });
   } catch (err) {
-    return serverError(err);
+    return handleApiError(err);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const companyId = await getCompanyId(request);
-    if (!companyId) return unauthorized();
+    const auth = await requireApiAuth(request);
+    const s = sb();
 
     const body = await parseBody(request);
     const parsed = accountSchema.safeParse(body);
@@ -63,23 +51,25 @@ export async function POST(request: NextRequest) {
 
     const depthLimit = 10;
     if (parentId) {
-      const parentRes = await query(
-        `SELECT id FROM accounts WHERE id = $1 AND company_id = $2`,
-        [parentId, companyId]
-      );
-      if (parentRes.rows.length === 0) {
+      const { data: parent } = await s.from('accounts')
+        .select('id')
+        .eq('id', parentId)
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
+      if (!parent) {
         return error('الحساب الأب غير موجود');
       }
 
       let depth = 1;
-      let currentParent = parentId;
+      let currentParent: string | null = parentId;
       while (currentParent) {
-        const pRes = await query(
-          `SELECT parent_id FROM accounts WHERE id = $1 AND company_id = $2`,
-          [currentParent, companyId]
-        );
-        if (pRes.rows.length === 0) break;
-        currentParent = pRes.rows[0].parent_id;
+        const { data: p }: any = await s.from('accounts')
+          .select('parent_id')
+          .eq('id', currentParent)
+          .eq('company_id', auth.companyId)
+          .maybeSingle();
+        if (!p) break;
+        currentParent = p.parent_id;
         depth++;
         if (depth > depthLimit) {
           return error(`لا يمكن تجاوز ${depthLimit} مستويات في شجرة الحسابات`);
@@ -87,23 +77,33 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const existing = await query(
-      `SELECT id FROM accounts WHERE company_id = $1 AND code = $2`,
-      [companyId, code]
-    );
-    if (existing.rows.length > 0) {
+    const { data: existing } = await s.from('accounts')
+      .select('id')
+      .eq('company_id', auth.companyId)
+      .eq('code', code)
+      .maybeSingle();
+    if (existing) {
       return error('رمز الحساب موجود مسبقاً');
     }
 
-    const created = await query(
-      `INSERT INTO accounts (company_id, code, name, name_en, type, parent_id, is_active, currency)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, code, name, name_en, type, parent_id, is_active, currency, created_at`,
-      [companyId, code, name, nameEn || null, type, parentId || null, isActive ?? true, currency || null]
-    );
+    const { data: created, error: insertError } = await s.from('accounts')
+      .insert({
+        company_id: auth.companyId,
+        code,
+        name,
+        name_en: nameEn || null,
+        type,
+        parent_id: parentId || null,
+        is_active: isActive ?? true,
+        currency: currency || null,
+      })
+      .select('id, code, name, name_en, type, parent_id, is_active, currency, created_at')
+      .single();
 
-    return success(created.rows[0], 201);
+    if (insertError) throw insertError;
+
+    return success(created, 201);
   } catch (err) {
-    return serverError(err);
+    return handleApiError(err);
   }
 }

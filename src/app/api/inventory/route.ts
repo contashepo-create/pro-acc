@@ -1,83 +1,60 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
-import { query, transaction } from '@/lib/db';
-import { ACCOUNT_CODES } from '@/lib/constants';
+import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+
+// @ts-ignore
+const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
     const warehouseId = url.searchParams.get('warehouseId');
-    const type = url.searchParams.get('type');
-    const itemId = url.searchParams.get('itemId');
 
     if (url.searchParams.has('warehouses')) {
-      const warehouses = await query(
-        `SELECT * FROM warehouses WHERE company_id = $1 ORDER BY name`,
-        [auth.companyId]
-      );
-      return success({ warehouses: warehouses.rows });
+      const { data, error: wErr } = await s.from('warehouses').select('*').eq('company_id', auth.companyId).order('name');
+      if (wErr) throw wErr;
+      return success({ warehouses: data || [] });
     }
 
     if (url.searchParams.has('items')) {
-      const items = await query(
-        `SELECT i.*, w.name as warehouse_name FROM inventory_items i
-         LEFT JOIN warehouses w ON i.warehouse_id = w.id
-         WHERE i.company_id = $1 AND i.is_active = true ORDER BY i.name`,
-        [auth.companyId]
-      );
-      return success({ items: items.rows });
+      const { data, error: iErr } = await s.from('inventory_items')
+        .select('*, warehouses(name)').eq('company_id', auth.companyId).eq('is_active', true).order('name');
+      if (iErr) throw iErr;
+      const items = (data || []).map((i: any) => ({ ...i, warehouse_name: i.warehouses?.name || null }));
+      return success({ items });
     }
 
-    const conditions = ['i.company_id = $1'];
-    const params: any[] = [auth.companyId];
-    let idx = 2;
+    let query = s.from('inventory_items')
+      .select('*, warehouses(name)', { count: 'exact' }).eq('company_id', auth.companyId);
+    if (warehouseId) query = query.eq('warehouse_id', warehouseId);
 
-    if (warehouseId) { conditions.push(`i.warehouse_id = $${idx}`); params.push(warehouseId); idx++; }
-
-    const where = conditions.join(' AND ');
-    const total = await query(`SELECT COUNT(*) as cnt FROM inventory_items i WHERE ${where}`, params);
     const offset = (page - 1) * pageSize;
-    params.push(pageSize, offset);
+    const { data, error: queryError, count } = await query.order('name').range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
 
-    const items = await query(
-      `SELECT i.*, w.name as warehouse_name FROM inventory_items i
-       LEFT JOIN warehouses w ON i.warehouse_id = w.id
-       WHERE ${where} ORDER BY i.name LIMIT $${idx} OFFSET $${idx + 1}`,
-      params
-    );
-
-    return success({ items: items.rows, total: parseInt(total.rows[0].cnt, 10), page, pageSize });
-  } catch (err) {
-    return handleApiError(err);
-  }
+    const items = (data || []).map((i: any) => ({ ...i, warehouse_name: i.warehouses?.name || null }));
+    return success({ items, total: count || 0, page, pageSize });
+  } catch (err) { return handleApiError(err); }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
+    const s = sb();
     const data = await parseBody(req);
     const { code, name, unit, warehouse_id, category } = data;
+    if (!code || !name || !unit || !warehouse_id) return error('code, name, unit, warehouse_id are required');
 
-    if (!code || !name || !unit || !warehouse_id) {
-      return error('company_id, code, name, unit, warehouse_id are required');
-    }
+    const { data: existing } = await s.from('inventory_items').select('id').eq('company_id', auth.companyId).eq('code', code).maybeSingle();
+    if (existing) return error('كود الصنف موجود مسبقاً');
 
-    const existing = await query(
-      `SELECT id FROM inventory_items WHERE company_id = $1 AND code = $2`,
-      [auth.companyId, code]
-    );
-    if (existing.rows.length > 0) return error('كود الصنف موجود مسبقاً');
-
-    const result = await query(
-      `INSERT INTO inventory_items (company_id, code, name, unit, warehouse_id, category, quantity, unit_price, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, 0, 0, true) RETURNING *`,
-      [auth.companyId, code, name, unit, warehouse_id, category || null]
-    );
-
-    return success(result.rows[0], 201);
-  } catch (err) {
-    return handleApiError(err);
-  }
+    const { data: result, error: insertError } = await s.from('inventory_items')
+      .insert({ company_id: auth.companyId, code, name, unit, warehouse_id, category: category || null, quantity: 0, unit_price: 0, is_active: true })
+      .select('*').single();
+    if (insertError) throw insertError;
+    return success(result, 201);
+  } catch (err) { return handleApiError(err); }
 }
