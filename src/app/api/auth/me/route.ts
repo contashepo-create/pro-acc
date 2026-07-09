@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
     if (!u.is_active) return error('هذا الحساب غير نشط', 403);
 
     const { data: company } = await s.from('companies')
-      .select('id, name, commercial_registration, tax_number, vat_number, address, phone, email, logo, is_active')
+      .select('id, name, commercial_registration, tax_number, address, phone, email, logo, is_active')
       .eq('id', u.company_id).single();
     const c: any = company;
 
