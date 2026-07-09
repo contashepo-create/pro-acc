@@ -1,5 +1,9 @@
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
-const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID!;
+function clean(s: string): string {
+  return (s || '').replace(/^\uFEFF/, '').trim();
+}
+
+const BOT_TOKEN = clean(process.env.TELEGRAM_BOT_TOKEN || '');
+const ADMIN_CHAT_ID = clean(process.env.TELEGRAM_ADMIN_CHAT_ID || '');
 
 const TELEGRAM_API = 'https://api.telegram.org';
 
@@ -53,10 +57,6 @@ export async function sendAdminNotification(text: string): Promise<boolean> {
         parse_mode: 'HTML',
       }),
     });
-    if (!res.ok) {
-      const body = await res.text();
-      console.warn('Telegram notification failed:', res.status, body);
-    }
     return res.ok;
   } catch (err) {
     console.warn('Telegram notification error:', err);
