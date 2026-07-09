@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
       return error('انتهت صلاحية الجلسة. يرجى تسجيل الدخول مرة أخرى', 401);
     }
 
-    if (session.email !== email.trim().toLowerCase()) {
+    if (session.email.toLowerCase() !== email.trim().toLowerCase()) {
       return error('البريد الإلكتروني غير متطابق مع الجلسة', 401);
     }
 

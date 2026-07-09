@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
     const code = String(randomInt(100000, 1000000));
 
     await setSession(a.id, {
-      email: a.email,
+      email: (a.email || '').toLowerCase(),
       code,
       step: 'code_sent',
       codeSent: false,

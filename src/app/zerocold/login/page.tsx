@@ -40,7 +40,7 @@ export default function ZerocoldLoginPage() {
         return;
       }
 
-      router.push(`/zerocold/verify-telegram?email=${encodeURIComponent(body.email)}`);
+      router.push(`/zerocold/verify-telegram?email=${encodeURIComponent(body.email.toLowerCase())}`);
     } catch {
       setError('حدث خطأ في الاتصال بالخادم');
     } finally {
