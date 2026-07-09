@@ -1,23 +1,91 @@
 'use client';
 
-import { useState } from 'react';
-import { Save, Palette, Sun, Moon, Check } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone, Building2, Calendar, AlertCircle } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
 import { useThemeStore } from '@/store/theme-store';
+import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
 
 export default function SettingsPage() {
   const [tab, setTab] = useState('general');
   const [toast, setToast] = useState('');
-  const { themeId, isDark, setTheme, toggleMode, setDark } = useThemeStore();
+  const [loading, setLoading] = useState(true);
+  const { themeId, isDark, setTheme, toggleMode } = useThemeStore();
+  const { user, company } = useAuthStore();
+
+  // Company form state
+  const [companyName, setCompanyName] = useState('');
+  const [registration, setRegistration] = useState('');
+  const [taxNumber, setTaxNumber] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [address, setAddress] = useState('');
+
+  // Subscription state
+  const [subscription, setSubscription] = useState<any>(null);
+  const [subLoading, setSubLoading] = useState(true);
+
+  useEffect(() => {
+    // Load company data from /api/auth/me
+    fetch('/api/auth/me')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success && d.data?.company) {
+          const c = d.data.company;
+          setCompanyName(c.name || '');
+          setRegistration(c.registrationNumber || '');
+          setTaxNumber(c.taxNumber || '');
+          setPhone(c.phone || '');
+          setEmail(c.email || '');
+          setAddress(c.address || '');
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+
+    // Load subscription data
+    fetch('/api/auth/subscription-status')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setSubscription(d.data);
+      })
+      .catch(() => {})
+      .finally(() => setSubLoading(false));
+  }, []);
 
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(''), 3000);
+  };
+
+  const handleSaveCompany = async () => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_name: companyName,
+          commercial_registration: registration,
+          tax_number: taxNumber,
+          phone: phone,
+          email: email,
+          address: address,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('تم حفظ الإعدادات بنجاح');
+      } else {
+        showToast(data.message || 'فشل الحفظ');
+      }
+    } catch {
+      showToast('حدث خطأ في الاتصال');
+    }
   };
 
   const currentTheme = themes.find((t) => t.id === themeId) || themes[0];
@@ -30,47 +98,167 @@ export default function SettingsPage() {
         { id: 'general', label: 'عام' },
         { id: 'accounting', label: 'محاسبة' },
         { id: 'tax', label: 'ضرائب' },
+        { id: 'subscription', label: 'الاشتراك' },
+        { id: 'about', label: 'حول البرنامج' },
         { id: 'appearance', label: 'المظهر' },
         { id: 'notifications', label: 'إشعارات' },
       ]} activeTab={tab} onChange={setTab} />
 
+      {/* General — Company Info */}
       {tab === 'general' && (
         <Card title="معلومات الشركة">
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="اسم الشركة" defaultValue="شركتي" className="col-span-2" />
-            <Input label="رقم السجل التجاري" />
-            <Input label="الرقم الضريبي" />
-            <Input label="الهاتف" />
-            <Input label="البريد الإلكتروني" type="email" />
-            <Input label="العنوان" className="col-span-2" />
-            <Input label="رمز العملة" defaultValue="SAR" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="اسم الشركة" value={companyName} onChange={(e: any) => setCompanyName(e.target.value)} className="col-span-2" />
+            <Input label="رقم السجل التجاري" value={registration} onChange={(e: any) => setRegistration(e.target.value)} />
+            <Input label="الرقم الضريبي" value={taxNumber} onChange={(e: any) => setTaxNumber(e.target.value)} />
+            <Input label="الهاتف" value={phone} onChange={(e: any) => setPhone(e.target.value)} />
+            <Input label="البريد الإلكتروني" type="email" value={email} onChange={(e: any) => setEmail(e.target.value)} />
+            <Input label="العنوان" value={address} onChange={(e: any) => setAddress(e.target.value)} className="col-span-2" />
           </div>
           <div className="mt-4">
-            <Button onClick={() => showToast('تم حفظ الإعدادات')} leftIcon={<Save size={16} />}>حفظ الإعدادات</Button>
+            <Button onClick={handleSaveCompany} leftIcon={<Save size={16} />}>حفظ الإعدادات</Button>
           </div>
         </Card>
       )}
 
+      {/* Accounting */}
       {tab === 'accounting' && (
         <Card title="الإعدادات المحاسبية">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="بداية السنة المالية" type="date" />
             <Input label="عدد المنازل العشرية" type="number" defaultValue="2" />
           </div>
-        </Card>
-      )}
-
-      {tab === 'tax' && (
-        <Card title="إعدادات الضرائب">
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="نسبة ضريبة القيمة المضافة (%)" type="number" defaultValue="15" />
+          <div className="mt-4">
+            <Button onClick={() => showToast('تم حفظ الإعدادات')} leftIcon={<Save size={16} />}>حفظ</Button>
           </div>
         </Card>
       )}
 
+      {/* Tax */}
+      {tab === 'tax' && (
+        <Card title="إعدادات الضرائب">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="نسبة ضريبة القيمة المضافة (%)" type="number" defaultValue="15" />
+          </div>
+          <div className="mt-4">
+            <Button onClick={() => showToast('تم حفظ الإعدادات')} leftIcon={<Save size={16} />}>حفظ</Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Subscription */}
+      {tab === 'subscription' && (
+        <div className="space-y-4">
+          {subLoading ? (
+            <Card><div className="text-center py-8 text-text-muted">جاري التحميل...</div></Card>
+          ) : subscription ? (
+            <>
+              <Card title="حالة الاشتراك">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-bg-secondary">
+                    <span className="text-sm text-text-muted">الباقة الحالية</span>
+                    <span className="font-bold text-accent">{subscription.plan_name || 'تجريبي'}</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-bg-secondary">
+                    <span className="text-sm text-text-muted">الحالة</span>
+                    <span className={`font-bold ${subscription.is_expired ? 'text-danger' : 'text-success'}`}>
+                      {subscription.is_expired ? 'منتهي' : 'نشط'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-bg-secondary">
+                    <span className="text-sm text-text-muted">تاريخ الانتهاء</span>
+                    <span className="font-medium text-text-primary" dir="ltr">{subscription.end_date}</span>
+                  </div>
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-bg-secondary">
+                    <span className="text-sm text-text-muted">الأيام المتبقية</span>
+                    <span className={`font-bold ${subscription.days_remaining <= 7 ? 'text-warning' : 'text-success'}`}>
+                      {subscription.days_remaining} يوم
+                    </span>
+                  </div>
+                  {subscription.is_expiring_soon && !subscription.is_expired && (
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-warning/10 border border-warning/30 text-warning text-sm">
+                      <AlertCircle size={16} />
+                      اشتراكك ينتهي قريباً — يرجى التجديد
+                    </div>
+                  )}
+                  <Button onClick={() => window.location.href = '/subscription'} leftIcon={<CreditCard size={16} />}>
+                    ترقية / تجديد الاشتراك
+                  </Button>
+                </div>
+              </Card>
+            </>
+          ) : (
+            <Card><div className="text-center py-8 text-text-muted">لا يوجد اشتراك. <a href="/subscription" className="text-accent">اشترك الآن</a></div></Card>
+          )}
+        </div>
+      )}
+
+      {/* About */}
+      {tab === 'about' && (
+        <Card title="حول البرنامج">
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 p-4 rounded-xl bg-accent/5">
+              <div className="w-12 h-12 rounded-xl bg-accent flex items-center justify-center">
+                <Building2 size={24} className="text-white" />
+              </div>
+              <div>
+                <h3 className="font-bold text-text-primary">برو أكاوننت — AccWeb</h3>
+                <p className="text-xs text-text-muted">نظام محاسبة متكامل — الإصدار 1.0</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-sm font-bold text-text-secondary mb-2">بيانات حسابك</h4>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
+                <Mail size={16} className="text-text-muted" />
+                <span className="text-sm text-text-muted">البريد:</span>
+                <span className="text-sm font-medium text-text-primary" dir="ltr">{user?.email || '—'}</span>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
+                <Info size={16} className="text-text-muted" />
+                <span className="text-sm text-text-muted">الاسم:</span>
+                <span className="text-sm font-medium text-text-primary">{user?.name || '—'}</span>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
+                <Building2 size={16} className="text-text-muted" />
+                <span className="text-sm text-text-muted">الشركة:</span>
+                <span className="text-sm font-medium text-text-primary">{company?.name || '—'}</span>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
+                <CreditCard size={16} className="text-text-muted" />
+                <span className="text-sm text-text-muted">رقم الاشتراك:</span>
+                <span className="text-sm font-medium text-text-primary font-mono" dir="ltr">
+                  {subscription ? subscription.id?.substring(0, 8) : '—'}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-4 border-t border-border">
+              <h4 className="text-sm font-bold text-text-secondary mb-2">للتواصل والدعم</h4>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
+                <Mail size={16} className="text-accent" />
+                <span className="text-sm text-text-muted">البريد:</span>
+                <a href="mailto:conta.moha@gmail.com" className="text-sm text-accent hover:underline" dir="ltr">conta.moha@gmail.com</a>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
+                <Phone size={16} className="text-accent" />
+                <span className="text-sm text-text-muted">تيليجرام:</span>
+                <a href="https://t.me/contashepo" className="text-sm text-accent hover:underline" dir="ltr">@contashepo</a>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-bg-secondary text-center">
+              <p className="text-xs text-text-muted">
+                عند التواصل مع الدعم، يرجى إرسال رقم اشتراكك وبريدك الإلكتروني لتسهيل المساعدة
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Appearance */}
       {tab === 'appearance' && (
         <div className="space-y-6">
-          {/* Mode toggle */}
           <Card>
             <div className="flex items-center justify-between">
               <div>
@@ -81,14 +269,10 @@ export default function SettingsPage() {
               </div>
               <button
                 onClick={toggleMode}
-                className={`relative w-16 h-8 rounded-full transition-colors duration-300 ${
-                  isDark ? 'bg-accent/30' : 'bg-border'
-                }`}
+                className={`relative w-16 h-8 rounded-full transition-colors duration-300 ${isDark ? 'bg-accent/30' : 'bg-border'}`}
               >
                 <div
-                  className={`absolute top-1 w-6 h-6 rounded-full bg-accent flex items-center justify-center transition-all duration-300 shadow-md ${
-                    isDark ? 'right-1' : 'right-9'
-                  }`}
+                  className={`absolute top-1 w-6 h-6 rounded-full bg-accent flex items-center justify-center transition-all duration-300 shadow-md ${isDark ? 'right-1' : 'right-9'}`}
                 >
                   {isDark ? <Moon size={12} className="text-white" /> : <Sun size={12} className="text-white" />}
                 </div>
@@ -96,32 +280,27 @@ export default function SettingsPage() {
             </div>
           </Card>
 
-          {/* Theme selection */}
           <Card>
             <div className="flex items-center gap-2 mb-4">
               <Palette size={18} className="text-accent" />
               <h3 className="text-base font-semibold">الثيم</h3>
             </div>
             <p className="text-sm text-text-muted mb-4">
-              اختر لوحة الألوان الأساسية. زر الوضع (داكن/فاتح) في الأعلى يحوّل بين النسختين الداكنة والفاتحة من الثيم المحدد.
+              اختر لوحة الألوان الأساسية.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {themes.map((theme) => {
                 const isActive = theme.id === themeId;
-                const previewBg = isDark ? theme.dark['--color-bg-primary'] : theme.light['--color-bg-primary'];
                 const previewAccent = isDark ? theme.dark['--color-accent'] : theme.light['--color-accent'];
                 const previewCard = isDark ? theme.dark['--color-bg-card'] : theme.light['--color-bg-card'];
+                const previewBg = isDark ? theme.dark['--color-bg-primary'] : theme.light['--color-bg-primary'];
                 const previewBorder = isDark ? theme.dark['--color-border'] : theme.light['--color-border'];
 
                 return (
                   <button
                     key={theme.id}
                     onClick={() => setTheme(theme.id)}
-                    className={`relative p-3 rounded-xl border-2 text-right transition-all duration-200 hover:-translate-y-0.5 ${
-                      isActive
-                        ? 'border-accent shadow-md'
-                        : 'border-border hover:border-border-light'
-                    }`}
+                    className={`relative p-3 rounded-xl border-2 text-right transition-all duration-200 hover:-translate-y-0.5 ${isActive ? 'border-accent shadow-md' : 'border-border hover:border-border-light'}`}
                     style={{ background: previewCard }}
                   >
                     {isActive && (
@@ -137,10 +316,7 @@ export default function SettingsPage() {
                       </div>
                     </div>
                     <p className="text-xs text-text-muted leading-relaxed mb-2">{theme.description}</p>
-                    <div
-                      className="h-8 rounded-lg flex gap-1 p-1"
-                      style={{ background: previewBg, border: `1px solid ${previewBorder}` }}
-                    >
+                    <div className="h-8 rounded-lg flex gap-1 p-1" style={{ background: previewBg, border: `1px solid ${previewBorder}` }}>
                       <div className="flex-1 rounded" style={{ background: previewCard }} />
                       <div className="w-6 rounded" style={{ background: previewAccent }} />
                     </div>
@@ -149,26 +325,10 @@ export default function SettingsPage() {
               })}
             </div>
           </Card>
-
-          {/* Current theme info */}
-          <Card padding="md">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: isDark ? currentTheme.dark['--color-accent'] : currentTheme.light['--color-accent'] }}>
-                <Palette size={18} className="text-white" />
-              </div>
-              <div>
-                <div className="text-sm font-medium text-text-primary">
-                  الثيم الحالي: {currentTheme.name}
-                </div>
-                <div className="text-xs text-text-muted">
-                  {isDark ? 'وضع داكن' : 'وضع فاتح'} — {currentTheme.nameEn}
-                </div>
-              </div>
-            </div>
-          </Card>
         </div>
       )}
 
+      {/* Notifications */}
       {tab === 'notifications' && (
         <Card title="الإشعارات">
           <div className="space-y-3">
