@@ -56,11 +56,20 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  // Auth page redirects
+  // Auth page redirects — if logged in, go to dashboard
   if (pathname === '/login' || pathname === '/register' || pathname === '/forgot-password' || pathname === '/reset-password') {
     const token = request.cookies.get('token')?.value;
     if (token) {
-      return NextResponse.redirect(new URL('/', request.url));
+      return NextResponse.redirect(new URL('/dashboard', request.url));
+    }
+  }
+
+  // Protect /dashboard and other app routes — redirect to login if no token
+  const appRoutes = ['/dashboard', '/accounts', '/journal', '/invoices', '/clients', '/contacts', '/banks', '/cash', '/projects', '/reports', '/settings', '/employees', '/payroll', '/vouchers', '/quotations', '/purchases', '/inventory', '/subcontractors', '/boq', '/progress-billing', '/fixed-assets', '/daily-workers', '/custodies', '/currencies', '/categories', '/bank-reconciliation', '/fiscal', '/salary-sheets', '/notifications', '/messages', '/complaints', '/subscription'];
+  if (appRoutes.some((r) => pathname === r || pathname.startsWith(r + '/'))) {
+    const token = request.cookies.get('token')?.value;
+    if (!token || token.length < 20) {
+      return NextResponse.redirect(new URL('/login', request.url));
     }
   }
 

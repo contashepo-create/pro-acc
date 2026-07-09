@@ -25,7 +25,7 @@ export default function LoginPage() {
     try {
       const success = await login(email, password);
       if (success) {
-        router.push('/');
+        router.push('/dashboard');
       } else {
         setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
       }

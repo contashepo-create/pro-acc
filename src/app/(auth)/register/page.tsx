@@ -48,7 +48,7 @@ export default function RegisterPage() {
       });
       const data = await res.json();
       if (data.success) {
-        router.push('/');
+        router.push('/dashboard');
         checkSession();
       } else {
         setError(data.message || 'حدث خطأ');

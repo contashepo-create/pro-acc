@@ -104,7 +104,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [page, setActive]);
 
   const handleNavigate = (page: string) => {
-    router.push(page ? `/${page}` : '/');
+    router.push(page ? `/${page}` : '/dashboard');
   };
 
   return (
