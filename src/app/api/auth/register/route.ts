@@ -27,7 +27,10 @@ export async function POST(request: NextRequest) {
     const { data: company, error: companyErr } = await s.from('companies')
       .insert({ name: companyName, email: email.toLowerCase(), phone: phone || null, is_active: true })
       .select('id').single();
-    if (companyErr || !company) return error('فشل إنشاء الشركة', 500);
+    if (companyErr || !company) {
+      const errMsg = companyErr ? JSON.stringify(companyErr) : 'no data returned';
+      return error('فشل إنشاء الشركة: ' + errMsg, 500);
+    }
     const co: any = company;
 
     const insertData: any = { company_id: co.id, name, email: email.toLowerCase(), password_hash: passwordHash, role: 'admin', is_active: true };
