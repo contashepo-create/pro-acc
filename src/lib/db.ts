@@ -2,24 +2,34 @@ import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { setDefaultResultOrder } from 'dns';
 setDefaultResultOrder('ipv4first');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  ssl: process.env.DATABASE_URL?.includes('supabase')
-    ? { rejectUnauthorized: false }
-    : undefined,
-});
+let _pool: Pool | null = null;
 
-pool.on('error', (err) => {
-  console.error('Unexpected pool error:', err);
-});
+function getPool(): Pool {
+  if (_pool) return _pool;
+
+  const connectionString = process.env.DATABASE_URL || '';
+  
+  _pool = new Pool({
+    connectionString,
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+    ssl: connectionString.includes('supabase')
+      ? { rejectUnauthorized: false }
+      : undefined,
+  });
+
+  _pool.on('error', (err) => {
+    console.error('Unexpected pool error:', err);
+  });
+
+  return _pool;
+}
 
 export async function query<T extends QueryResultRow = any>(text: string, params?: any[]): Promise<QueryResult<T>> {
   const start = Date.now();
   try {
-    const res = await pool.query<T>(text, params);
+    const res = await getPool().query<T>(text, params);
     const duration = Date.now() - start;
     if (duration > 1000) {
       if (process.env.NODE_ENV === 'development') {
@@ -40,7 +50,7 @@ export async function query<T extends QueryResultRow = any>(text: string, params
 }
 
 export async function transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
+  const client = await getPool().connect();
   try {
     await client.query('BEGIN');
     const result = await fn(client);
@@ -55,9 +65,12 @@ export async function transaction<T>(fn: (client: PoolClient) => Promise<T>): Pr
 }
 
 export async function getClient(): Promise<PoolClient> {
-  return pool.connect();
+  return getPool().connect();
 }
 
 export async function endPool(): Promise<void> {
-  await pool.end();
+  if (_pool) {
+    await _pool.end();
+    _pool = null;
+  }
 }
