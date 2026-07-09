@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Loader2, UserPlus } from 'lucide-react';
+import { Eye, EyeOff, Loader2, UserPlus, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/auth-store';
 
@@ -17,6 +17,18 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [captcha, setCaptcha] = useState<{ id: string; question: string } | null>(null);
+  const [captchaAnswer, setCaptchaAnswer] = useState('');
+
+  useEffect(() => {
+    // Fetch CAPTCHA challenge
+    fetch('/api/auth/register')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setCaptcha(d.data);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,13 +37,14 @@ export default function RegisterPage() {
     if (!name.trim()) { setError('يرجى إدخال الاسم'); return; }
     if (!email.trim()) { setError('يرجى إدخال البريد الإلكتروني'); return; }
     if (!password || password.length < 6) { setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+    if (!captcha || !captchaAnswer) { setError('يرجى إكمال التحقق الأمني'); return; }
 
     setLoading(true);
     try {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyName, name, email, phone, password }),
+        body: JSON.stringify({ companyName, name, email, phone, password, captchaId: captcha.id, captchaAnswer }),
       });
       const data = await res.json();
       if (data.success) {
@@ -39,6 +52,12 @@ export default function RegisterPage() {
         checkSession();
       } else {
         setError(data.message || 'حدث خطأ');
+        // Refresh CAPTCHA on failure
+        setCaptchaAnswer('');
+        fetch('/api/auth/register')
+          .then((r) => r.json())
+          .then((d) => { if (d.success) setCaptcha(d.data); })
+          .catch(() => {});
       }
     } catch {
       setError('حدث خطأ في الاتصال بالخادم');
@@ -125,6 +144,25 @@ export default function RegisterPage() {
             </button>
           </div>
         </div>
+
+        {/* CAPTCHA */}
+        {captcha && (
+          <div>
+            <label className="block text-sm font-medium text-text-secondary mb-1.5">التحقق الأمني</label>
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={18} className="text-text-muted shrink-0" />
+              <span className="text-sm text-text-secondary font-mono" dir="ltr">{captcha.question}</span>
+              <input
+                type="number"
+                value={captchaAnswer}
+                onChange={(e) => setCaptchaAnswer(e.target.value)}
+                placeholder="الإجابة"
+                className="input-base w-24"
+                dir="ltr"
+              />
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="bg-danger-light/30 border border-danger/30 text-danger text-sm rounded-lg px-4 py-2.5">
