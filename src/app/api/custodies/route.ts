@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
 
     if (custAcc && bankAcc?.account_id) {
-      const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
+      const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
       const { data: je } = await s.from('journal_entries')
         .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `عهدة: ${description || ''}`, created_by: auth.userId })
         .select('id').single();

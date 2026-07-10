@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     const { data: bankAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.BANKS).maybeSingle();
 
     if (assetAcc) {
-      const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
+      const jeNum = await getNextJournalNumber(auth.companyId, purchase_date || new Date().toISOString());
       const { data: je } = await s.from('journal_entries')
         .insert({ company_id: auth.companyId, number: jeNum, date: purchase_date, type: 'general', description: `شراء أصل ثابت: ${name}`, created_by: auth.userId })
         .select('id').single();

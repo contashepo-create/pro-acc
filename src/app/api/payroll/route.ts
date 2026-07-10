@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     const { data: accrAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_SALARIES).maybeSingle();
     const { data: advAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_ADVANCES).maybeSingle();
 
-    const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
+    const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
     const { data: je } = await s.from('journal_entries')
       .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `رواتب شهر ${date.substring(0, 7)}`, created_by: auth.userId })
       .select('id').single();

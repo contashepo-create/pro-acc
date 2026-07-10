@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
     const { data: apAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
 
     if (invAcc && apAcc) {
-      const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
+      const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
       const { data: je } = await s.from('journal_entries')
         .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `فاتورة مشتريات #${nextNum}`, reference_type: 'purchase_invoice', reference_id: pi.id, created_by: auth.userId })
         .select('id').single();

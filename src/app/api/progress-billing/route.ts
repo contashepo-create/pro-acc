@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     const { data: retAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.RETENTIONS).maybeSingle();
 
     if (arAcc && revAcc) {
-      const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
+      const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
       const { data: je } = await s.from('journal_entries')
         .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `فاتورة مرحلية: ${claim_number}`, reference_type: 'progress_billing', reference_id: claim.id, created_by: auth.userId })
         .select('id').single();
