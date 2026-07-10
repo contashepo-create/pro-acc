@@ -69,17 +69,31 @@ export async function POST(request: NextRequest) {
     } catch {}
 
     let subscriptionExpired = false;
+    let subscriptionMessage = '';
     try {
       const { data: sub } = await s.from('subscriptions')
-        .select('status, end_date').eq('company_id', u.company_id)
+        .select('status, end_date, trial_extended').eq('company_id', u.company_id)
         .order('end_date', { ascending: false }).limit(1).single();
       if (sub) {
         const endDate = new Date((sub as any).end_date);
-        if (endDate < new Date() && (sub as any).status !== 'trial') subscriptionExpired = true;
+        const isExpired = endDate < new Date();
+        if (isExpired) {
+          subscriptionExpired = true;
+          if ((sub as any).status === 'trial') {
+            // Trial expired - check if extended
+            if ((sub as any).trial_extended) {
+              subscriptionMessage = 'انتهت المدة التجريبية الممددة. يرجى الاشتراك للمتابعة';
+            } else {
+              subscriptionMessage = 'انتهت المدة التجريبية (7 أيام). يمكنك طلب تمديد 7 أيام إضافية من الإدارة أو الاشتراك';
+            }
+          } else {
+            subscriptionMessage = 'انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول';
+          }
+        }
       }
     } catch {}
 
-    if (subscriptionExpired) return error('انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول', 403);
+    if (subscriptionExpired) return error(subscriptionMessage || 'انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول', 403);
 
     const token = createToken(u.id, u.role);
     const { password_hash: _, ...safeUser } = u;
