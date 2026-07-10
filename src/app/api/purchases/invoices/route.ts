@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextJournalNumber, getNextVoucherNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
 // @ts-ignore
@@ -77,8 +78,7 @@ export async function POST(req: NextRequest) {
     const { data: apAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
 
     if (invAcc && apAcc) {
-      const { data: maxJe } = await s.from('journal_entries').select('number').eq('company_id', auth.companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-      const jeNum = ((maxJe as any)?.number || 0) + 1;
+      const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
       const { data: je } = await s.from('journal_entries')
         .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `فاتورة مشتريات #${nextNum}`, reference_type: 'purchase_invoice', reference_id: pi.id, created_by: auth.userId })
         .select('id').single();

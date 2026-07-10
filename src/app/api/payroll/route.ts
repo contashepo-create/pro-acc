@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextJournalNumber, getNextVoucherNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
 // @ts-ignore
@@ -44,8 +45,7 @@ export async function POST(req: NextRequest) {
     const { data: accrAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_SALARIES).maybeSingle();
     const { data: advAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_ADVANCES).maybeSingle();
 
-    const { data: maxJe } = await s.from('journal_entries').select('number').eq('company_id', auth.companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-    const jeNum = ((maxJe as any)?.number || 0) + 1;
+    const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
     const { data: je } = await s.from('journal_entries')
       .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `رواتب شهر ${date.substring(0, 7)}`, created_by: auth.userId })
       .select('id').single();

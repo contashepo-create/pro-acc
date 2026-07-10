@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextJournalNumber, getNextVoucherNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
 // @ts-ignore
@@ -51,8 +52,7 @@ export async function POST(req: NextRequest) {
     const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
 
     if (custAcc && bankAcc?.account_id) {
-      const { data: maxJe } = await s.from('journal_entries').select('number').eq('company_id', auth.companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-      const jeNum = ((maxJe as any)?.number || 0) + 1;
+      const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
       const { data: je } = await s.from('journal_entries')
         .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `عهدة: ${description || ''}`, created_by: auth.userId })
         .select('id').single();

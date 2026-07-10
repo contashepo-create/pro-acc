@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, validationError, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextJournalNumber } from '@/lib/numbering';
 import { generateId } from '@/lib/utils';
 import { projectSchema } from '@/lib/validation';
 

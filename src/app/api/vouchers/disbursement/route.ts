@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextJournalNumber, getNextVoucherNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
 // @ts-ignore
@@ -53,9 +54,7 @@ export async function POST(request: NextRequest) {
     const companyId = auth.companyId;
     const userId = auth.userId;
 
-    const { data: maxVd } = await s.from('voucher_disbursements')
-      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-    const nextNum = ((maxVd as any)?.number || 0) + 1;
+    const nextNum = await getNextVoucherNumber(companyId, 'voucher_disbursements');
 
     const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
     const { data: maxJe } = await s.from('journal_entries')
