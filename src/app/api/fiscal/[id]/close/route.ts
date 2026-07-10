@@ -71,9 +71,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.RETAINED_EARNINGS).maybeSingle();
 
     if (netIncome !== 0 && retainedAccount) {
-      const { data: maxJe } = await s.from('journal_entries')
-        .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-      const closingNumber = ((maxJe as any)?.number || 0) + 1;
+      const closingNumber = await getNextJournalNumber(companyId, endDate);
 
       const { data: closingJe, error: jeErr } = await s.from('journal_entries')
         .insert({ company_id: companyId, number: closingNumber, date: endDate, type: 'closing', description: 'قيد إقفال السنة المالية', created_by: auth.userId })

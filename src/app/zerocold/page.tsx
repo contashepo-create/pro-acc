@@ -101,10 +101,12 @@ export default function ZerocoldDashboardPage() {
   const quickActions = [
     { label: 'إدارة الشركات', href: '/zerocold/companies', icon: Building2, color: 'border-sky-700/30 hover:border-sky-600/50' },
     { label: 'إدارة المستخدمين', href: '/zerocold/users', icon: Users, color: 'border-emerald-700/30 hover:border-emerald-600/50' },
+    { label: 'طلبات الترقية 💰', href: '/zerocold/upgrade-requests', icon: TrendingUp, color: 'border-green-700/30 hover:border-green-600/50' },
+    { label: 'طرق الدفع', href: '/zerocold/payment-methods', icon: Package, color: 'border-emerald-700/30 hover:border-emerald-600/50' },
     { label: 'الرسائل', href: '/zerocold/messages', icon: MessageSquare, color: 'border-blue-700/30 hover:border-blue-600/50' },
     { label: 'الشكاوي', href: '/zerocold/complaints', icon: MessageSquareWarning, color: 'border-orange-700/30 hover:border-orange-600/50' },
     { label: 'الإعلانات', href: '/zerocold/advertisements', icon: Megaphone, color: 'border-pink-700/30 hover:border-pink-600/50' },
-    { label: 'خطط الاشتراك', href: '/zerocold/plans', icon: Package, color: 'border-amber-700/30 hover:border-amber-600/50' },
+    { label: 'خطط الاشتراك المرنة', href: '/zerocold/plans', icon: Package, color: 'border-amber-700/30 hover:border-amber-600/50' },
     { label: 'الاشتراكات', href: '/zerocold/subscriptions', icon: Users, color: 'border-purple-700/30 hover:border-purple-600/50' },
     { label: 'أكواد التفعيل', href: '/zerocold/codes', icon: Key, color: 'border-green-700/30 hover:border-green-600/50' },
     { label: 'قاعدة البيانات', href: '/zerocold/database', icon: Database, color: 'border-violet-700/30 hover:border-violet-600/50' },
