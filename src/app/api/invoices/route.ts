@@ -47,6 +47,18 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
     const s = sb();
+
+    // Check usage limits for invoices
+    try {
+      const { checkUsageLimit } = await import('@/lib/usage-limits');
+      const limitCheck = await checkUsageLimit(auth.companyId, 'invoices');
+      if (!limitCheck.allowed) {
+        return error(limitCheck.message || 'تم الوصول للحد الأقصى للفواتير', 403);
+      }
+    } catch (e) {
+      console.warn('Usage limit check failed for invoices:', e);
+    }
+
     const body = await parseBody(request);
     const parsed = invoiceSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
