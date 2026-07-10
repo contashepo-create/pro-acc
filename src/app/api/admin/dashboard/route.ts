@@ -16,51 +16,94 @@ export async function GET(request: NextRequest) {
 
     const s = sb();
 
-    // Get counts
-    const { count: companiesCount } = await s.from('companies').select('id', { count: 'exact', head: true });
-    const { count: usersCount } = await s.from('users').select('id', { count: 'exact', head: true });
-    const { count: activeSubs } = await s.from('subscriptions').select('id', { count: 'exact', head: true }).eq('status', 'active');
+    let companiesCount = 0, usersCount = 0, activeSubs = 0, unusedCodes = 0;
+    let recentCompanies: any[] = [], recentSubs: any[] = [], plans: any[] = [], activity: any[] = [];
 
-    // Get recent companies
-    const { data: recentCompanies } = await s.from('companies')
-      .select('id, name, is_active, created_at')
-      .order('created_at', { ascending: false })
-      .limit(5);
+    try {
+      const { count } = await s.from('companies').select('id', { count: 'exact', head: true });
+      companiesCount = count || 0;
+    } catch (e) { console.warn('dashboard companies count failed', e); }
 
-    // Get recent subscriptions
-    const { data: recentSubs } = await s.from('subscriptions')
-      .select('id, company_id, plan_code, status, end_date')
-      .order('created_at', { ascending: false })
-      .limit(5);
+    try {
+      const { count } = await s.from('users').select('id', { count: 'exact', head: true });
+      usersCount = count || 0;
+    } catch (e) { console.warn('dashboard users count failed', e); }
 
-    // Get plans
-    const { data: plans } = await s.from('subscription_plans')
-      .select('id, name, price, is_active')
-      .order('price');
+    try {
+      const { count } = await s.from('subscriptions').select('id', { count: 'exact', head: true }).eq('status', 'active');
+      activeSubs = count || 0;
+    } catch (e) { console.warn('dashboard subs count failed', e); }
 
-    // Get unused activation codes
-    const { count: unusedCodes } = await s.from('activation_codes')
-      .select('id', { count: 'exact', head: true })
-      .eq('used_by', null);
+    try {
+      const { data } = await s.from('companies')
+        .select('id, name, is_active, created_at')
+        .order('created_at', { ascending: false })
+        .limit(5);
+      recentCompanies = data || [];
+    } catch (e) { console.warn('dashboard recent companies failed', e); }
 
-    // Get recent activity from audit log
-    const { data: activity } = await s.from('admin_audit_log')
-      .select('action, details, timestamp')
-      .order('timestamp', { ascending: false })
-      .limit(10);
+    try {
+      const { data } = await s.from('subscriptions')
+        .select('id, company_id, plan_code, status, end_date')
+        .order('created_at', { ascending: false })
+        .limit(5);
+      recentSubs = data || [];
+    } catch (e) { console.warn('dashboard recent subs failed', e); }
+
+    try {
+      // Try new schema first, fallback to old
+      let { data, error } = await s.from('subscription_plans')
+        .select('id, name, price_monthly, is_active')
+        .order('price_monthly');
+      if (error) {
+        const { data: oldData } = await s.from('subscription_plans')
+          .select('id, name, price, is_active')
+          .order('price');
+        data = oldData as any;
+      }
+      plans = data || [];
+    } catch (e) { console.warn('dashboard plans failed', e); }
+
+    try {
+      const { count } = await s.from('activation_codes')
+        .select('id', { count: 'exact', head: true })
+        .is('used_by', null);
+      unusedCodes = count || 0;
+    } catch (e) { console.warn('dashboard codes failed', e); }
+
+    try {
+      // Try timestamp, fallback to created_at
+      let { data, error } = await s.from('admin_audit_log')
+        .select('action, details, created_at')
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (error) {
+        const { data: oldData } = await s.from('admin_audit_log')
+          .select('action, details, timestamp')
+          .order('timestamp', { ascending: false })
+          .limit(10);
+        data = oldData as any;
+      }
+      // Normalize to timestamp field for frontend
+      activity = (data || []).map((a: any) => ({
+        action: a.action,
+        details: a.details,
+        timestamp: a.timestamp || a.created_at,
+      }));
+    } catch (e) { console.warn('dashboard activity failed', e); }
 
     return success({
-      companiesCount: companiesCount || 0,
-      usersCount: usersCount || 0,
-      activeSubscriptions: activeSubs || 0,
+      companiesCount,
+      usersCount,
+      activeSubscriptions: activeSubs,
       monthlyRevenue: 0,
-      unusedCodes: unusedCodes || 0,
+      unusedCodes,
       dbSize: 'N/A',
       lastLogin: null,
-      recentActivity: activity || [],
-      recentCompanies: recentCompanies || [],
-      recentSubscriptions: recentSubs || [],
-      planDistribution: plans || [],
+      recentActivity: activity,
+      recentCompanies,
+      recentSubscriptions: recentSubs,
+      planDistribution: plans,
       systemHealth: {
         apiResponseTime: 'N/A',
         uptime: 'N/A',
@@ -68,6 +111,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (err) {
+    console.error('Admin dashboard error:', err);
     return error('حدث خطأ في الخادم', 500);
   }
 }
