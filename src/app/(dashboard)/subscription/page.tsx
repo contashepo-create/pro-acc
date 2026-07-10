@@ -11,7 +11,9 @@ import { Modal } from '@/components/ui/Modal';
 interface Plan {
   id: string; code: string; name: string; description: string; description_ar: string;
   price_monthly: number; price_yearly: number; yearly_discount_percent: number;
-  trial_days: number; max_users: number; max_clients: number; max_projects: number;
+  trial_days: number; max_users: number; max_clients: number; max_suppliers?: number;
+  max_employees?: number; max_projects: number; max_invoices_per_month?: number;
+  max_storage_mb?: number;
   features_modules: any;
 }
 
