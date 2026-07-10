@@ -54,9 +54,35 @@ export async function POST(request: NextRequest) {
     const companyId = auth.companyId;
     const userId = auth.userId;
 
-    const { data: maxVr } = await s.from('voucher_receipts')
-      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-    const nextNum = ((maxVr as any)?.number || 0) + 1;
+    // FIXED: Use atomic RPC to avoid race condition
+    let nextNum: number;
+    try {
+      const { data: rpcData } = await s.rpc('next_voucher_number', {
+        p_company_id: companyId,
+        p_table_name: 'voucher_receipts',
+      });
+      nextNum = rpcData as number;
+    } catch {
+      const { data: maxVr } = await s.from('voucher_receipts')
+        .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+      nextNum = ((maxVr as any)?.number || 0) + 1;
+    }
+
+    // Helper for journal number
+    async function getNextJournalNumber(): Promise<number> {
+      try {
+        const year = new Date(date).getFullYear();
+        const { data } = await s.rpc('next_journal_number', {
+          p_company_id: companyId,
+          p_year: year,
+        });
+        return data as number;
+      } catch {
+        const { data: maxJe } = await s.from('journal_entries')
+          .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+        return ((maxJe as any)?.number || 0) + 1;
+      }
+    }
 
     if (receipt_type === 'client') {
       let totalAllocated = 0;
@@ -78,9 +104,7 @@ export async function POST(request: NextRequest) {
           const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
 
           if (arAccount && bankAccount?.account_id) {
-            const { data: maxJe } = await s.from('journal_entries')
-              .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-            const jeNum = ((maxJe as any)?.number || 0) + 1;
+            const jeNum = await getNextJournalNumber();
             const { data: je } = await s.from('journal_entries')
               .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `دفع فاتورة #${inv.number}`, reference_type: 'invoice', reference_id: item.invoice_id, created_by: userId })
               .select('id').single();
@@ -108,9 +132,7 @@ export async function POST(request: NextRequest) {
     if (receipt_type === 'supplier_refund') {
       const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
       const { data: apAccount } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
-      const { data: maxJe } = await s.from('journal_entries')
-        .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-      const jeNum = ((maxJe as any)?.number || 0) + 1;
+      const jeNum = await getNextJournalNumber();
       const { data: je } = await s.from('journal_entries')
         .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `استرداد من مورد: ${reason}`, created_by: userId })
         .select('id').single();
@@ -130,9 +152,7 @@ export async function POST(request: NextRequest) {
     // General receipt
     const generalAccount = account_id;
     const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
-    const { data: maxJe } = await s.from('journal_entries')
-      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-    const jeNum = ((maxJe as any)?.number || 0) + 1;
+    const jeNum = await getNextJournalNumber();
     const { data: je } = await s.from('journal_entries')
       .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `سند قبض: ${reason}`, created_by: userId })
       .select('id').single();
