@@ -3,6 +3,7 @@ import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { verifyPassword, createToken } from '@/lib/auth';
 import { loginSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 // @ts-ignore - supabase client typing issues
 const sb = () => getSupabase() as any;
@@ -15,6 +16,13 @@ export async function POST(request: NextRequest) {
 
     const { email, password } = parsed.data;
     const s = sb();
+
+    // Rate limiting check
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || 'unknown';
+    const rateLimit = await checkRateLimit(email.toLowerCase(), ip);
+    if (!rateLimit.allowed) {
+      return error(`تم حظر محاولات الدخول مؤقتاً. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
+    }
 
     const { data: user, error: userErr } = await s.from('users')
       .select('id, name, email, password_hash, role, is_active, company_id')
@@ -31,14 +39,34 @@ export async function POST(request: NextRequest) {
     if (!c || !c.is_active) return error('الشركة غير نشطة. تواصل مع مدير النظام', 403);
 
     const valid = await verifyPassword(password, u.password_hash);
-    if (!valid) return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
+    if (!valid) {
+      // Log failed attempt for rate limiting
+      try {
+        await s.from('login_attempts').insert({
+          email: email.toLowerCase(),
+          ip_address: ip,
+          success: false,
+          attempted_at: new Date().toISOString(),
+        });
+      } catch {}
+      return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
+    }
 
     try {
       const { data: uv } = await s.from('users').select('email_verified').eq('id', u.id).single();
       if (uv && uv.email_verified === false) return error('يرجى تأكيد بريدك الإلكتروني أولاً', 403);
     } catch {}
 
-    try { await s.from('users').update({ last_login: new Date().toISOString() }).eq('id', u.id); } catch {}
+    try { 
+      await s.from('users').update({ last_login: new Date().toISOString() }).eq('id', u.id);
+      // Log successful attempt
+      await s.from('login_attempts').insert({
+        email: email.toLowerCase(),
+        ip_address: ip,
+        success: true,
+        attempted_at: new Date().toISOString(),
+      });
+    } catch {}
 
     let subscriptionExpired = false;
     try {
