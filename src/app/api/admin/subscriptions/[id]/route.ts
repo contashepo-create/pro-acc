@@ -1,12 +1,21 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { verifyToken } from '@/lib/auth';
 
 // @ts-ignore
 const sb = () => getSupabase() as any;
 
+function requireAdmin(request: NextRequest) {
+  const token = request.cookies.get('admin_token')?.value;
+  if (!token) throw new Error('Unauthorized');
+  const payload = verifyToken(token);
+  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
+}
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    requireAdmin(req);
     const { id } = await params;
     const s = sb();
 
@@ -17,7 +26,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     if (subErr || !sub) return error('Not found', 404);
 
-    // Fetch company name
     let companyName: string | null = null;
     if (sub.company_id) {
       const { data: company } = await s.from('companies')
@@ -27,7 +35,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       companyName = company?.name || null;
     }
 
-    // Fetch plan name and price
     let planName: string | null = null;
     let planPriceMonthly: number | null = null;
     if (sub.plan_id) {
@@ -41,35 +48,26 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       }
     }
 
-    // Fetch payments
-    const { data: payments, error: payErr } = await s.from('payment_transactions')
-      .select('*')
-      .eq('subscription_id', id)
-      .order('transaction_date', { ascending: false });
-
-    return success({
-      ...sub,
-      company_name: companyName,
-      plan_name: planName,
-      price_monthly: planPriceMonthly,
-      payments: payments || [],
-    });
+    return success({ ...sub, company_name: companyName, plan_name: planName, plan_price_monthly: planPriceMonthly });
   } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    requireAdmin(req);
     const { id } = await params;
     const body = await parseBody(req);
+    const s = sb();
 
     const update: any = {};
     if (body.status !== undefined) update.status = body.status;
-    if (body.endDate !== undefined) update.end_date = body.endDate;
-    if (body.autoRenew !== undefined) update.auto_renew = body.autoRenew;
+    if (body.end_date !== undefined) update.end_date = body.end_date;
+    if (body.plan_id !== undefined) update.plan_id = body.plan_id;
+    update.updated_at = new Date().toISOString();
 
-    const s = sb();
     const { data, error: updateErr } = await s.from('subscriptions')
       .update(update)
       .eq('id', id)
@@ -80,6 +78,28 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     return success(data);
   } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
+    return serverError(e);
+  }
+}
+
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    requireAdmin(req);
+    const { id } = await params;
+    const s = sb();
+
+    const { data, error: delErr } = await s.from('subscriptions')
+      .delete()
+      .eq('id', id)
+      .select('id')
+      .single();
+
+    if (delErr || !data) return error('Not found', 404);
+
+    return success({ deleted: true });
+  } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
 }
