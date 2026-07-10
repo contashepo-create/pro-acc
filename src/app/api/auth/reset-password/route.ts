@@ -3,6 +3,7 @@ import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword } from '@/lib/auth';
 import { resetPasswordSchema } from '@/lib/validation';
+import { createHash } from 'crypto';
 
 // @ts-ignore
 const sb = () => getSupabase() as any;
@@ -16,10 +17,31 @@ export async function POST(request: NextRequest) {
     const { token, password } = parsed.data;
     const s = sb();
 
-    const { data: tokenData, error: tokenError } = await s.from('password_reset_tokens')
+    // Hash incoming token to match stored hash
+    const hashedToken = createHash('sha256').update(token).digest('hex');
+
+    // Try both hashed and plain for backward compatibility during migration
+    let tokenData = null;
+    let tokenError = null;
+
+    // First try hashed
+    const { data: hashedData, error: hashedErr } = await s.from('password_reset_tokens')
       .select('id, user_id, expires_at, used')
-      .eq('token', token)
+      .eq('token', hashedToken)
       .maybeSingle();
+
+    if (hashedData) {
+      tokenData = hashedData;
+    } else {
+      // Fallback to plain (for tokens created before fix)
+      const { data: plainData, error: plainErr } = await s.from('password_reset_tokens')
+        .select('id, user_id, expires_at, used')
+        .eq('token', token)
+        .maybeSingle();
+      tokenData = plainData;
+      tokenError = plainErr;
+      if (hashedErr && plainErr) tokenError = hashedErr;
+    }
 
     if (tokenError || !tokenData) return error('الرمز غير صالح', 400);
 

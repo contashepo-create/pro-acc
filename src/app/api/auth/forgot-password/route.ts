@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { forgotPasswordSchema } from '@/lib/validation';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { sendPasswordResetEmail } from '@/lib/email';
 
 // @ts-ignore
@@ -24,30 +24,26 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (queryError || !user) {
+      // Always return same message to prevent email enumeration
       return success({ message: 'إذا كان البريد الإلكتروني مسجلاً، ستتلقى رابط إعادة التعيين' });
     }
 
-    const token = randomBytes(32).toString('hex');
+    const rawToken = randomBytes(32).toString('hex');
+    // Hash token before storing (security best practice)
+    const hashedToken = createHash('sha256').update(rawToken).digest('hex');
     const expiresAt = new Date(Date.now() + 3600000).toISOString();
 
     await s.from('password_reset_tokens').insert({
       user_id: user.id,
-      token,
+      token: hashedToken,
       expires_at: expiresAt,
     });
 
-    const resetUrl = `${request.nextUrl.origin}/reset-password?token=${token}`;
+    const resetUrl = `${request.nextUrl.origin}/reset-password?token=${rawToken}`;
 
-    const emailSent = await sendPasswordResetEmail(email, resetUrl);
+    await sendPasswordResetEmail(email, resetUrl);
 
-    if (!emailSent && process.env.NODE_ENV !== 'production') {
-      return success({
-        message: 'رابط إعادة تعيين كلمة المرور جاهز',
-        resetUrl,
-        email: user.email,
-      });
-    }
-
+    // Never return resetUrl even in dev (was leaking token)
     return success({ message: 'تم إرسال رابط إعادة التعيين إلى بريدك الإلكتروني' });
   } catch (err) {
     return serverError(err);
