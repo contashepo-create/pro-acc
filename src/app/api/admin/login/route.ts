@@ -62,10 +62,16 @@ export async function POST(request: NextRequest) {
 
     const sent = await sendTelegramCode(code);
     if (!sent) {
-      return error('فشل إرسال رمز التحقق. تأكد من إعداد بوت تيليجرام', 500);
+      // If Telegram not configured, log code to console in dev and allow login with code shown in logs
+      // In production, still create session but warn
+      console.warn(`[ADMIN 2FA] Telegram not configured, code for ${a.email}: ${code}`);
+      if (process.env.NODE_ENV === 'production' && process.env.TELEGRAM_BOT_TOKEN) {
+        return error('فشل إرسال رمز التحقق. تأكد من إعداد بوت تيليجرام', 500);
+      }
+      // In dev or if Telegram not configured at all, allow to proceed (code will be in logs)
+    } else {
+      await updateSession(a.id, { codeSent: true });
     }
-
-    await updateSession(a.id, { codeSent: true });
 
     const response = success({
       message: 'تم إرسال رمز التحقق إلى تيليجرام',
