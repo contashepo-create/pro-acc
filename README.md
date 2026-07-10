@@ -1,36 +1,146 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Pro Acc - نظام محاسبة متكامل للمقاولات
 
-## Getting Started
+نظام ERP محاسبي متكامل مصمم خصيصاً لشركات المقاولات والإنشاءات في السعودية والخليج. يدعم اللغة العربية بالكامل مع واجهة عصرية وسهلة الاستخدام.
 
-First, run the development server:
+![Next.js](https://img.shields.io/badge/Next.js-16-black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)
+![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-green)
 
+## ✨ المميزات
+
+### 📊 المحاسبة المالية
+- دليل حسابات مرن (4 أرقام) مع شجرة حسابات
+- قيود يومية متوازنة تلقائياً
+- ميزان مراجعة، قائمة دخل، ميزانية عمومية
+- تقارير تقادم العملاء والموردين
+
+### 🧾 الفواتير والمبيعات
+- فواتير مبيعات مع ضريبة القيمة المضافة 15%
+- سندات قبض وصرف
+- عروض أسعار
+- متابعة التحصيلات
+
+### 🏗️ إدارة المشاريع (مقاولات)
+- BOQ (جدول الكميات)
+- مستخلصات مقاولين
+- عقود مقاولين باطن وشهادات إنجاز
+- تكاليف المشاريع وربحية كل مشروع
+- الفوترة المرحلية
+
+### 👷 إدارة الموظفين
+- رواتب وكشوف مرتبات
+- عمالة يومية
+- عهد وسلف موظفين
+- حضور وانصراف
+
+### 📦 المخزون والمشتريات
+- مستودعات متعددة
+- حركات مخزنية (إضافة، صرف، تحويل)
+- أوامر شراء وفواتير مشتريات
+- أصناف وموردين
+
+### 🔐 الأمان
+- مصادقة بـ JWT مع httpOnly cookies
+- تشفير كلمات المرور بـ scrypt
+- حماية CSRF
+- Rate Limiting
+- تسجيل دخول ثنائي عبر Telegram للـ Admin
+- عزل بيانات كل شركة (Multi-tenant)
+
+## 🚀 التشغيل السريع
+
+### 1. المتطلبات
+- Node.js 18+
+- Supabase account
+- SMTP (اختياري للبريد)
+
+### 2. التثبيت
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone https://github.com/contashepo-create/pro-acc.git
+cd pro-acc
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 3. إعداد البيئة
+```bash
+cp .env.example .env.local
+# عدل .env.local بمعلوماتك
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 4. إعداد قاعدة البيانات
+في Supabase Dashboard > SQL Editor، شغل:
+```sql
+-- من ملف src/migrations/000-full-schema.sql
+-- ثم 001, 002, ... حتى 007
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+أو استخدم:
+```bash
+npm run migrate
+```
 
-## Learn More
+### 5. إنشاء مدير النظام
+```bash
+ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=StrongPass123 npm run seed:admin
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 6. التشغيل
+```bash
+npm run dev
+# افتح http://localhost:3000
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 🔧 متغيرات البيئة المطلوبة
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| المتغير | الوصف | مطلوب |
+|---------|-------|--------|
+| `NEXT_PUBLIC_SUPABASE_URL` | رابط مشروع Supabase | ✅ |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | المفتاح العام | ✅ |
+| `SUPABASE_SERVICE_ROLE_KEY` | مفتاح الخدمة (سري جداً) | ✅ |
+| `TOKEN_SECRET` | مفتاح تشفير JWT (32 حرف+) | ✅ |
+| `DATABASE_URL` | رابط Postgres مباشر (اختياري) | ❌ |
+| `TELEGRAM_BOT_TOKEN` | بوت Telegram للـ Admin 2FA | ❌ |
+| `SMTP_*` | إعدادات البريد | ❌ |
 
-## Deploy on Vercel
+## 📁 هيكل المشروع
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+src/
+├── app/
+│   ├── (auth)/       # صفحات الدخول والتسجيل
+│   ├── (dashboard)/  # صفحات النظام المحاسبي
+│   ├── zerocold/     # لوحة تحكم المطور
+│   └── api/          # 100+ API route
+├── lib/
+│   ├── auth.ts       # JWT + تشفير
+│   ├── db.ts         # اتصال pg
+│   ├── supabase.ts   # عميل Supabase
+│   ├── validation.ts # Zod schemas
+│   └── ...
+├── components/
+│   └── ui/           # مكونات واجهة
+└── migrations/       # ملفات SQL
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 🛡️ الأمان - تنبيه مهم
+
+هذا المشروع تمت مراجعته أمنياً. قبل الإطلاق:
+
+1. **احذف المفاتيح المسربة** من `scripts/` (تم إصلاحها)
+2. **فعل RLS Policies** في Supabase
+3. **استخدم Cloudflare Turnstile** بدلاً من CAPTCHA الرياضي
+4. **لا ترفع `logs/`** على Git
+
+راجع `SECURITY_AUDIT.md` و `REPORT_PRO-ACC.md`.
+
+## 📝 الترخيص
+
+خاص - جميع الحقوق محفوظة لصاحب المشروع.
+
+## 🤝 المساهمة
+
+هذا مشروع مغلق حالياً. للاستفسار: conta.moha@gmail.com
+
+---
+
+**تم التطوير بـ ❤️ للمحاسبين العرب**

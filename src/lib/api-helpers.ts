@@ -85,13 +85,33 @@ export async function parseBody<T = any>(request: Request): Promise<T> {
 export function checkCsrf(request: Request): boolean {
   const method = request.method.toUpperCase();
   if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
-  if (process.env.NODE_ENV !== 'production') return true;
+  
+  // FIXED: CSRF must be enforced in all environments, not just production
+  // If you need to bypass for local testing, use CSRF_BYPASS=true env var
+  if (process.env.CSRF_BYPASS === 'true') return true;
 
   const csrfToken = request.headers.get('x-csrf-token');
   const csrfCookie = (request as any).cookies?.get?.('csrf_token')?.value;
 
   if (!csrfToken || !csrfCookie) return false;
-  return csrfToken === csrfCookie;
+  
+  // FIXED: timing-safe comparison to prevent timing attacks
+  if (csrfToken.length !== csrfCookie.length) return false;
+  let diff = 0;
+  for (let i = 0; i < csrfToken.length; i++) {
+    diff |= csrfToken.charCodeAt(i) ^ csrfCookie.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+export function escapeHtml(str: string): string {
+  return str.replace(/[&<>"']/g, (m) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[m] as string));
 }
 
 export function requireCsrf(request: Request): void {

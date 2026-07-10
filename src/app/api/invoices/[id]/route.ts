@@ -61,15 +61,23 @@ export async function PATCH(
 
       if (invoice.journal_entry_id) {
         const year = new Date().getFullYear().toString();
-        const { data: seqExisting } = await s.from('journal_sequences')
-          .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
-        let reversalNumber;
-        if (seqExisting) {
-          reversalNumber = seqExisting.last_number + 1;
-          await s.from('journal_sequences').update({ last_number: reversalNumber }).eq('company_id', auth.companyId).eq('year', year);
-        } else {
-          reversalNumber = 1;
-          await s.from('journal_sequences').insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
+        let reversalNumber: number;
+        try {
+          const { data: rpcData } = await s.rpc('next_journal_number', {
+            p_company_id: auth.companyId,
+            p_year: parseInt(year),
+          });
+          reversalNumber = rpcData as number;
+        } catch {
+          const { data: seqExisting } = await s.from('journal_sequences')
+            .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
+          if (seqExisting) {
+            reversalNumber = seqExisting.last_number + 1;
+            await s.from('journal_sequences').update({ last_number: reversalNumber }).eq('company_id', auth.companyId).eq('year', year);
+          } else {
+            reversalNumber = 1;
+            await s.from('journal_sequences').insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
+          }
         }
 
         const { data: reversalRes, error: revErr } = await s.from('journal_entries')

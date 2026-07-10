@@ -34,37 +34,46 @@ export async function GET(request: NextRequest) {
 
     if (queryError) throw queryError;
 
-    // Enrich with lines_count, total_debit, total_credit
-    let enriched = [];
+    // FIXED: N+1 query - batch fetch all lines at once
+    let enriched = entries || [];
     if (accountId) {
-      // Filter by account
       const { data: acc } = await s.from('accounts').select('id').eq('id', accountId).eq('company_id', auth.companyId).maybeSingle();
       if (acc) {
         const { data: filteredLines } = await s.from('journal_lines')
-          .select('journal_entry_id, debit, credit').eq('account_id', acc.id);
-        const jeIds = [...new Set((filteredLines || []).map((l: any) => l.journal_entry_id))];
-        enriched = (entries || []).filter((e: any) => jeIds.includes(e.id));
+          .select('journal_entry_id').eq('account_id', acc.id);
+        const jeIds = new Set((filteredLines || []).map((l: any) => l.journal_entry_id));
+        enriched = (entries || []).filter((e: any) => jeIds.has(e.id));
       } else {
         enriched = [];
       }
-    } else {
-      enriched = entries || [];
     }
 
-    // For each entry, get lines summary
-    const result = [];
-    for (const entry of enriched) {
-      const { data: lines } = await s.from('journal_lines')
-        .select('debit, credit').eq('journal_entry_id', entry.id);
-      const totalDebit = (lines || []).reduce((s: number, l: any) => s + (parseFloat(l.debit) || 0), 0);
-      const totalCredit = (lines || []).reduce((s: number, l: any) => s + (parseFloat(l.credit) || 0), 0);
-      result.push({
-        ...entry,
-        lines_count: (lines || []).length,
-        total_debit: totalDebit,
-        total_credit: totalCredit,
-      });
+    // Batch fetch all lines for all entries
+    const enrichedIds = enriched.map((e: any) => e.id);
+    let linesMap: Record<string, { count: number; total_debit: number; total_credit: number }> = {};
+    if (enrichedIds.length > 0) {
+      const { data: allLines } = await s.from('journal_lines')
+        .select('journal_entry_id, debit, credit')
+        .in('journal_entry_id', enrichedIds);
+      
+      for (const line of allLines || []) {
+        const jeId = (line as any).journal_entry_id;
+        if (!linesMap[jeId]) linesMap[jeId] = { count: 0, total_debit: 0, total_credit: 0 };
+        linesMap[jeId].count += 1;
+        linesMap[jeId].total_debit += parseFloat((line as any).debit) || 0;
+        linesMap[jeId].total_credit += parseFloat((line as any).credit) || 0;
+      }
     }
+
+    const result = enriched.map((entry: any) => {
+      const summary = linesMap[entry.id] || { count: 0, total_debit: 0, total_credit: 0 };
+      return {
+        ...entry,
+        lines_count: summary.count,
+        total_debit: summary.total_debit,
+        total_credit: summary.total_credit,
+      };
+    });
 
     return success({ entries: result, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) || 1 });
   } catch (err) {
@@ -84,21 +93,30 @@ export async function POST(request: NextRequest) {
 
     const year = date.substring(0, 4);
 
-    // Upsert journal_sequences
-    const { data: seqExisting } = await s.from('journal_sequences')
-      .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
-
-    let number;
-    if (seqExisting) {
-      number = seqExisting.last_number + 1;
-      const { error: seqErr } = await s.from('journal_sequences')
-        .update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
-      if (seqErr) throw seqErr;
-    } else {
-      number = 1;
-      const { error: seqErr } = await s.from('journal_sequences')
-        .insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
-      if (seqErr) throw seqErr;
+    // FIXED: Atomic sequence via RPC to prevent race condition
+    let number: number;
+    try {
+      const { data: rpcData, error: rpcError } = await s.rpc('next_journal_number', {
+        p_company_id: auth.companyId,
+        p_year: parseInt(year),
+      });
+      if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
+      number = rpcData as number;
+    } catch {
+      // Fallback old logic
+      const { data: seqExisting } = await s.from('journal_sequences')
+        .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
+      if (seqExisting) {
+        number = seqExisting.last_number + 1;
+        const { error: seqErr } = await s.from('journal_sequences')
+          .update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
+        if (seqErr) throw seqErr;
+      } else {
+        number = 1;
+        const { error: seqErr } = await s.from('journal_sequences')
+          .insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
+        if (seqErr) throw seqErr;
+      }
     }
 
     const { data: entryRes, error: entryErr } = await s.from('journal_entries')

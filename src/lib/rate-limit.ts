@@ -19,7 +19,8 @@ export async function checkRateLimit(
 
   if (error) {
     console.error('Rate limit check error:', error);
-    return { allowed: true, remainingMinutes: 0 };
+    // FIXED: Fail-Closed - if DB fails, block request instead of allowing brute force
+    return { allowed: false, remainingMinutes: 5 };
   }
 
   const count = (attempts || []).length;

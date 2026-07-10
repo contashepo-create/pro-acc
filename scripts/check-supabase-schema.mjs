@@ -1,14 +1,16 @@
-// Add columns to Supabase via the management API
-// Supabase doesn't expose DDL via REST, so we use the SQL endpoint
-const SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZtemNlanRhdGtnbWVtd2xiaHRrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MjE1NzY1MiwiZXhwIjoyMDk3NzMzNjUyfQ.2Nelui57BCS8LWnGGYyQ4ZdMSGa21EEa9b1kwEcCW2w';
-const BASE_URL = 'https://vmzcejtatkgmemwlbhtk.supabase.co';
+/**
+ * Safe version - uses env vars, no hardcoded secrets
+ * Usage: SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node scripts/check-supabase-schema.mjs
+ */
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const BASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 
-// We can't run DDL via REST API. But we can try to INSERT/UPDATE directly
-// since the service role key bypasses RLS.
+if (!SERVICE_KEY || !BASE_URL) {
+  console.error('❌ Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars');
+  process.exit(1);
+}
 
 async function addColumnsViaInsert() {
-  // Try updating users table to add email_verified=true for existing users
-  // This will fail if column doesn't exist, confirming we need manual SQL
   const res = await fetch(BASE_URL + '/rest/v1/users?select=id,email', {
     headers: { 'apikey': SERVICE_KEY, 'Authorization': 'Bearer ' + SERVICE_KEY }
   });
@@ -17,7 +19,6 @@ async function addColumnsViaInsert() {
   if (res.ok && Array.isArray(data)) {
     console.log(`Found ${data.length} users in Supabase`);
     
-    // Try to PATCH a user with email_verified field
     if (data.length > 0) {
       const patchRes = await fetch(BASE_URL + '/rest/v1/users?id=eq.' + data[0].id, {
         method: 'PATCH',

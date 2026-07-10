@@ -54,15 +54,27 @@ export async function POST(request: NextRequest) {
     const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes } = parsed.data;
     const year = date.substring(0, 4);
 
-    const { data: seqExisting } = await s.from('invoice_sequences')
-      .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
-    let number;
-    if (seqExisting) {
-      number = seqExisting.last_number + 1;
-      await s.from('invoice_sequences').update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
-    } else {
-      number = 1;
-      await s.from('invoice_sequences').insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
+    // FIXED: Atomic sequence generation via SQL function to avoid race condition
+    // Fallback to old logic if function doesn't exist yet
+    let number: number;
+    try {
+      const { data: rpcData, error: rpcError } = await s.rpc('next_invoice_number', {
+        p_company_id: auth.companyId,
+        p_year: parseInt(year),
+      });
+      if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
+      number = rpcData as number;
+    } catch {
+      // Fallback (old logic) - will be removed after migration 007 runs
+      const { data: seqExisting } = await s.from('invoice_sequences')
+        .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
+      if (seqExisting) {
+        number = seqExisting.last_number + 1;
+        await s.from('invoice_sequences').update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
+      } else {
+        number = 1;
+        await s.from('invoice_sequences').insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
+      }
     }
 
     const computedVat = vatAmount ?? subtotal * vatRate;
