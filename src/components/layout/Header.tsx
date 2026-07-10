@@ -163,10 +163,10 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               {isDark ? <Sun size={17} /> : <Moon size={17} />}
             </button>
 
-            <div className="relative" ref={userMenuRef}>
+            <div className="relative" ref={userMenuRef} style={{ zIndex: 100 }}>
               <button
                 onClick={() => setUserMenuOpen(!userMenuOpen)}
-                className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-bg-hover transition-colors"
+                className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-bg-hover transition-colors relative z-[101]"
               >
                 <div className="w-7 h-7 rounded-full bg-[var(--section-accent,var(--color-accent))] flex items-center justify-center text-text-inverse text-xs font-bold">
                   {initials}
@@ -180,10 +180,10 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               </button>
 
               {userMenuOpen && (
-                <div className="fixed inset-0 z-[9998]" onClick={() => setUserMenuOpen(false)} />
+                <div className="fixed inset-0 z-[9998] bg-transparent" onClick={() => setUserMenuOpen(false)} style={{ pointerEvents: 'auto' }} />
               )}
               {userMenuOpen && (
-                <div className="absolute left-0 top-full mt-2 w-56 border border-border rounded-xl shadow-2xl py-1 z-[9999] animate-[fade-in_0.15s_ease-out]" style={{ backgroundColor: 'var(--color-bg-card)' }}>
+                <div className="absolute left-0 top-full mt-2 w-64 border border-border rounded-xl shadow-2xl py-1 z-[10000] animate-[fade-in_0.15s_ease-out] isolate" style={{ backgroundColor: 'var(--color-bg-card)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', border: '1px solid var(--color-border)' }}>
                   <div className="px-4 py-3 border-b border-border">
                     <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
                     <div className="text-xs text-text-muted">{user?.email || ''}</div>

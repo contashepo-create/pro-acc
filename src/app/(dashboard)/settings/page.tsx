@@ -26,23 +26,44 @@ export default function SettingsPage() {
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
 
+  // Accounting settings
+  const [fiscalStart, setFiscalStart] = useState('');
+  const [decimalPlaces, setDecimalPlaces] = useState('2');
+  const [vatRate, setVatRate] = useState('15');
+  
+  // Notifications
+  const [notifInvoice, setNotifInvoice] = useState(true);
+  const [notifDue, setNotifDue] = useState(true);
+  const [notifStock, setNotifStock] = useState(true);
+  const [notifVoucher, setNotifVoucher] = useState(false);
+
   // Subscription state
   const [subscription, setSubscription] = useState<any>(null);
   const [subLoading, setSubLoading] = useState(true);
 
   useEffect(() => {
-    // Load company data from /api/auth/me
-    fetch('/api/auth/me')
+    // Load company data and settings
+    fetch('/api/settings')
       .then((r) => r.json())
       .then((d) => {
-        if (d.success && d.data?.company) {
-          const c = d.data.company;
-          setCompanyName(c.name || '');
-          setRegistration(c.registrationNumber || '');
-          setTaxNumber(c.taxNumber || '');
-          setPhone(c.phone || '');
-          setEmail(c.email || '');
-          setAddress(c.address || '');
+        if (d.success) {
+          const c = d.data?.company;
+          if (c) {
+            setCompanyName(c.name || '');
+            setRegistration(c.commercial_registration || c.registrationNumber || '');
+            setTaxNumber(c.tax_number || c.taxNumber || '');
+            setPhone(c.phone || '');
+            setEmail(c.email || '');
+            setAddress(c.address || '');
+          }
+          const s = d.data?.settings || {};
+          if (s.fiscal_start) setFiscalStart(s.fiscal_start);
+          if (s.decimal_places) setDecimalPlaces(s.decimal_places);
+          if (s.vat_rate) setVatRate(s.vat_rate);
+          if (s.notif_invoice !== undefined) setNotifInvoice(s.notif_invoice === 'true');
+          if (s.notif_due !== undefined) setNotifDue(s.notif_due === 'true');
+          if (s.notif_stock !== undefined) setNotifStock(s.notif_stock === 'true');
+          if (s.notif_voucher !== undefined) setNotifVoucher(s.notif_voucher === 'true');
         }
       })
       .catch(() => {})
@@ -79,7 +100,77 @@ export default function SettingsPage() {
       });
       const data = await res.json();
       if (data.success) {
-        showToast('تم حفظ الإعدادات بنجاح');
+        showToast('تم حفظ إعدادات الشركة بنجاح');
+      } else {
+        showToast(data.message || 'فشل الحفظ');
+      }
+    } catch {
+      showToast('حدث خطأ في الاتصال');
+    }
+  };
+
+  const handleSaveAccounting = async () => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: {
+            fiscal_start: fiscalStart,
+            decimal_places: decimalPlaces,
+          }
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('تم حفظ الإعدادات المحاسبية');
+      } else {
+        showToast(data.message || 'فشل الحفظ');
+      }
+    } catch {
+      showToast('حدث خطأ في الاتصال');
+    }
+  };
+
+  const handleSaveTax = async () => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: {
+            vat_rate: vatRate,
+          }
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('تم حفظ إعدادات الضرائب');
+      } else {
+        showToast(data.message || 'فشل الحفظ');
+      }
+    } catch {
+      showToast('حدث خطأ في الاتصال');
+    }
+  };
+
+  const handleSaveNotifications = async () => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: {
+            notif_invoice: String(notifInvoice),
+            notif_due: String(notifDue),
+            notif_stock: String(notifStock),
+            notif_voucher: String(notifVoucher),
+          }
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('تم حفظ إعدادات الإشعارات');
       } else {
         showToast(data.message || 'فشل الحفظ');
       }
@@ -125,11 +216,11 @@ export default function SettingsPage() {
       {tab === 'accounting' && (
         <Card title="الإعدادات المحاسبية">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="بداية السنة المالية" type="date" />
-            <Input label="عدد المنازل العشرية" type="number" defaultValue="2" />
+            <Input label="بداية السنة المالية" type="date" value={fiscalStart} onChange={(e:any)=>setFiscalStart(e.target.value)} />
+            <Input label="عدد المنازل العشرية" type="number" value={decimalPlaces} onChange={(e:any)=>setDecimalPlaces(e.target.value)} />
           </div>
           <div className="mt-4">
-            <Button onClick={() => showToast('تم حفظ الإعدادات')} leftIcon={<Save size={16} />}>حفظ</Button>
+            <Button onClick={handleSaveAccounting} leftIcon={<Save size={16} />}>حفظ</Button>
           </div>
         </Card>
       )}
@@ -138,10 +229,10 @@ export default function SettingsPage() {
       {tab === 'tax' && (
         <Card title="إعدادات الضرائب">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="نسبة ضريبة القيمة المضافة (%)" type="number" defaultValue="15" />
+            <Input label="نسبة ضريبة القيمة المضافة (%)" type="number" value={vatRate} onChange={(e:any)=>setVatRate(e.target.value)} />
           </div>
           <div className="mt-4">
-            <Button onClick={() => showToast('تم حفظ الإعدادات')} leftIcon={<Save size={16} />}>حفظ</Button>
+            <Button onClick={handleSaveTax} leftIcon={<Save size={16} />}>حفظ</Button>
           </div>
         </Card>
       )}
@@ -333,24 +424,24 @@ export default function SettingsPage() {
         <Card title="الإشعارات">
           <div className="space-y-3">
             <label className="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" defaultChecked />
+              <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" checked={notifInvoice} onChange={(e)=>setNotifInvoice(e.target.checked)} />
               <span className="text-sm">إشعار عند إضافة فاتورة جديدة</span>
             </label>
             <label className="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" defaultChecked />
+              <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" checked={notifDue} onChange={(e)=>setNotifDue(e.target.checked)} />
               <span className="text-sm">إشعار عند استحقاق فاتورة</span>
             </label>
             <label className="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" defaultChecked />
+              <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" checked={notifStock} onChange={(e)=>setNotifStock(e.target.checked)} />
               <span className="text-sm">إشعار عند انخفاض رصيد المخزون</span>
             </label>
             <label className="flex items-center gap-3 cursor-pointer">
-              <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" />
+              <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" checked={notifVoucher} onChange={(e)=>setNotifVoucher(e.target.checked)} />
               <span className="text-sm">إشعار عند إنشاء سند قبض/صرف</span>
             </label>
           </div>
           <div className="mt-4">
-            <Button onClick={() => showToast('تم حفظ الإعدادات')} leftIcon={<Save size={16} />}>حفظ</Button>
+            <Button onClick={handleSaveNotifications} leftIcon={<Save size={16} />}>حفظ</Button>
           </div>
         </Card>
       )}
