@@ -37,7 +37,7 @@ export class AuthError extends Error {
 // @ts-ignore
 const sb = () => getSupabase() as any;
 
-export async function requireApiAuth(request: Request): Promise<{ companyId: string; userId: string; role: string }> {
+export async function requireApiAuth(request: Request, options: { checkSubscription?: boolean } = {}): Promise<{ companyId: string; userId: string; role: string }> {
   const { extractToken, verifyToken } = await import('@/lib/auth');
   const token = extractToken(request);
   if (!token) throw new AuthError('غير مصرح به');
@@ -55,7 +55,37 @@ export async function requireApiAuth(request: Request): Promise<{ companyId: str
   const u: any = user;
   if (!u.is_active) throw new AuthError('المستخدم غير نشط');
 
+  // Check company is active
+  try {
+    const { data: company } = await s.from('companies').select('is_active').eq('id', u.company_id).single();
+    if (company && (company as any).is_active === false) {
+      throw new AuthError('الشركة غير نشطة. تواصل مع مدير النظام');
+    }
+  } catch (e) {
+    if (e instanceof AuthError) throw e;
+    // ignore if company check fails
+  }
+
+  // Check subscription if requested
+  if (options.checkSubscription) {
+    try {
+      const { getCompanySubscription } = await import('@/lib/subscription');
+      const sub = await getCompanySubscription(u.company_id);
+      if (sub && sub.is_expired) {
+        throw new AuthError('انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك');
+      }
+    } catch (e) {
+      if (e instanceof AuthError) throw e;
+      // ignore subscription check errors (fail open for now, log)
+      console.warn('Subscription check failed:', e);
+    }
+  }
+
   return { companyId: u.company_id, userId: payload.userId, role: payload.role };
+}
+
+export async function requireApiAuthWithSubscription(request: Request) {
+  return requireApiAuth(request, { checkSubscription: true });
 }
 
 export async function requireAdminAuth(request: Request): Promise<{ userId: string; email: string }> {

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { createHmac } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { verifyToken } from '@/lib/auth';
 
 // @ts-ignore
 const sb = () => getSupabase() as any;
@@ -11,8 +12,16 @@ if (!process.env.PRO_ACCOUNTANT_LICENSE_SALT) {
 }
 const SALT = process.env.PRO_ACCOUNTANT_LICENSE_SALT;
 
+function requireAdmin(request: NextRequest) {
+  const token = request.cookies.get('admin_token')?.value;
+  if (!token) throw new Error('Unauthorized');
+  const payload = verifyToken(token);
+  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
+}
+
 export async function GET(req: NextRequest) {
   try {
+    requireAdmin(req);
     const s = sb();
     const used = req.nextUrl.searchParams.get('used');
 
@@ -27,7 +36,6 @@ export async function GET(req: NextRequest) {
     const { data: codes, error: err } = await queryBuilder;
     if (err) throw err;
 
-    // Fetch company names for used_by
     const companyIds = (codes || []).map((c: any) => c.used_by).filter(Boolean);
     let companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
@@ -44,12 +52,14 @@ export async function GET(req: NextRequest) {
 
     return success(result);
   } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
+    requireAdmin(req);
     const body = await parseBody(req);
     const { companyId, planCode, durationMonths } = body;
     if (!planCode || !durationMonths) return error('planCode and durationMonths required');
@@ -73,6 +83,7 @@ export async function POST(req: NextRequest) {
 
     return success({ code, planCode, durationMonths });
   } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
 }
