@@ -33,16 +33,25 @@ export default function ZerocoldLoginPage() {
         body: JSON.stringify({ email: email.trim(), password }),
       });
 
-      const body = await res.json();
+      let body;
+      try {
+        body = await res.json();
+      } catch (jsonErr: any) {
+        const text = await res.text().catch(() => '');
+        console.error('Failed to parse JSON:', text);
+        setError(`خطأ في الخادم (HTTP ${res.status}): ${text.substring(0, 200)}`);
+        return;
+      }
 
       if (!res.ok || !body.success) {
         setError(body.message || 'البريد الإلكتروني أو كلمة المرور غير صحيحة');
         return;
       }
 
-      router.push(`/zerocold/verify-telegram?email=${encodeURIComponent(body.email.toLowerCase())}`);
-    } catch {
-      setError('حدث خطأ في الاتصال بالخادم');
+      router.push(`/zerocold/verify-telegram?email=${encodeURIComponent(body.data?.email?.toLowerCase() || email.toLowerCase())}`);
+    } catch (err: any) {
+      console.error('Login fetch error:', err);
+      setError(`حدث خطأ في الاتصال بالخادم: ${err?.message || 'Unknown'} - تأكد من الإنترنت وحاول تاني`);
     } finally {
       setLoading(false);
     }
