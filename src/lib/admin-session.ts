@@ -15,12 +15,27 @@ const TTL = 30 * 60 * 1000;
 
 export async function setSession(adminId: string, data: AdminSessionData): Promise<void> {
   const s = sb();
-  await s.from('admin_users').update({
-    telegram_code: data.code,
-    telegram_code_expires: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-    master_verified: false,
-    login_session_data: data,
-  }).eq('id', adminId);
+  try {
+    await s.from('admin_users').update({
+      telegram_code: data.code,
+      telegram_code_expires: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      master_verified: false,
+      login_session_data: data,
+    }).eq('id', adminId);
+  } catch (err) {
+    console.warn('setSession failed, trying fallback without extra columns:', err);
+    try {
+      // Fallback: try with only login_session_data if other columns missing
+      await s.from('admin_users').update({
+        login_session_data: data,
+      }).eq('id', adminId);
+    } catch (e2) {
+      console.error('setSession fallback also failed:', e2);
+      // Last fallback: store in memory (will not persist across instances but allows login to proceed)
+      // For Vercel serverless, we can't rely on memory, so throw to trigger error
+      throw e2;
+    }
+  }
 }
 
 export async function getSession(adminId: string): Promise<AdminSessionData | null> {
