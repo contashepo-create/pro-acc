@@ -3,11 +3,15 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 let serverClient: SupabaseClient | null = null;
 let clientClient: SupabaseClient | null = null;
 
+function clean(s: string): string {
+  return (s || '').replace(/^\uFEFF/, '').trim();
+}
+
 export function createServerClient(): SupabaseClient {
   if (serverClient) return serverClient;
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = clean(process.env.NEXT_PUBLIC_SUPABASE_URL || '');
+  const serviceKey = clean(process.env.SUPABASE_SERVICE_ROLE_KEY || '');
 
   if (!url || !serviceKey) {
     throw new Error(
@@ -31,8 +35,8 @@ export function createServerClient(): SupabaseClient {
 export function createClientClient(): SupabaseClient {
   if (clientClient) return clientClient;
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const url = clean(process.env.NEXT_PUBLIC_SUPABASE_URL || '');
+  const anonKey = clean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '');
 
   if (!url || !anonKey) {
     throw new Error(
