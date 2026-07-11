@@ -1,9 +1,14 @@
 import { scryptSync, randomBytes, timingSafeEqual, createHmac, randomInt } from 'crypto';
 
-if (!process.env.TOKEN_SECRET) {
+function cleanEnv(s: string): string {
+  return (s || '').replace(/^\uFEFF/, '').trim();
+}
+
+const rawSecret = process.env.TOKEN_SECRET;
+if (!rawSecret) {
   throw new Error('TOKEN_SECRET environment variable is required');
 }
-const TOKEN_SECRET = process.env.TOKEN_SECRET;
+const TOKEN_SECRET = cleanEnv(rawSecret);
 const KEY_LENGTH = 64;
 
 export async function hashPassword(password: string): Promise<string> {
