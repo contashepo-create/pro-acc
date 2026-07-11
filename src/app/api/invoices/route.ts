@@ -20,7 +20,8 @@ export async function GET(request: NextRequest) {
 
     let query = s.from('invoices')
       .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, created_at, contacts(name)', { count: 'exact' })
-      .eq('company_id', auth.companyId);
+      .eq('company_id', auth.companyId)
+      .is('deleted_at', null);
     if (status) query = query.eq('status', status);
     if (clientId) query = query.eq('contact_id', clientId);
     if (dateFrom) query = query.gte('date', dateFrom);
@@ -148,6 +149,18 @@ export async function POST(request: NextRequest) {
 
       const { data: itemsRes } = await s.from('invoice_items')
         .select('id, description, quantity, unit_price, total').eq('invoice_id', invoiceId);
+
+      // Audit log
+      try {
+        await s.from('financial_audit_log').insert({
+          company_id: auth.companyId,
+          user_id: auth.userId,
+          action: 'create_invoice',
+          table_name: 'invoices',
+          record_id: invoiceId,
+          new_values: { number, total: computedTotal, client_id: clientId },
+        });
+      } catch {}
 
       return success({ ...invoiceRes, items: itemsRes || [], journalEntryId }, 201);
     } catch (txErr: any) {
