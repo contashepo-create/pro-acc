@@ -10,6 +10,10 @@ export async function GET(request: NextRequest) {
     telegram: {},
   };
 
+  function clean(s: string): string {
+    return (s || '').replace(/^\uFEFF/, '').trim();
+  }
+
   // Check env vars
   checks.env.NEXT_PUBLIC_SUPABASE_URL = !!process.env.NEXT_PUBLIC_SUPABASE_URL;
   checks.env.SUPABASE_SERVICE_ROLE_KEY = !!process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -20,8 +24,8 @@ export async function GET(request: NextRequest) {
   // Check Supabase connection
   try {
     const { createClient } = await import('@supabase/supabase-js');
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+    const url = clean(process.env.NEXT_PUBLIC_SUPABASE_URL || '');
+    const key = clean(process.env.SUPABASE_SERVICE_ROLE_KEY || '');
     
     if (!url || !key) {
       checks.supabase.error = 'Missing URL or Service Role Key';
@@ -38,7 +42,7 @@ export async function GET(request: NextRequest) {
       }
     }
   } catch (e: any) {
-    checks.supabase.error = e.message;
+    checks.supabase.error = e.message + (e.stack ? ' ' + e.stack.substring(0,200) : '');
     checks.supabase.ok = false;
   }
 
