@@ -20,12 +20,36 @@ export default function QuotationsPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [form, setForm] = useState<any>({});
+
   const handleSave = async () => {
-    // TODO: Implement save logic for this page
-    // This is a temporary fix to prevent empty button
-    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
-    setShowModal(false);
+    setSaving(true);
+    setSaveError('');
+    try {
+      const res = await fetch('/api/quotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setShowModal(false);
+        setForm({});
+        // Refresh data
+        window.location.reload();
+      } else {
+        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
+      }
+    } catch (e: any) {
+      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+    } finally {
+      setSaving(false);
+    }
   };
+
+
 
 
 
@@ -83,7 +107,7 @@ export default function QuotationsPage() {
         <DataTable columns={columns} data={quotations} searchable searchKeys={['contact_name']} />
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عرض سعر" size="xl"
-        footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
+        footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" />
@@ -91,6 +115,7 @@ export default function QuotationsPage() {
             <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
           </div>
           <Textarea label="ملاحظات" />
+                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
     </div>
