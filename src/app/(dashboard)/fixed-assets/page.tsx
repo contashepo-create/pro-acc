@@ -20,6 +20,15 @@ export default function FixedAssetsPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
+  const handleSave = async () => {
+    // TODO: Implement save logic for this page
+    // This is a temporary fix to prevent empty button
+    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
+    setShowModal(false);
+  };
+
+
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -73,7 +82,7 @@ export default function FixedAssetsPage() {
       ) : (
         <DataTable columns={columns} data={assets} searchable searchKeys={['name', 'code', 'category']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة أصل ثابت" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة أصل ثابت" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="الكود" /><Input label="اسم الأصل" className="col-span-2" />
           <Select label="التصنيف" options={[{ value: 'مركبات', label: 'مركبات' }, { value: 'أجهزة', label: 'أجهزة' }, { value: 'مباني', label: 'مباني' }, { value: 'أثاث', label: 'أثاث' }, { value: 'أخرى', label: 'أخرى' }]} />

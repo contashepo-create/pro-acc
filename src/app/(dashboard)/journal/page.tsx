@@ -19,6 +19,15 @@ export default function JournalPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  const handleSave = async () => {
+    // TODO: Implement save logic for this page
+    // This is a temporary fix to prevent empty button
+    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
+    setShowModal(false);
+  };
+
+
   const [showDetail, setShowDetail] = useState<any>(null);
   const [lines, setLines] = useState([{ account_id: '', debit: 0, credit: 0, description: '' }]);
 
@@ -91,7 +100,7 @@ export default function JournalPage() {
         <DataTable columns={columns} data={entries} searchable searchKeys={['description', 'number']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة قيد محاسبي" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة قيد محاسبي" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" />

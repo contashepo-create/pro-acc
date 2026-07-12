@@ -20,6 +20,15 @@ export default function InventoryPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
+  const handleSave = async () => {
+    // TODO: Implement save logic for this page
+    // This is a temporary fix to prevent empty button
+    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
+    setShowModal(false);
+  };
+
+
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -81,7 +90,7 @@ export default function InventoryPage() {
         <DataTable columns={columns} data={items} searchable searchKeys={['name', 'code']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة صنف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة صنف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="الكود" placeholder="كود الصنف" />
           <Input label="الوحدة" placeholder="مثال: كيس، طن" />

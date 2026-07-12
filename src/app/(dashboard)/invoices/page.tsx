@@ -20,6 +20,15 @@ export default function InvoicesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  const handleSave = async () => {
+    // TODO: Implement save logic for this page
+    // This is a temporary fix to prevent empty button
+    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
+    setShowModal(false);
+  };
+
+
   const [statusTab, setStatusTab] = useState('all');
 
   useEffect(() => {
@@ -102,7 +111,7 @@ export default function InvoicesPage() {
         <DataTable columns={columns} data={filtered} searchable searchKeys={['contact_name', 'number']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة فاتورة جديدة" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة فاتورة جديدة" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" />

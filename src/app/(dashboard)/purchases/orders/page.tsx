@@ -21,6 +21,15 @@ export default function PurchaseOrdersPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
+  const handleSave = async () => {
+    // TODO: Implement save logic for this page
+    // This is a temporary fix to prevent empty button
+    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
+    setShowModal(false);
+  };
+
+
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -91,7 +100,7 @@ export default function PurchaseOrdersPage() {
         <DataTable columns={columns} data={orders} searchable searchKeys={['supplier_name', 'po_number']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة أمر شراء" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة أمر شراء" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" />

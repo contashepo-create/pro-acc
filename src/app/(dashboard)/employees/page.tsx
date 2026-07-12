@@ -19,6 +19,15 @@ export default function EmployeesPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
+  const handleSave = async () => {
+    // TODO: Implement save logic for this page
+    // This is a temporary fix to prevent empty button
+    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
+    setShowModal(false);
+  };
+
+
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -72,7 +81,7 @@ export default function EmployeesPage() {
       ) : (
         <DataTable columns={columns} data={employees} searchable searchKeys={['name', 'phone', 'department']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة موظف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة موظف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="الاسم" placeholder="اسم الموظف" className="col-span-2" />
           <Input label="الجوال" placeholder="05xxxxxxxx" />

@@ -18,6 +18,15 @@ export default function CashPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  const handleSave = async () => {
+    // TODO: Implement save logic for this page
+    // This is a temporary fix to prevent empty button
+    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
+    setShowModal(false);
+  };
+
+
   const [typeTab, setTypeTab] = useState('all');
 
   useEffect(() => {
@@ -89,7 +98,7 @@ export default function CashPage() {
         <DataTable columns={columns} data={filtered} searchable searchKeys={['reason']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة معاملة نقدية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة معاملة نقدية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="التاريخ" type="date" />
           <Select label="النوع" options={[{ value: 'revenue', label: 'قبض' }, { value: 'expense', label: 'صرف' }]} />

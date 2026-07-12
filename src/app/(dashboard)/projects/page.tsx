@@ -19,6 +19,15 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+
+  const handleSave = async () => {
+    // TODO: Implement save logic for this page
+    // This is a temporary fix to prevent empty button
+    alert('جاري تطوير حفظ البيانات لهذا القسم - سيتم تفعيله قريباً');
+    setShowModal(false);
+  };
+
+
   const [statusTab, setStatusTab] = useState('all');
 
   useEffect(() => {
@@ -99,7 +108,7 @@ export default function ProjectsPage() {
         <DataTable columns={columns} data={filtered} searchable searchKeys={['name', 'client_name']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة مشروع جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة مشروع جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="اسم المشروع" placeholder="اسم المشروع" className="col-span-2" />
           <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
