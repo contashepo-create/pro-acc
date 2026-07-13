@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, Loader2, Search, ChevronLeft, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Users, Loader2, ChevronLeft } from 'lucide-react';
 import Link from 'next/link';
 
 interface Subscription {
@@ -43,6 +43,7 @@ export default function SubscriptionsPage() {
       } finally { setLoading(false); }
     };
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filtered = data.filter((s) => !filter || s.status === filter);

@@ -4,8 +4,7 @@ import { success, unauthorized, error, serverError } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
 import { auditLog } from '@/lib/admin-auth';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = ['.sql', '.backup'];

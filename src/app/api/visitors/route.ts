@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { success } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {
@@ -54,7 +53,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const s = sb();
     const today = new Date().toISOString().split('T')[0];

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, Loader2, Plus, RefreshCw, Edit2, Trash2, DollarSign } from 'lucide-react';
+import { ChevronLeft, Loader2, Plus, RefreshCw, DollarSign } from 'lucide-react';
 import Link from 'next/link';
 
 interface PaymentMethod {
@@ -33,7 +33,11 @@ export default function PaymentMethodsPage() {
     } catch {} finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchMethods(); }, []);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchMethods();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const saveMethod = async () => {
     setSaving(true);

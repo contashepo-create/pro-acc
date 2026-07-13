@@ -5,8 +5,7 @@ import { verifyToken } from '@/lib/auth';
 import { auditLog } from '@/lib/admin-auth';
 import { sendAdminNotification } from '@/lib/telegram';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 // Known tables in the database
 const KNOWN_TABLES = [

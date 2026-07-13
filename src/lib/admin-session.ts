@@ -1,7 +1,6 @@
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export interface AdminSessionData {
   email: string;
@@ -10,8 +9,6 @@ export interface AdminSessionData {
   codeSent: boolean;
   expiresAt: number;
 }
-
-const TTL = 30 * 60 * 1000;
 
 export async function setSession(adminId: string, data: AdminSessionData): Promise<void> {
   const s = sb();

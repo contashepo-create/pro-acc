@@ -1,7 +1,6 @@
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export interface PlanLimits {
   max_users: number;

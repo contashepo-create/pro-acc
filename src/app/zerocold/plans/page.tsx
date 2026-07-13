@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Package, Plus, Loader2, Check, X, ChevronLeft, RefreshCw, Settings, Users, Building, FileText, DollarSign, Archive } from 'lucide-react';
+import { Package, Plus, Loader2, ChevronLeft, RefreshCw, Settings, Users, DollarSign } from 'lucide-react';
 import Link from 'next/link';
 
 interface Plan {
@@ -81,7 +81,11 @@ export default function PlansPageEnhanced() {
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchPlans(); }, []);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchPlans();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const openEdit = (plan: Plan) => {
     setEditingPlan(plan);
@@ -187,7 +191,7 @@ export default function PlansPageEnhanced() {
                 <div className="bg-[#1a1625] rounded-lg p-2"><span className="text-amber-400/50">مستخدمين: </span><strong>{plan.max_users}</strong></div>
               </div>
               <div className="mt-3 flex flex-wrap gap-1">
-                {Object.entries(plan.features_modules || {}).filter(([_, v]) => v).map(([k]) => (
+                {Object.entries(plan.features_modules || {}).filter(([, v]) => v).map(([k]) => (
                   <span key={k} className="text-[10px] bg-amber-950/30 border border-amber-900/30 text-amber-400 px-2 py-1 rounded-full">{ALL_MODULES.find(m=>m.id===k)?.label || k}</span>
                 ))}
               </div>

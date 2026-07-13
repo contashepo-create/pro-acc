@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(
   request: NextRequest,
@@ -28,7 +27,7 @@ export async function GET(
       .eq('company_id', auth.companyId)
       .order('code');
 
-    return success({ ...data, children: children || [] });
+    return success({ ...(data as Record<string, unknown>), children: children || [] });
   } catch (err) {
     return handleApiError(err);
   }

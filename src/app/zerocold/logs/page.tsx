@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Activity, Search, Loader2, ShieldAlert, RefreshCw,
+  Activity, Search, Loader2, RefreshCw,
   ChevronLeft, Download, Trash2, Filter, Calendar
 } from 'lucide-react';
 import Link from 'next/link';
@@ -70,7 +70,9 @@ export default function ZerocoldLogsPage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleExportCsv = () => {

@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody, requireApiAuth, handleApiError, getPaginationParams } from '@/lib/api-helpers';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {

@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireApiAuth, handleApiError, success, error, parseBody } from '@/lib/api-helpers';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
@@ -104,10 +103,6 @@ export async function POST(request: NextRequest) {
 
     // Send to Telegram bot if configured
     try {
-      const { sendTelegramCode } = await import('@/lib/telegram');
-      // For upgrade requests, we send notification to admin
-      const { getSupabase } = await import('@/lib/supabase-client');
-      // Notify admin via backup_logs? Actually use telegram
       console.log(`New upgrade request: ${newRequest.id} from company ${auth.companyId}`);
     } catch {}
 

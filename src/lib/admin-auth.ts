@@ -7,8 +7,7 @@ export interface AdminPayload {
   role: string;
 }
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function verifyAdminToken(request: NextRequest): Promise<AdminPayload | null> {
   const token = request.cookies.get('admin_token')?.value;

@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, serverError, requireAdminAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
@@ -28,7 +27,7 @@ export async function GET(request: NextRequest) {
 
     // Get company names
     const companyIds = (complaints || []).map((c: any) => c.company_id).filter(Boolean);
-    let companyMap: Record<string, string> = {};
+    const companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
       const { data: companies } = await s.from('companies')
         .select('id, name')

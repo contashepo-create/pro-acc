@@ -34,7 +34,10 @@ export default function AdminAdvertisementsPage() {
     setLoading(false);
   };
 
-  useEffect(() => { loadAds(); }, []);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadAds();
+  }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();

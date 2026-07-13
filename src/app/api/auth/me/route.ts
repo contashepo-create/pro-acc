@@ -3,8 +3,7 @@ import { success, error, unauthorized, serverError, notFound } from '@/lib/api-h
 import { verifyToken } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {

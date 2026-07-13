@@ -22,7 +22,7 @@ function VerifyTelegramPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [countdown, setCountdown] = useState(RESEND_COOLDOWN);
-  const [canResend, setCanResend] = useState(false);
+  const canResend = countdown === 0;
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
@@ -34,14 +34,11 @@ function VerifyTelegramPage() {
   }, [email, router]);
 
   useEffect(() => {
-    if (countdown > 0 && !canResend) {
+    if (countdown > 0) {
       const timer = setTimeout(() => setCountdown((c) => c - 1), 1000);
       return () => clearTimeout(timer);
     }
-    if (countdown === 0 && !canResend) {
-      setCanResend(true);
-    }
-  }, [countdown, canResend]);
+  }, [countdown]);
 
   const sendTelegramCode = async () => {
     try {
@@ -123,7 +120,6 @@ function VerifyTelegramPage() {
 
   const handleResend = async () => {
     if (!canResend) return;
-    setCanResend(false);
     setCountdown(RESEND_COOLDOWN);
     setCode(Array(6).fill(''));
     setError('');

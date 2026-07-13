@@ -3,8 +3,7 @@ import { success, error } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
@@ -51,7 +50,7 @@ export async function GET(request: NextRequest) {
     } catch (e) { console.warn('dashboard recent subs failed', e); }
 
     try {
-      // Try new schema first, fallback to old
+      // eslint-disable-next-line prefer-const
       let { data, error } = await s.from('subscription_plans')
         .select('id, name, price_monthly, is_active')
         .order('price_monthly');
@@ -72,7 +71,7 @@ export async function GET(request: NextRequest) {
     } catch (e) { console.warn('dashboard codes failed', e); }
 
     try {
-      // Try timestamp, fallback to created_at
+      // eslint-disable-next-line prefer-const
       let { data, error } = await s.from('admin_audit_log')
         .select('action, details, created_at')
         .order('created_at', { ascending: false })

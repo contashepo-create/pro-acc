@@ -3,8 +3,7 @@ import { success, handleApiError } from '@/lib/api-helpers';
 import { requireApiAuth } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
@@ -44,7 +43,6 @@ export async function GET(request: NextRequest) {
         }
 
         // AR/AP calculation
-        const arAccount = accounts.find((a: any) => a.type === 'asset'); // fallback
         // More accurate: get 1130 and 2110 codes
         const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', '1130').maybeSingle();
         const { data: apAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', '2110').maybeSingle();

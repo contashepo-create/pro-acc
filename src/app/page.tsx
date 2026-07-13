@@ -5,9 +5,8 @@ import Link from 'next/link';
 import {
   Calculator, Shield, Clock, BarChart3, FileText, Users, Building2,
   CheckCircle, ArrowLeft, Mail, Phone, MessageSquare, AlertCircle,
-  Loader2, Star, Zap, Lock, CreditCard
+  Loader2, Zap
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 
 interface VisitorStats {
   visits: number;
@@ -15,12 +14,9 @@ interface VisitorStats {
 }
 
 export default function LandingPage() {
-  const router = useRouter();
   const [stats, setStats] = useState<VisitorStats | null>(null);
-  const [complaintModal, setComplaintModal] = useState(false);
   const [complaintSent, setComplaintSent] = useState('');
   const [trackingId, setTrackingId] = useState('');
-  const [trackModal, setTrackModal] = useState(false);
   const [trackResult, setTrackResult] = useState<any>(null);
   const [trackLoading, setTrackLoading] = useState(false);
 

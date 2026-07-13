@@ -5,8 +5,7 @@ import { hashPassword } from '@/lib/auth';
 import { resetPasswordSchema } from '@/lib/validation';
 import { createHash } from 'crypto';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {

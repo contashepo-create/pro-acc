@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 // GET /api/auth/cleanup-inactive — called by Vercel Cron daily at 3am
 // POST /api/auth/cleanup-inactive — called manually with x-cron-secret header

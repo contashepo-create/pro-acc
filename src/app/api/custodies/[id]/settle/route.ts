@@ -1,10 +1,9 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, notFound, handleApiError, requireApiAuth, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, notFound, requireApiAuth, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {

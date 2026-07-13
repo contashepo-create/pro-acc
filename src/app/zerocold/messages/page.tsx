@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { MessageSquare, Send, Loader2, Search, Inbox } from 'lucide-react';
+import { MessageSquare, Send, Loader2, Search } from 'lucide-react';
 
 interface Message {
   id: string;
@@ -30,7 +30,11 @@ export default function AdminMessagesPage() {
     setLoading(false);
   };
 
-  useEffect(() => { loadMessages(); }, [companyId]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadMessages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();

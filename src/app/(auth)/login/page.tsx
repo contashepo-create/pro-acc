@@ -23,11 +23,11 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const success = await login(email, password);
-      if (success) {
+      const result = await login(email, password);
+      if (result.success) {
         router.push('/dashboard');
       } else {
-        setError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
+        setError(result.message || 'البريد الإلكتروني أو كلمة المرور غير صحيحة');
       }
     } catch {
       setError('حدث خطأ في الاتصال بالخادم');

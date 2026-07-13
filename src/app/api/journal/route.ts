@@ -1,10 +1,9 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError, getPaginationParams } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { journalEntrySchema } from '@/lib/validation';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
@@ -50,7 +49,7 @@ export async function GET(request: NextRequest) {
 
     // Batch fetch all lines for all entries
     const enrichedIds = enriched.map((e: any) => e.id);
-    let linesMap: Record<string, { count: number; total_debit: number; total_credit: number }> = {};
+    const linesMap: Record<string, { count: number; total_debit: number; total_credit: number }> = {};
     if (enrichedIds.length > 0) {
       const { data: allLines } = await s.from('journal_lines')
         .select('journal_entry_id, debit, credit')

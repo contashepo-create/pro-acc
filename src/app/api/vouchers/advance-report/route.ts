@@ -1,10 +1,8 @@
-// @ts-nocheck
 import { NextRequest } from 'next/server';
 import { success, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
@@ -40,11 +38,17 @@ export async function GET(request: NextRequest) {
       .not('contact_id', 'is', null);
 
     // Aggregate by contact_id
-    const balances = {};
-    const contactIds = [...new Set((lines || []).map((l) => l.contact_id))];
+    interface AdvanceBalance {
+      contact_id: string;
+      contact_name: string;
+      balance: number;
+    }
+    const balances: Record<string, AdvanceBalance> = {};
+    const contactIds = [...new Set((lines || []).map((l: { contact_id: string | null }) => l.contact_id))];
 
     for (const cid of contactIds) {
-      const contactLines = (lines || []).filter((l) => l.contact_id === cid);
+      if (!cid) continue;
+      const contactLines = (lines || []).filter((l: { contact_id: string | null }) => l.contact_id === cid);
       const totalCredit = contactLines.reduce((sum, l) => sum + (parseFloat(l.credit) || 0), 0);
       const totalDebit = contactLines.reduce((sum, l) => sum + (parseFloat(l.debit) || 0), 0);
       const balance = totalCredit - totalDebit;

@@ -41,7 +41,10 @@ export default function AccountsPage() {
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+  }, []);
 
   const handleSave = async () => {
     if (!form.code || !form.name) {

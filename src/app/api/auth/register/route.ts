@@ -1,13 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
 import { hashPassword, createToken } from '@/lib/auth';
 import { registerSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
 import { sendEmail } from '@/lib/email';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHmac } from 'crypto';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 // List of disposable email domains to block
 const DISPOSABLE_DOMAINS = [
@@ -58,7 +57,6 @@ export async function GET(request: NextRequest) {
 
 function verifyCaptchaToken(token: string, userAnswer: number): boolean {
   try {
-    const { createHmac } = require('crypto');
     const secret = process.env.TOKEN_SECRET || 'fallback-secret';
     const decoded = Buffer.from(token, 'base64url').toString();
     const parts = decoded.split(':');
@@ -243,10 +241,7 @@ export async function POST(request: NextRequest) {
         : 'تم إنشاء الحساب بنجاح',
     }, 201);
 
-    response.cookies.set('token', token, {
-      httpOnly: true, secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict', path: '/', maxAge: 86400 * 7,
-    });
+    setAuthCookie(response, 'token', token, 86400 * 7);
 
     return response;
   } catch (err) {

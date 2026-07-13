@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireApiAuth, handleApiError, success, error } from '@/lib/api-helpers';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,7 +33,7 @@ export async function POST(request: NextRequest) {
 
     // Try to upload to Supabase Storage (receipts bucket)
     try {
-      const { data: uploadData, error: uploadError } = await s.storage
+      const { error: uploadError } = await s.storage
         .from('receipts')
         .upload(fileName, buffer, {
           contentType: file.type,

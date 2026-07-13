@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
 export function success<T>(data: T, status = 200) {
@@ -34,8 +33,7 @@ export class AuthError extends Error {
   constructor(message: string) { super(message); this.name = 'AuthError'; }
 }
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function requireApiAuth(request: Request, options: { checkSubscription?: boolean } = {}): Promise<{ companyId: string; userId: string; role: string }> {
   const { extractToken, verifyToken } = await import('@/lib/auth');
@@ -162,4 +160,19 @@ export function getDateRangeParams(url: string | URL): { from: string | null; to
   const from = urlObj.searchParams.get('from') || null;
   const to = urlObj.searchParams.get('to') || null;
   return { from, to };
+}
+
+const cookieDefaults = {
+  httpOnly: true,
+  sameSite: 'lax' as const,
+  path: '/',
+  secure: process.env.NODE_ENV === 'production',
+};
+
+export function setAuthCookie(response: NextResponse, name: string, value: string, maxAge: number) {
+  response.cookies.set(name, value, { ...cookieDefaults, maxAge });
+}
+
+export function clearAuthCookie(response: NextResponse, name: string) {
+  response.cookies.set(name, '', { ...cookieDefaults, maxAge: 0 });
 }

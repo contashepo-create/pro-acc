@@ -35,7 +35,7 @@ function getPool(): Pool {
     ssl: connectionString.includes('supabase')
       ? { rejectUnauthorized: false }
       : undefined,
-    // @ts-ignore — pg accepts dns lookup override
+    // @ts-expect-error - pg PoolConfig doesn't include 'lookup' but it's accepted at runtime
     lookup: dnsLookup,
   });
 

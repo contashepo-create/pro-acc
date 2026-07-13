@@ -18,6 +18,7 @@ function ResetPasswordForm() {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!token) setError('رابط إعادة التعيين غير صالح');
   }, [token]);
 

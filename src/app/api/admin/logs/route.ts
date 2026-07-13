@@ -4,8 +4,7 @@ import { success, error, serverError, parseBody, getPaginationParams, getDateRan
 import { verifyToken } from '@/lib/auth';
 import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {

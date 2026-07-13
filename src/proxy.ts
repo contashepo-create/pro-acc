@@ -16,7 +16,7 @@ async function verifyTokenEdge(token: string): Promise<{ sub: string; role: stri
       if (payloadJson.exp && payloadJson.exp < Math.floor(Date.now() / 1000)) return null;
     } catch { return null; }
     const secret = process.env.TOKEN_SECRET;
-    if (!secret) return payloadJson ? { sub: payloadJson.sub, role: payloadJson.role, exp: payloadJson.exp } : null;
+    if (!secret) return null;
     const encoder = new TextEncoder();
     const keyData = encoder.encode(secret);
     const cryptoKey = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);

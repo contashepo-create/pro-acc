@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Key, Plus, Loader2, Copy, Check, ChevronLeft, ShieldAlert, RefreshCw
+  Key, Plus, Loader2, Copy, Check, ChevronLeft, RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -38,7 +38,11 @@ export default function CodesPage() {
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchCodes(); }, []);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchCodes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const generateCode = async () => {
     setSaving(true);

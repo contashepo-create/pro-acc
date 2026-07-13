@@ -1,9 +1,8 @@
 import { NextRequest } from 'next/server';
-import { success, error, unauthorized, serverError, notFound, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(
   request: NextRequest,

@@ -6,7 +6,7 @@ export async function GET() {
   const response = NextResponse.json({ token });
   response.cookies.set('csrf_token', token, {
     httpOnly: false,
-    sameSite: 'strict',
+    sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
   });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   LayoutDashboard,
   Calculator,
@@ -15,9 +15,6 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
-  MessageSquare,
-  MessageSquareWarning,
-  CreditCard,
 } from 'lucide-react';
 import { useSidebarStore } from '@/store/sidebar-store';
 

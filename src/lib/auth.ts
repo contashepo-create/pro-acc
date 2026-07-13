@@ -1,4 +1,4 @@
-import { scryptSync, randomBytes, timingSafeEqual, createHmac, randomInt } from 'crypto';
+import { scryptSync, randomBytes, timingSafeEqual, createHmac } from 'crypto';
 
 function cleanEnv(s: string): string {
   return (s || '').replace(/^\uFEFF/, '').trim();

@@ -1,11 +1,10 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, parseBody, setAuthCookie, clearAuthCookie } from '@/lib/api-helpers';
 import { verifyPassword, createToken } from '@/lib/auth';
 import { getSession, deleteSession } from '@/lib/admin-session';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {
@@ -66,21 +65,9 @@ export async function POST(request: NextRequest) {
       token,
     });
 
-    response.cookies.set('admin_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 86400,
-      path: '/',
-    });
+    setAuthCookie(response, 'admin_token', token, 86400);
 
-    response.cookies.set('admin_session', '', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 0,
-      path: '/',
-    });
+    clearAuthCookie(response, 'admin_session');
 
     return response;
   } catch (err) {

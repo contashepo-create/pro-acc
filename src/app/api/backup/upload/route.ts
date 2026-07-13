@@ -3,8 +3,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { requireApiAuth, handleApiError, error, success } from '@/lib/api-helpers';
 import { createHmac } from 'crypto';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 const BACKUP_SECRET = process.env.TOKEN_SECRET || 'backup-secret';
 

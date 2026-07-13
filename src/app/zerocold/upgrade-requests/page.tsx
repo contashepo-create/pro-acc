@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, Loader2, Check, X, Clock, DollarSign, Image as ImageIcon, Calendar, RefreshCw } from 'lucide-react';
+import { ChevronLeft, Loader2, Check, X, DollarSign, Image as ImageIcon, Calendar, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 
 interface UpgradeRequest {
@@ -40,7 +40,11 @@ export default function UpgradeRequestsPage() {
     } catch {} finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchRequests(); }, [filter]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
 
   const handleAction = async (id: string, status: 'approved' | 'rejected', notes?: string) => {
     setProcessing(id);

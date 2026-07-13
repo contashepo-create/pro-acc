@@ -3,8 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Building2, Search, Loader2, ShieldAlert, RefreshCw,
-  CheckCircle, XCircle, Eye, ChevronLeft
+  Building2, Search, Loader2, RefreshCw,
+  CheckCircle, XCircle, ChevronLeft
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -56,7 +56,9 @@ export default function ZerocoldCompaniesPage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchCompanies();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleStatus = async (companyId: string, currentStatus: string) => {

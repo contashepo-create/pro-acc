@@ -5,8 +5,7 @@ import { forgotPasswordSchema } from '@/lib/validation';
 import { randomBytes, createHash } from 'crypto';
 import { sendPasswordResetEmail } from '@/lib/email';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,9 +40,18 @@ export async function POST(request: NextRequest) {
 
     const resetUrl = `${request.nextUrl.origin}/reset-password?token=${rawToken}`;
 
-    await sendPasswordResetEmail(email, resetUrl);
+    const emailSent = await sendPasswordResetEmail(email, resetUrl);
 
-    // Never return resetUrl even in dev (was leaking token)
+    // In development or when SMTP is not configured, return the reset URL
+    // so the user can still reset their password
+    if (!emailSent && process.env.NODE_ENV !== 'production') {
+      return success({ message: 'لم يتم تكوين خادم البريد. استخدم الرابط أدناه لإعادة التعيين', resetUrl });
+    }
+
+    if (!emailSent) {
+      return success({ message: 'تعذر إرسال البريد الإلكتروني. تواصل مع مدير النظام' });
+    }
+
     return success({ message: 'تم إرسال رابط إعادة التعيين إلى بريدك الإلكتروني' });
   } catch (err) {
     return serverError(err);

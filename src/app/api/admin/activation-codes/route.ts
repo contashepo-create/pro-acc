@@ -4,8 +4,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 if (!process.env.PRO_ACCOUNTANT_LICENSE_SALT) {
   throw new Error('PRO_ACCOUNTANT_LICENSE_SALT environment variable is required');
@@ -37,7 +36,7 @@ export async function GET(req: NextRequest) {
     if (err) throw err;
 
     const companyIds = (codes || []).map((c: any) => c.used_by).filter(Boolean);
-    let companyMap: Record<string, string> = {};
+    const companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
       const { data: companies } = await s.from('companies')
         .select('id, name')

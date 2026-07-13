@@ -2,12 +2,11 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireApiAuth(req);
+    await requireApiAuth(req);
     const { id } = await params;
     const s = sb();
 
@@ -43,7 +42,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireApiAuth(req);
+    await requireApiAuth(req);
     const { id } = await params;
     const data = await parseBody(req);
     const s = sb();
@@ -67,7 +66,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireApiAuth(req);
+    await requireApiAuth(req);
     const { id } = await params;
     const s = sb();
 

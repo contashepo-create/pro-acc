@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Database, HardDrive, Table2, Upload, Download, Loader2,
-  ShieldAlert, RefreshCw, ChevronLeft, AlertTriangle, CheckCircle, XCircle
+  RefreshCw, ChevronLeft, AlertTriangle, CheckCircle
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -60,7 +60,9 @@ export default function ZerocoldDatabasePage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDbInfo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleBackup = async () => {

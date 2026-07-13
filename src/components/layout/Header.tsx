@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Sun, Moon, Search, Bell, ChevronDown, LogOut, User, Settings,
+  Sun, Moon, Search, Bell, ChevronDown, LogOut, Settings,
   Clock, Calendar, Menu, ShieldAlert,
 } from 'lucide-react';
 import { useThemeStore } from '@/store/theme-store';

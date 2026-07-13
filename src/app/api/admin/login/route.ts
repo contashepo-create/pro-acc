@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody } from '@/lib/api-helpers';
+import { success, error, parseBody, setAuthCookie } from '@/lib/api-helpers';
 import { verifyPassword } from '@/lib/auth';
 import { adminLoginSchema } from '@/lib/validation';
 import { sendTelegramCode } from '@/lib/telegram';
@@ -7,8 +7,7 @@ import { setSession, updateSession } from '@/lib/admin-session';
 import { getSupabase } from '@/lib/supabase-client';
 import { randomInt } from 'crypto';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 const DEV_EMAIL = 'conta.moha@gmail.com';
 
@@ -138,13 +137,7 @@ export async function POST(request: NextRequest) {
       debugCode: !sent ? code : undefined, // Only return code if Telegram failed
     });
 
-    response.cookies.set('admin_session', a.id, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 1800,
-      path: '/',
-    });
+    setAuthCookie(response, 'admin_session', a.id, 1800);
 
     return response;
   } catch (err: any) {

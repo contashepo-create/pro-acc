@@ -7,7 +7,7 @@ interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
 
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => Promise<void>;
   setUser: (user: User | null) => void;
   setCompany: (company: Company | null) => void;
@@ -28,23 +28,19 @@ export const useAuthStore = create<AuthState>((set) => ({
         body: JSON.stringify({ email, password }),
       });
 
-      if (!res.ok) {
-        return false;
-      }
-
       const body = await res.json();
 
-      if (!body.success) {
-        return false;
+      if (!res.ok || !body.success) {
+        return { success: false, message: body.message || 'البريد الإلكتروني أو كلمة المرور غير صحيحة' };
       }
 
       const { user, company } = body.data;
 
       set({ user, company, isAuthenticated: true });
 
-      return true;
+      return { success: true };
     } catch {
-      return false;
+      return { success: false, message: 'حدث خطأ في الاتصال بالخادم' };
     }
   },
 

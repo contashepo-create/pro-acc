@@ -21,7 +21,14 @@ export function SearchInput({
   className = '',
 }: SearchInputProps) {
   const [localValue, setLocalValue] = useState(value);
+  const [prevValue, setPrevValue] = useState(value);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Sync local state when prop changes (React-recommended pattern instead of useEffect)
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setLocalValue(value);
+  }
 
   const debouncedOnChange = useCallback(
     (val: string) => {
@@ -38,10 +45,6 @@ export function SearchInput({
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, []);
-
-  useEffect(() => {
-    setLocalValue(value);
-  }, [value]);
 
   const handleChange = (val: string) => {
     setLocalValue(val);

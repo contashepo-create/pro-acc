@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Users, Search, Loader2, ShieldAlert, RefreshCw,
+  Users, Search, Loader2, RefreshCw,
   CheckCircle, XCircle, ChevronLeft, Filter, Eye
 } from 'lucide-react';
 import Link from 'next/link';
@@ -71,7 +71,9 @@ export default function ZerocoldUsersPage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleStatus = async (userId: string, currentStatus: string) => {

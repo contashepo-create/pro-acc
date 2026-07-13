@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { MessageSquareWarning, Loader2, Search, CheckCircle, Reply, AlertCircle, Lightbulb } from 'lucide-react';
+import { MessageSquareWarning, Loader2, CheckCircle, Reply, AlertCircle, Lightbulb } from 'lucide-react';
 
 interface Complaint {
   id: string;
@@ -29,7 +29,11 @@ export default function AdminComplaintsPage() {
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, [filter]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
 
   const handleReply = async (id: string) => {
     if (!replyText.trim()) return;

@@ -26,7 +26,7 @@ function getTransporter(): nodemailer.Transporter | null {
 export async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
   const t = getTransporter();
   if (!t) {
-    console.warn('SMTP not configured — email not sent');
+    console.warn('SMTP not configured — email not sent. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env.local');
     return false;
   }
   try {

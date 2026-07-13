@@ -1,10 +1,9 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword, createToken } from '@/lib/auth';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 const DEFAULT_ACCOUNTS = [
   { code: '1000', name: 'الأصول', type: 'asset' },
@@ -167,13 +166,7 @@ export async function POST(request: NextRequest) {
       setupProtected: !!process.env.NEXT_PUBLIC_SETUP_TOKEN,
     }, 201);
 
-    response.cookies.set('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 86400 * 7,
-      path: '/',
-    });
+    setAuthCookie(response, 'token', token, 86400 * 7);
 
     return response;
   } catch (err) {

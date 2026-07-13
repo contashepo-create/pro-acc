@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
@@ -34,7 +33,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { companyId, userId } = await requireApiAuth(request);
+    const { companyId } = await requireApiAuth(request);
     const body = await parseBody<{ subject: string; body: string }>(request);
 
     if (!body.subject?.trim()) return error('عنوان الرسالة مطلوب');

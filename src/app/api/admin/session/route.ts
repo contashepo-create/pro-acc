@@ -3,8 +3,7 @@ import { success, error } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   const token = request.cookies.get('admin_token')?.value || '';

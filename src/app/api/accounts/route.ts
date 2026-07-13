@@ -3,8 +3,7 @@ import { success, error, requireApiAuth, handleApiError, parseBody } from '@/lib
 import { getSupabase } from '@/lib/supabase-client';
 import { accountSchema } from '@/lib/validation';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {

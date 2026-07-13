@@ -3,8 +3,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 function requireAdmin(request: NextRequest) {
   const token = request.cookies.get('admin_token')?.value;

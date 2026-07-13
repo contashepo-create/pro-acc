@@ -1,10 +1,10 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 function clean(s: string): string {
   return (s || '').replace(/^\uFEFF/, '').trim();
 }
 
-let _client: ReturnType<typeof createClient> | null = null;
+let _client: SupabaseClient | null = null;
 
 /**
  * SERVER-ONLY Supabase client using service_role key
@@ -15,7 +15,7 @@ let _client: ReturnType<typeof createClient> | null = null;
  * 
  * SECURITY: Never use this client on the client-side (browser)
  */
-export function getSupabase() {
+export function getSupabase(): SupabaseClient {
   if (typeof window !== 'undefined') {
     throw new Error('getSupabase() is server-only! Use createClientClient() for browser');
   }

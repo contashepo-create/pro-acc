@@ -23,8 +23,27 @@ function VerifyMasterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [attempts, setAttempts] = useState(0);
-  const [blockedUntil, setBlockedUntil] = useState<number | null>(null);
+  const [attempts, setAttempts] = useState(() => {
+    if (typeof window === 'undefined') return 0;
+    const saved = localStorage.getItem('zerocold_master_attempts');
+    return saved ? parseInt(saved, 10) : 0;
+  });
+  const [blockedUntil, setBlockedUntil] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const blocked = localStorage.getItem('zerocold_master_blocked');
+    if (blocked) {
+      const until = parseInt(blocked, 10);
+      if (Date.now() < until) return until;
+      localStorage.removeItem('zerocold_master_blocked');
+    }
+    return null;
+  });
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!email) {
@@ -34,29 +53,15 @@ function VerifyMasterPage() {
   }, [email, router]);
 
   useEffect(() => {
-    const blocked = localStorage.getItem('zerocold_master_blocked');
-    if (blocked) {
-      const until = parseInt(blocked, 10);
-      if (Date.now() < until) {
-        setBlockedUntil(until);
-      } else {
-        localStorage.removeItem('zerocold_master_blocked');
-      }
-    }
-    const savedAttempts = localStorage.getItem('zerocold_master_attempts');
-    if (savedAttempts) {
-      setAttempts(parseInt(savedAttempts, 10));
-    }
-  }, []);
-
-  useEffect(() => {
-    if (blockedUntil && Date.now() >= blockedUntil) {
+    if (blockedUntil && now >= blockedUntil) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBlockedUntil(null);
+       
       setAttempts(0);
       localStorage.removeItem('zerocold_master_blocked');
       localStorage.removeItem('zerocold_master_attempts');
     }
-  }, [blockedUntil]);
+  }, [blockedUntil, now]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -117,7 +122,7 @@ function VerifyMasterPage() {
 
   const formatBlockTime = () => {
     if (!blockedUntil) return '';
-    const remaining = Math.max(0, blockedUntil - Date.now());
+    const remaining = Math.max(0, blockedUntil - now);
     const mins = Math.ceil(remaining / 60000);
     if (mins >= 60) {
       return `${Math.floor(mins / 60)} ساعة و ${mins % 60} دقيقة`;
@@ -159,7 +164,7 @@ function VerifyMasterPage() {
                   className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 placeholder-amber-700/50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm pl-10"
                   dir="ltr"
                   autoFocus
-                  disabled={!!(blockedUntil && Date.now() < blockedUntil)}
+                  disabled={!!(blockedUntil && now < blockedUntil)}
                 />
                 <button
                   type="button"
@@ -177,7 +182,7 @@ function VerifyMasterPage() {
               </div>
             )}
 
-            {blockedUntil && Date.now() < blockedUntil && (
+            {blockedUntil && now < blockedUntil && (
               <div className="bg-red-950/40 border border-red-800/40 text-red-400 text-sm rounded-xl px-4 py-2.5 text-center">
                 <Lock size={16} className="inline ml-1.5" />
                 تم الحظر. المتبقي: {formatBlockTime()}
@@ -186,7 +191,7 @@ function VerifyMasterPage() {
 
             <button
               type="submit"
-              disabled={loading || (!!(blockedUntil && Date.now() < blockedUntil))}
+              disabled={loading || (!!(blockedUntil && now < blockedUntil))}
               className="w-full py-2.5 bg-gradient-to-l from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 disabled:from-red-800 disabled:to-rose-900 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all text-sm shadow-lg shadow-red-900/20 flex items-center justify-center gap-2"
             >
               {loading ? (

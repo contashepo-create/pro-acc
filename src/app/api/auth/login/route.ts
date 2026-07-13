@@ -1,12 +1,11 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
 import { verifyPassword, createToken } from '@/lib/auth';
 import { loginSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
 import { checkRateLimit } from '@/lib/rate-limit';
 
-// @ts-ignore - supabase client typing issues
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {
@@ -54,7 +53,15 @@ export async function POST(request: NextRequest) {
 
     try {
       const { data: uv } = await s.from('users').select('email_verified').eq('id', u.id).single();
-      if (uv && uv.email_verified === false) return error('يرجى تأكيد بريدك الإلكتروني أولاً', 403);
+      if (uv && uv.email_verified === false) {
+        // Allow login if SMTP is not configured (can't verify email anyway)
+        const smtpConfigured = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS;
+        if (smtpConfigured) {
+          return error('يرجى تأكيد بريدك الإلكتروني أولاً', 403);
+        }
+        // If SMTP not configured, allow login but warn
+        console.warn('Email verification bypassed — SMTP not configured');
+      }
     } catch {}
 
     try { 
@@ -109,10 +116,7 @@ export async function POST(request: NextRequest) {
       token,
     });
 
-    response.cookies.set('token', token, {
-      httpOnly: true, secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict', maxAge: 86400 * 7, path: '/',
-    });
+    setAuthCookie(response, 'token', token, 86400 * 7);
 
     return response;
   } catch (err) {

@@ -3,8 +3,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, getPaginationParams } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
@@ -31,7 +30,7 @@ export async function GET(request: NextRequest) {
 
     // Get user counts per company
     const companyIds = (companies || []).map((c: any) => c.id);
-    let userCountMap: Record<string, number> = {};
+    const userCountMap: Record<string, number> = {};
     if (companyIds.length > 0) {
       const { data: users } = await s.from('users')
         .select('company_id')
