@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import {
   Sun, Moon, Search, Bell, ChevronDown, LogOut, Settings,
@@ -77,6 +78,18 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
     logout();
     router.push('/login');
   };
+
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (userMenuOpen && userMenuRef.current) {
+      const rect = userMenuRef.current.getBoundingClientRect();
+      setDropdownPosition({
+        top: rect.bottom + 8,
+        left: Math.max(10, rect.left - 180), // Adjust to show fully
+      });
+    }
+  }, [userMenuOpen]);
 
   return (
     <>
@@ -190,11 +203,56 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
                 <ChevronDown size={14} className="text-text-muted hidden lg:block" />
               </button>
 
-              {userMenuOpen && (
-                <div className="fixed inset-0 z-[99990] bg-transparent" onClick={() => setUserMenuOpen(false)} style={{ pointerEvents: 'auto' }} />
+              {userMenuOpen && typeof window !== 'undefined' && createPortal(
+                <>
+                  <div className="fixed inset-0 z-[99980] bg-transparent" onClick={() => setUserMenuOpen(false)} style={{ pointerEvents: 'auto' }} />
+                  <div className="fixed w-64 border border-border rounded-xl shadow-2xl py-1 z-[99999] animate-[fade-in_0.15s_ease-out]" 
+                       style={{ 
+                         top: `${dropdownPosition.top}px`, 
+                         left: `${dropdownPosition.left}px`,
+                         backgroundColor: 'var(--color-bg-card)', 
+                         boxShadow: '0 30px 80px rgba(0,0,0,0.5)', 
+                         border: '1px solid var(--color-border)',
+                       }}>
+                    <div className="px-4 py-3 border-b border-border">
+                      <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
+                      <div className="text-xs text-text-muted">{user?.email || ''}</div>
+                      <div className="text-[11px] text-text-muted mt-0.5">
+                        {user?.role === 'admin' ? 'مدير النظام' : 'محاسب'}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => { setUserMenuOpen(false); router.push('/settings'); }}
+                      className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
+                    >
+                      <Settings size={16} />
+                      الإعدادات
+                    </button>
+                    {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
+                      <button
+                        onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
+                        className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
+                      >
+                        <ShieldAlert size={16} />
+                        لوحة المطور
+                      </button>
+                    )}
+                    <div className="border-t border-border mt-1 pt-1">
+                      <button
+                        onClick={() => { setUserMenuOpen(false); handleLogout(); }}
+                        className="w-full text-right px-4 py-2.5 text-sm text-danger hover:bg-danger-light/20 flex items-center gap-3 transition-colors"
+                      >
+                        <LogOut size={16} />
+                        تسجيل الخروج
+                      </button>
+                    </div>
+                  </div>
+                </>,
+                document.body
               )}
-              {userMenuOpen && (
-                <div className="absolute left-0 top-full mt-2 w-64 border border-border rounded-xl shadow-2xl py-1 z-[99999] animate-[fade-in_0.15s_ease-out]" style={{ backgroundColor: 'var(--color-bg-card)', boxShadow: '0 30px 80px rgba(0,0,0,0.5)', border: '1px solid var(--color-border)', isolation: 'isolate' }}>
+              {/* Old dropdown kept for reference but hidden - will be removed */}
+              {false && userMenuOpen && (
+                <div className="absolute left-0 top-full mt-2 w-64 border border-border rounded-xl shadow-2xl py-1 z-[10000] animate-[fade-in_0.15s_ease-out] isolate" style={{ backgroundColor: 'var(--color-bg-card)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', border: '1px solid var(--color-border)' }}>
                   <div className="px-4 py-3 border-b border-border">
                     <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
                     <div className="text-xs text-text-muted">{user?.email || ''}</div>
