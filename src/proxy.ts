@@ -15,8 +15,14 @@ async function verifyTokenEdge(token: string): Promise<{ sub: string; role: stri
       payloadJson = JSON.parse(payloadStr);
       if (payloadJson.exp && payloadJson.exp < Math.floor(Date.now() / 1000)) return null;
     } catch { return null; }
+<<<<<<< Updated upstream
     const secret = process.env.TOKEN_SECRET;
     if (!secret) return null;
+=======
+    const rawSecret = process.env.TOKEN_SECRET;
+    const secret = (rawSecret || '').replace(/^\uFEFF/, '').trim();
+    if (!secret) return payloadJson ? { sub: payloadJson.sub, role: payloadJson.role, exp: payloadJson.exp } : null;
+>>>>>>> Stashed changes
     const encoder = new TextEncoder();
     const keyData = encoder.encode(secret);
     const cryptoKey = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
