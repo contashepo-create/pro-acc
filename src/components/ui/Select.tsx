@@ -98,7 +98,7 @@ export function Select({
         </button>
 
         {isOpen && (
-          <div className="absolute z-50 mt-1 w-full bg-bg-card border border-border rounded-lg shadow-dropdown overflow-hidden">
+          <div className="absolute z-[100] mt-1 w-full bg-bg-card border border-border rounded-lg shadow-dropdown overflow-hidden">
             {searchable && (
               <div className="p-2 border-b border-border">
                 <div className="relative">

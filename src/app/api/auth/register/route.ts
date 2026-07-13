@@ -174,6 +174,15 @@ export async function POST(request: NextRequest) {
     if (companyErr || !company) return error('فشل إنشاء الشركة', 500);
     const co: any = company;
 
+    // Create default chart of accounts for new company
+    try {
+      const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
+      await createDefaultChartOfAccounts(s, co.id);
+    } catch (e) {
+      console.warn('Failed to create default chart of accounts:', e);
+      // Don't fail registration if chart creation fails
+    }
+
     // Try with email_verified column, fall back without
     const insertData: any = {
       company_id: co.id, name, email: email.toLowerCase(), password_hash: passwordHash,

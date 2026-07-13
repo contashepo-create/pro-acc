@@ -17,6 +17,7 @@ export default function AccountsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
 
@@ -46,6 +47,45 @@ export default function AccountsPage() {
     fetchData();
   }, []);
 
+  const handleOpenAdd = () => {
+    setEditingAccount(null);
+    setForm({ code: '', name: '', nameEn: '', type: 'asset', parentId: '' });
+    setSaveError('');
+    setShowModal(true);
+  };
+
+  const handleOpenEdit = (account: any) => {
+    setEditingAccount(account);
+    setForm({
+      code: account.code || '',
+      name: account.name || '',
+      nameEn: account.name_en || '',
+      type: account.type || 'asset',
+      parentId: account.parent_id || '',
+    });
+    setSaveError('');
+    setShowModal(true);
+  };
+
+  const handleSeedDefaults = async () => {
+    if (!confirm('هل تريد إنشاء الحسابات الرئيسية الافتراضية؟ سيتم إنشاء 50 حساب محاسبي معروف')) return;
+    setLoading(true);
+    try {
+      const res = await fetch('/api/accounts/seed-default', { method: 'POST' });
+      const json = await res.json();
+      if (json.success) {
+        alert(json.data.message);
+        fetchData();
+      } else {
+        alert(json.message || 'فشل إنشاء الحسابات');
+      }
+    } catch {
+      alert('فشل الاتصال بالخادم');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!form.code || !form.name) {
       setSaveError('رمز واسم الحساب مطلوبان');
@@ -58,8 +98,12 @@ export default function AccountsPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const res = await fetch('/api/accounts', {
-        method: 'POST',
+      const isEditing = !!editingAccount;
+      const url = isEditing ? `/api/accounts/${editingAccount.id}` : '/api/accounts';
+      const method = isEditing ? 'PUT' : 'POST';
+      
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           code: form.code,
@@ -73,6 +117,7 @@ export default function AccountsPage() {
       if (json.success) {
         setShowModal(false);
         setForm({ code: '', name: '', nameEn: '', type: 'asset', parentId: '' });
+        setEditingAccount(null);
         fetchData();
       } else {
         setSaveError(json.message || 'فشل الحفظ');
@@ -116,24 +161,27 @@ export default function AccountsPage() {
     <div className="space-y-6">
       <PageHeader
         title="دليل الحسابات"
-        description="إدارة شجرة الحسابات المحاسبية"
+        description="إدارة شجرة الحسابات المحاسبية - 50 حساب افتراضي معروف"
         actions={
-          <Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>
-            إضافة حساب
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={handleSeedDefaults}>إنشاء الحسابات الافتراضية</Button>
+            <Button onClick={handleOpenAdd} leftIcon={<Plus size={18} />}>
+              إضافة حساب
+            </Button>
+          </div>
         }
       />
 
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>}
 
       {flatData.length === 0 ? (
-        <EmptyState title="لا توجد حسابات" description="أضف حساباً جديداً لبدء دليل الحسابات" actionLabel="إضافة حساب" onAction={() => setShowModal(true)} />
+        <EmptyState title="لا توجد حسابات" description="اضغط إنشاء الحسابات الافتراضية للحصول على 50 حساب معروف أو أضف حساباً جديداً" actionLabel="إنشاء الحسابات الافتراضية" onAction={handleSeedDefaults} />
       ) : (
-        <DataTable columns={columns} data={flatData} searchable searchKeys={['name', 'code']} />
+        <DataTable columns={[...columns, { key: 'actions', label: 'إجراءات', render: (row:any) => <Button variant="ghost" size="sm" onClick={() => handleOpenEdit(row)}>تعديل</Button> }]} data={flatData} searchable searchKeys={['name', 'code']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة حساب جديد" size="lg"
-        footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving} leftIcon={<Save size={16} />}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editingAccount ? `تعديل حساب ${editingAccount.code}` : "إضافة حساب جديد"} size="lg"
+        footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving} leftIcon={<Save size={16} />}>{saving ? 'جاري الحفظ...' : (editingAccount ? 'تحديث' : 'حفظ')}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="رمز الحساب (4 أرقام)" placeholder="مثال: 1130" value={form.code} onChange={(e:any)=>setForm({...form, code: e.target.value})} />
           <Select label="النوع" value={form.type} onChange={(value)=>setForm({...form, type: value})} options={[
