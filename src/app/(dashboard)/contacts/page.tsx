@@ -20,7 +20,7 @@ export default function ContactsPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"name": "", "type": "", "phone": "", "email": ""});
 
   const handleSave = async () => {
     setSaving(true);

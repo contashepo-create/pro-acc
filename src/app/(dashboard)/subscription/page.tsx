@@ -207,26 +207,26 @@ export default function SubscriptionPageEnhanced() {
               </div>
               <div>
                 <label className="text-xs text-text-muted">المبلغ المحول</label>
-                <Input type="number" value={form.amount} onChange={(e:any)=>setForm({...form, amount: e.target.value})} />
+                <Input type="number" value={form.amount} onChange={(value)=>setForm({...form, amount: value})} />
               </div>
               <div>
                 <label className="text-xs text-text-muted">تاريخ التحويل</label>
-                <Input type="date" value={form.date} onChange={(e:any)=>setForm({...form, date: e.target.value})} />
+                <Input type="date" value={form.date} onChange={(value)=>setForm({...form, date: value})} />
               </div>
               <div>
                 <label className="text-xs text-text-muted">وقت التحويل</label>
-                <Input type="time" value={form.time} onChange={(e:any)=>setForm({...form, time: e.target.value})} />
+                <Input type="time" value={form.time} onChange={(value)=>setForm({...form, time: value})} />
               </div>
             </div>
 
             <div>
               <label className="text-xs text-text-muted">رابط صورة الإيصال (ارفع الصورة على أي موقع وانسخ الرابط أو اتركه فارغ وأرسل الصورة للدعم)</label>
-              <Input placeholder="https://..." value={form.receipt_url} onChange={(e:any)=>setForm({...form, receipt_url: e.target.value})} />
+              <Input placeholder="https://..." value={form.receipt_url} onChange={(value)=>setForm({...form, receipt_url: value})} />
             </div>
 
             <div>
               <label className="text-xs text-text-muted">ملاحظات إضافية</label>
-              <textarea value={form.notes} onChange={(e)=>setForm({...form, notes: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm h-20" placeholder="اكتب تفاصيل إضافية..."></textarea>
+              <textarea value={form.notes} onChange={(value)=>setForm({...form, notes: value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm h-20" placeholder="اكتب تفاصيل إضافية..."></textarea>
             </div>
 
             <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 text-xs text-amber-300">

@@ -21,7 +21,7 @@ export default function BoqPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"project_id": "", "description": "", "quantity": "", "unit_price": ""});
 
   const handleSave = async () => {
     setSaving(true);

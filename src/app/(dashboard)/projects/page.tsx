@@ -22,7 +22,7 @@ export default function ProjectsPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"name": "", "contract_value": "", "client_id": "", "start_date": ""});
 
   const handleSave = async () => {
     setSaving(true);

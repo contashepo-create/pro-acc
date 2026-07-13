@@ -21,7 +21,7 @@ export default function DisbursementPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"amount": "", "bank_safe_id": "", "reason": "", "type": ""});
 
   const handleSave = async () => {
     setSaving(true);

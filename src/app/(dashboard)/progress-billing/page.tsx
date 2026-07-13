@@ -21,7 +21,7 @@ export default function ProgressBillingPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"project_id": "", "description": "", "gross_amount": ""});
 
   const handleSave = async () => {
     setSaving(true);

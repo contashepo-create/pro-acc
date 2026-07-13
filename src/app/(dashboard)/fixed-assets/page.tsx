@@ -22,7 +22,7 @@ export default function FixedAssetsPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"name": "", "code": "", "purchase_cost": "", "useful_life_years": ""});
 
   const handleSave = async () => {
     setSaving(true);

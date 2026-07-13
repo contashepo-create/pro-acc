@@ -22,7 +22,7 @@ export default function JournalPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"date": "", "description": ""});
 
   const handleSave = async () => {
     setSaving(true);

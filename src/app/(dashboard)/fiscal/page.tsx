@@ -20,7 +20,7 @@ export default function FiscalPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"name": "", "start_date": "", "end_date": ""});
 
   const handleSave = async () => {
     setSaving(true);

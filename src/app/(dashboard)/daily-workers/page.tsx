@@ -21,7 +21,7 @@ export default function DailyWorkersPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"name": "", "phone": "", "daily_wage": ""});
 
   const handleSave = async () => {
     setSaving(true);

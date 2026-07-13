@@ -21,7 +21,7 @@ export default function CustodiesPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"employee_id": "", "amount": "", "bank_safe_id": "", "reason": ""});
 
   const handleSave = async () => {
     setSaving(true);

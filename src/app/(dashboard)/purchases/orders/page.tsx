@@ -23,7 +23,7 @@ export default function PurchaseOrdersPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"supplier_id": "", "date": "", "total": ""});
 
   const handleSave = async () => {
     setSaving(true);

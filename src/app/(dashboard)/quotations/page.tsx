@@ -22,7 +22,7 @@ export default function QuotationsPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"client_id": "", "date": "", "total": ""});
 
   const handleSave = async () => {
     setSaving(true);

@@ -21,7 +21,7 @@ export default function EmployeesPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"name": "", "phone": "", "email": "", "salary": "", "department": ""});
 
   const handleSave = async () => {
     setSaving(true);

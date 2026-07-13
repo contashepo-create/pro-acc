@@ -21,7 +21,7 @@ export default function CashPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"type": "", "amount": "", "account_id": "", "reason": ""});
 
   const handleSave = async () => {
     setSaving(true);

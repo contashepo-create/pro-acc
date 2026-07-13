@@ -22,7 +22,7 @@ export default function InventoryPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"code": "", "name": "", "unit": "", "quantity": "", "unit_price": ""});
 
   const handleSave = async () => {
     setSaving(true);

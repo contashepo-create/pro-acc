@@ -23,7 +23,7 @@ export default function InvoicesPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({"client_id": "", "date": "", "due_date": "", "subtotal": ""});
 
   const handleSave = async () => {
     setSaving(true);
