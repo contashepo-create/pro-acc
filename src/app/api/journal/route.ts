@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     const accountId = url.searchParams.get('account_id');
 
     let query = s.from('journal_entries')
-      .select('id, number, date, type, description, reference, created_by, created_at', { count: 'exact' })
+      .select('id, number, date, type, description, created_by, created_at', { count: 'exact' })
       .eq('company_id', auth.companyId);
 
     if (dateFrom) query = query.gte('date', dateFrom);
@@ -121,11 +121,55 @@ export async function POST(request: NextRequest) {
     const { data: entryRes, error: entryErr } = await s.from('journal_entries')
       .insert({
         company_id: auth.companyId, number, date, type,
-        description: description || null, reference: reference || null, created_by: auth.userId,
+        description: description || null, created_by: auth.userId,
       })
-      .select('id, number, date, type, description, reference, created_at')
+      .select('id, number, date, type, description, created_at')
       .single();
-    if (entryErr) throw entryErr;
+    if (entryErr) {
+      // Fallback without created_by if column missing, try with reference
+      try {
+        const { data: fallback } = await s.from('journal_entries')
+          .insert({
+            company_id: auth.companyId, number, date, type,
+            description: description || null,
+          })
+          .select('id, number, date, type, description, created_at')
+          .single();
+        if (fallback) {
+          // Use fallback
+          const entryId = fallback.id;
+          // Continue with lines...
+          let totalDebit = 0;
+          let totalCredit = 0;
+          for (const line of lines) {
+            const { data: account } = await s.from('accounts')
+              .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+            if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
+            const { error: lineErr } = await s.from('journal_lines').insert({
+              journal_entry_id: entryId, account_id: account.id, account_code: line.accountCode,
+              debit: line.debit, credit: line.credit, description: line.description || null,
+            });
+            if (lineErr) throw lineErr;
+            totalDebit += line.debit;
+            totalCredit += line.credit;
+          }
+          if (Math.abs(totalDebit - totalCredit) > 0.01) {
+            await s.from('journal_lines').delete().eq('journal_entry_id', entryId);
+            await s.from('journal_entries').delete().eq('id', entryId);
+            return error(`خطأ في الموازنة: مجموع الديون (${totalDebit}) لا يساوي مجموع الدائنين (${totalCredit})`);
+          }
+          const { data: linesRes } = await s.from('journal_lines')
+            .select('id, account_code, accounts(name, type), debit, credit, description')
+            .eq('journal_entry_id', entryId).order('id');
+          const formattedLines = (linesRes || []).map((l: any) => ({
+            id: l.id, account_code: l.account_code, account_name: (l.accounts as any)?.name || null,
+            account_type: (l.accounts as any)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
+          }));
+          return success({ ...fallback, totalDebit, totalCredit, lines: formattedLines }, 201);
+        }
+      } catch {}
+      throw entryErr;
+    }
 
     const entryId = entryRes.id;
 
