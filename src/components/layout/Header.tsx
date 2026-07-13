@@ -59,6 +59,15 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Close search when user menu opens and vice versa
+  useEffect(() => {
+    if (userMenuOpen) setSearchOpen(false);
+  }, [userMenuOpen]);
+
+  useEffect(() => {
+    if (searchOpen) setUserMenuOpen(false);
+  }, [searchOpen]);
+
   const initials = user?.name
     ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
     : 'مس';
@@ -124,22 +133,24 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
           </div>
 
           {/* Actions + User */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 relative">
             <button
               onClick={() => setSearchOpen(!searchOpen)}
-              className="btn btn-ghost btn-icon relative"
+              className="btn btn-ghost btn-icon relative z-10"
               title="بحث"
             >
               <Search size={17} />
             </button>
             {searchOpen && (
-              <input
-                type="text"
-                placeholder="بحث..."
-                className="input-base w-28 sm:w-36 md:w-48 animate-[fade-in_0.15s_ease-out]"
-                autoFocus
-                onBlur={() => setTimeout(() => setSearchOpen(false), 200)}
-              />
+              <div className="absolute right-0 top-full mt-2 z-20">
+                <input
+                  type="text"
+                  placeholder="بحث..."
+                  className="input-base w-56 sm:w-72 shadow-lg animate-[fade-in_0.15s_ease-out]"
+                  autoFocus
+                  onBlur={() => setTimeout(() => setSearchOpen(false), 300)}
+                />
+              </div>
             )}
 
             <button
@@ -163,10 +174,10 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               {isDark ? <Sun size={17} /> : <Moon size={17} />}
             </button>
 
-            <div className="relative" ref={userMenuRef} style={{ zIndex: 100 }}>
+            <div className="relative" ref={userMenuRef} style={{ zIndex: 9999 }}>
               <button
                 onClick={() => setUserMenuOpen(!userMenuOpen)}
-                className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-bg-hover transition-colors relative z-[101]"
+                className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-bg-hover transition-colors relative z-[10000]"
               >
                 <div className="w-7 h-7 rounded-full bg-[var(--section-accent,var(--color-accent))] flex items-center justify-center text-text-inverse text-xs font-bold">
                   {initials}
@@ -180,10 +191,10 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               </button>
 
               {userMenuOpen && (
-                <div className="fixed inset-0 z-[9998] bg-transparent" onClick={() => setUserMenuOpen(false)} style={{ pointerEvents: 'auto' }} />
+                <div className="fixed inset-0 z-[99990] bg-transparent" onClick={() => setUserMenuOpen(false)} style={{ pointerEvents: 'auto' }} />
               )}
               {userMenuOpen && (
-                <div className="absolute left-0 top-full mt-2 w-64 border border-border rounded-xl shadow-2xl py-1 z-[10000] animate-[fade-in_0.15s_ease-out] isolate" style={{ backgroundColor: 'var(--color-bg-card)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', border: '1px solid var(--color-border)' }}>
+                <div className="absolute left-0 top-full mt-2 w-64 border border-border rounded-xl shadow-2xl py-1 z-[99999] animate-[fade-in_0.15s_ease-out]" style={{ backgroundColor: 'var(--color-bg-card)', boxShadow: '0 30px 80px rgba(0,0,0,0.5)', border: '1px solid var(--color-border)', isolation: 'isolate' }}>
                   <div className="px-4 py-3 border-b border-border">
                     <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
                     <div className="text-xs text-text-muted">{user?.email || ''}</div>
