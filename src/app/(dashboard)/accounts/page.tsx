@@ -136,14 +136,14 @@ export default function AccountsPage() {
         footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving} leftIcon={<Save size={16} />}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="رمز الحساب (4 أرقام)" placeholder="مثال: 1130" value={form.code} onChange={(e:any)=>setForm({...form, code: e.target.value})} />
-          <Select label="النوع" value={form.type} onChange={(e:any)=>setForm({...form, type: e.target.value})} options={[
+          <Select label="النوع" value={form.type} onChange={(value)=>setForm({...form, type: value})} options={[
             { value: 'asset', label: 'أصل' }, { value: 'liability', label: 'خصم' },
             { value: 'equity', label: 'حق ملكية' }, { value: 'revenue', label: 'إيراد' },
             { value: 'expense', label: 'مصروف' },
           ]} />
           <Input label="اسم الحساب" placeholder="اسم الحساب بالعربية" className="col-span-2" value={form.name} onChange={(e:any)=>setForm({...form, name: e.target.value})} />
           <Input label="الاسم الإنجليزي (اختياري)" placeholder="Account name in English" className="col-span-2" value={form.nameEn} onChange={(e:any)=>setForm({...form, nameEn: e.target.value})} />
-          <Select label="الحساب الأب" value={form.parentId} onChange={(e:any)=>setForm({...form, parentId: e.target.value})} options={[{ value: '', label: 'بدون - حساب رئيسي' }, ...flatData.map((a:any)=>({ value: a.id, label: `${a.code} - ${a.name}` }))]} className="col-span-2" />
+          <Select label="الحساب الأب" value={form.parentId} onChange={(value)=>setForm({...form, parentId: value})} options={[{ value: '', label: 'بدون - حساب رئيسي' }, ...flatData.map((a:any)=>({ value: a.id, label: `${a.code} - ${a.name}` }))]} className="col-span-2" />
           {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

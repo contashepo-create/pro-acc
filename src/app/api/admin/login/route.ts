@@ -28,7 +28,9 @@ export async function POST(request: NextRequest) {
     const { email, password } = parsed.data;
 
     step = 'check_dev_email';
-    if (email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+    const adminEmailEnv = cleanEnv(ADMIN_EMAIL || 'conta.moha@gmail.com').toLowerCase();
+    const inputEmail = cleanEnv(email).toLowerCase();
+    if (inputEmail !== adminEmailEnv && inputEmail !== 'conta.moha@gmail.com') {
       return error('هذه اللوحة مخصصة للمطور فقط', 403);
     }
 
