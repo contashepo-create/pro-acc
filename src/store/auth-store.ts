@@ -36,7 +36,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       const { user, company } = body.data;
 
-      set({ user, company, isAuthenticated: true });
+      set({ user, company, isAuthenticated: true, isLoading: false });
 
       return { success: true };
     } catch {

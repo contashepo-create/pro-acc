@@ -162,11 +162,14 @@ export function getDateRangeParams(url: string | URL): { from: string | null; to
   return { from, to };
 }
 
+// Detect if running on HTTPS (Vercel always is, localhost is not)
+const isHttps = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+
 const cookieDefaults = {
   httpOnly: true,
   sameSite: 'lax' as const,
   path: '/',
-  secure: process.env.NODE_ENV === 'production',
+  secure: isHttps,
 };
 
 export function setAuthCookie(response: NextResponse, name: string, value: string, maxAge: number) {

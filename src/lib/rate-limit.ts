@@ -18,8 +18,9 @@ export async function checkRateLimit(
 
   if (error) {
     console.error('Rate limit check error:', error);
-    // FIXED: Fail-Closed - if DB fails, block request instead of allowing brute force
-    return { allowed: false, remainingMinutes: 5 };
+    // Fail-Open: if DB is unreachable, allow login but log the issue
+    // Fail-closed would block ALL users when Supabase is slow/down
+    return { allowed: true, remainingMinutes: 0 };
   }
 
   const count = (attempts || []).length;
