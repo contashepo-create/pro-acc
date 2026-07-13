@@ -9,7 +9,7 @@ import { randomInt } from 'crypto';
 
 const sb = () => getSupabase();
 
-const DEV_EMAIL = 'conta.moha@gmail.com';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || '';
 
 function cleanEnv(s: string): string {
   return (s || '').replace(/^\uFEFF/, '').trim();
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     const { email, password } = parsed.data;
 
     step = 'check_dev_email';
-    if (email.toLowerCase() !== DEV_EMAIL) {
+    if (email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
       return error('هذه اللوحة مخصصة للمطور فقط', 403);
     }
 
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
       s = sb();
     } catch (e: any) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
-      return error(`خطأ في الاتصال بقاعدة البيانات (Supabase): ${e.message}`, 500);
+      return error('حدث خطأ في الخادم', 500);
     }
 
     step = 'query_admin_user';
@@ -52,11 +52,10 @@ export async function POST(request: NextRequest) {
       queryErr = result.error;
     } catch (e: any) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
-      return error(`خطأ في قراءة بيانات الأدمن: ${e.message}`, 500);
+      return error('حدث خطأ في الخادم', 500);
     }
 
     if (queryErr || !admin) {
-      console.warn(`[ADMIN LOGIN] User not found: ${email}, error:`, queryErr);
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
@@ -71,7 +70,7 @@ export async function POST(request: NextRequest) {
       valid = await verifyPassword(password, a.password_hash);
     } catch (e: any) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
-      return error(`خطأ في التحقق من كلمة المرور: ${e.message}`, 500);
+      return error('حدث خطأ في الخادم', 500);
     }
 
     if (!valid) {
@@ -99,7 +98,7 @@ export async function POST(request: NextRequest) {
       });
     } catch (e: any) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
-      return error(`خطأ في إنشاء الجلسة: ${e.message}. تأكد من تشغيل SQL: ALTER TABLE admin_users ADD COLUMN login_session_data JSONB`, 500);
+      return error('حدث خطأ في الخادم', 500);
     }
 
     step = 'send_telegram';
@@ -132,9 +131,8 @@ export async function POST(request: NextRequest) {
     }
 
     const response = success({
-      message: sent ? 'تم إرسال رمز التحقق إلى تيليجرام' : `تم إنشاء الرمز (Telegram غير مربوط). الكود: ${code} - شاهده في Vercel Logs`,
+      message: sent ? 'تم إرسال رمز التحقق إلى تيليجرام' : 'تعذر إرسال رمز التحقق. تحقق من سجلات الخادم',
       email: a.email,
-      debugCode: !sent ? code : undefined, // Only return code if Telegram failed
     });
 
     setAuthCookie(response, 'admin_session', a.id, 1800);
@@ -142,14 +140,10 @@ export async function POST(request: NextRequest) {
     return response;
   } catch (err: any) {
     console.error(`[ADMIN LOGIN CRITICAL FAILED at step ${step}]:`, err, err?.stack);
-    // Always return detailed error for admin login to help debugging
     return new Response(
       JSON.stringify({
         success: false,
-        message: `خطأ في الخادم عند خطوة ${step}: ${err?.message || 'Unknown'} - تأكد من تشغيل SQL وتحديث Vercel Env`,
-        step,
-        error: err?.message,
-        stack: process.env.NODE_ENV !== 'production' ? err?.stack : undefined,
+        message: 'حدث خطأ في الخادم. يرجى المحاولة مرة أخرى',
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );

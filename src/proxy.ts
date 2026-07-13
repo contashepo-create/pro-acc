@@ -47,12 +47,20 @@ export default async function proxy(request: NextRequest) {
       return res;
     }
   }
-  if (pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/login') && !pathname.startsWith('/api/auth/register') && !pathname.startsWith('/api/auth/forgot-password') && !pathname.startsWith('/api/auth/reset-password') && !pathname.startsWith('/api/auth/setup') && !pathname.startsWith('/api/auth/me') && !pathname.startsWith('/api/auth/logout') && !pathname.startsWith('/api/auth/verify-email') && !pathname.startsWith('/api/auth/cleanup-inactive') && !pathname.startsWith('/api/debug') && !pathname.startsWith('/api/admin/') && !pathname.startsWith('/api/visitors') && !pathname.startsWith('/api/complaints') && !pathname.startsWith('/api/csrf-token')) {
-    if (request.method === 'OPTIONS') return NextResponse.next();
-    const token = request.cookies.get('token')?.value || request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) return NextResponse.json({ success: false, message: 'غير مصرح به. يرجى تسجيل الدخول' }, { status: 401 });
-    const verified = await verifyTokenEdge(token);
-    if (!verified) return NextResponse.json({ success: false, message: 'انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى' }, { status: 401 });
+  if (pathname.startsWith('/api/') && !pathname.startsWith('/api/auth/login') && !pathname.startsWith('/api/auth/register') && !pathname.startsWith('/api/auth/forgot-password') && !pathname.startsWith('/api/auth/reset-password') && !pathname.startsWith('/api/auth/setup') && !pathname.startsWith('/api/auth/me') && !pathname.startsWith('/api/auth/logout') && !pathname.startsWith('/api/auth/verify-email') && !pathname.startsWith('/api/auth/cleanup-inactive') && !pathname.startsWith('/api/visitors') && !pathname.startsWith('/api/complaints') && !pathname.startsWith('/api/csrf-token') && !pathname.startsWith('/api/admin/login') && !pathname.startsWith('/api/admin/send-telegram-code') && !pathname.startsWith('/api/admin/verify-telegram') && !pathname.startsWith('/api/admin/verify-master') && !pathname.startsWith('/api/admin/logout')) {
+    if (pathname.startsWith('/api/admin/')) {
+      if (request.method === 'OPTIONS') return NextResponse.next();
+      const adminToken = request.cookies.get('admin_token')?.value;
+      if (!adminToken) return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+      const verified = await verifyTokenEdge(adminToken);
+      if (!verified || verified.role !== 'superadmin') return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+    } else {
+      if (request.method === 'OPTIONS') return NextResponse.next();
+      const token = request.cookies.get('token')?.value || request.headers.get('authorization')?.replace('Bearer ', '');
+      if (!token) return NextResponse.json({ success: false, message: 'غير مصرح به. يرجى تسجيل الدخول' }, { status: 401 });
+      const verified = await verifyTokenEdge(token);
+      if (!verified) return NextResponse.json({ success: false, message: 'انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى' }, { status: 401 });
+    }
   }
   if (pathname === '/login' || pathname === '/register' || pathname === '/forgot-password' || pathname === '/reset-password') {
     const token = request.cookies.get('token')?.value;

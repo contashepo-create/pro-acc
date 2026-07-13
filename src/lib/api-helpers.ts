@@ -23,7 +23,7 @@ export function validationError(errors: Record<string, string[]> | string) {
 
 export function serverError(err: unknown) {
   console.error('Server error:', err);
-  const message = process.env.NODE_ENV !== 'production' || process.env.SHOW_ERRORS === 'true'
+  const message = process.env.NODE_ENV !== 'production'
     ? (err instanceof Error ? err.message : 'Internal server error')
     : 'حدث خطأ في الخادم';
   return NextResponse.json({ success: false, message }, { status: 500 });
