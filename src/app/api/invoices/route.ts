@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
+import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
 
 const sb = () => getSupabase();
 
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
     const dateTo = url.searchParams.get('to');
 
     let query = s.from('invoices')
-      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, created_at, contacts(name)', { count: 'exact' })
+      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at, contacts(name)', { count: 'exact' })
       .eq('company_id', auth.companyId)
       .is('deleted_at', null);
     if (status) query = query.eq('status', status);
@@ -161,7 +162,47 @@ export async function POST(request: NextRequest) {
         });
       } catch {}
 
-      return success({ ...invoiceRes, items: itemsRes || [], journalEntryId }, 201);
+      // ZATCA Phase 2: Generate QR code data for the invoice
+      // This is stored in the response so the frontend can render the QR image
+      let zatcaQRData: string | null = null;
+      try {
+        // Get company info for QR (seller name + VAT number)
+        const { data: company } = await s.from('companies')
+          .select('name, tax_number')
+          .eq('id', auth.companyId)
+          .maybeSingle();
+        
+        const companyData = company as { name?: string; tax_number?: string } | null;
+        const sellerName = companyData?.name || '';
+        const vatNumber = companyData?.tax_number || '';
+        
+        if (sellerName && vatNumber && /^\d{15}$/.test(vatNumber)) {
+          const qrPayload = {
+            sellerName,
+            vatNumber,
+            timestamp: new Date(date).toISOString(),
+            invoiceTotal: parseFloat(String(computedTotal)),
+            vatTotal: parseFloat(String(computedVat)),
+          };
+          
+          const validation = validateInvoiceForZatca(qrPayload);
+          if (validation.valid) {
+            zatcaQRData = generateZatcaQRData(qrPayload);
+            
+            // Store QR data in the invoice for later retrieval
+            await s.from('invoices')
+              .update({ zatca_qr: zatcaQRData })
+              .eq('id', invoiceId);
+          } else {
+            console.warn('ZATCA QR validation failed:', validation.errors);
+          }
+        }
+      } catch (zatcaErr) {
+        // Don't fail invoice creation if ZATCA QR generation fails
+        console.warn('ZATCA QR generation failed (invoice still created):', zatcaErr);
+      }
+
+      return success({ ...invoiceRes, items: itemsRes || [], journalEntryId, zatcaQRData }, 201);
     } catch (txErr: any) {
       // Rollback on failure
       console.error('Invoice creation failed, rolling back:', txErr);

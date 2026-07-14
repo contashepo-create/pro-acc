@@ -124,16 +124,24 @@ export async function POST(request: NextRequest) {
       // ignore limit check failure, allow creation
     }
 
-    // Check if email already exists for this company
-    const { data: existing } = await s
-      .from('users')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('email', email.toLowerCase().trim())
-      .maybeSingle();
+    // SECURITY FIX: Check email uniqueness GLOBALLY (across all companies),
+    // not just within the current company. This prevents a scenario where:
+    // 1. Admin of Company A adds a user with email X
+    // 2. A user in Company B already has email X
+    // 3. Login (which searches by email globally using .single()) breaks for both
+    // This matches the behavior of POST /api/auth/register
+    const { data: existingGlobal } = await s.from('users')
+      .select('id, company_id')
+      .ilike('email', email.toLowerCase().trim())
+      .limit(1);
 
-    if (existing) {
-      return error('هذا البريد الإلكتروني مستخدم بالفعل في هذه الشركة');
+    if (existingGlobal && existingGlobal.length > 0) {
+      const existingUser = existingGlobal[0] as { id: string; company_id: string };
+      if (existingUser.company_id === auth.companyId) {
+        return error('هذا البريد الإلكتروني مستخدم بالفعل في هذه الشركة');
+      } else {
+        return error('هذا البريد الإلكتروني مسجل مسبقاً في نظام آخر');
+      }
     }
 
     // Hash password and create user

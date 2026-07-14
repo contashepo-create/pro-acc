@@ -47,7 +47,19 @@ export async function PUT(
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
         return error('صيغة البريد الإلكتروني غير صحيحة');
       }
-      updateData.email = body.email.toLowerCase().trim();
+      // SECURITY FIX: Check global email uniqueness (same rationale as POST)
+      const newEmail = body.email.toLowerCase().trim();
+      const { data: emailExists } = await s.from('users')
+        .select('id')
+        .ilike('email', newEmail)
+        .limit(1);
+      if (emailExists && emailExists.length > 0) {
+        const existingRow = emailExists[0] as { id: string };
+        if (existingRow.id !== id) {
+          return error('هذا البريد الإلكتروني مستخدم بالفعل من حساب آخر');
+        }
+      }
+      updateData.email = newEmail;
     }
     if (body.role !== undefined) {
       const validRoles = ['admin', 'accountant', 'manager', 'supervisor'];
