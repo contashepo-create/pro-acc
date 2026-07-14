@@ -100,7 +100,7 @@ export async function GET(request: NextRequest) {
       cash_balance: cashBalance,
       active_projects: activeProjects,
       overdue_invoices: overdueInvoices,
-    });
+    }, 200, { cache: "private", maxAge: 30, staleWhileRevalidate: 10 });
   } catch (err) {
     return handleApiError(err);
   }

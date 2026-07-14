@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return success({ accounts: roots });
+    return success({ accounts: roots }, 200, { cache: 'private', maxAge: 300, staleWhileRevalidate: 60 });
   } catch (err) {
     return handleApiError(err);
   }

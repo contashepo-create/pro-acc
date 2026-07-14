@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { IBM_Plex_Sans_Arabic, Plus_Jakarta_Sans } from 'next/font/google';
 import Providers from '@/components/Providers';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
@@ -20,8 +20,25 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: 'برو أكاوننت',
-  description: 'نظام محاسبة متكامل',
+  title: 'برو أكاوننت - نظام محاسبة المقاولات',
+  description: 'نظام محاسبة وإدارة مالية متكامل مخصص لشركات المقاولات في السعودية والخليج',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Pro Acc',
+  },
+  icons: {
+    icon: '/window.svg',
+    apple: '/window.svg',
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#2563eb',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
 };
 
 export default function RootLayout({

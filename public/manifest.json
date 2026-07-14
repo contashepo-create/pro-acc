@@ -1,0 +1,47 @@
+{
+  "name": "Pro Acc - نظام المحاسبة",
+  "short_name": "Pro Acc",
+  "description": "نظام محاسبة متكامل لشركات المقاولات",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "orientation": "any",
+  "dir": "rtl",
+  "lang": "ar",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "/window.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/window.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "لوحة التحكم",
+      "short_name": "Dashboard",
+      "url": "/dashboard",
+      "icons": [{ "src": "/window.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "الفواتير",
+      "short_name": "Invoices",
+      "url": "/invoices",
+      "icons": [{ "src": "/window.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "القيود اليومية",
+      "short_name": "Journal",
+      "url": "/journal",
+      "icons": [{ "src": "/window.svg", "sizes": "96x96" }]
+    }
+  ]
+}

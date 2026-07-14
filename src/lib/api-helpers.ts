@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
+import { applyCacheHeaders, type CacheOptions } from '@/lib/cache';
 
-export function success<T>(data: T, status = 200) {
-  return NextResponse.json({ success: true, data }, { status });
+export function success<T>(data: T, status = 200, cacheOptions?: CacheOptions) {
+  const response = NextResponse.json({ success: true, data }, { status });
+  if (cacheOptions) {
+    applyCacheHeaders(response, cacheOptions);
+  }
+  return response;
 }
 
 export function error(message: string, status = 400) {
