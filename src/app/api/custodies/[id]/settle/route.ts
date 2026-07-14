@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError, notFound, requireApiAuth, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -49,15 +50,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     if (!expenseAccount) throw new Error('الحساب غير موجود');
 
-    // Get next JE number
-    const { data: maxJe } = await s.from('journal_entries')
-      .select('number')
-      .eq('company_id', custody.company_id)
-      .order('number', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const nextNumber = (maxJe?.number || 0) + 1;
+    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1 to prevent race conditions
+    const jeDate = data.date || new Date().toISOString().split('T')[0];
+    const nextNumber = await getNextJournalNumber(custody.company_id, jeDate);
 
     // Create journal entry
     const { data: je, error: jeErr } = await s.from('journal_entries')

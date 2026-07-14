@@ -27,14 +27,31 @@ function getPool(): Pool {
   // Strip BOM character that PowerShell/vercel CLI may add
   const connectionString = (process.env.DATABASE_URL || '').replace(/^\uFEFF/, '').trim();
   
+  // SECURITY: SSL configuration for database connection
+  // For Supabase: prefer proper CA verification. Set DATABASE_CA_CERT env var with the CA certificate
+  // content to enable full certificate verification. If not set, falls back to { rejectUnauthorized: false }
+  // which is vulnerable to MITM attacks but needed for Supabase's default certificate chain.
+  // See: https://supabase.com/docs/guides/database/connecting-to-postgres#verifying-the-ssl-certificate
+  let sslConfig: any = undefined;
+  if (connectionString.includes('supabase')) {
+    if (process.env.DATABASE_CA_CERT) {
+      sslConfig = {
+        rejectUnauthorized: true,
+        ca: process.env.DATABASE_CA_CERT,
+      };
+    } else {
+      // WARNING: This disables certificate verification, making the connection
+      // theoretically vulnerable to MITM attacks. Set DATABASE_CA_CERT for production.
+      sslConfig = { rejectUnauthorized: false };
+    }
+  }
+
   _pool = new Pool({
     connectionString,
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
-    ssl: connectionString.includes('supabase')
-      ? { rejectUnauthorized: false }
-      : undefined,
+    ssl: sslConfig,
     // @ts-expect-error - pg PoolConfig doesn't include 'lookup' but it's accepted at runtime
     lookup: dnsLookup,
   });

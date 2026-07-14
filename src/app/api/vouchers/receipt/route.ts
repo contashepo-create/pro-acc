@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -66,21 +67,7 @@ export async function POST(request: NextRequest) {
       nextNum = ((maxVr as any)?.number || 0) + 1;
     }
 
-    // Helper for journal number
-    async function getNextJournalNumber(): Promise<number> {
-      try {
-        const year = new Date(date).getFullYear();
-        const { data } = await s.rpc('next_journal_number', {
-          p_company_id: companyId,
-          p_year: year,
-        });
-        return data as number;
-      } catch {
-        const { data: maxJe } = await s.from('journal_entries')
-          .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-        return ((maxJe as any)?.number || 0) + 1;
-      }
-    }
+    // FIXED: getNextJournalNumber is now imported from @/lib/numbering (centralized atomic RPC)
 
     if (receipt_type === 'client') {
       let totalAllocated = 0;
@@ -102,7 +89,7 @@ export async function POST(request: NextRequest) {
           const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
 
           if (arAccount && bankAccount?.account_id) {
-            const jeNum = await getNextJournalNumber();
+            const jeNum = await getNextJournalNumber(companyId, date);
             const { data: je } = await s.from('journal_entries')
               .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `دفع فاتورة #${inv.number}`, reference_type: 'invoice', reference_id: item.invoice_id, created_by: userId })
               .select('id').single();
@@ -130,7 +117,7 @@ export async function POST(request: NextRequest) {
     if (receipt_type === 'supplier_refund') {
       const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
       const { data: apAccount } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
-      const jeNum = await getNextJournalNumber();
+      const jeNum = await getNextJournalNumber(companyId, date);
       const { data: je } = await s.from('journal_entries')
         .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `استرداد من مورد: ${reason}`, created_by: userId })
         .select('id').single();
@@ -150,7 +137,7 @@ export async function POST(request: NextRequest) {
     // General receipt
     const generalAccount = account_id;
     const { data: bankAccount } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
-    const jeNum = await getNextJournalNumber();
+    const jeNum = await getNextJournalNumber(companyId, date);
     const { data: je } = await s.from('journal_entries')
       .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `سند قبض: ${reason}`, created_by: userId })
       .select('id').single();

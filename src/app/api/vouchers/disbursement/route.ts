@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextVoucherNumber } from '@/lib/numbering';
+import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
@@ -56,9 +56,8 @@ export async function POST(request: NextRequest) {
     const nextNum = await getNextVoucherNumber(companyId, 'voucher_disbursements');
 
     const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
-    const { data: maxJe } = await s.from('journal_entries')
-      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-    const jeNum = ((maxJe as any)?.number || 0) + 1;
+    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+    const jeNum = await getNextJournalNumber(companyId, date);
     const { data: je } = await s.from('journal_entries')
       .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `سند صرف: ${reason}`, created_by: userId })
       .select('id').single();

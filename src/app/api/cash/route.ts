@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -80,14 +81,8 @@ export async function POST(request: NextRequest) {
     const txId = generateId();
     const jeId = generateId();
 
-    // Get next journal entry number
-    const { data: maxJe } = await s.from('journal_entries')
-      .select('number')
-      .eq('company_id', auth.companyId)
-      .order('number', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const nextSeq = ((maxJe as any)?.number || 0) + 1;
+    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1 to prevent race conditions
+    const nextSeq = await getNextJournalNumber(auth.companyId, body.date);
 
     let bankAccountId: string | null = null;
     if (body.bank_safe_id) {

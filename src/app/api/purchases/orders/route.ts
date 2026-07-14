@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextPurchaseOrderNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -39,9 +40,8 @@ export async function POST(req: NextRequest) {
     if (!date || !supplier_id || !items || items.length === 0)
       return error('date, supplier_id, items are required');
 
-    const { data: maxPo } = await s.from('purchase_orders')
-      .select('po_number').eq('company_id', auth.companyId).order('po_number', { ascending: false }).limit(1).maybeSingle();
-    const nextNum = ((maxPo as any)?.po_number || 0) + 1;
+    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+    const nextNum = await getNextPurchaseOrderNumber(auth.companyId);
 
     let total = 0;
     for (const item of items) total += (item.quantity || 0) * (item.unit_price || 0);

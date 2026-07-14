@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -47,14 +48,8 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
 
     if (apAccount && bankAccount) {
-      const { data: maxJe } = await s.from('journal_entries')
-        .select('number')
-        .eq('company_id', auth.companyId)
-        .order('number', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      const nextNumber = (maxJe?.number || 0) + 1;
+      // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+      const nextNumber = await getNextJournalNumber(auth.companyId, date);
 
       const { data: je, error: jeErr } = await s.from('journal_entries')
         .insert({

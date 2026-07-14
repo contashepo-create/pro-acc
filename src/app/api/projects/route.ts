@@ -3,6 +3,7 @@ import { success, error, parseBody, getPaginationParams, validationError, requir
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 import { projectSchema } from '@/lib/validation';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -86,9 +87,8 @@ export async function POST(request: NextRequest) {
     if (body.auto_invoice && effectiveClientId) {
       const invoiceId = generateId();
       const jeId = generateId();
-      const { data: maxJe } = await s.from('journal_entries')
-        .select('number').eq('company_id', auth.companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-      const invSeq = ((maxJe as any)?.number || 0) + 1;
+      // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+      const invSeq = await getNextJournalNumber(auth.companyId, body.start_date);
       const invoiceNumber = `INV-${projectId.substring(0, 8).toUpperCase()}`;
 
       await s.from('journal_entries').insert({

@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber, getNextVoucherNumber } from '@/lib/numbering';
+import { getNextJournalNumber, getNextVoucherNumber, getNextPurchaseInvoiceNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
@@ -44,9 +44,8 @@ export async function POST(req: NextRequest) {
     if (!date || !supplier_id || !items || items.length === 0)
       return error('date, supplier_id, items are required');
 
-    const { data: maxPi } = await s.from('purchase_invoices')
-      .select('invoice_number').eq('company_id', auth.companyId).order('invoice_number', { ascending: false }).limit(1).maybeSingle();
-    const nextNum = ((maxPi as any)?.invoice_number || 0) + 1;
+    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+    const nextNum = await getNextPurchaseInvoiceNumber(auth.companyId);
 
     let subtotal = 0;
     for (const item of items) subtotal += (item.quantity || 0) * (item.unit_price || 0);

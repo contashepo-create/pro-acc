@@ -90,9 +90,79 @@ export async function POST(request: NextRequest) {
 
     const { date, type, description, reference, lines } = parsed.data;
 
+    // SECURITY FIX: Try atomic RPC function first (validates balance BEFORE inserting)
+    // This eliminates the need for manual rollback and prevents the race condition window
+    // where an unbalanced entry could be read by another query.
+    try {
+      // Resolve account IDs for all lines first
+      const resolvedLines: any[] = [];
+      for (const line of lines) {
+        const { data: account } = await s.from('accounts')
+          .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+        if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
+        resolvedLines.push({
+          accountId: account.id,
+          accountCode: line.accountCode,
+          debit: line.debit,
+          credit: line.credit,
+          description: line.description || null,
+          contactId: null,
+          projectId: null,
+        });
+      }
+
+      const { data: rpcResult, error: rpcError } = await s.rpc('create_journal_entry', {
+        p_company_id: auth.companyId,
+        p_date: date,
+        p_type: type,
+        p_description: description || null,
+        p_created_by: auth.userId,
+        p_lines: resolvedLines,
+      });
+
+      if (rpcError) throw rpcError;
+
+      const result: any = rpcResult;
+      const entryId = result.id;
+
+      // Fetch the created entry and lines for response
+      const { data: entryRes } = await s.from('journal_entries')
+        .select('id, number, date, type, description, created_at')
+        .eq('id', entryId).single();
+
+      const { data: linesRes } = await s.from('journal_lines')
+        .select('id, account_code, accounts(name, type), debit, credit, description')
+        .eq('journal_entry_id', entryId).order('id');
+
+      const formattedLines = (linesRes || []).map((l: any) => ({
+        id: l.id, account_code: l.account_code,
+        account_name: (l.accounts as any)?.name || null,
+        account_type: (l.accounts as any)?.type || null,
+        debit: l.debit, credit: l.credit, description: l.description,
+      }));
+
+      return success({
+        ...entryRes,
+        totalDebit: result.total_debit,
+        totalCredit: result.total_credit,
+        lines: formattedLines,
+      }, 201);
+    } catch (rpcAttempt: any) {
+      // If the RPC function doesn't exist yet (migration not applied), fall through to legacy logic
+      if (rpcAttempt.message?.includes('غير موجود')) throw rpcAttempt;
+      if (rpcAttempt.message?.includes('الموازنة') || rpcAttempt.code === 'P0001') {
+        return error(rpcAttempt.message);
+      }
+      // RPC function not found - fall through to legacy logic below
+      if (!rpcAttempt.message?.includes('function') && !rpcAttempt.message?.includes('does not exist') && !rpcAttempt.message?.includes('Could not find')) {
+        throw rpcAttempt;
+      }
+    }
+
+    // LEGACY FALLBACK: Used only when create_journal_entry RPC function doesn't exist yet
+    // This has the known issue of manual rollback - will be removed after migration 012 is applied
     const year = date.substring(0, 4);
 
-    // FIXED: Atomic sequence via RPC to prevent race condition
     let number: number;
     try {
       const { data: rpcData, error: rpcError } = await s.rpc('next_journal_number', {
@@ -102,7 +172,6 @@ export async function POST(request: NextRequest) {
       if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
       number = rpcData as number;
     } catch {
-      // Fallback old logic
       const { data: seqExisting } = await s.from('journal_sequences')
         .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
       if (seqExisting) {
@@ -118,6 +187,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // SECURITY NOTE: Pre-validate balance BEFORE inserting to avoid manual rollback window
+    let preCheckDebit = 0;
+    let preCheckCredit = 0;
+    for (const line of lines) {
+      preCheckDebit += line.debit;
+      preCheckCredit += line.credit;
+    }
+    if (Math.abs(preCheckDebit - preCheckCredit) > 0.01) {
+      return error(`خطأ في الموازنة: مجموع الديون (${preCheckDebit}) لا يساوي مجموع الدائنين (${preCheckCredit})`);
+    }
+
     const { data: entryRes, error: entryErr } = await s.from('journal_entries')
       .insert({
         company_id: auth.companyId, number, date, type,
@@ -125,8 +205,8 @@ export async function POST(request: NextRequest) {
       })
       .select('id, number, date, type, description, created_at')
       .single();
+
     if (entryErr) {
-      // Fallback without created_by if column missing, try with reference
       try {
         const { data: fallback } = await s.from('journal_entries')
           .insert({
@@ -136,9 +216,7 @@ export async function POST(request: NextRequest) {
           .select('id, number, date, type, description, created_at')
           .single();
         if (fallback) {
-          // Use fallback
           const entryId = fallback.id;
-          // Continue with lines...
           let totalDebit = 0;
           let totalCredit = 0;
           for (const line of lines) {
@@ -152,11 +230,6 @@ export async function POST(request: NextRequest) {
             if (lineErr) throw lineErr;
             totalDebit += line.debit;
             totalCredit += line.credit;
-          }
-          if (Math.abs(totalDebit - totalCredit) > 0.01) {
-            await s.from('journal_lines').delete().eq('journal_entry_id', entryId);
-            await s.from('journal_entries').delete().eq('id', entryId);
-            return error(`خطأ في الموازنة: مجموع الديون (${totalDebit}) لا يساوي مجموع الدائنين (${totalCredit})`);
           }
           const { data: linesRes } = await s.from('journal_lines')
             .select('id, account_code, accounts(name, type), debit, credit, description')
@@ -172,14 +245,12 @@ export async function POST(request: NextRequest) {
     }
 
     const entryId = entryRes.id;
-
     let totalDebit = 0;
     let totalCredit = 0;
     for (const line of lines) {
       const { data: account } = await s.from('accounts')
         .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
       if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
-
       const { error: lineErr } = await s.from('journal_lines').insert({
         journal_entry_id: entryId, account_id: account.id, account_code: line.accountCode,
         debit: line.debit, credit: line.credit, description: line.description || null,
@@ -187,13 +258,6 @@ export async function POST(request: NextRequest) {
       if (lineErr) throw lineErr;
       totalDebit += line.debit;
       totalCredit += line.credit;
-    }
-
-    if (Math.abs(totalDebit - totalCredit) > 0.01) {
-      // Clean up - delete the entry and lines
-      await s.from('journal_lines').delete().eq('journal_entry_id', entryId);
-      await s.from('journal_entries').delete().eq('id', entryId);
-      return error(`خطأ في الموازنة: مجموع الديون (${totalDebit}) لا يساوي مجموع الدائنين (${totalCredit})`);
     }
 
     const { data: linesRes } = await s.from('journal_lines')

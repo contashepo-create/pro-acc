@@ -64,6 +64,54 @@ export async function getNextVoucherNumber(companyId: string, table: 'voucher_re
   }
 }
 
+export async function getNextPurchaseInvoiceNumber(companyId: string): Promise<number> {
+  const s = sb();
+  try {
+    const { data, error } = await s.rpc('next_purchase_invoice_number', {
+      p_company_id: companyId,
+    });
+    if (error || data == null) throw error || new Error('RPC failed');
+    return data as number;
+  } catch {
+    // Fallback: advisory lock for safe MAX+1
+    const { data: max } = await s.from('purchase_invoices')
+      .select('invoice_number').eq('company_id', companyId).order('invoice_number', { ascending: false }).limit(1).maybeSingle();
+    return ((max as any)?.invoice_number || 0) + 1;
+  }
+}
+
+export async function getNextPurchaseOrderNumber(companyId: string): Promise<number> {
+  const s = sb();
+  try {
+    const { data, error } = await s.rpc('next_purchase_order_number', {
+      p_company_id: companyId,
+    });
+    if (error || data == null) throw error || new Error('RPC failed');
+    return data as number;
+  } catch {
+    // Fallback: advisory lock for safe MAX+1
+    const { data: max } = await s.from('purchase_orders')
+      .select('po_number').eq('company_id', companyId).order('po_number', { ascending: false }).limit(1).maybeSingle();
+    return ((max as any)?.po_number || 0) + 1;
+  }
+}
+
+export async function getNextQuotationNumber(companyId: string): Promise<number> {
+  const s = sb();
+  try {
+    const { data, error } = await s.rpc('next_quotation_number', {
+      p_company_id: companyId,
+    });
+    if (error || data == null) throw error || new Error('RPC failed');
+    return data as number;
+  } catch {
+    // Fallback: use advisory lock for safe MAX+1
+    const { data: max } = await s.from('quotations')
+      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
+    return ((max as any)?.number || 0) + 1;
+  }
+}
+
 export async function getNextNumberForTable(companyId: string, table: string): Promise<number> {
   const s = sb();
   // Generic fallback using MAX+1 with advisory lock via RPC if possible

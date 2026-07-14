@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -94,14 +95,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
         .maybeSingle();
 
       if (oldJe) {
-        const { data: maxJe } = await s.from('journal_entries')
-          .select('number')
-          .eq('company_id', oldJe.company_id)
-          .order('number', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        const nextNumber = (maxJe?.number || 0) + 1;
+        // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+        const today = new Date().toISOString().split('T')[0];
+        const nextNumber = await getNextJournalNumber(oldJe.company_id, today);
 
         const { data: revJe, error: revJeErr } = await s.from('journal_entries')
           .insert({

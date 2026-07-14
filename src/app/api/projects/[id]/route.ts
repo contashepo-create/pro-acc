@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -126,9 +127,8 @@ export async function PUT(
 
           if (arContact?.account_id && revAcc) {
             const adjJeId = generateId();
-            const { data: maxJe } = await s.from('journal_entries')
-              .select('number').eq('company_id', auth.companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-            const adjSeq = ((maxJe as any)?.number || 0) + 1;
+            // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+            const adjSeq = await getNextJournalNumber(auth.companyId, body.start_date || existing.start_date);
 
             await s.from('journal_entries').insert({
               id: adjJeId, company_id: auth.companyId, number: adjSeq,

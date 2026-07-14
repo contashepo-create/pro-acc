@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
+import { getNextQuotationNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -53,9 +53,8 @@ export async function POST(req: NextRequest) {
     const taxAmount = subtotal * rate;
     const total = subtotal + taxAmount;
 
-    const { data: maxQ } = await s.from('quotations')
-      .select('number').eq('company_id', auth.companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-    const nextNum = ((maxQ as any)?.number || 0) + 1;
+    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+    const nextNum = await getNextQuotationNumber(auth.companyId);
 
     const { data: result, error: insertError } = await s.from('quotations')
       .insert({ company_id: auth.companyId, number: nextNum, date, contact_id, subtotal, tax_amount: taxAmount, tax_rate: rate, total, notes, valid_until, status: 'draft', created_by: auth.userId })

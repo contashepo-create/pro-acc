@@ -17,7 +17,11 @@ async function verifyTokenEdge(token: string): Promise<{ sub: string; role: stri
     } catch { return null; }
     const rawSecret = process.env.TOKEN_SECRET;
     const secret = (rawSecret || '').replace(/^\uFEFF/, '').trim();
-    if (!secret) return payloadJson ? { sub: payloadJson.sub, role: payloadJson.role, exp: payloadJson.exp } : null;
+    // SECURITY FIX: Reject all tokens when TOKEN_SECRET is missing (fail-closed).
+    // Previously, this returned the parsed payload without signature verification,
+    // allowing any well-formed JWT to bypass authentication entirely.
+    // This now matches the fail-closed behavior in lib/auth.ts which throws if secret is missing.
+    if (!secret) return null;
     const encoder = new TextEncoder();
     const keyData = encoder.encode(secret);
     const cryptoKey = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
