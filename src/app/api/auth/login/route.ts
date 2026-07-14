@@ -28,13 +28,13 @@ export async function POST(request: NextRequest) {
       .eq('email', email.toLowerCase()).single();
 
     if (userErr || !user) return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
-    const u: any = user;
+    const u = user as { id: string; name: string; email: string; password_hash: string; role: string; is_active: boolean; company_id: string };
     if (!u.is_active) return error('هذا الحساب غير نشط. تواصل مع مدير النظام', 403);
 
     const { data: company, error: companyErr } = await s.from('companies')
       .select('id, name, commercial_registration, tax_number, address, phone, email, is_active')
       .eq('id', u.company_id).single();
-    const c: any = company;
+    const c = company as { id: string; is_active: boolean; name: string } | null;
     if (!c || !c.is_active) return error('الشركة غير نشطة. تواصل مع مدير النظام', 403);
 
     const valid = await verifyPassword(password, u.password_hash);
@@ -82,13 +82,14 @@ export async function POST(request: NextRequest) {
         .select('status, end_date, trial_extended').eq('company_id', u.company_id)
         .order('end_date', { ascending: false }).limit(1).single();
       if (sub) {
-        const endDate = new Date((sub as any).end_date);
+        const subTyped = sub as { status: string; end_date: string; trial_extended: boolean };
+        const endDate = new Date(subTyped.end_date);
         const isExpired = endDate < new Date();
         if (isExpired) {
           subscriptionExpired = true;
-          if ((sub as any).status === 'trial') {
+          if (subTyped.status === 'trial') {
             // Trial expired - check if extended
-            if ((sub as any).trial_extended) {
+            if (subTyped.trial_extended) {
               subscriptionMessage = 'انتهت المدة التجريبية الممددة. يرجى الاشتراك للمتابعة';
             } else {
               subscriptionMessage = 'انتهت المدة التجريبية (7 أيام). يمكنك طلب تمديد 7 أيام إضافية من الإدارة أو الاشتراك';

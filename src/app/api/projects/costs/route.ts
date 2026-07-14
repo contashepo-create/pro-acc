@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
       const accountMap: Record<string, { code: string; name: string; type: string; total_debit: number; total_credit: number }> = {};
 
       for (const l of (lines || [])) {
-        const acc = l.accounts as any;
+        const acc = l.accounts ;
         if (!acc) continue;
         const key = acc.code;
         if (!accountMap[key]) {
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
 
     const accountMap2: Record<string, { code: string; name: string; type: string; total_debit: number; total_credit: number }> = {};
     for (const l of (directLines || [])) {
-      const acc = l.accounts as any;
+      const acc = l.accounts ;
       if (!acc) continue;
       const key = acc.code;
       if (!accountMap2[key]) {

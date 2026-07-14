@@ -9,7 +9,7 @@ const sb = () => getSupabase();
 // Type definitions for Supabase query results
 interface JournalEntry { id: string; number: number; date: string; type: string; description: string; created_by: string; created_at: string }
 interface JournalLine { journal_entry_id: string; account_id: string; account_code: string; debit: number; credit: number; description: string }
-interface JournalLineWithAccount extends JournalLine { accounts: { name: string; type: string } | null }
+interface JournalLineWithAccount { id: string; journal_entry_id: string; account_id: string; account_code: string; debit: number; credit: number; description: string; accounts: { name: string; type: string } | null }
 interface AccountRow { id: string }
 interface LineIdRow { journal_entry_id: string }
 interface RpcResult { id: string; number: number; total_debit: number; total_credit: number; lines_count: number }
@@ -69,15 +69,16 @@ export async function GET(request: NextRequest) {
         const jeId = (line as JournalLine).journal_entry_id;
         if (!linesMap[jeId]) linesMap[jeId] = { count: 0, total_debit: 0, total_credit: 0 };
         linesMap[jeId].count += 1;
-        linesMap[jeId].total_debit += parseFloat((line as JournalLine).debit) || 0;
-        linesMap[jeId].total_credit += parseFloat((line as JournalLine).credit) || 0;
+        linesMap[jeId].total_debit += Number((line as JournalLine).debit) || 0;
+        linesMap[jeId].total_credit += Number((line as JournalLine).credit) || 0;
       }
     }
 
-    const result = enriched.map((entry) => (entry as unknown as JournalEntry & { lines_count?: number; total_debit?: number; total_credit?: number }) {
-      const summary = linesMap[entry.id] || { count: 0, total_debit: 0, total_credit: 0 };
+    const result = enriched.map((entry) => {
+      const e = entry as unknown as JournalEntry;
+      const summary = linesMap[e.id] || { count: 0, total_debit: 0, total_credit: 0 };
       return {
-        ...entry,
+        ...e,
         lines_count: summary.count,
         total_debit: summary.total_debit,
         total_credit: summary.total_credit,
@@ -144,7 +145,7 @@ export async function POST(request: NextRequest) {
         .select('id, account_code, accounts(name, type), debit, credit, description')
         .eq('journal_entry_id', entryId).order('id');
 
-      const formattedLines = (linesRes || []).map((l: JournalLineWithAccount) => ({
+      const formattedLines = (linesRes || []).map((l: Record<string, any>) => ({
         id: l.id, account_code: l.account_code,
         account_name: (l.accounts)?.name || null,
         account_type: (l.accounts)?.type || null,
@@ -157,14 +158,15 @@ export async function POST(request: NextRequest) {
         totalCredit: result.total_credit,
         lines: formattedLines,
       }, 201);
-    } catch (rpcAttempt: Error) {
+    } catch (rpcAttempt) {
       // If the RPC function doesn't exist yet (migration not applied), fall through to legacy logic
-      if (rpcAttempt.message?.includes('غير موجود')) throw rpcAttempt;
-      if (rpcAttempt.message?.includes('الموازنة') || rpcAttempt.code === 'P0001') {
-        return error(rpcAttempt.message);
+      const rpcErr = rpcAttempt as { message?: string; code?: string };
+      if (rpcErr.message?.includes('غير موجود')) throw rpcAttempt;
+      if (rpcErr.message?.includes('الموازنة') || rpcErr.code === 'P0001') {
+        return error(rpcErr.message || 'خطأ في الموازنة');
       }
       // RPC function not found - fall through to legacy logic below
-      if (!rpcAttempt.message?.includes('function') && !rpcAttempt.message?.includes('does not exist') && !rpcAttempt.message?.includes('Could not find')) {
+      if (!rpcErr.message?.includes('function') && !rpcErr.message?.includes('does not exist') && !rpcErr.message?.includes('Could not find')) {
         throw rpcAttempt;
       }
     }
@@ -244,7 +246,7 @@ export async function POST(request: NextRequest) {
           const { data: linesRes } = await s.from('journal_lines')
             .select('id, account_code, accounts(name, type), debit, credit, description')
             .eq('journal_entry_id', entryId).order('id');
-          const formattedLines = (linesRes || []).map((l: JournalLineWithAccount) => ({
+          const formattedLines = (linesRes || []).map((l: Record<string, any>) => ({
             id: l.id, account_code: l.account_code, account_name: (l.accounts)?.name || null,
             account_type: (l.accounts)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
           }));
@@ -274,14 +276,15 @@ export async function POST(request: NextRequest) {
       .select('id, account_code, accounts(name, type), debit, credit, description')
       .eq('journal_entry_id', entryId).order('id');
 
-    const formattedLines = (linesRes || []).map((l: JournalLineWithAccount) => ({
+    const formattedLines = (linesRes || []).map((l: Record<string, any>) => ({
       id: l.id, account_code: l.account_code, account_name: (l.accounts)?.name || null,
       account_type: (l.accounts)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
     }));
 
     return success({ ...entryRes, totalDebit, totalCredit, lines: formattedLines }, 201);
-  } catch (err: Error) {
-    if (err.message?.includes('غير موجود') || err.message?.includes('الموازنة')) return error(err.message);
+  } catch (err) {
+    const errorObj = err as { message?: string };
+    if (errorObj.message?.includes('غير موجود') || errorObj.message?.includes('الموازنة')) return error(errorObj.message || 'خطأ');
     return handleApiError(err);
   }
 }

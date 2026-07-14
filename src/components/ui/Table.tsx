@@ -27,7 +27,7 @@ interface TableProps<T> {
   className?: string;
 }
 
-export function Table<T extends Record<string, unknown>>({
+export function Table<T extends Record<string, any>>({
   columns,
   data,
   sortable: globallySortable = false,

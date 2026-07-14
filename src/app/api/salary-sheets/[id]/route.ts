@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     }));
 
     return success({ ...sheet, items: itemsWithNames });
-  } catch (e: any) {
+  } catch (e) {
     return handleApiError(e);
   }
 }
@@ -54,7 +54,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     if (updateError || !result) return error('Not found', 404);
     return success(result);
-  } catch (e: any) {
+  } catch (e) {
     return handleApiError(e);
   }
 }
@@ -79,7 +79,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
     if (deleteError || !result) return error('Not found', 404);
     return success({ deleted: true });
-  } catch (e: any) {
+  } catch (e) {
     return handleApiError(e);
   }
 }

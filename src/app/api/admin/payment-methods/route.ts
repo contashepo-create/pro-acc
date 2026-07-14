@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
     const { data, error: err } = await s.from('payment_methods').select('*').order('sort_order');
     if (err) throw err;
     return success({ methods: data || [] });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
 
     if (err) throw err;
     return success(data, 201);
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
@@ -65,7 +65,7 @@ export async function PUT(req: NextRequest) {
 
     if (err) throw err;
     return success(data);
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }

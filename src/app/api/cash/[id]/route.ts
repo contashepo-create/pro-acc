@@ -25,7 +25,7 @@ export async function GET(
       return notFound();
     }
 
-    const ct: any = data;
+    const ct = data as Record<string, any>;
     return success({
       ...ct,
       bank_safe_name: ct.banks_safes?.name || null,
@@ -58,7 +58,7 @@ export async function PUT(
       return notFound();
     }
 
-    const existing: any = txRes;
+    const existing = txRes as Record<string, any>;
 
     const updateData: Record<string, any> = {};
     if (body.date !== undefined) updateData.date = body.date;
@@ -97,7 +97,7 @@ export async function PUT(
 
     if (fetchError) throw fetchError;
 
-    const result: any = updated;
+    const result = updated as Record<string, any>;
     return success({
       ...result,
       journal_entry_number: result.journal_entries?.number || null,
@@ -126,7 +126,7 @@ export async function DELETE(
       return notFound();
     }
 
-    const tx: any = txRes;
+    const tx = txRes as Record<string, any>;
 
     if (tx.journal_entry_id) {
       const { error: lErr } = await s.from('journal_lines')

@@ -25,7 +25,7 @@ export async function getCompanyLimits(companyId: string): Promise<PlanLimits> {
     .single();
 
   let planId = null;
-  if (sub) planId = (sub as any).plan_id;
+  if (sub) planId = (sub as Record<string, any>).plan_id;
 
   // Get plan details
   let limits: PlanLimits = {
@@ -46,7 +46,7 @@ export async function getCompanyLimits(companyId: string): Promise<PlanLimits> {
       .single();
     
     if (plan) {
-      const p: any = plan;
+      const p = plan;
       limits = {
         max_users: p.max_users || limits.max_users,
         max_clients: p.max_clients || limits.max_clients,

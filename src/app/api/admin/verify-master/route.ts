@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
       return error('المستخدم غير موجود', 401);
     }
 
-    const a: any = admin;
+    const a = admin as Record<string, any>;
     if (!a.is_active) {
       return error('هذا الحساب غير نشط', 403);
     }

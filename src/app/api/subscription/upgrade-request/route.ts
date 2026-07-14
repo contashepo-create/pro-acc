@@ -110,8 +110,8 @@ export async function POST(request: NextRequest) {
     await s.from('company_messages').insert({
       company_id: auth.companyId,
       user_id: auth.userId,
-      subject: `طلب ترقية إلى ${(plan as any).code}`,
-      body: `طلب ترقية جديد:\nالباقة: ${(plan as any).code}\nالمدة: ${duration_type}\nطريقة الدفع: ${payment_method_code}\nالمبلغ: ${payment_amount}\nالتاريخ: ${payment_date} ${payment_time}\nملاحظات: ${notes || ''}`,
+      subject: `طلب ترقية إلى ${(plan as Record<string, any>).code}`,
+      body: `طلب ترقية جديد:\nالباقة: ${(plan as Record<string, any>).code}\nالمدة: ${duration_type}\nطريقة الدفع: ${payment_method_code}\nالمبلغ: ${payment_amount}\nالتاريخ: ${payment_date} ${payment_time}\nملاحظات: ${notes || ''}`,
       type: 'upgrade',
       status: 'open',
     });

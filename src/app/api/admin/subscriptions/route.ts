@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
     }));
 
     return success({ subscriptions: result });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }

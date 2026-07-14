@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     const { data: company } = await s.from('companies').select('id, name, email, phone').eq('id', auth.companyId).single();
     if (!company) return error('Company not found', 404);
 
-    const c: any = company;
+    const c = company as Record<string, any>;
 
     // Verify metadata matches current company
     if (backupData.metadata?.company_id !== auth.companyId) {

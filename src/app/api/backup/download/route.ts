@@ -28,9 +28,9 @@ export async function GET(request: NextRequest) {
     const backupData: any = {
       metadata: {
         company_id: auth.companyId,
-        company_name: (company as any).name,
-        email: (company as any).email,
-        phone: (company as any).phone,
+        company_name: (company as Record<string, any>).name,
+        email: (company as Record<string, any>).email,
+        phone: (company as Record<string, any>).phone,
         exported_at: new Date().toISOString(),
         version: '1.0',
         format,
@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
       });
     }
   } catch (err) {
-    return handleApiError(err) as any;
+    return handleApiError(err) ;
   }
 }
 

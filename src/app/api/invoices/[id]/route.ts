@@ -21,7 +21,7 @@ export async function GET(
     const { data: itemsRes } = await s.from('invoice_items')
       .select('id, description, quantity, unit_price, total').eq('invoice_id', id).order('id');
 
-    const inv: any = invRes;
+    const inv = invRes as Record<string, any>;
     return success({ ...inv, client_name: inv.contacts?.name || '', items: itemsRes || [] });
   } catch (err) {
     return handleApiError(err);
@@ -41,7 +41,7 @@ export async function PATCH(
     const { data: invRes } = await s.from('invoices')
       .select('id, number, total, status, journal_entry_id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!invRes) return notFound();
-    const invoice: any = invRes;
+    const invoice = invRes as Record<string, any>;
 
     if (body.status === 'paid') {
       if (invoice.status === 'paid') return error('الفاتورة مدفوعة مسبقاً');

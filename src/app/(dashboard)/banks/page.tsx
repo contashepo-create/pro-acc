@@ -55,7 +55,7 @@ export default function BanksPage() {
         setForm({ name: '', type: 'bank', account_number: '', opening_balance: '' });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e:any) { setSaveError('خطأ في الاتصال: ' + (e.message || '')); } finally { setSaving(false); }
+    } catch (e) { setSaveError('خطأ في الاتصال: ' + ('خطأ')); } finally { setSaving(false); }
   };
 
   const columns = [

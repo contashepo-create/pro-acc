@@ -81,6 +81,7 @@ const navGroups: NavGroup[] = [
     items: [
       { id: 'employees', label: 'الموظفين' },
       { id: 'payroll', label: 'الرواتب' },
+      { id: 'users', label: 'المستخدمين' },
       { id: 'salary-sheets', label: 'كشوف المرتبات' },
       { id: 'daily-workers', label: 'العمال اليوميون' },
       { id: 'custodies', label: 'العهد' },

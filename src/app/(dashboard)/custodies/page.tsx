@@ -41,8 +41,8 @@ export default function CustodiesPage() {
       } else {
         setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
       }
-    } catch (e: any) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+    } catch (e) {
+      setSaveError('خطأ في الاتصال بالخادم: ' + ('خطأ'));
     } finally {
       setSaving(false);
     }

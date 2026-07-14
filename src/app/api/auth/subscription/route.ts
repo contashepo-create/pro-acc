@@ -25,9 +25,9 @@ export async function GET(request: NextRequest) {
     if (subscription) {
       subData = {
         ...subscription,
-        plan_name: (subscription as any).subscription_plans?.name || null,
-        price: (subscription as any).subscription_plans?.price || null,
-        duration_days: (subscription as any).subscription_plans?.duration_days || null,
+        plan_name: (subscription as Record<string, any>).subscription_plans?.name || null,
+        price: (subscription as Record<string, any>).subscription_plans?.price || null,
+        duration_days: (subscription as Record<string, any>).subscription_plans?.duration_days || null,
       };
     }
 

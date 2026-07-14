@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
     if (err) throw err;
 
     return success({ requests: data || [] });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
@@ -71,7 +71,7 @@ export async function PUT(req: NextRequest) {
 
     // If approved, upgrade the subscription
     if (status === 'approved') {
-      const reqData: any = existing;
+      const reqData = existing as Record<string, any>;
       const durationDays = reqData.duration_type === 'yearly' ? 365 : 30;
       const endDate = new Date();
       endDate.setDate(endDate.getDate() + durationDays);
@@ -94,7 +94,7 @@ export async function PUT(req: NextRequest) {
           status: 'active',
           end_date: endDate.toISOString().split('T')[0],
           updated_at: new Date().toISOString(),
-        }).eq('id', (currentSub as any).id);
+        }).eq('id', (currentSub as Record<string, any>).id);
       } else {
         await s.from('subscriptions').insert({
           company_id: reqData.company_id,
@@ -116,7 +116,7 @@ export async function PUT(req: NextRequest) {
     }
 
     return success({ request: updated });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }

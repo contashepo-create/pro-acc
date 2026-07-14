@@ -24,7 +24,7 @@ export async function GET(
       return notFound();
     }
 
-    const bank: any = bankRes;
+    const bank = bankRes as Record<string, any>;
     let balance = 0;
 
     if (bank.account_id) {
@@ -94,7 +94,7 @@ export async function PUT(
 
     if (fetchError) throw fetchError;
 
-    const u: any = updated;
+    const u = updated as Record<string, any>;
     return success({
       ...u,
       account_code: u.accounts?.code || null,

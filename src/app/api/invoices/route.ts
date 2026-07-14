@@ -203,7 +203,7 @@ export async function POST(request: NextRequest) {
       }
 
       return success({ ...invoiceRes, items: itemsRes || [], journalEntryId, zatcaQRData }, 201);
-    } catch (txErr: any) {
+    } catch (txErr) {
       // Rollback on failure
       console.error('Invoice creation failed, rolling back:', txErr);
       try {
@@ -220,7 +220,7 @@ export async function POST(request: NextRequest) {
       }
       throw txErr;
     }
-  } catch (err: any) {
+  } catch (err) {
     if (err.message?.includes('مفقودة')) return error(err.message);
     return handleApiError(err);
   }

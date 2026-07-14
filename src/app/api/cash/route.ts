@@ -183,7 +183,7 @@ export async function POST(request: NextRequest) {
 
     if (txError) throw txError;
 
-    const result: any = txData;
+    const result = txData as Record<string, any>;
     return success({
       ...result,
       journal_entry_number: result.journal_entries?.number || null,

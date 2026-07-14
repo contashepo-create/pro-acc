@@ -52,13 +52,13 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
     .single();
 
   if (userErr || !user) throw new AuthError('المستخدم غير موجود');
-  const u: any = user;
+  const u = user;
   if (!u.is_active) throw new AuthError('المستخدم غير نشط');
 
   // Check company is active
   try {
     const { data: company } = await s.from('companies').select('is_active').eq('id', u.company_id).single();
-    if (company && (company as any).is_active === false) {
+    if (company && (company as Record<string, any>).is_active === false) {
       throw new AuthError('الشركة غير نشطة. تواصل مع مدير النظام');
     }
   } catch (e) {
@@ -127,7 +127,7 @@ export async function requireAccountantOrAbove(request: Request) {
 }
 
 export async function requireAdminAuth(request: Request): Promise<{ userId: string; email: string }> {
-  const req = request as any;
+  const req = request ;
   const adminToken = req.cookies?.get
     ? req.cookies.get('admin_token')?.value
     : null;
@@ -159,7 +159,7 @@ export function checkCsrf(request: Request): boolean {
   if (process.env.CSRF_BYPASS === 'true') return true;
 
   const csrfToken = request.headers.get('x-csrf-token');
-  const csrfCookie = (request as any).cookies?.get?.('csrf_token')?.value;
+  const csrfCookie = (request as Record<string, any>).cookies?.get?.('csrf_token')?.value;
 
   if (!csrfToken || !csrfCookie) return false;
   

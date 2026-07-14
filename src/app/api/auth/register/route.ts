@@ -172,7 +172,7 @@ export async function POST(request: NextRequest) {
       .insert({ name: companyName, email: email.toLowerCase(), phone: phone || null, is_active: true })
       .select('id').single();
     if (companyErr || !company) return error('فشل إنشاء الشركة', 500);
-    const co: any = company;
+    const co = company as Record<string, any>;
 
     // Create default chart of accounts for new company
     try {
@@ -188,7 +188,7 @@ export async function POST(request: NextRequest) {
       company_id: co.id, name, email: email.toLowerCase(), password_hash: passwordHash,
       role: 'admin', is_active: true,
     };
-    let user: any = null;
+    let user = null;
     const { data: u1, error: e1 } = await s.from('users')
       .insert({ ...insertData, email_verified: false, email_verification_token: verificationToken, email_verification_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })
       .select('id, name, email, role').single();
@@ -206,7 +206,7 @@ export async function POST(request: NextRequest) {
     // Create trial subscription - FIXED: 7 days not 30
     try {
       const { data: plan } = await s.from('subscription_plans').select('id, trial_days').eq('code', 'trial').eq('is_active', true).limit(1).single();
-      const p: any = plan;
+      const p = plan as Record<string, any>;
       if (p) {
         const trialDays = p.trial_days || 7;
         await s.from('subscriptions').upsert({

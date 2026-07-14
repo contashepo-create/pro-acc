@@ -114,7 +114,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     return success({ ...custody, settlement_amount: settlement, status: 'settled' });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Not found') return notFound();
     return serverError(e);
   }

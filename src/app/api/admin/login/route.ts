@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     let s;
     try {
       s = sb();
-    } catch (e: any) {
+    } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
       return error('حدث خطأ في الخادم', 500);
     }
@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
         .single();
       admin = result.data;
       queryErr = result.error;
-    } catch (e: any) {
+    } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
       return error('حدث خطأ في الخادم', 500);
     }
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
-    const a: any = admin;
+    const a = admin as Record<string, any>;
     if (!a.is_active) {
       return error('هذا الحساب غير نشط', 403);
     }
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     let valid = false;
     try {
       valid = await verifyPassword(password, a.password_hash);
-    } catch (e: any) {
+    } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
       return error('حدث خطأ في الخادم', 500);
     }
@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
     let code: string;
     try {
       code = String(randomInt(100000, 1000000));
-    } catch (e: any) {
+    } catch (e) {
       // Fallback if crypto.randomInt not available
       code = String(Math.floor(100000 + Math.random() * 900000));
       console.warn(`[ADMIN LOGIN] randomInt failed, using Math.random fallback:`, e);
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
         codeSent: false,
         expiresAt: Date.now() + 30 * 60 * 1000,
       });
-    } catch (e: any) {
+    } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
       return error('حدث خطأ في الخادم', 500);
     }
@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
     let sent = false;
     try {
       sent = await sendTelegramCode(code);
-    } catch (e: any) {
+    } catch (e) {
       console.error(`[ADMIN LOGIN] Telegram send failed:`, e);
       sent = false;
     }
@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
     setAuthCookie(response, 'admin_session', a.id, 1800);
 
     return response;
-  } catch (err: any) {
+  } catch (err) {
     console.error(`[ADMIN LOGIN CRITICAL FAILED at step ${step}]:`, err, err?.stack);
     return new Response(
       JSON.stringify({

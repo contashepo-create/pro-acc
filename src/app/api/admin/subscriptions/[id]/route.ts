@@ -48,7 +48,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     return success({ ...sub, company_name: companyName, plan_name: planName, plan_price_monthly: planPriceMonthly });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
@@ -76,7 +76,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (updateErr || !data) return error('Not found', 404);
 
     return success(data);
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
@@ -97,7 +97,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     if (delErr || !data) return error('Not found', 404);
 
     return success({ deleted: true });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }

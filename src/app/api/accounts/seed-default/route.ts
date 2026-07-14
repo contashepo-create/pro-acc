@@ -4,7 +4,7 @@ import { requireApiAuth, handleApiError, success } from '@/lib/api-helpers';
 import { createDefaultChartOfAccounts } from '@/lib/default-accounts';
 
 // @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase() ;
 
 export async function POST(request: NextRequest) {
   try {

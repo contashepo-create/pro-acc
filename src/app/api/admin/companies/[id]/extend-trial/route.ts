@@ -38,7 +38,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return error('لا يوجد اشتراك لهذه الشركة', 404);
     }
 
-    const subData: any = sub;
+    const subData = sub as Record<string, any>;
 
     if (subData.status !== 'trial') {
       return error('التمديد متاح فقط للباقات التجريبية', 400);
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
 
     return success({ subscription: updated, message: `تم تمديد الفترة التجريبية 7 أيام. تنتهي الآن في ${newEndDate.toISOString().split('T')[0]}` });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }

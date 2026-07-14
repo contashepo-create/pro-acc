@@ -25,10 +25,10 @@ export async function GET(
 
     return success({
       ...voucher,
-      contact_name: (voucher as any).contacts?.name || null,
-      bank_safe_name: (voucher as any).banks_safes?.name || null,
-      journal_entry_number: (voucher as any).journal_entries?.sequence_number || null,
-      employee_name: (voucher as any).employees?.name || null,
+      contact_name: (voucher as Record<string, any>).contacts?.name || null,
+      bank_safe_name: (voucher as Record<string, any>).banks_safes?.name || null,
+      journal_entry_number: (voucher as Record<string, any>).journal_entries?.sequence_number || null,
+      employee_name: (voucher as Record<string, any>).employees?.name || null,
     });
   } catch (err) {
     return handleApiError(err);
@@ -63,19 +63,19 @@ export async function DELETE(
     }
 
     // Sequential deletes (was a transaction)
-    if ((voucher as any).disbursement_type === 'employee_advance' && (voucher as any).employee_id) {
+    if ((voucher as Record<string, any>).disbursement_type === 'employee_advance' && (voucher as Record<string, any>).employee_id) {
       await s.from('employee_advances')
         .delete()
-        .eq('journal_entry_id', (voucher as any).journal_entry_id);
+        .eq('journal_entry_id', (voucher as Record<string, any>).journal_entry_id);
     }
 
-    if ((voucher as any).journal_entry_id) {
+    if ((voucher as Record<string, any>).journal_entry_id) {
       await s.from('journal_lines')
         .delete()
-        .eq('journal_entry_id', (voucher as any).journal_entry_id);
+        .eq('journal_entry_id', (voucher as Record<string, any>).journal_entry_id);
       await s.from('journal_entries')
         .delete()
-        .eq('id', (voucher as any).journal_entry_id);
+        .eq('id', (voucher as Record<string, any>).journal_entry_id);
     }
 
     await s.from('voucher_disbursements').delete().eq('id', id);

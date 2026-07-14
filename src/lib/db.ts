@@ -32,7 +32,7 @@ function getPool(): Pool {
   // content to enable full certificate verification. If not set, falls back to { rejectUnauthorized: false }
   // which is vulnerable to MITM attacks but needed for Supabase's default certificate chain.
   // See: https://supabase.com/docs/guides/database/connecting-to-postgres#verifying-the-ssl-certificate
-  let sslConfig: any = undefined;
+  let sslConfig = undefined;
   if (connectionString.includes('supabase')) {
     if (process.env.DATABASE_CA_CERT) {
       sslConfig = {

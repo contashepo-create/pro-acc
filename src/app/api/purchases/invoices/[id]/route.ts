@@ -32,8 +32,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     return success({
       ...pi,
-      supplier_name: (pi as any).contacts?.name || null,
-      po_number: (pi as any).purchase_orders?.po_number || null,
+      supplier_name: (pi as Record<string, any>).contacts?.name || null,
+      po_number: (pi as Record<string, any>).purchase_orders?.po_number || null,
       items: items || [],
       paid_amount: paidAmount,
     });
@@ -82,17 +82,17 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     await s.from('purchase_invoice_items').delete().eq('purchase_invoice_id', id);
     await s.from('disbursement_invoice_items').delete().eq('purchase_invoice_id', id);
 
-    if ((inv as any).journal_entry_id) {
+    if ((inv as Record<string, any>).journal_entry_id) {
       // Get JE data for reversal
       const { data: oldLines } = await s.from('journal_lines')
         .select('account_id, debit, credit')
-        .eq('journal_entry_id', (inv as any).journal_entry_id);
+        .eq('journal_entry_id', (inv as Record<string, any>).journal_entry_id);
 
-      await s.from('journal_lines').delete().eq('journal_entry_id', (inv as any).journal_entry_id);
+      await s.from('journal_lines').delete().eq('journal_entry_id', (inv as Record<string, any>).journal_entry_id);
 
       const { data: oldJe } = await s.from('journal_entries')
         .select('company_id')
-        .eq('id', (inv as any).journal_entry_id)
+        .eq('id', (inv as Record<string, any>).journal_entry_id)
         .maybeSingle();
 
       if (oldJe) {
@@ -107,7 +107,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
             date: new Date().toISOString().split('T')[0],
             type: 'general',
             description: 'عكس فاتورة مشتريات ملغاة',
-            created_by: (inv as any).created_by,
+            created_by: (inv as Record<string, any>).created_by,
           })
           .select('*')
           .single();
@@ -123,7 +123,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
         }
       }
 
-      await s.from('journal_entries').delete().eq('id', (inv as any).journal_entry_id);
+      await s.from('journal_entries').delete().eq('id', (inv as Record<string, any>).journal_entry_id);
     }
 
     await s.from('purchase_invoices').delete().eq('id', id);

@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
       .order('sort_order');
     if (err) throw err;
     return success({ plans: data || [] });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
 
     if (insertErr) throw insertErr;
     return success(data);
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }

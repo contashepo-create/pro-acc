@@ -82,7 +82,7 @@ export async function getCompanyContext(
   try {
     const authHeader = request.headers.get('authorization') || '';
     const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    const token = bearerToken || (request as any).cookies?.get?.('token')?.value || '';
+    const token = bearerToken || (request as Record<string, any>).cookies?.get?.('token')?.value || '';
 
     if (!token) return null;
 
@@ -108,7 +108,7 @@ export function extractToken(request: Request): string | null {
   if (authHeader.startsWith('Bearer ')) return authHeader.slice(7);
 
   // Also check cookie
-  const cookie = (request as any).cookies?.get?.('token')?.value;
+  const cookie = (request as Record<string, any>).cookies?.get?.('token')?.value;
   if (cookie) return cookie;
 
   return null;

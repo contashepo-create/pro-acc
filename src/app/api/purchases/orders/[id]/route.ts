@@ -25,7 +25,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     return success({
       ...po,
-      supplier_name: (po as any).contacts?.name || null,
+      supplier_name: (po as Record<string, any>).contacts?.name || null,
       items: items || [],
     });
   } catch (err) {
@@ -118,7 +118,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       // Update inventory
       const { data: invItem } = await s.from('inventory_items')
         .select('id, quantity, unit_price')
-        .eq('company_id', (po as any).company_id)
+        .eq('company_id', (po as Record<string, any>).company_id)
         .eq('code', item.description)
         .maybeSingle();
 
@@ -139,7 +139,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           .maybeSingle();
 
         await s.from('inventory_transactions').insert({
-          company_id: (po as any).company_id,
+          company_id: (po as Record<string, any>).company_id,
           item_id: invItem.id,
           warehouse_id: wh?.warehouse_id || null,
           type: 'add',
@@ -155,13 +155,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         // Create new inventory item
         const { data: wh } = await s.from('warehouses')
           .select('id')
-          .eq('company_id', (po as any).company_id)
+          .eq('company_id', (po as Record<string, any>).company_id)
           .limit(1)
           .maybeSingle();
 
         const { data: newItem, error: newItemErr } = await s.from('inventory_items')
           .insert({
-            company_id: (po as any).company_id,
+            company_id: (po as Record<string, any>).company_id,
             code: item.description,
             name: item.description,
             unit: 'وحدة',
@@ -175,7 +175,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
         if (!newItemErr && newItem) {
           await s.from('inventory_transactions').insert({
-            company_id: (po as any).company_id,
+            company_id: (po as Record<string, any>).company_id,
             item_id: newItem.id,
             warehouse_id: wh?.id || null,
             type: 'add',
@@ -213,7 +213,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     if (updErr) throw updErr;
     return success(updated);
-  } catch (err: any) {
+  } catch (err) {
     if (err.message === 'Not found') return notFound();
     return handleApiError(err);
   }

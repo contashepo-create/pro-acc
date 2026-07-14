@@ -24,7 +24,7 @@ export async function GET(
       return notFound();
     }
 
-    const c: any = contact;
+    const c = contact as Record<string, any>;
     let balance = 0;
     let balanceType: string | null = null;
 
@@ -77,7 +77,7 @@ export async function PUT(
       return notFound();
     }
 
-    const contact: any = contactRes;
+    const contact = contactRes as Record<string, any>;
 
     const updateData: Record<string, any> = {};
     if (body.name !== undefined) updateData.name = body.name;
@@ -134,7 +134,7 @@ export async function PUT(
 
     if (fetchError) throw fetchError;
 
-    const u: any = updated;
+    const u = updated as Record<string, any>;
     return success({
       ...u,
       account_code: u.accounts?.code || null,
@@ -164,7 +164,7 @@ export async function DELETE(
       return notFound();
     }
 
-    const contact: any = contactRes;
+    const contact = contactRes as Record<string, any>;
 
     const { data: invDep } = await s.from('invoices')
       .select('id')

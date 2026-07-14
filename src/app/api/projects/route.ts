@@ -125,7 +125,7 @@ export async function POST(request: NextRequest) {
       .select('*, contacts(name)').eq('id', projectId).single();
     if (fetchErr) throw fetchErr;
 
-    const result: any = projectRes;
+    const result = projectRes as Record<string, any>;
     return success({ ...result, client_name: result.contacts?.name || null, invoice }, 201);
   } catch (err) {
     return handleApiError(err);

@@ -28,7 +28,7 @@ export async function GET(
       .eq('company_id', auth.companyId)
       .order('code');
 
-    return success({ ...(data as Record<string, unknown>), children: children || [] });
+    return success({ ...(data as Record<string, any>), children: children || [] });
   } catch (err) {
     return handleApiError(err);
   }

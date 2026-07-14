@@ -29,9 +29,9 @@ export async function GET(
 
     return success({
       ...voucher,
-      contact_name: (voucher as any).contacts?.name || null,
-      bank_safe_name: (voucher as any).banks_safes?.name || null,
-      journal_entry_number: (voucher as any).journal_entries?.sequence_number || null,
+      contact_name: (voucher as Record<string, any>).contacts?.name || null,
+      bank_safe_name: (voucher as Record<string, any>).banks_safes?.name || null,
+      journal_entry_number: (voucher as Record<string, any>).journal_entries?.sequence_number || null,
       invoice_items: (invoiceItems || []).map((ri: any) => ({
         ...ri,
         invoice_number: ri.invoices?.number || null,
@@ -71,13 +71,13 @@ export async function DELETE(
 
     await s.from('receipt_invoice_items').delete().eq('voucher_receipt_id', id);
 
-    if ((voucher as any).journal_entry_id) {
+    if ((voucher as Record<string, any>).journal_entry_id) {
       await s.from('journal_lines')
         .delete()
-        .eq('journal_entry_id', (voucher as any).journal_entry_id);
+        .eq('journal_entry_id', (voucher as Record<string, any>).journal_entry_id);
       await s.from('journal_entries')
         .delete()
-        .eq('id', (voucher as any).journal_entry_id);
+        .eq('id', (voucher as Record<string, any>).journal_entry_id);
     }
 
     await s.from('voucher_receipts').delete().eq('id', id);

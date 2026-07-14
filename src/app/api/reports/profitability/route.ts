@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
 
       result.push({
         ...project,
-        client_name: (project as any).contacts?.name || null,
+        client_name: (project as Record<string, any>).contacts?.name || null,
         contract_value: contractValue,
         total_costs: totalCosts,
         profit,

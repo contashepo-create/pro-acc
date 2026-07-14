@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
     }));
 
     return success(result);
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
     if (insertErr) throw insertErr;
 
     return success({ code, planCode, durationMonths });
-  } catch (e: any) {
+  } catch (e) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }

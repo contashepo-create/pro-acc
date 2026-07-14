@@ -39,7 +39,7 @@ export default function ZerocoldLoginPage() {
       if (contentType.includes('application/json')) {
         try {
           body = await res.json();
-        } catch (jsonErr: any) {
+        } catch (jsonErr) {
           const text = await res.text().catch(() => '');
           console.error('Failed to parse JSON:', text, jsonErr);
           setError(`خطأ في الخادم (HTTP ${res.status}): ${text.substring(0, 300)}`);
@@ -58,7 +58,7 @@ export default function ZerocoldLoginPage() {
       }
 
       router.push(`/zerocold/verify-telegram?email=${encodeURIComponent(body.data?.email?.toLowerCase() || email.toLowerCase())}`);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Login fetch error:', err);
       setError(`حدث خطأ في الاتصال بالخادم: ${err?.message || 'فشل الشبكة'} - حاول تاني أو افتح /api/admin/debug`);
     } finally {

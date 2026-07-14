@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     return error('Admin not found', 401);
   }
 
-  const a: any = admin;
+  const a = admin as Record<string, any>;
   if (!a.is_active) {
     return error('Account inactive', 403);
   }

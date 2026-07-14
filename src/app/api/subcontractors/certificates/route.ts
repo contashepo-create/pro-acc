@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
 
     if (!contract) return error('العقد غير موجود');
 
-    const rate = retention_rate ?? (contract as any).retention_rate ?? 0;
+    const rate = retention_rate ?? (contract as Record<string, any>).retention_rate ?? 0;
     const retentionAmount = gross_amount * rate;
     const netAmount = gross_amount - retentionAmount;
 

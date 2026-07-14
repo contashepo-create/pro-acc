@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
 
     const { data: full } = await s.from('quotations')
       .select('*, contacts(name)').eq('id', result.id).single();
-    const fullResult: any = full;
+    const fullResult = full as Record<string, any>;
     fullResult.items = items;
     fullResult.contact_name = fullResult.contacts?.name || null;
 

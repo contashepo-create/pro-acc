@@ -19,7 +19,7 @@ export async function GET(
     const { data: projectRes, error: pErr } = await s.from('projects')
       .select('*, contacts(name)').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (pErr || !projectRes) return notFound();
-    const project: any = projectRes;
+    const project = projectRes as Record<string, any>;
 
     // Get journal entries for this project
     const { data: jes } = await s.from('journal_entries')
@@ -90,7 +90,7 @@ export async function PUT(
     const { data: projectRes } = await s.from('projects')
       .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!projectRes) return notFound();
-    const existing: any = projectRes;
+    const existing = projectRes as Record<string, any>;
 
     const updateData: Record<string, any> = {};
     if (body.name !== undefined) updateData.name = body.name;
@@ -115,7 +115,7 @@ export async function PUT(
         .not('status', 'in', '("paid","cancelled")').limit(1).maybeSingle();
 
       if (invRes) {
-        const inv: any = invRes;
+        const inv = invRes as Record<string, any>;
         const oldValue = parseFloat(existing.contract_value);
         const newValue = parseFloat(body.contract_value);
         const diff = newValue - oldValue;
@@ -158,7 +158,7 @@ export async function PUT(
       .select('*, contacts(name)').eq('id', id).single();
     if (fetchErr) throw fetchErr;
 
-    const result: any = updated;
+    const result = updated as Record<string, any>;
     return success({ ...result, client_name: result.contacts?.name || null });
   } catch (err) {
     return handleApiError(err);

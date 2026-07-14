@@ -30,7 +30,7 @@ export async function PUT(
     if (!targetUser) return notFound();
 
     const target = targetUser as { id: string; role: string; email: string; name: string; is_active: boolean };
-    const updateData: Record<string, unknown> = {};
+    const updateData: Record<string, any> = {};
 
     // Prevent admin from demoting themselves
     if (id === auth.userId && body.role && body.role !== 'admin') {

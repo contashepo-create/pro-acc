@@ -20,13 +20,13 @@ export async function GET(request: NextRequest) {
       .eq('id', payload.userId).single();
 
     if (userErr || !user) return notFound();
-    const u: any = user;
+    const u = user as Record<string, any>;
     if (!u.is_active) return error('هذا الحساب غير نشط', 403);
 
     const { data: company } = await s.from('companies')
       .select('id, name, commercial_registration, tax_number, address, phone, email, is_active')
       .eq('id', u.company_id).single();
-    const c: any = company;
+    const c = company as Record<string, any>;
 
     return success({
       user: {
