@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
+// RBAC import added
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
@@ -104,7 +105,7 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireManagerOrAbove(request);
     const s = sb();
     const url = new URL(request.url);
     const id = url.searchParams.get('id');

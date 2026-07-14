@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, handleApiError, parseBody, requireApiAuth } from '@/lib/api-helpers';
+import { success, handleApiError, parseBody, requireApiAuth, requireAdmin } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -29,7 +29,8 @@ export async function GET(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    // RBAC: Only admin can modify company settings
+    const auth = await requireAdmin(req);
     const s = sb();
     const body = await parseBody(req);
 

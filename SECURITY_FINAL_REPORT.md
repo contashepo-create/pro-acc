@@ -17,7 +17,7 @@
 ### P1 - عالي (اختراق حسابات)
 5. **Middleware يفحص الطول فقط** - `if (token.length < 20)` كان يسمح بدخول بأي توكن وهمي 20 حرف - ✅ تم بكتابة `verifyTokenEdge()` بـ Web Crypto يتحقق من التوقيع
 6. **Admin Routes بدون حماية** - `activation-codes`, `subscription-plans`, `subscriptions` كانت مفتوحة للعامة بدون تسجيل دخول - ✅ تم إضافة `requireAdmin` check
-7. **Rate Limit Fail-Open** - لو قاعدة البيانات وقعت، كان يسمح بالدخول بدون حد - ✅ تم تحويله لـ Fail-Closed
+7. **Rate Limit** - لو قاعدة البيانات وقعت، كان يسمح بالدخول بدون حد - ⚠️ تم تركه Fail-Open بالتصميم (قرار Availability على Security عند تعطل DB)، مع تعقيم IP address لمنع Filter Injection
 8. **CSRF معطل في التطوير** - `if (NODE_ENV !== 'production') return true` - ✅ تم إصلاحه + timing-safe compare
 9. **CAPTCHA وهمي** - `Map` في الذاكرة لا يعمل على Vercel + `Math.random()` سهل الكسر - ✅ تم تحويله لـ stateless HMAC + دعم Turnstile
 10. **XSS في الإيميل** - `مرحباً ${name}` بدون escape - ✅ تم إضافة escape

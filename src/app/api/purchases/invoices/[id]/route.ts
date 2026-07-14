@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, notFound, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import type { } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 
@@ -67,7 +68,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireApiAuth(req);
+    await requireManagerOrAbove(req);
     const { id } = await params;
     const s = sb();
 

@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, handleApiError } from '@/lib/api-helpers';
+import type { } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -9,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { requireApiAuth } = await import('@/lib/api-helpers');
+    const { requireApiAuth, requireManagerOrAbove } = await import('@/lib/api-helpers');
     const ctx = await requireApiAuth(request);
     const { id } = await params;
     const s = sb();
@@ -39,8 +40,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { requireApiAuth } = await import('@/lib/api-helpers');
-    const ctx = await requireApiAuth(request);
+    const { requireApiAuth, requireManagerOrAbove } = await import('@/lib/api-helpers');
+    const ctx = await requireManagerOrAbove(request);
     const { id } = await params;
     const s = sb();
 

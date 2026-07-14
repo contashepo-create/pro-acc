@@ -44,8 +44,10 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
   if (!payload) throw new AuthError('غير مصرح به');
 
   const s = sb();
+  // SECURITY FIX: Fetch role from database (source of truth) instead of JWT token.
+  // The JWT role could be stale or manipulated. The DB role is authoritative.
   const { data: user, error: userErr } = await s.from('users')
-    .select('company_id, is_active')
+    .select('company_id, is_active, role')
     .eq('id', payload.userId)
     .single();
 
@@ -79,11 +81,49 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
     }
   }
 
-  return { companyId: u.company_id, userId: payload.userId, role: payload.role };
+  return { companyId: u.company_id, userId: payload.userId, role: u.role };
 }
 
 export async function requireApiAuthWithSubscription(request: Request) {
   return requireApiAuth(request, { checkSubscription: true });
+}
+
+/**
+ * RBAC Role Check - Enforces role-based access control on sensitive operations.
+ * Role hierarchy: admin > manager > accountant > supervisor
+ * - admin: Full access to all operations
+ * - manager: Can manage most operations except company settings and user management
+ * - accountant: Can create/edit financial entries, cannot delete or approve
+ * - supervisor: Read-only + limited create (vouchers, receipts)
+ *
+ * Usage: await requireRole(request, ['admin', 'manager'])
+ */
+export async function requireRole(
+  request: Request,
+  allowedRoles: string[]
+): Promise<{ companyId: string; userId: string; role: string }> {
+  const auth = await requireApiAuth(request);
+  if (!allowedRoles.includes(auth.role)) {
+    throw new AuthError(
+      `ليس لديك صلاحية لتنفيذ هذا الإجراء. الصلاحيات المطلوبة: ${allowedRoles.join(' أو ')}. دورك الحالي: ${auth.role}`
+    );
+  }
+  return auth;
+}
+
+/** Shortcut: only admin can perform this action */
+export async function requireAdmin(request: Request) {
+  return requireRole(request, ['admin']);
+}
+
+/** Shortcut: admin or manager can perform this action */
+export async function requireManagerOrAbove(request: Request) {
+  return requireRole(request, ['admin', 'manager']);
+}
+
+/** Shortcut: admin, manager, or accountant can perform this action */
+export async function requireAccountantOrAbove(request: Request) {
+  return requireRole(request, ['admin', 'manager', 'accountant']);
 }
 
 export async function requireAdminAuth(request: Request): Promise<{ userId: string; email: string }> {
