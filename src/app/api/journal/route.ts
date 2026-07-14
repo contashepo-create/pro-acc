@@ -2,8 +2,18 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { journalEntrySchema } from '@/lib/validation';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
+
+// Type definitions for Supabase query results
+interface JournalEntry { id: string; number: number; date: string; type: string; description: string; created_by: string; created_at: string }
+interface JournalLine { journal_entry_id: string; account_id: string; account_code: string; debit: number; credit: number; description: string }
+interface JournalLineWithAccount extends JournalLine { accounts: { name: string; type: string } | null }
+interface AccountRow { id: string }
+interface LineIdRow { journal_entry_id: string }
+interface RpcResult { id: string; number: number; total_debit: number; total_credit: number; lines_count: number }
+interface SequenceRow { last_number: number }
 
 export async function GET(request: NextRequest) {
   try {
@@ -40,15 +50,15 @@ export async function GET(request: NextRequest) {
       if (acc) {
         const { data: filteredLines } = await s.from('journal_lines')
           .select('journal_entry_id').eq('account_id', acc.id);
-        const jeIds = new Set((filteredLines || []).map((l: any) => l.journal_entry_id));
-        enriched = (entries || []).filter((e: any) => jeIds.has(e.id));
+        const jeIds = new Set((filteredLines || []).map((l) => (l as LineIdRow).journal_entry_id));
+        enriched = (entries || []).filter((e) => jeIds.has((e as JournalEntry).id));
       } else {
         enriched = [];
       }
     }
 
     // Batch fetch all lines for all entries
-    const enrichedIds = enriched.map((e: any) => e.id);
+    const enrichedIds = enriched.map((e) => (e as JournalEntry).id);
     const linesMap: Record<string, { count: number; total_debit: number; total_credit: number }> = {};
     if (enrichedIds.length > 0) {
       const { data: allLines } = await s.from('journal_lines')
@@ -56,15 +66,15 @@ export async function GET(request: NextRequest) {
         .in('journal_entry_id', enrichedIds);
       
       for (const line of allLines || []) {
-        const jeId = (line as any).journal_entry_id;
+        const jeId = (line as JournalLine).journal_entry_id;
         if (!linesMap[jeId]) linesMap[jeId] = { count: 0, total_debit: 0, total_credit: 0 };
         linesMap[jeId].count += 1;
-        linesMap[jeId].total_debit += parseFloat((line as any).debit) || 0;
-        linesMap[jeId].total_credit += parseFloat((line as any).credit) || 0;
+        linesMap[jeId].total_debit += parseFloat((line as JournalLine).debit) || 0;
+        linesMap[jeId].total_credit += parseFloat((line as JournalLine).credit) || 0;
       }
     }
 
-    const result = enriched.map((entry: any) => {
+    const result = enriched.map((entry) => (entry as unknown as JournalEntry & { lines_count?: number; total_debit?: number; total_credit?: number }) {
       const summary = linesMap[entry.id] || { count: 0, total_debit: 0, total_credit: 0 };
       return {
         ...entry,
@@ -95,7 +105,7 @@ export async function POST(request: NextRequest) {
     // where an unbalanced entry could be read by another query.
     try {
       // Resolve account IDs for all lines first
-      const resolvedLines: any[] = [];
+      const resolvedLines: Array<{accountId: string; accountCode: string; debit: number; credit: number; description: string | null; contactId: null; projectId: null}> = [];
       for (const line of lines) {
         const { data: account } = await s.from('accounts')
           .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
@@ -122,7 +132,7 @@ export async function POST(request: NextRequest) {
 
       if (rpcError) throw rpcError;
 
-      const result: any = rpcResult;
+      const result = rpcResult as RpcResult;
       const entryId = result.id;
 
       // Fetch the created entry and lines for response
@@ -134,10 +144,10 @@ export async function POST(request: NextRequest) {
         .select('id, account_code, accounts(name, type), debit, credit, description')
         .eq('journal_entry_id', entryId).order('id');
 
-      const formattedLines = (linesRes || []).map((l: any) => ({
+      const formattedLines = (linesRes || []).map((l: JournalLineWithAccount) => ({
         id: l.id, account_code: l.account_code,
-        account_name: (l.accounts as any)?.name || null,
-        account_type: (l.accounts as any)?.type || null,
+        account_name: (l.accounts)?.name || null,
+        account_type: (l.accounts)?.type || null,
         debit: l.debit, credit: l.credit, description: l.description,
       }));
 
@@ -147,7 +157,7 @@ export async function POST(request: NextRequest) {
         totalCredit: result.total_credit,
         lines: formattedLines,
       }, 201);
-    } catch (rpcAttempt: any) {
+    } catch (rpcAttempt: Error) {
       // If the RPC function doesn't exist yet (migration not applied), fall through to legacy logic
       if (rpcAttempt.message?.includes('غير موجود')) throw rpcAttempt;
       if (rpcAttempt.message?.includes('الموازنة') || rpcAttempt.code === 'P0001') {
@@ -234,9 +244,9 @@ export async function POST(request: NextRequest) {
           const { data: linesRes } = await s.from('journal_lines')
             .select('id, account_code, accounts(name, type), debit, credit, description')
             .eq('journal_entry_id', entryId).order('id');
-          const formattedLines = (linesRes || []).map((l: any) => ({
-            id: l.id, account_code: l.account_code, account_name: (l.accounts as any)?.name || null,
-            account_type: (l.accounts as any)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
+          const formattedLines = (linesRes || []).map((l: JournalLineWithAccount) => ({
+            id: l.id, account_code: l.account_code, account_name: (l.accounts)?.name || null,
+            account_type: (l.accounts)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
           }));
           return success({ ...fallback, totalDebit, totalCredit, lines: formattedLines }, 201);
         }
@@ -264,13 +274,13 @@ export async function POST(request: NextRequest) {
       .select('id, account_code, accounts(name, type), debit, credit, description')
       .eq('journal_entry_id', entryId).order('id');
 
-    const formattedLines = (linesRes || []).map((l: any) => ({
-      id: l.id, account_code: l.account_code, account_name: (l.accounts as any)?.name || null,
-      account_type: (l.accounts as any)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
+    const formattedLines = (linesRes || []).map((l: JournalLineWithAccount) => ({
+      id: l.id, account_code: l.account_code, account_name: (l.accounts)?.name || null,
+      account_type: (l.accounts)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
     }));
 
     return success({ ...entryRes, totalDebit, totalCredit, lines: formattedLines }, 201);
-  } catch (err: any) {
+  } catch (err: Error) {
     if (err.message?.includes('غير موجود') || err.message?.includes('الموازنة')) return error(err.message);
     return handleApiError(err);
   }

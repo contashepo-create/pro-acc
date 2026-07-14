@@ -20,14 +20,17 @@ function sanitizeIpAddress(ip: string): string {
   // IPv6 with embedded IPv4
   const ipv6MappedPattern = /^::ffff:(\d{1,3}\.){3}\d{1,3}$/;
 
-  if (ipv4Pattern.test(trimmed) || ipv6Pattern.test(trimmed) || ipv6MappedPattern.test(trimmed)) {
-    // Validate IPv4 octets are <= 255
-    if (ipv4Pattern.test(trimmed)) {
-      const octets = trimmed.split('.').map(Number);
-      if (octets.every(o => o >= 0 && o <= 255)) {
-        return trimmed;
-      }
+  if (ipv4Pattern.test(trimmed)) {
+    const octets = trimmed.split('.').map(Number);
+    if (octets.every(o => o >= 0 && o <= 255)) {
+      return trimmed;
     }
+    // Invalid IPv4 octets - reject
+    console.warn('Invalid IPv4 address (octets out of range):', trimmed.substring(0, 50));
+    return 'unknown';
+  }
+  
+  if (ipv6Pattern.test(trimmed) || ipv6MappedPattern.test(trimmed)) {
     return trimmed;
   }
 
