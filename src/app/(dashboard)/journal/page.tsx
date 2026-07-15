@@ -132,9 +132,9 @@ export default function JournalPage() {
               { value: 'general', label: 'عام' },
               { value: 'opening_balance', label: 'افتتاحي' },
               { value: 'accrual', label: 'استحقاق' },
-            ]} />
+            ]} value={form.type} onChange={(value) => setForm({...form, type: value})} />
           </div>
-          <Textarea label="البيان" placeholder="شرح القيد" />
+          <Textarea label="البيان" placeholder="شرح القيد" value={form.البيان} onChange={(e) => setForm({...form, البيان: e.target.value})} />
           <div className="border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-bg-secondary">

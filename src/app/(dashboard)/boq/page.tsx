@@ -107,7 +107,7 @@ export default function BoqPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة بند كمية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Select label="المشروع" options={[{ value: '', label: 'اختر مشروعاً' }]} className="col-span-2" />
+          <Select label="المشروع" options={[{ value: '', label: 'اختر مشروعاً' }]} className="col-span-2" value={form.project_id} onChange={(value) => setForm({...form, project_id: value})} />
           <Input label="كود البند" value={form.كود_البند} onChange={(e) => setForm({...form, كود_البند: e.target.value})} /><Input label="الوحدة" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} />
           <Input label="البيان" className="col-span-2" value={form.البيان} onChange={(e) => setForm({...form, البيان: e.target.value})} />
           <Input label="الكمية" type="number" value={form.quantity} onChange={(e) => setForm({...form, quantity: e.target.value})} /><Input label="سعر الوحدة" type="number" value={form.unit_price} onChange={(e) => setForm({...form, unit_price: e.target.value})} />

@@ -125,10 +125,10 @@ export default function CashPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة معاملة نقدية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
-          <Select label="النوع" options={[{ value: 'revenue', label: 'قبض' }, { value: 'expense', label: 'صرف' }]} />
+          <Select label="النوع" options={[{ value: 'revenue', label: 'قبض' }, { value: 'expense', label: 'صرف' }]} value={form.type} onChange={(value) => setForm({...form, type: value})} />
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} />
-          <Select label="الخزينة/البنك" options={[{ value: '', label: 'اختر' }]} />
-          <Select label="الحساب" options={[{ value: '', label: 'اختر حساباً' }]} className="col-span-2" />
+          <Select label="الخزينة/البنك" options={[{ value: '', label: 'اختر' }]} value={form.الخزينة/البنك} onChange={(value) => setForm({...form, الخزينة/البنك: value})} />
+          <Select label="الحساب" options={[{ value: '', label: 'اختر حساباً' }]} className="col-span-2" value={form.account_id} onChange={(value) => setForm({...form, account_id: value})} />
           <Input label="البيان" className="col-span-2" placeholder="سبب المعاملة" value={form.البيان} onChange={(e) => setForm({...form, البيان: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

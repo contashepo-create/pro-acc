@@ -135,7 +135,7 @@ export default function ProjectsPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة مشروع جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="اسم المشروع" placeholder="اسم المشروع" className="col-span-2" value={form.اسم_المشروع} onChange={(e) => setForm({...form, اسم_المشروع: e.target.value})} />
-          <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
+          <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" value={form.client_id} onChange={(value) => setForm({...form, client_id: value})} />
           <Input label="قيمة العقد" type="number" value={form.قيمة_العقد} onChange={(e) => setForm({...form, قيمة_العقد: e.target.value})} />
           <Input label="تاريخ البداية" type="date" value={form.تاريخ_البداية} onChange={(e) => setForm({...form, تاريخ_البداية: e.target.value})} />
           <Input label="تاريخ النهاية" type="date" value={form.تاريخ_النهاية} onChange={(e) => setForm({...form, تاريخ_النهاية: e.target.value})} />

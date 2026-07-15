@@ -103,8 +103,8 @@ export default function CategoriesPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة تصنيف" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
-          <Select label="النوع" options={[{ value: 'revenue', label: 'إيراد' }, { value: 'expense', label: 'مصروف' }]} />
-          <Select label="الحساب" options={[{ value: '', label: 'اختر حساباً' }]} />
+          <Select label="النوع" options={[{ value: 'revenue', label: 'إيراد' }, { value: 'expense', label: 'مصروف' }]} value={form.type} onChange={(value) => setForm({...form, type: value})} />
+          <Select label="الحساب" options={[{ value: '', label: 'اختر حساباً' }]} value={form.account_id} onChange={(value) => setForm({...form, account_id: value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

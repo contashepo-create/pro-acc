@@ -105,10 +105,10 @@ export default function CustodiesPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عهدة" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Select label="الموظف" options={[{ value: '', label: 'اختر موظفاً' }]} className="col-span-2" />
+          <Select label="الموظف" options={[{ value: '', label: 'اختر موظفاً' }]} className="col-span-2" value={form.employee_id} onChange={(value) => setForm({...form, employee_id: value})} />
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} />
-          <Select label="الخزينة/البنك" options={[{ value: '', label: 'اختر' }]} />
+          <Select label="الخزينة/البنك" options={[{ value: '', label: 'اختر' }]} value={form.الخزينة/البنك} onChange={(value) => setForm({...form, الخزينة/البنك: value})} />
           <Input label="البيان" className="col-span-2" placeholder="وصف العهدة" value={form.البيان} onChange={(e) => setForm({...form, البيان: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
