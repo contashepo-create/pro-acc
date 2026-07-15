@@ -4,11 +4,15 @@ function cleanEnv(s: string): string {
   return (s || '').replace(/^\uFEFF/, '').trim();
 }
 
-const rawSecret = process.env.TOKEN_SECRET;
-if (!rawSecret) {
-  throw new Error('TOKEN_SECRET environment variable is required');
+// Lazy evaluation: check TOKEN_SECRET at usage time, not import time.
+// This allows the module to be imported during Next.js build even without env vars.
+function getTokenSecret(): string {
+  const rawSecret = process.env.TOKEN_SECRET;
+  if (!rawSecret) {
+    throw new Error('TOKEN_SECRET environment variable is required');
+  }
+  return cleanEnv(rawSecret);
 }
-const TOKEN_SECRET = cleanEnv(rawSecret);
 const KEY_LENGTH = 64;
 
 export async function hashPassword(password: string): Promise<string> {
@@ -32,6 +36,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 export function createToken(userId: string, role: string): string {
+  const TOKEN_SECRET = getTokenSecret();
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const now = Math.floor(Date.now() / 1000);
   const payload = Buffer.from(
@@ -50,6 +55,7 @@ export function createToken(userId: string, role: string): string {
 
 export function verifyToken(token: string): { userId: string; role: string } | null {
   try {
+    const TOKEN_SECRET = getTokenSecret();
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [header, payload, signature] = parts;

@@ -6,10 +6,14 @@ import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-if (!process.env.PRO_ACCOUNTANT_LICENSE_SALT) {
-  throw new Error('PRO_ACCOUNTANT_LICENSE_SALT environment variable is required');
+// Lazy evaluation: check env var at usage time, not import time
+function getLicenseSalt(): string {
+  const salt = process.env.PRO_ACCOUNTANT_LICENSE_SALT;
+  if (!salt) {
+    throw new Error('PRO_ACCOUNTANT_LICENSE_SALT environment variable is required');
+  }
+  return salt;
 }
-const SALT = process.env.PRO_ACCOUNTANT_LICENSE_SALT;
 
 function requireAdmin(request: NextRequest) {
   const token = request.cookies.get('admin_token')?.value;
@@ -65,7 +69,7 @@ export async function POST(req: NextRequest) {
 
     const machineId = companyId || 'web-' + Date.now();
     const raw = `${planCode}-${machineId}-${durationMonths}`;
-    const hmac = createHmac('sha256', SALT).update(raw).digest('hex').toUpperCase().slice(0, 16);
+    const hmac = createHmac('sha256', getLicenseSalt()).update(raw).digest('hex').toUpperCase().slice(0, 16);
     const code = `${planCode}-${machineId.slice(0, 8)}-${durationMonths}-${hmac}`;
 
     const endDate = new Date();

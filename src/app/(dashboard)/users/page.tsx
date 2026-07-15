@@ -161,7 +161,7 @@ export default function UsersPage() {
   if (loading) {
     return (
       <div className="p-6">
-        <PageHeader title="إدارة المستخدمين" subtitle="إضافة وإدارة أعضاء فريق العمل" />
+        <PageHeader title="إدارة المستخدمين" description="إضافة وإدارة أعضاء فريق العمل" />
         <div className="animate-pulse space-y-4 mt-6">
           <div className="h-24 bg-bg-secondary rounded-xl" />
           <div className="h-64 bg-bg-secondary rounded-xl" />
@@ -172,7 +172,7 @@ export default function UsersPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <PageHeader title="إدارة المستخدمين" subtitle="إضافة وإدارة أعضاء فريق العمل" />
+      <PageHeader title="إدارة المستخدمين" description="إضافة وإدارة أعضاء فريق العمل" />
 
       {toast && (
         <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />
