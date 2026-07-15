@@ -116,11 +116,11 @@ export default function InventoryPage() {
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة صنف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="الكود" placeholder="كود الصنف" />
-          <Input label="الوحدة" placeholder="مثال: كيس، طن" />
-          <Input label="اسم الصنف" placeholder="اسم الصنف" className="col-span-2" />
+          <Input label="الكود" placeholder="كود الصنف" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
+          <Input label="الوحدة" placeholder="مثال: كيس، طن" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} />
+          <Input label="اسم الصنف" placeholder="اسم الصنف" className="col-span-2" value={form.اسم_الصنف} onChange={(e) => setForm({...form, اسم_الصنف: e.target.value})} />
           <Select label="المستودع" options={[{ value: '', label: 'اختر مستودعاً' }]} className="col-span-2" />
-          <Input label="التصنيف" placeholder="اختياري" className="col-span-2" />
+          <Input label="التصنيف" placeholder="اختياري" className="col-span-2" value={form.التصنيف} onChange={(e) => setForm({...form, التصنيف: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

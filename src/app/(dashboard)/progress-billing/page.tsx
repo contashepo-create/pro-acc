@@ -107,9 +107,9 @@ export default function ProgressBillingPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة فاتورة مرحلية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="رقم الفاتورة" /><Select label="المشروع" options={[{ value: '', label: 'اختر' }]} />
-          <Input label="التاريخ" type="date" /><Input label="المبلغ الإجمالي" type="number" />
-          <Input label="نسبة الاحتجاز (%)" type="number" /><Input label="ملاحظات" className="col-span-2" />
+          <Input label="رقم الفاتورة" value={form.invoice_number} onChange={(e) => setForm({...form, invoice_number: e.target.value})} /><Select label="المشروع" options={[{ value: '', label: 'اختر' }]} />
+          <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} /><Input label="المبلغ الإجمالي" type="number" value={form.المبلغ_الإجمالي} onChange={(e) => setForm({...form, المبلغ_الإجمالي: e.target.value})} />
+          <Input label="نسبة الاحتجاز (%)" type="number" value={form.نسبة_الاحتجاز_(%)} onChange={(e) => setForm({...form, نسبة_الاحتجاز_(%): e.target.value})} /><Input label="ملاحظات" className="col-span-2" value={form.ملاحظات} onChange={(e) => setForm({...form, ملاحظات: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

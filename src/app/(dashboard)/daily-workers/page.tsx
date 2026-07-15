@@ -108,12 +108,12 @@ export default function DailyWorkersPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="تسجيل عامل يومي" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Select label="المشروع" options={[{ value: '', label: 'اختر' }]} className="col-span-2" />
-          <Input label="اسم العامل" />
+          <Input label="اسم العامل" value={form.اسم_العامل} onChange={(e) => setForm({...form, اسم_العامل: e.target.value})} />
           <Select label="النوع" options={[{ value: 'worker', label: 'عامل' }, { value: 'foreman', label: 'رئيس عمال' }]} />
-          <Input label="التاريخ" type="date" />
-          <Input label="السعر اليومي" type="number" />
-          <Input label="ساعات العمل" type="number" defaultValue="8" />
-          <Input label="ملاحظات" className="col-span-2" />
+          <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+          <Input label="السعر اليومي" type="number" value={form.السعر_اليومي} onChange={(e) => setForm({...form, السعر_اليومي: e.target.value})} />
+          <Input label="ساعات العمل" type="number" defaultValue="8" value={form.ساعات_العمل} onChange={(e) => setForm({...form, ساعات_العمل: e.target.value})} />
+          <Input label="ملاحظات" className="col-span-2" value={form.ملاحظات} onChange={(e) => setForm({...form, ملاحظات: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

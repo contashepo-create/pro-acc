@@ -138,8 +138,8 @@ export default function InvoicesPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة فاتورة جديدة" size="xl" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="التاريخ" type="date" />
-            <Input label="تاريخ الاستحقاق" type="date" />
+            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+            <Input label="تاريخ الاستحقاق" type="date" value={form.due_date} onChange={(e) => setForm({...form, due_date: e.target.value})} />
             <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
             <Select label="المشروع" options={[{ value: '', label: 'اختياري' }]} className="col-span-2" />
           </div>

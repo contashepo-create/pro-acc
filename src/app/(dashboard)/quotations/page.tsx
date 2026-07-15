@@ -110,8 +110,8 @@ export default function QuotationsPage() {
         footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="التاريخ" type="date" />
-            <Input label="صالح حتى" type="date" />
+            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+            <Input label="صالح حتى" type="date" value={form.صالح_حتى} onChange={(e) => setForm({...form, صالح_حتى: e.target.value})} />
             <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
           </div>
           <Textarea label="ملاحظات" />

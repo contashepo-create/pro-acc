@@ -104,11 +104,11 @@ export default function ContactsPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة جهة اتصال" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="الاسم" className="col-span-2" />
+          <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
           <Select label="النوع" options={[{ value: 'client', label: 'عميل' }, { value: 'supplier', label: 'مورد' }, { value: 'subcontractor', label: 'مقاول باطن' }, { value: 'both', label: 'عميل ومورد' }]} />
-          <Input label="الجوال" /><Input label="البريد الإلكتروني" type="email" />
-          <Input label="العنوان" className="col-span-2" />
-          <Input label="الرقم الضريبي" /><Input label="السجل التجاري" />
+          <Input label="الجوال" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} /><Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} />
+          <Input label="العنوان" className="col-span-2" value={form.address} onChange={(e) => setForm({...form, address: e.target.value})} />
+          <Input label="الرقم الضريبي" value={form.tax_number} onChange={(e) => setForm({...form, tax_number: e.target.value})} /><Input label="السجل التجاري" value={form.commercial_registration} onChange={(e) => setForm({...form, commercial_registration: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

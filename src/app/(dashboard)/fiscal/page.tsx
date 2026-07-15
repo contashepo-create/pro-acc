@@ -115,9 +115,9 @@ export default function FiscalPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة سنة مالية" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="الاسم" placeholder="مثال: 2026" className="col-span-2" />
-          <Input label="تاريخ البداية" type="date" />
-          <Input label="تاريخ النهاية" type="date" />
+          <Input label="الاسم" placeholder="مثال: 2026" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
+          <Input label="تاريخ البداية" type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} />
+          <Input label="تاريخ النهاية" type="date" value={form.end_date} onChange={(e) => setForm({...form, end_date: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

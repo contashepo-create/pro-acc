@@ -107,13 +107,13 @@ export default function EmployeesPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة موظف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="الاسم" placeholder="اسم الموظف" className="col-span-2" />
-          <Input label="الجوال" placeholder="05xxxxxxxx" />
-          <Input label="البريد الإلكتروني" type="email" />
-          <Input label="الراتب" type="number" />
-          <Input label="تاريخ التعيين" type="date" />
-          <Input label="القسم" />
-          <Input label="المسمى الوظيفي" />
+          <Input label="الاسم" placeholder="اسم الموظف" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
+          <Input label="الجوال" placeholder="05xxxxxxxx" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} />
+          <Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} />
+          <Input label="الراتب" type="number" value={form.salary} onChange={(e) => setForm({...form, salary: e.target.value})} />
+          <Input label="تاريخ التعيين" type="date" value={form.تاريخ_التعيين} onChange={(e) => setForm({...form, تاريخ_التعيين: e.target.value})} />
+          <Input label="القسم" value={form.department} onChange={(e) => setForm({...form, department: e.target.value})} />
+          <Input label="المسمى الوظيفي" value={form.المسمى_الوظيفي} onChange={(e) => setForm({...form, المسمى_الوظيفي: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
