@@ -87,16 +87,22 @@ export async function POST(request: NextRequest) {
     }
     if (jl.length > 0) await s.from('journal_lines').insert(jl);
 
-    if (disbursement_type === 'supplier' && invoice_items && invoice_items.length > 0) {
-      for (const item of invoice_items) {
-        await s.from('disbursement_invoice_items').insert({ disbursement_voucher_id: nextNum, purchase_invoice_id: item.purchase_invoice_id, amount: item.amount });
-      }
-    }
-
     const { data: vd, error: vdErr } = await s.from('voucher_disbursements')
       .insert({ company_id: companyId, number: nextNum, date, disbursement_type, contact_id: contact_id || null, employee_id: employee_id || null, amount, bank_safe_id, reason, journal_entry_id: jeId, created_by: userId })
       .select('*').single();
     if (vdErr) throw vdErr;
+
+    // FIXED: Insert invoice items AFTER creating the voucher (use vd.id instead of nextNum)
+    if (disbursement_type === 'supplier' && invoice_items && invoice_items.length > 0) {
+      for (const item of invoice_items) {
+        await s.from('disbursement_invoice_items').insert({ 
+          disbursement_voucher_id: vd.id, 
+          purchase_invoice_id: item.purchase_invoice_id, 
+          amount: item.amount 
+        });
+      }
+    }
+
     return success(vd, 201);
   } catch (err) {
     return handleApiError(err);

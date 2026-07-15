@@ -19,7 +19,7 @@ RETURNS INT AS $$
 DECLARE next_num INT;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext(p_company_id::text || 'purchase_invoices'));
-  SELECT COALESCE(MAX(invoice_number), 0) + 1 INTO next_num FROM purchase_invoices WHERE company_id = p_company_id;
+  SELECT COALESCE(MAX(number), 0) + 1 INTO next_num FROM purchase_invoices WHERE company_id = p_company_id;
   RETURN next_num;
 END;
 $$ LANGUAGE plpgsql;
@@ -30,7 +30,7 @@ RETURNS INT AS $$
 DECLARE next_num INT;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext(p_company_id::text || 'purchase_orders'));
-  SELECT COALESCE(MAX(po_number), 0) + 1 INTO next_num FROM purchase_orders WHERE company_id = p_company_id;
+  SELECT COALESCE(MAX(number), 0) + 1 INTO next_num FROM purchase_orders WHERE company_id = p_company_id;
   RETURN next_num;
 END;
 $$ LANGUAGE plpgsql;
@@ -51,7 +51,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'purchase_invoices_company_number_unique'
   ) THEN
-    ALTER TABLE purchase_invoices ADD CONSTRAINT purchase_invoices_company_number_unique UNIQUE (company_id, invoice_number);
+    ALTER TABLE purchase_invoices ADD CONSTRAINT purchase_invoices_company_number_unique UNIQUE (company_id, number);
   END IF;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
@@ -61,7 +61,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'purchase_orders_company_number_unique'
   ) THEN
-    ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_company_number_unique UNIQUE (company_id, po_number);
+    ALTER TABLE purchase_orders ADD CONSTRAINT purchase_orders_company_number_unique UNIQUE (company_id, number);
   END IF;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;

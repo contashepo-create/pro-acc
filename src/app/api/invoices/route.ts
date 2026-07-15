@@ -129,7 +129,10 @@ export async function POST(request: NextRequest) {
       const { data: jeRes, error: jeErr } = await s.from('journal_entries')
         .insert({
           company_id: auth.companyId, number, date, type: 'general',
-          description: `فاتورة مبيعات رقم ${number}`, reference: `INV-${number}`, created_by: auth.userId,
+          description: `فاتورة مبيعات رقم ${number}`, 
+          reference_type: 'invoice',
+          reference_id: invoiceId,
+          created_by: auth.userId,
         }).select('id').single();
       if (jeErr) throw jeErr;
       journalEntryId = jeRes.id;

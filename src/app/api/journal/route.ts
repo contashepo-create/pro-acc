@@ -262,14 +262,29 @@ export async function POST(request: NextRequest) {
     for (const line of lines) {
       const { data: account } = await s.from('accounts')
         .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
-      if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
+      if (!account) {
+        // Rollback on account not found
+        await s.from('journal_entries').delete().eq('id', entryId);
+        throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
+      }
       const { error: lineErr } = await s.from('journal_lines').insert({
         journal_entry_id: entryId, account_id: account.id, account_code: line.accountCode,
         debit: line.debit, credit: line.credit, description: line.description || null,
       });
-      if (lineErr) throw lineErr;
+      if (lineErr) {
+        // Rollback on line insert failure
+        await s.from('journal_entries').delete().eq('id', entryId);
+        throw lineErr;
+      }
       totalDebit += line.debit;
       totalCredit += line.credit;
+    }
+
+    // SECURITY: Verify balance AFTER inserting all lines (defense in depth)
+    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+      await s.from('journal_lines').delete().eq('journal_entry_id', entryId);
+      await s.from('journal_entries').delete().eq('id', entryId);
+      return error(`خطأ في الموازنة: مجموع الديون (${totalDebit}) لا يساوي مجموع الدائنين (${totalCredit})`);
     }
 
     const { data: linesRes } = await s.from('journal_lines')
