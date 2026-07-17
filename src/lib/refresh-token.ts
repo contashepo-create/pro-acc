@@ -3,7 +3,7 @@ import { randomBytes, createHash } from 'crypto';
 import { createToken } from '@/lib/auth';
 
 // @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
