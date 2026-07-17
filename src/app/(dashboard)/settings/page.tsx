@@ -202,7 +202,7 @@ export default function SettingsPage() {
             <Input label="اسم الشركة" value={companyName} onChange={(e: any) => setCompanyName(e.target.value)} className="col-span-2" />
             <Input label="رقم السجل التجاري" value={registration} onChange={(e: any) => setRegistration(e.target.value)} />
             <Input label="الرقم الضريبي" value={taxNumber} onChange={(e: any) => setTaxNumber(e.target.value)} />
-            <Input label="الهاتف" value={phone} onChange={(e: any) => setPhone(e.target.value)} />
+            <Input label="الهاتف" type="tel" type="tel" value={phone} onChange={(e: any) => setPhone(e.target.value)} />
             <Input label="البريد الإلكتروني" type="email" value={email} onChange={(e: any) => setEmail(e.target.value)} />
             <Input label="العنوان" value={address} onChange={(e: any) => setAddress(e.target.value)} className="col-span-2" />
           </div>

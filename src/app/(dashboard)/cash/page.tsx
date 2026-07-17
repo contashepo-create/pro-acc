@@ -129,7 +129,7 @@ export default function CashPage() {
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} />
           <Select label="الخزينة/البنك" options={[{ value: '', label: 'اختر' }]} value={form.الخزينة/البنك} onChange={(value) => setForm({...form, الخزينة/البنك: value})} />
           <Select label="الحساب" options={[{ value: '', label: 'اختر حساباً' }]} className="col-span-2" value={form.account_id} onChange={(value) => setForm({...form, account_id: value})} />
-          <Input label="البيان" className="col-span-2" placeholder="سبب المعاملة" value={form.البيان} onChange={(e) => setForm({...form, البيان: e.target.value})} />
+          <Input label="البيان" className="col-span-2" placeholder="سبب المعاملة" value={form.description} onChange={(e) => setForm({...form, البيان: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

@@ -109,7 +109,7 @@ export default function CustodiesPage() {
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} />
           <Select label="الخزينة/البنك" options={[{ value: '', label: 'اختر' }]} value={form.الخزينة/البنك} onChange={(value) => setForm({...form, الخزينة/البنك: value})} />
-          <Input label="البيان" className="col-span-2" placeholder="وصف العهدة" value={form.البيان} onChange={(e) => setForm({...form, البيان: e.target.value})} />
+          <Input label="البيان" className="col-span-2" placeholder="وصف العهدة" value={form.description} onChange={(e) => setForm({...form, البيان: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

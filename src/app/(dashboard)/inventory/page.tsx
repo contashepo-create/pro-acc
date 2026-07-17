@@ -118,7 +118,7 @@ export default function InventoryPage() {
         <div className="grid grid-cols-2 gap-4">
           <Input label="الكود" placeholder="كود الصنف" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
           <Input label="الوحدة" placeholder="مثال: كيس، طن" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} />
-          <Input label="اسم الصنف" placeholder="اسم الصنف" className="col-span-2" value={form.اسم_الصنف} onChange={(e) => setForm({...form, اسم_الصنف: e.target.value})} />
+          <Input label="اسم الصنف" placeholder="اسم الصنف" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, اسم_الصنف: e.target.value})} />
           <Select label="المستودع" options={[{ value: '', label: 'اختر مستودعاً' }]} className="col-span-2" value={form.warehouse_id} onChange={(value) => setForm({...form, warehouse_id: value})} />
           <Input label="التصنيف" placeholder="اختياري" className="col-span-2" value={form.التصنيف} onChange={(e) => setForm({...form, التصنيف: e.target.value})} />
                   {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}

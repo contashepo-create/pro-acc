@@ -111,7 +111,7 @@ export default function QuotationsPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
-            <Input label="صالح حتى" type="date" value={form.صالح_حتى} onChange={(e) => setForm({...form, صالح_حتى: e.target.value})} />
+            <Input label="صالح حتى" type="date" value={form.valid_until} onChange={(e) => setForm({...form, صالح_حتى: e.target.value})} />
             <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" value={form.client_id} onChange={(value) => setForm({...form, client_id: value})} />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} />

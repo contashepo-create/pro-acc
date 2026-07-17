@@ -103,7 +103,7 @@ export default function ClientsPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عميل" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
-          <Input label="الجوال" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} />
+          <Input label="الجوال" type="tel" type="tel" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} />
           <Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} />
           <Input label="الرقم الضريبي" value={form.tax_number} onChange={(e) => setForm({...form, tax_number: e.target.value})} />
           <Input label="الحد الائتماني" type="number" value={form.credit_limit} onChange={(e) => setForm({...form, credit_limit: e.target.value})} />
