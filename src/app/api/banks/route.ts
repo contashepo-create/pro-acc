@@ -21,13 +21,35 @@ export async function GET(request: NextRequest) {
 
     if (queryError) throw queryError;
 
-    const banks = (data || []).map((bs: any) => ({
-      ...bs,
-      account_code: bs.accounts?.code || null,
-      account_name: bs.accounts?.name || null,
+    // Calculate balance for each bank/safe from journal entries
+    const banksWithBalance = await Promise.all((data || []).map(async (bs: any) => {
+      let balance = 0;
+      
+      // If the bank has an associated account, calculate balance from journal_lines
+      if (bs.account_id) {
+        const { data: lines } = await s.from('journal_lines')
+          .select('debit, credit')
+          .eq('account_id', bs.account_id);
+        
+        if (lines) {
+          const totalDebit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
+          const totalCredit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.credit) || 0), 0);
+          balance = totalDebit - totalCredit;
+        }
+      } else {
+        // Fallback to opening_balance if no account linked
+        balance = parseFloat(bs.opening_balance) || 0;
+      }
+
+      return {
+        ...bs,
+        account_code: bs.accounts?.code || null,
+        account_name: bs.accounts?.name || null,
+        balance, // Add calculated balance
+      };
     }));
 
-    return success({ banks, total: count || 0, page, pageSize });
+    return success({ banks: banksWithBalance, total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
   }
@@ -42,9 +64,11 @@ export async function POST(request: NextRequest) {
 
     if (!name || !type) return error('name, type are required');
 
-    // إنشاء حساب تلقائياً في شجرة الحسابات
+    // Create auto account in chart of accounts
     const accountCode = `${type === 'bank' ? '1120' : '1110'}-${Date.now().toString().slice(-4)}`;
     const parentCode = type === 'bank' ? '1120' : '1110';
+    
+    console.log(`Creating auto account for bank/safe: ${name} with code ${accountCode}`);
     
     const newAccount = await createAutoAccount({
       companyId: auth.companyId,
@@ -56,31 +80,41 @@ export async function POST(request: NextRequest) {
     });
 
     if (!newAccount) {
-      return error('فشل إنشاء الحساب المحاسبي للبنك/الصندوق');
+      console.error('Failed to create auto account for bank/safe');
+      return error('فشل إنشاء الحساب المحاسبي للبنك/الصندوق. تأكد من وجود الحساب الأب في شجرة الحسابات');
     }
 
-    // إنشاء البنك/الصندوق وربطه بالحساب
+    console.log(`Auto account created successfully: ${newAccount.id}`);
+
+    // Create bank/safe and link to account
     const { data: result, error: insertError } = await s.from('banks_safes')
       .insert({
         company_id: auth.companyId,
         name,
         type,
         account_number: account_number || null,
-        account_id: newAccount.id, // ربط بالحساب المُنشأ تلقائياً
+        account_id: newAccount.id, // Link to auto-created account
         opening_balance: opening_balance || 0,
         is_active: true,
       })
       .select('*')
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      console.error('Failed to create bank/safe:', insertError);
+      throw insertError;
+    }
+
+    console.log(`Bank/safe created successfully: ${result.id}`);
 
     return success({
       ...result,
       account_code: newAccount.code,
       account_name: newAccount.name,
+      balance: opening_balance || 0, // Include initial balance
     }, 201);
   } catch (err) {
+    console.error('Error in POST /api/banks:', err);
     return handleApiError(err);
   }
 }

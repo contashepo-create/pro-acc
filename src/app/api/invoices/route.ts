@@ -18,24 +18,56 @@ export async function GET(request: NextRequest) {
     const dateFrom = url.searchParams.get('from');
     const dateTo = url.searchParams.get('to');
 
-    let query = s.from('invoices')
-      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at, contacts(name)', { count: 'exact' })
-      .eq('company_id', auth.companyId)
-      .is('deleted_at', null);
-    if (status) query = query.eq('status', status);
-    if (clientId) query = query.eq('contact_id', clientId);
-    if (dateFrom) query = query.gte('date', dateFrom);
-    if (dateTo) query = query.lte('date', dateTo);
+    // Try with all columns first, fallback to basic columns if some don't exist
+    let data, queryError, count;
+    try {
+      let query = s.from('invoices')
+        .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at, contacts(name)', { count: 'exact' })
+        .eq('company_id', auth.companyId);
+      
+      if (status) query = query.eq('status', status);
+      if (clientId) query = query.eq('contact_id', clientId);
+      if (dateFrom) query = query.gte('date', dateFrom);
+      if (dateTo) query = query.lte('date', dateTo);
 
-    const offset = (page - 1) * pageSize;
-    const { data, error: queryError, count } = await query
-      .order('date', { ascending: false }).order('number', { ascending: false })
-      .range(offset, offset + pageSize - 1);
+      const offset = (page - 1) * pageSize;
+      const result = await query
+        .order('date', { ascending: false }).order('number', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      
+      data = result.data;
+      queryError = result.error;
+      count = result.count;
+    } catch (err) {
+      // Fallback to basic columns if vat_rate, vat_amount don't exist
+      console.warn('Invoice GET with extended columns failed, using basic columns:', err);
+      let query = s.from('invoices')
+        .select('id, number, contact_id, project_id, date, due_date, subtotal, tax_amount, tax_rate, total, status, notes, journal_entry_id, created_at, contacts(name)', { count: 'exact' })
+        .eq('company_id', auth.companyId);
+      
+      if (status) query = query.eq('status', status);
+      if (clientId) query = query.eq('contact_id', clientId);
+      if (dateFrom) query = query.gte('date', dateFrom);
+      if (dateTo) query = query.lte('date', dateTo);
+
+      const offset = (page - 1) * pageSize;
+      const result = await query
+        .order('date', { ascending: false }).order('number', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      
+      data = result.data;
+      queryError = result.error;
+      count = result.count;
+    }
 
     if (queryError) throw queryError;
 
     const invoices = (data || []).map((i: any) => ({
-      ...i, client_name: i.contacts?.name || '',
+      ...i, 
+      client_name: i.contacts?.name || '',
+      // Map tax columns to vat columns for consistency
+      vat_rate: i.vat_rate || i.tax_rate || 0.15,
+      vat_amount: i.vat_amount || i.tax_amount || 0,
     }));
 
     return success({ invoices, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) || 1 });
@@ -67,8 +99,7 @@ export async function POST(request: NextRequest) {
     const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes } = parsed.data;
     const year = date.substring(0, 4);
 
-    // FIXED: Atomic sequence generation via SQL function to avoid race condition
-    // Fallback to old logic if function doesn't exist yet
+    // Get next invoice number
     let number: number;
     try {
       const { data: rpcData, error: rpcError } = await s.rpc('next_invoice_number', {
@@ -78,11 +109,11 @@ export async function POST(request: NextRequest) {
       if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
       number = rpcData as number;
     } catch {
-      // Fallback (old logic) - will be removed after migration 007 runs
+      // Fallback to sequence table
       const { data: seqExisting } = await s.from('invoice_sequences')
         .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
       if (seqExisting) {
-        number = seqExisting.last_number + 1;
+        number = (seqExisting as any).last_number + 1;
         await s.from('invoice_sequences').update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
       } else {
         number = 1;
@@ -90,34 +121,81 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const computedVat = vatAmount ?? subtotal * vatRate;
+    const computedVat = vatAmount ?? subtotal * (vatRate || 0.15);
     const computedTotal = total ?? subtotal + computedVat;
 
-    // Use transaction-like pattern with manual rollback
     let invoiceId: string | null = null;
     let journalEntryId: string | null = null;
 
     try {
-      const { data: invoiceRes, error: invErr } = await s.from('invoices')
-        .insert({
-          company_id: auth.companyId, number, contact_id: clientId, project_id: projectId || null,
-          date, due_date: dueDate, subtotal, vat_rate: vatRate, vat_amount: computedVat,
-          total: computedTotal, status: 'unpaid', notes: notes || null, created_by: auth.userId,
-        })
-        .select('id, number, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes')
-        .single();
+      // Try with extended columns first
+      let invoiceRes: any = null;
+      let invErr: any = null;
+      
+      try {
+        const result = await s.from('invoices')
+          .insert({
+            company_id: auth.companyId, 
+            number, 
+            contact_id: clientId, 
+            project_id: projectId || null,
+            date, 
+            due_date: dueDate, 
+            subtotal, 
+            vat_rate: vatRate || 0.15, 
+            vat_amount: computedVat,
+            total: computedTotal, 
+            status: 'unpaid', 
+            notes: notes || null, 
+            created_by: auth.userId,
+          })
+          .select('id, number, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes')
+          .single();
+        
+        invoiceRes = result.data;
+        invErr = result.error;
+      } catch {
+        // Fallback to basic columns
+        console.warn('Invoice insert with extended columns failed, using basic columns');
+        const result = await s.from('invoices')
+          .insert({
+            company_id: auth.companyId, 
+            number, 
+            contact_id: clientId, 
+            project_id: projectId || null,
+            date, 
+            due_date: dueDate, 
+            subtotal, 
+            tax_rate: vatRate || 0.15, 
+            tax_amount: computedVat,
+            total: computedTotal, 
+            status: 'unpaid', 
+            notes: notes || null,
+          })
+          .select('id, number, date, due_date, subtotal, tax_rate, tax_amount, total, status, notes')
+          .single();
+        
+        invoiceRes = result.data;
+        invErr = result.error;
+      }
+
       if (invErr) throw invErr;
       invoiceId = invoiceRes.id;
 
+      // Insert invoice items
       for (const item of items) {
         const itemTotal = item.total ?? item.quantity * item.unitPrice;
         const { error: itemErr } = await s.from('invoice_items').insert({
-          invoice_id: invoiceId, description: item.description, quantity: item.quantity,
-          unit_price: item.unitPrice, total: itemTotal,
+          invoice_id: invoiceId, 
+          description: item.description, 
+          quantity: item.quantity,
+          unit_price: item.unitPrice, 
+          total: itemTotal,
         });
         if (itemErr) throw itemErr;
       }
 
+      // Get accounts for journal entry
       const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle();
       const { data: revenueAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
       const { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle();
@@ -126,32 +204,89 @@ export async function POST(request: NextRequest) {
         throw new Error('الحسابات الأساسية مفقودة. يرجى التأكد من وجود حسابات العملاء (1130) والإيرادات (4100)');
       }
 
-      const { data: jeRes, error: jeErr } = await s.from('journal_entries')
-        .insert({
-          company_id: auth.companyId, number, date, type: 'general',
-          description: `فاتورة مبيعات رقم ${number}`, 
-          reference_type: 'invoice',
-          reference_id: invoiceId,
-          created_by: auth.userId,
-        }).select('id').single();
+      // Try to create journal entry with extended columns
+      let jeRes: any = null;
+      let jeErr: any = null;
+
+      try {
+        const result = await s.from('journal_entries')
+          .insert({
+            company_id: auth.companyId, 
+            number, 
+            date, 
+            type: 'general',
+            description: `فاتورة مبيعات رقم ${number}`, 
+            reference_type: 'invoice',
+            reference_id: invoiceId,
+            created_by: auth.userId,
+          })
+          .select('id')
+          .single();
+        
+        jeRes = result.data;
+        jeErr = result.error;
+      } catch {
+        // Fallback to basic columns
+        const result = await s.from('journal_entries')
+          .insert({
+            company_id: auth.companyId, 
+            number, 
+            date, 
+            type: 'general',
+            description: `فاتورة مبيعات رقم ${number}`,
+          })
+          .select('id')
+          .single();
+        
+        jeRes = result.data;
+        jeErr = result.error;
+      }
+
       if (jeErr) throw jeErr;
       journalEntryId = jeRes.id;
 
+      // Create journal lines
       const journalLines: any[] = [
-        { journal_entry_id: journalEntryId, account_id: arAccount.id, account_code: '1130', debit: computedTotal, credit: 0, description: `فاتورة مبيعات رقم ${number}` },
-        { journal_entry_id: journalEntryId, account_id: revenueAccount.id, account_code: '4100', debit: 0, credit: subtotal, description: `إيراد فاتورة رقم ${number}` },
+        { 
+          journal_entry_id: journalEntryId, 
+          account_id: arAccount.id, 
+          account_code: '1130', 
+          debit: computedTotal, 
+          credit: 0, 
+          description: `فاتورة مبيعات رقم ${number}` 
+        },
+        { 
+          journal_entry_id: journalEntryId, 
+          account_id: revenueAccount.id, 
+          account_code: '4100', 
+          debit: 0, 
+          credit: subtotal, 
+          description: `إيراد فاتورة رقم ${number}` 
+        },
       ];
+      
       if (computedVat > 0 && vatAccount) {
-        journalLines.push({ journal_entry_id: journalEntryId, account_id: vatAccount.id, account_code: '2120', debit: 0, credit: computedVat, description: `ضريبة فاتورة رقم ${number}` });
+        journalLines.push({ 
+          journal_entry_id: journalEntryId, 
+          account_id: vatAccount.id, 
+          account_code: '2120', 
+          debit: 0, 
+          credit: computedVat, 
+          description: `ضريبة فاتورة رقم ${number}` 
+        });
       }
+      
       const { error: linesErr } = await s.from('journal_lines').insert(journalLines);
       if (linesErr) throw linesErr;
 
+      // Update invoice with journal entry ID
       const { error: updateErr } = await s.from('invoices').update({ journal_entry_id: journalEntryId }).eq('id', invoiceId);
       if (updateErr) throw updateErr;
 
+      // Get invoice items for response
       const { data: itemsRes } = await s.from('invoice_items')
-        .select('id, description, quantity, unit_price, total').eq('invoice_id', invoiceId);
+        .select('id, description, quantity, unit_price, total')
+        .eq('invoice_id', invoiceId);
 
       // Audit log
       try {
@@ -165,11 +300,9 @@ export async function POST(request: NextRequest) {
         });
       } catch {}
 
-      // ZATCA Phase 2: Generate QR code data for the invoice
-      // This is stored in the response so the frontend can render the QR image
+      // ZATCA QR code (optional)
       let zatcaQRData: string | null = null;
       try {
-        // Get company info for QR (seller name + VAT number)
         const { data: company } = await s.from('companies')
           .select('name, tax_number')
           .eq('id', auth.companyId)
@@ -192,20 +325,26 @@ export async function POST(request: NextRequest) {
           if (validation.valid) {
             zatcaQRData = generateZatcaQRData(qrPayload);
             
-            // Store QR data in the invoice for later retrieval
-            await s.from('invoices')
-              .update({ zatca_qr: zatcaQRData })
-              .eq('id', invoiceId);
-          } else {
-            console.warn('ZATCA QR validation failed:', validation.errors);
+            try {
+              await s.from('invoices')
+                .update({ zatca_qr: zatcaQRData })
+                .eq('id', invoiceId);
+            } catch {
+              // zatca_qr column might not exist
+              console.warn('zatca_qr column not found, skipping QR storage');
+            }
           }
         }
       } catch (zatcaErr) {
-        // Don't fail invoice creation if ZATCA QR generation fails
-        console.warn('ZATCA QR generation failed (invoice still created):', zatcaErr);
+        console.warn('ZATCA QR generation failed:', zatcaErr);
       }
 
-      return success({ ...invoiceRes, items: itemsRes || [], journalEntryId, zatcaQRData }, 201);
+      return success({ 
+        ...invoiceRes, 
+        items: itemsRes || [], 
+        journalEntryId, 
+        zatcaQRData 
+      }, 201);
     } catch (txErr) {
       // Rollback on failure
       console.error('Invoice creation failed, rolling back:', txErr);
@@ -224,7 +363,7 @@ export async function POST(request: NextRequest) {
       throw txErr;
     }
   } catch (err) {
-    if (err.message?.includes('مفقودة')) return error(err.message);
+    if ((err as Error).message?.includes('مفقودة')) return error((err as Error).message);
     return handleApiError(err);
   }
 }
