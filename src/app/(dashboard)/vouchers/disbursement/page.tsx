@@ -11,17 +11,18 @@ import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
+import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function DisbursementPage() {
   const [disbursements, setDisbursements] = useState<any[]>([]);
   const [banks, setBanks] = useState<any[]>([]);
-  const [contacts, setContacts] = useState<any[]>([]);
+  const [suppliers, setSuppliers] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-
+  const [editingDisbursement, setEditingDisbursement] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
@@ -47,14 +48,18 @@ export default function DisbursementPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const res = await fetch('/api/vouchers/disbursement', {
-        method: 'POST',
+      const url = editingDisbursement ? `/api/vouchers/disbursement/${editingDisbursement.id}` : '/api/vouchers/disbursement';
+      const method = editingDisbursement ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       });
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
+        setEditingDisbursement(null);
         setForm({
           date: new Date().toISOString().split('T')[0],
           disbursement_type: 'supplier',
@@ -75,36 +80,63 @@ export default function DisbursementPage() {
     }
   };
 
+  const handleEdit = async (disbursement: any) => {
+    try {
+      const res = await fetch(`/api/vouchers/disbursement/${disbursement.id}`);
+      const json = await res.json();
+      if (json.success) {
+        setEditingDisbursement(disbursement);
+        setForm({
+          date: json.data.date,
+          disbursement_type: json.data.disbursement_type,
+          bank_safe_id: json.data.bank_safe_id,
+          contact_id: json.data.contact_id || '',
+          employee_id: json.data.employee_id || '',
+          amount: json.data.amount,
+          reason: json.data.reason || '',
+        });
+        setShowModal(true);
+      }
+    } catch (e) {
+      console.error('Failed to load disbursement:', e);
+    }
+  };
+
+  const handleDelete = async (disbursement: any) => {
+    try {
+      const res = await fetch(`/api/vouchers/disbursement/${disbursement.id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        window.location.reload();
+      } else {
+        alert(json.message || 'فشل الحذف');
+      }
+    } catch (e) {
+      alert('خطأ في الاتصال بالخادم');
+    }
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [disRes, bankRes, conRes, empRes] = await Promise.all([
+        const [disRes, bankRes, supRes, empRes] = await Promise.all([
           fetch('/api/vouchers/disbursement'),
           fetch('/api/banks'),
-          fetch('/api/contacts'),
+          fetch('/api/contacts?type=supplier'),
           fetch('/api/employees'),
         ]);
-        const [disJson, bankJson, conJson, empJson] = await Promise.all([
+        const [disJson, bankJson, supJson, empJson] = await Promise.all([
           disRes.json(),
           bankRes.json(),
-          conRes.json(),
+          supRes.json(),
           empRes.json(),
         ]);
-        if (disJson.success) {
-          setDisbursements(disJson.data?.disbursements || []);
-        } else {
-          setError(disJson.message || 'فشل تحميل البيانات');
-        }
-        if (bankJson.success) {
-          setBanks(bankJson.data?.banks || []);
-        }
-        if (conJson.success) {
-          setContacts(conJson.data?.contacts || []);
-        }
-        if (empJson.success) {
-          setEmployees(empJson.data?.employees || []);
-        }
+        if (disJson.success) setDisbursements(disJson.data?.disbursements || []);
+        else setError(disJson.message || 'فشل');
+        if (bankJson.success) setBanks(bankJson.data?.banks || []);
+        if (supJson.success) setSuppliers(supJson.data?.contacts || []);
+        if (empJson.success) setEmployees(empJson.data?.employees || []);
       } catch {
         setError('فشل تحميل البيانات');
       } finally {
@@ -119,9 +151,10 @@ export default function DisbursementPage() {
       supplier: { variant: 'danger', label: 'مورد' },
       client_refund: { variant: 'warning', label: 'عميل' },
       employee_advance: { variant: 'info', label: 'موظف' },
+      subcontractor: { variant: 'accent', label: 'مقاول باطن' },
       other: { variant: 'accent', label: 'أخرى' },
     };
-    const m = map[type] || { variant: 'default' as const, label: type };
+    const m = map[type] || { variant: 'accent', label: type };
     return <Badge variant={m.variant}>{m.label}</Badge>;
   };
 
@@ -133,20 +166,26 @@ export default function DisbursementPage() {
     { key: 'employee_name', label: 'الموظف', sortable: true },
     { key: 'amount', label: 'المبلغ', sortable: true, render: (row: any) => formatCurrency(row.amount) },
     { key: 'bank_name', label: 'الخزينة/البنك' },
+    { key: 'status', label: 'الحالة', render: (row: any) => (
+      <Badge variant={row.status === 'approved' ? 'success' : row.status === 'rejected' ? 'danger' : 'warning'}>
+        {row.status === 'approved' ? 'مؤكدة' : row.status === 'rejected' ? 'مرفوضة' : 'قيد الانتظار'}
+      </Badge>
+    )},
+    {
+      key: 'actions',
+      label: 'إجراءات',
+      render: (row: any) => (
+        <ActionButtons
+          item={row}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+        />
+      ),
+    },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
-
-  if (error) {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="سندات الصرف" description="تسجيل المدفوعات النقدية"
-          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة سند صرف</Button>}
-        />
-        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
-      </div>
-    );
-  }
+  if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
 
   return (
     <div className="space-y-6">
@@ -154,7 +193,7 @@ export default function DisbursementPage() {
         title="سندات الصرف"
         description="تسجيل المدفوعات النقدية"
         actions={
-          <Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>
+          <Button onClick={() => { setEditingDisbursement(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>
             إضافة سند صرف
           </Button>
         }
@@ -166,24 +205,25 @@ export default function DisbursementPage() {
         <DataTable columns={columns} data={disbursements} searchable searchKeys={['number', 'contact_name', 'employee_name']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة سند صرف" size="lg" footer={
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
-        </div>
-      }>
+      <Modal
+        isOpen={showModal}
+        onClose={() => { setShowModal(false); setEditingDisbursement(null); }}
+        title={editingDisbursement ? `تعديل سند صرف #${editingDisbursement.number}` : 'إضافة سند صرف'}
+        size="lg"
+        footer={
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => { setShowModal(false); setEditingDisbursement(null); }}>إلغاء</Button>
+            <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button>
+          </div>
+        }
+      >
         <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input
-              label="التاريخ"
-              type="date"
-              value={form.date}
-              onChange={(e) => setForm({...form, date: e.target.value})}
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
             <Select
               label="نوع السند"
               value={form.disbursement_type}
-              onChange={(value) => setForm({...form, disbursement_type: value})}
+              onChange={(v) => setForm({...form, disbursement_type: v})}
               options={[
                 { value: 'supplier', label: 'دفعة مورد' },
                 { value: 'client_refund', label: 'رد عميل' },
@@ -195,22 +235,16 @@ export default function DisbursementPage() {
             <Select
               label="الخزينة/البنك"
               value={form.bank_safe_id}
-              onChange={(value) => setForm({...form, bank_safe_id: value})}
-              options={[
-                { value: '', label: 'اختر الخزينة/البنك' },
-                ...banks.map(b => ({ value: b.id, label: `${b.name} (${b.type === 'bank' ? 'بنك' : 'صندوق'})` })),
-              ]}
+              onChange={(v) => setForm({...form, bank_safe_id: v})}
+              options={[{ value: '', label: 'اختر' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]}
               className="col-span-2"
             />
             {(form.disbursement_type === 'supplier' || form.disbursement_type === 'subcontractor') && (
               <Select
-                label="المورد/المقاول"
+                label="المورد/المقاول (اختياري)"
                 value={form.contact_id}
-                onChange={(value) => setForm({...form, contact_id: value})}
-                options={[
-                  { value: '', label: 'اختر (اختياري)' },
-                  ...contacts.filter(c => c.type === 'supplier' || c.type === 'both').map(c => ({ value: c.id, label: c.name })),
-                ]}
+                onChange={(v) => setForm({...form, contact_id: v})}
+                options={[{ value: '', label: 'اختر' }, ...suppliers.map((s: any) => ({ value: s.id, label: s.name }))]}
                 className="col-span-2"
               />
             )}
@@ -218,27 +252,13 @@ export default function DisbursementPage() {
               <Select
                 label="الموظف"
                 value={form.employee_id}
-                onChange={(value) => setForm({...form, employee_id: value})}
-                options={[
-                  { value: '', label: 'اختر موظفاً' },
-                  ...employees.map(e => ({ value: e.id, label: e.name })),
-                ]}
+                onChange={(v) => setForm({...form, employee_id: v})}
+                options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e: any) => ({ value: e.id, label: e.name }))]}
                 className="col-span-2"
               />
             )}
-            <Input
-              label="المبلغ"
-              type="number"
-              value={form.amount}
-              onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})}
-            />
-            <Input
-              label="البيان"
-              value={form.reason}
-              onChange={(e) => setForm({...form, reason: e.target.value})}
-              placeholder="سبب الصرف"
-              className="col-span-2"
-            />
+            <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
+            <Input label="البيان" value={form.reason} onChange={(e) => setForm({...form, reason: e.target.value})} placeholder="سبب الصرف" className="col-span-2" />
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Search } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -11,16 +11,17 @@ import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
+import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function ReceiptPage() {
   const [receipts, setReceipts] = useState<any[]>([]);
   const [banks, setBanks] = useState<any[]>([]);
-  const [contacts, setContacts] = useState<any[]>([]);
+  const [clients, setClients] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-
+  const [editingReceipt, setEditingReceipt] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
@@ -45,14 +46,18 @@ export default function ReceiptPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const res = await fetch('/api/vouchers/receipt', {
-        method: 'POST',
+      const url = editingReceipt ? `/api/vouchers/receipt/${editingReceipt.id}` : '/api/vouchers/receipt';
+      const method = editingReceipt ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       });
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
+        setEditingReceipt(null);
         setForm({
           date: new Date().toISOString().split('T')[0],
           receipt_type: 'client',
@@ -72,31 +77,59 @@ export default function ReceiptPage() {
     }
   };
 
+  const handleEdit = async (receipt: any) => {
+    try {
+      const res = await fetch(`/api/vouchers/receipt/${receipt.id}`);
+      const json = await res.json();
+      if (json.success) {
+        setEditingReceipt(receipt);
+        setForm({
+          date: json.data.date,
+          receipt_type: json.data.receipt_type,
+          bank_safe_id: json.data.bank_safe_id,
+          contact_id: json.data.contact_id || '',
+          amount: json.data.amount,
+          reason: json.data.reason || '',
+        });
+        setShowModal(true);
+      }
+    } catch (e) {
+      console.error('Failed to load receipt:', e);
+    }
+  };
+
+  const handleDelete = async (receipt: any) => {
+    try {
+      const res = await fetch(`/api/vouchers/receipt/${receipt.id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        window.location.reload();
+      } else {
+        alert(json.message || 'فشل الحذف');
+      }
+    } catch (e) {
+      alert('خطأ في الاتصال بالخادم');
+    }
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [recRes, bankRes, conRes] = await Promise.all([
+        const [recRes, bankRes, cliRes] = await Promise.all([
           fetch('/api/vouchers/receipt'),
           fetch('/api/banks'),
-          fetch('/api/contacts'),
+          fetch('/api/clients'),
         ]);
-        const [recJson, bankJson, conJson] = await Promise.all([
+        const [recJson, bankJson, cliJson] = await Promise.all([
           recRes.json(),
           bankRes.json(),
-          conRes.json(),
+          cliRes.json(),
         ]);
-        if (recJson.success) {
-          setReceipts(recJson.data?.receipts || []);
-        } else {
-          setError(recJson.message || 'فشل تحميل البيانات');
-        }
-        if (bankJson.success) {
-          setBanks(bankJson.data?.banks || []);
-        }
-        if (conJson.success) {
-          setContacts(conJson.data?.contacts || []);
-        }
+        if (recJson.success) setReceipts(recJson.data?.receipts || []);
+        else setError(recJson.message || 'فشل');
+        if (bankJson.success) setBanks(bankJson.data?.banks || []);
+        if (cliJson.success) setClients(cliJson.data?.clients || []);
       } catch {
         setError('فشل تحميل البيانات');
       } finally {
@@ -112,7 +145,7 @@ export default function ReceiptPage() {
       supplier_refund: { variant: 'info', label: 'مورد' },
       general: { variant: 'accent', label: 'عام' },
     };
-    const m = map[type] || { variant: 'default' as const, label: type };
+    const m = map[type] || { variant: 'info', label: type };
     return <Badge variant={m.variant}>{m.label}</Badge>;
   };
 
@@ -123,20 +156,26 @@ export default function ReceiptPage() {
     { key: 'contact_name', label: 'الطرف', sortable: true },
     { key: 'amount', label: 'المبلغ', sortable: true, render: (row: any) => formatCurrency(row.amount) },
     { key: 'bank_name', label: 'الخزينة/البنك', sortable: true },
+    { key: 'status', label: 'الحالة', render: (row: any) => (
+      <Badge variant={row.status === 'approved' ? 'success' : row.status === 'rejected' ? 'danger' : 'warning'}>
+        {row.status === 'approved' ? 'مؤكدة' : row.status === 'rejected' ? 'مرفوضة' : 'قيد الانتظار'}
+      </Badge>
+    )},
+    {
+      key: 'actions',
+      label: 'إجراءات',
+      render: (row: any) => (
+        <ActionButtons
+          item={row}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+        />
+      ),
+    },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
-
-  if (error) {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="سندات القبض" description="تسجيل المقبوضات النقدية"
-          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة سند قبض</Button>}
-        />
-        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
-      </div>
-    );
-  }
+  if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
 
   return (
     <div className="space-y-6">
@@ -144,7 +183,7 @@ export default function ReceiptPage() {
         title="سندات القبض"
         description="تسجيل المقبوضات النقدية"
         actions={
-          <Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>
+          <Button onClick={() => { setEditingReceipt(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>
             إضافة سند قبض
           </Button>
         }
@@ -156,24 +195,25 @@ export default function ReceiptPage() {
         <DataTable columns={columns} data={receipts} searchable searchKeys={['number', 'contact_name']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة سند قبض" size="lg" footer={
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
-        </div>
-      }>
+      <Modal
+        isOpen={showModal}
+        onClose={() => { setShowModal(false); setEditingReceipt(null); }}
+        title={editingReceipt ? `تعديل سند قبض #${editingReceipt.number}` : 'إضافة سند قبض'}
+        size="lg"
+        footer={
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => { setShowModal(false); setEditingReceipt(null); }}>إلغاء</Button>
+            <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button>
+          </div>
+        }
+      >
         <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input
-              label="التاريخ"
-              type="date"
-              value={form.date}
-              onChange={(e) => setForm({...form, date: e.target.value})}
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
             <Select
               label="نوع السند"
               value={form.receipt_type}
-              onChange={(value) => setForm({...form, receipt_type: value})}
+              onChange={(v) => setForm({...form, receipt_type: v})}
               options={[
                 { value: 'client', label: 'تحصيل من عميل' },
                 { value: 'supplier_refund', label: 'استرداد من مورد' },
@@ -183,38 +223,19 @@ export default function ReceiptPage() {
             <Select
               label="الخزينة/البنك"
               value={form.bank_safe_id}
-              onChange={(value) => setForm({...form, bank_safe_id: value})}
-              options={[
-                { value: '', label: 'اختر الخزينة/البنك' },
-                ...banks.map(b => ({ value: b.id, label: `${b.name} (${b.type === 'bank' ? 'بنك' : 'صندوق'})` })),
-              ]}
-              className="col-span-2"
+              onChange={(v) => setForm({...form, bank_safe_id: v})}
+              options={[{ value: '', label: 'اختر' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]}
             />
             {form.receipt_type === 'client' && (
               <Select
-                label="العميل"
+                label="العميل (اختياري)"
                 value={form.contact_id}
-                onChange={(value) => setForm({...form, contact_id: value})}
-                options={[
-                  { value: '', label: 'اختر عميلاً (اختياري)' },
-                  ...contacts.filter(c => c.type === 'client' || c.type === 'both').map(c => ({ value: c.id, label: c.name })),
-                ]}
-                className="col-span-2"
+                onChange={(v) => setForm({...form, contact_id: v})}
+                options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]}
               />
             )}
-            <Input
-              label="المبلغ"
-              type="number"
-              value={form.amount}
-              onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})}
-            />
-            <Input
-              label="البيان"
-              value={form.reason}
-              onChange={(e) => setForm({...form, reason: e.target.value})}
-              placeholder="سبب القبض"
-              className="col-span-2"
-            />
+            <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
+            <Input label="البيان" value={form.reason} onChange={(e) => setForm({...form, reason: e.target.value})} placeholder="سبب القبض" className="col-span-2" />
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
