@@ -7,6 +7,12 @@ ALTER TABLE custodies ADD COLUMN IF NOT EXISTS remaining_amount NUMERIC(15,2) DE
 ALTER TABLE custodies ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id);
 ALTER TABLE custodies ADD COLUMN IF NOT EXISTS file_number TEXT;
 ALTER TABLE custodies ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE custodies ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE custodies ADD COLUMN IF NOT EXISTS settlement_amount NUMERIC(15,2);
+ALTER TABLE custodies ADD COLUMN IF NOT EXISTS settlement_date DATE;
+ALTER TABLE custodies ADD COLUMN IF NOT EXISTS settlement_description TEXT;
+ALTER TABLE custodies ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE custodies ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 -- Update existing records to have correct remaining
 UPDATE custodies SET 
@@ -111,7 +117,7 @@ SELECT
   c.total_expenses,
   c.remaining_amount,
   c.status,
-  c.description,
+  COALESCE(c.description, c.reason, c.notes) as description,
   c.file_number,
   c.created_at,
   COUNT(ct.id) as transaction_count,
