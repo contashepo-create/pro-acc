@@ -49,6 +49,7 @@ const ALL_MODULES = [
   { id: 'settings', label: 'الإعدادات', icon: '⚙️' },
   { id: 'backup', label: 'النسخ الاحتياطي', icon: '💾' },
   { id: 'subscription', label: 'الباقات', icon: '💳' },
+  { id: 'telegram_integration', label: 'ربط تيليجرام والموافقات', icon: '🤖' },
 ];
 
 export default function PlansPageEnhanced() {

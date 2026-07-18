@@ -1,7 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone, Building2, Calendar, AlertCircle } from 'lucide-react';
+import { 
+  Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone, 
+  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw 
+} from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -41,6 +44,22 @@ export default function SettingsPage() {
   const [subscription, setSubscription] = useState<any>(null);
   const [subLoading, setSubLoading] = useState(true);
 
+  // Telegram Settings State
+  const [telegramAllowed, setTelegramAllowed] = useState(true);
+  const [telegramConfig, setTelegramConfig] = useState<any>({
+    chat_id: '',
+    is_enabled: false,
+    notify_invoices: true,
+    notify_cash_transactions: true,
+    notify_user_logins: true,
+    approvals_enabled: false,
+    approval_threshold: '5000'
+  });
+  const [telegramLoading, setTelegramLoading] = useState(false);
+  const [testRunId, setTestRunId] = useState<string | null>(null);
+  const [testStatus, setTestStatus] = useState<string>(''); // '', 'pending', 'accepted', 'rejected', 'expired'
+  const [testLoading, setTestLoading] = useState(false);
+
   useEffect(() => {
     // Load company data and settings
     fetch('/api/settings')
@@ -78,6 +97,63 @@ export default function SettingsPage() {
       .catch(() => {})
       .finally(() => setSubLoading(false));
   }, []);
+
+  // Load Telegram Configurations on tab click
+  useEffect(() => {
+    if (tab === 'telegram') {
+      fetch('/api/settings/telegram')
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.success) {
+            setTelegramAllowed(d.data.isAllowed);
+            if (d.data.config) {
+              setTelegramConfig({
+                ...d.data.config,
+                approval_threshold: String(d.data.config.approval_threshold || '5000')
+              });
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [tab]);
+
+  // Real-time polling for Telegram Interactive Test Run
+  useEffect(() => {
+    if (testStatus !== 'pending' || !testRunId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/settings/telegram/test?test_run_id=${testRunId}`);
+        const data = await res.json();
+        if (data.success && data.data) {
+          const status = data.data.status;
+          if (status !== 'pending') {
+            setTestStatus(status);
+            clearInterval(interval);
+          }
+        }
+      } catch (e) {
+        console.error('Telegram polling failed:', e);
+      }
+    }, 2000);
+
+    // Expire the test run after 60 seconds to prevent infinite loops
+    const timeout = setTimeout(() => {
+      setTestStatus((current) => {
+        if (current === 'pending') {
+          clearInterval(interval);
+          return 'expired';
+        }
+        return current;
+      });
+    }, 60000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [testStatus, testRunId]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -179,11 +255,67 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSaveTelegram = async () => {
+    setTelegramLoading(true);
+    try {
+      const res = await fetch('/api/settings/telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(telegramConfig),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('تم حفظ إعدادات تيليجرام بنجاح');
+      } else {
+        showToast(data.message || 'فشل الحفظ');
+      }
+    } catch {
+      showToast('حدث خطأ في الاتصال');
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const handleStartTest = async () => {
+    if (!telegramConfig.chat_id) {
+      showToast('يرجى تعيين وحفظ "معرف الدردشة" (Chat ID) أولاً قبل البدء بالفحص');
+      return;
+    }
+    setTestLoading(true);
+    setTestStatus('');
+    setTestRunId(null);
+    try {
+      // First save settings to ensure DB is aligned
+      await fetch('/api/settings/telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(telegramConfig),
+      });
+
+      const res = await fetch('/api/settings/telegram/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestRunId(data.data.testRunId);
+        setTestStatus('pending');
+        showToast('تم إرسال رسالة الفحص لتيليجرام بنجاح');
+      } else {
+        showToast(data.message || 'فشل البدء بالفحص التفاعلي');
+      }
+    } catch {
+      showToast('حدث خطأ في الاتصال بالشبكة');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
   const currentTheme = themes.find((t) => t.id === themeId) || themes[0];
 
   return (
     <div className="space-y-6">
-      <PageHeader title="الإعدادات" description="إعدادات الشركة والنظام" />
+      <PageHeader title="الإعدادات" description="إعدادات الشركة والنظام والربط التقني" />
 
       <Tabs items={[
         { id: 'general', label: 'عام' },
@@ -193,6 +325,7 @@ export default function SettingsPage() {
         { id: 'about', label: 'حول البرنامج' },
         { id: 'appearance', label: 'المظهر' },
         { id: 'notifications', label: 'إشعارات' },
+        { id: 'telegram', label: 'تيليجرام 🤖' },
       ]} activeTab={tab} onChange={setTab} />
 
       {/* General — Company Info */}
@@ -421,7 +554,7 @@ export default function SettingsPage() {
 
       {/* Notifications */}
       {tab === 'notifications' && (
-        <Card title="الإشعارات">
+        <Card title="إشعارات النظام">
           <div className="space-y-3">
             <label className="flex items-center gap-3 cursor-pointer">
               <input type="checkbox" className="w-4 h-4 rounded border-border accent-accent" checked={notifInvoice} onChange={(e)=>setNotifInvoice(e.target.checked)} />
@@ -441,9 +574,186 @@ export default function SettingsPage() {
             </label>
           </div>
           <div className="mt-4">
-            <Button onClick={handleSaveNotifications} leftIcon={<Save size={16} />}>حفظ</Button>
+            <Button onClick={handleSaveNotifications} leftIcon={<Save size={16} />}>حفظ الإشعارات</Button>
           </div>
         </Card>
+      )}
+
+      {/* Telegram Tab */}
+      {tab === 'telegram' && (
+        <div className="space-y-6">
+          {!telegramAllowed ? (
+            <Card>
+              <div className="text-center py-10 px-4">
+                <div className="w-16 h-16 rounded-full bg-warning/10 flex items-center justify-center mx-auto mb-4">
+                  <Bot size={32} className="text-warning" />
+                </div>
+                <h3 className="text-lg font-bold text-text-primary mb-2">ميزة حصرية بالباقة الاحترافية 🚀</h3>
+                <p className="text-sm text-text-muted max-w-md mx-auto mb-6 leading-relaxed">
+                  ميزة ربط تليجرام التفاعلية والموافقات المباشرة عبر الجوال متوفرة للمشتركين في الباقة الاحترافية أو باقة المؤسسات فقط.
+                </p>
+                <Button onClick={() => setTab('subscription')} leftIcon={<CreditCard size={16} />}>
+                  ترقية اشتراكي الآن
+                </Button>
+              </div>
+            </Card>
+          ) : (
+            <>
+              <Card title="إعدادات ربط تليجرام الذكي">
+                <div className="space-y-4">
+                  <div className="p-4 rounded-xl bg-accent/5 border border-accent/10 flex items-start gap-3">
+                    <Bot size={22} className="text-accent shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-bold text-text-primary">كيفية تفعيل البوت المحاسبي؟</h4>
+                      <p className="text-xs text-text-muted leading-relaxed">
+                        1. قم بالبحث عن البوت في تيليجرام: <a href="https://t.me/pro_acc_bot" className="text-accent font-bold hover:underline" target="_blank">@pro_acc_bot</a>.
+                        <br />
+                        2. اضغط على زر ابدأ <b>/start</b> للحصول على معرف الدردشة الخاص بك (Chat ID).
+                        <br />
+                        3. أدخل المعرف الرقمي في الخانة أدناه وقم بتفعيل الربط للحفظ والمزامنة الفورية.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <Input 
+                      label="معرف الدردشة تيليجرام (Chat ID)" 
+                      placeholder="مثال: 987654321" 
+                      value={telegramConfig.chat_id} 
+                      onChange={(e: any) => setTelegramConfig({...telegramConfig, chat_id: e.target.value})} 
+                    />
+                    <div className="flex flex-col justify-end pb-1">
+                      <label className="flex items-center gap-3 cursor-pointer py-3">
+                        <input 
+                          type="checkbox" 
+                          className="w-4 h-4 rounded border-border accent-accent" 
+                          checked={telegramConfig.is_enabled} 
+                          onChange={(e) => setTelegramConfig({...telegramConfig, is_enabled: e.target.checked})} 
+                        />
+                        <span className="text-sm font-semibold">تفعيل البوت العام</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border space-y-3">
+                    <h4 className="text-sm font-bold text-text-secondary">تخصيص الإشعارات المباشرة (تنبيهات لحظية)</h4>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        className="w-4 h-4 rounded border-border accent-accent" 
+                        checked={telegramConfig.notify_invoices} 
+                        onChange={(e) => setTelegramConfig({...telegramConfig, notify_invoices: e.target.checked})} 
+                      />
+                      <span className="text-sm">إرسال تفاصيل الفواتير والتحصيلات فور إصدارها</span>
+                    </label>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        className="w-4 h-4 rounded border-border accent-accent" 
+                        checked={telegramConfig.notify_cash_transactions} 
+                        onChange={(e) => setTelegramConfig({...telegramConfig, notify_cash_transactions: e.target.checked})} 
+                      />
+                      <span className="text-sm">إشعار فوري بحركات النقدية الكبيرة وسندات الصرف والعهود المالية</span>
+                    </label>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        className="w-4 h-4 rounded border-border accent-accent" 
+                        checked={telegramConfig.notify_user_logins} 
+                        onChange={(e) => setTelegramConfig({...telegramConfig, notify_user_logins: e.target.checked})} 
+                      />
+                      <span className="text-sm">تنبيهات أمنية فائرة عند تسجيل دخول الموظفين للرقابة التامة</span>
+                    </label>
+                  </div>
+
+                  <div className="pt-4 border-t border-border space-y-3">
+                    <h4 className="text-sm font-bold text-text-secondary">نظام الموافقات والاعتمادات المالية عبر الجوال (Telegram Approvals)</h4>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        className="w-4 h-4 rounded border-border accent-accent" 
+                        checked={telegramConfig.approvals_enabled} 
+                        onChange={(e) => setTelegramConfig({...telegramConfig, approvals_enabled: e.target.checked})} 
+                      />
+                      <span className="text-sm font-semibold text-accent">تمكين اعتماد الأوامر والقيود اليومية عبر تيليجرام</span>
+                    </label>
+                    
+                    {telegramConfig.approvals_enabled && (
+                      <div className="pl-4 pr-4 py-3 rounded-lg bg-bg-secondary border border-border max-w-md">
+                        <Input 
+                          label="فرض الموافقات فقط للمبالغ التي تتجاوز (ريال):" 
+                          type="number" 
+                          placeholder="5000" 
+                          value={telegramConfig.approval_threshold} 
+                          onChange={(e: any) => setTelegramConfig({...telegramConfig, approval_threshold: e.target.value})} 
+                        />
+                        <p className="text-[10px] text-text-muted mt-1 leading-relaxed">
+                          أي مستند (سند صرف، عهدة، قيد مالي) يتخطى هذا المبلغ، سيتطلب نقرة موافقة تفاعلية من هاتف المدير قبل ترحيله للدفاتر المحاسبية.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-border">
+                    <Button 
+                      onClick={handleSaveTelegram} 
+                      disabled={telegramLoading} 
+                      leftIcon={<Save size={16} />}
+                    >
+                      {telegramLoading ? 'جاري الحفظ...' : 'حفظ إعدادات تيليجرام'}
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Real-time Interactive Test Connection Card */}
+              <Card title="فحص الاتصال والربط التفاعلي اللحظي 🧪">
+                <div className="space-y-4">
+                  <p className="text-xs text-text-muted leading-relaxed">
+                    اضغط على زر الفحص أدناه. سيقوم الموقع بإرسال رسالة تفاعلية ذكية فوراً إلى هاتفك تحتوي على خيار القبول والرفض. 
+                    اضغط عليها وسينعكس اختيارك وتحديثه أمامك على شاشة الموقع فورياً لتتأكد من نجاح الربط بنسبة 100%.
+                  </p>
+
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    <Button 
+                      onClick={handleStartTest} 
+                      disabled={testLoading || testStatus === 'pending'} 
+                      leftIcon={<Send size={16} />} 
+                      className="btn-secondary"
+                    >
+                      {testLoading ? 'جاري التحميل...' : 'إطلاق الفحص التفاعلي اللحظي 🚀'}
+                    </Button>
+
+                    {testStatus === 'pending' && (
+                      <div className="flex items-center gap-2 text-sm text-accent font-semibold animate-pulse">
+                        <RefreshCw size={16} className="animate-spin" />
+                        <span>انتظار النقر على جوالك في تيليجرام... (60 ثانية)</span>
+                      </div>
+                    )}
+
+                    {testStatus === 'accepted' && (
+                      <div className="p-2.5 rounded-lg bg-success/10 border border-success/30 text-success text-xs font-bold">
+                        تم تأكيد فحص الربط التفاعلي بنجاح! الحالة: مقبول وموافق عليه من هاتف المدير ✅
+                      </div>
+                    )}
+
+                    {testStatus === 'rejected' && (
+                      <div className="p-2.5 rounded-lg bg-danger/10 border border-danger/30 text-danger text-xs font-bold">
+                        تم تأكيد فحص الربط التفاعلي بنجاح! الحالة: تم الرفض والمرفوض من هاتف المدير ❌
+                      </div>
+                    )}
+
+                    {testStatus === 'expired' && (
+                      <div className="p-2.5 rounded-lg bg-warning/10 border border-warning/30 text-warning text-xs font-bold">
+                        انتهت مهلة الفحص المتاحة (60 ثانية) دون الضغط على الزر. يرجى المحاولة مجدداً.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            </>
+          )}
+        </div>
       )}
 
       {toast && (
