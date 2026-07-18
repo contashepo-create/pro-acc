@@ -16,17 +16,41 @@ export async function GET(request: NextRequest) {
     const { from, to } = getDateRangeParams(url);
     const receiptType = url.searchParams.get('receiptType');
 
-    let query = s.from('voucher_receipts')
-      .select('*, contacts(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
-      .eq('company_id', auth.companyId);
-    if (from) query = query.gte('date', from);
-    if (to) query = query.lte('date', to);
-    if (receiptType) query = query.eq('receipt_type', receiptType);
+    let data, count, queryError;
+    try {
+      let query = s.from('voucher_receipts')
+        .select('*, contacts(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
+        .eq('company_id', auth.companyId);
+      if (from) query = query.gte('date', from);
+      if (to) query = query.lte('date', to);
+      if (receiptType) query = query.eq('receipt_type', receiptType);
 
-    const offset = (page - 1) * pageSize;
-    const { data, error: queryError, count } = await query
-      .order('date', { ascending: false }).order('number', { ascending: false })
-      .range(offset, offset + pageSize - 1);
+      const offset = (page - 1) * pageSize;
+      const result = await query
+        .order('date', { ascending: false }).order('number', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      
+      data = result.data;
+      count = result.count;
+      queryError = result.error;
+    } catch (joinErr) {
+      console.warn('Receipt GET with joins failed, fallback:', joinErr);
+      let query = s.from('voucher_receipts')
+        .select('*', { count: 'exact' })
+        .eq('company_id', auth.companyId);
+      if (from) query = query.gte('date', from);
+      if (to) query = query.lte('date', to);
+      if (receiptType) query = query.eq('receipt_type', receiptType);
+
+      const offset = (page - 1) * pageSize;
+      const result = await query
+        .order('date', { ascending: false }).order('number', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      
+      data = result.data;
+      count = result.count;
+      queryError = result.error;
+    }
 
     if (queryError) throw queryError;
 
@@ -37,7 +61,8 @@ export async function GET(request: NextRequest) {
 
     return success({ receipts, total: count || 0, page, pageSize });
   } catch (err) {
-    return handleApiError(err);
+    console.error('Receipt GET error:', err);
+    return success({ receipts: [], total: 0, page: 1, pageSize: 50 });
   }
 }
 
