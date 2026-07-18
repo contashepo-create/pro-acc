@@ -104,7 +104,8 @@ AFTER INSERT OR DELETE ON custody_transactions
 FOR EACH ROW EXECUTE FUNCTION update_custody_remaining();
 
 -- 7. View for custody file summary
-CREATE OR REPLACE VIEW vw_custody_files AS
+DROP VIEW IF EXISTS vw_custody_files;
+CREATE VIEW vw_custody_files AS
 SELECT 
   c.id,
   c.company_id,
