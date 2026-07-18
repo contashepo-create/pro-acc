@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { createAutoAccount } from '@/lib/auto-account';
 
 const sb = () => getSupabase();
 
@@ -37,17 +38,35 @@ export async function POST(request: NextRequest) {
     const auth = await requireApiAuth(request);
     const s = sb();
     const data = await parseBody(request);
-    const { name, type, account_number, account_id, opening_balance } = data;
+    const { name, type, account_number, opening_balance } = data;
 
     if (!name || !type) return error('name, type are required');
 
+    // إنشاء حساب تلقائياً في شجرة الحسابات
+    const accountCode = `${type === 'bank' ? '1120' : '1110'}-${Date.now().toString().slice(-4)}`;
+    const parentCode = type === 'bank' ? '1120' : '1110';
+    
+    const newAccount = await createAutoAccount({
+      companyId: auth.companyId,
+      code: accountCode,
+      name: name,
+      type: 'asset',
+      parentCode: parentCode,
+      openingBalance: opening_balance || 0,
+    });
+
+    if (!newAccount) {
+      return error('فشل إنشاء الحساب المحاسبي للبنك/الصندوق');
+    }
+
+    // إنشاء البنك/الصندوق وربطه بالحساب
     const { data: result, error: insertError } = await s.from('banks_safes')
       .insert({
         company_id: auth.companyId,
         name,
         type,
         account_number: account_number || null,
-        account_id: account_id || null,
+        account_id: newAccount.id, // ربط بالحساب المُنشأ تلقائياً
         opening_balance: opening_balance || 0,
         is_active: true,
       })
@@ -56,7 +75,11 @@ export async function POST(request: NextRequest) {
 
     if (insertError) throw insertError;
 
-    return success(result, 201);
+    return success({
+      ...result,
+      account_code: newAccount.code,
+      account_name: newAccount.name,
+    }, 201);
   } catch (err) {
     return handleApiError(err);
   }

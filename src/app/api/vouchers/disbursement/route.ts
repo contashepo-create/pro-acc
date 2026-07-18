@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
-// RBAC import added
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
@@ -16,7 +15,6 @@ export async function GET(request: NextRequest) {
     const { from, to } = getDateRangeParams(url);
     const disbType = url.searchParams.get('disbursementType');
 
-    // Try with joins, fallback to simple select if joins fail
     let data, count, queryError;
     try {
       let query = s.from('voucher_disbursements')
@@ -36,7 +34,6 @@ export async function GET(request: NextRequest) {
       queryError = result.error;
     } catch (joinErr) {
       console.warn('Disbursement GET with joins failed, trying simple:', joinErr);
-      // Fallback to simple select without joins
       let query = s.from('voucher_disbursements')
         .select('*', { count: 'exact' })
         .eq('company_id', auth.companyId);
@@ -67,7 +64,6 @@ export async function GET(request: NextRequest) {
     return success({ disbursements, total: count || 0, page, pageSize });
   } catch (err) {
     console.error('Disbursement GET error:', err);
-    // Return empty instead of error to prevent frontend from showing server error
     return success({ disbursements: [], total: 0, page: 1, pageSize: 50 });
   }
 }
@@ -87,50 +83,138 @@ export async function POST(request: NextRequest) {
 
     const nextNum = await getNextVoucherNumber(companyId, 'voucher_disbursements');
 
-    const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
-    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+    // الحصول على حساب البنك/الخزينة
+    const { data: bankAcc } = await s.from('banks_safes')
+      .select('account_id')
+      .eq('id', bank_safe_id)
+      .maybeSingle();
+
+    if (!bankAcc?.account_id) {
+      return error('الحساب البنكي غير موجود لهذا البنك/الصندوق');
+    }
+
+    // إنشاء القيد المحاسبي
     const jeNum = await getNextJournalNumber(companyId, date);
-    const { data: je } = await s.from('journal_entries')
-      .insert({ company_id: companyId, number: jeNum, date, type: 'general', description: `سند صرف: ${reason}`, created_by: userId })
-      .select('id').single();
+    const { data: je, error: jeErr } = await s.from('journal_entries')
+      .insert({ 
+        company_id: companyId, 
+        number: jeNum, 
+        date, 
+        type: 'general', 
+        description: `سند صرف: ${reason}`, 
+        created_by: userId 
+      })
+      .select('id')
+      .single();
+
+    if (jeErr) throw jeErr;
     const jeId = je.id;
 
+    // إنشاء سطور القيد
     const jl: any[] = [];
-    if (bankAcc?.account_id) jl.push({ journal_entry_id: jeId, account_id: bankAcc.account_id, debit: 0, credit: amount });
+    
+    // دائن: البنك/الخزينة
+    jl.push({ 
+      journal_entry_id: jeId, 
+      account_id: bankAcc.account_id, 
+      debit: 0, 
+      credit: amount 
+    });
+
+    // مدين: الحساب المقابل بناءً على نوع السند
+    let counterpartAccountId: string | null = null;
 
     if (disbursement_type === 'supplier' || disbursement_type === 'supplier_advance') {
-      const { data: apAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
-      if (apAcc) jl.push({ journal_entry_id: jeId, account_id: apAcc.id, debit: amount, credit: 0 });
+      // دفع لمورد -> مدين: الموردون (2110)
+      const { data: apAcc } = await s.from('accounts')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE)
+        .maybeSingle();
+      counterpartAccountId = apAcc?.id || null;
     } else if (disbursement_type === 'client_refund') {
-      const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE).maybeSingle();
-      if (arAcc) jl.push({ journal_entry_id: jeId, account_id: arAcc.id, debit: amount, credit: 0 });
+      // رد لعميل -> مدين: العملاء (1130)
+      const { data: arAcc } = await s.from('accounts')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE)
+        .maybeSingle();
+      counterpartAccountId = arAcc?.id || null;
     } else if (disbursement_type === 'employee_advance') {
-      const { data: advAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_ADVANCES).maybeSingle();
-      if (advAcc) jl.push({ journal_entry_id: jeId, account_id: advAcc.id, debit: amount, credit: 0 });
+      // سلفة موظف -> مدين: سلف الموظفين (1160)
+      const { data: advAcc } = await s.from('accounts')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('code', ACCOUNT_CODES.EMPLOYEE_ADVANCES)
+        .maybeSingle();
+      counterpartAccountId = advAcc?.id || null;
+      
       if (employee_id) {
-        await s.from('employee_advances').insert({ company_id: companyId, employee_id, date, type: 'advance', amount, description: reason });
+        await s.from('employee_advances')
+          .insert({ 
+            company_id: companyId, 
+            employee_id, 
+            date, 
+            type: 'advance', 
+            amount, 
+            description: reason 
+          });
       }
     } else if (disbursement_type === 'subcontractor') {
-      const { data: subAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES).maybeSingle();
-      if (subAcc) jl.push({ journal_entry_id: jeId, account_id: subAcc.id, debit: amount, credit: 0 });
-    } else {
-      if (account_id) jl.push({ journal_entry_id: jeId, account_id: account_id, debit: amount, credit: 0 });
+      // دفع مقاول باطن -> مدين: مقاولو الباطن (2150)
+      const { data: subAcc } = await s.from('accounts')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('code', ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES)
+        .maybeSingle();
+      counterpartAccountId = subAcc?.id || null;
+    } else if (account_id) {
+      // حساب محدد
+      counterpartAccountId = account_id;
     }
-    if (jl.length > 0) await s.from('journal_lines').insert(jl);
 
+    if (counterpartAccountId) {
+      jl.push({ 
+        journal_entry_id: jeId, 
+        account_id: counterpartAccountId, 
+        debit: amount, 
+        credit: 0 
+      });
+    }
+
+    if (jl.length > 0) {
+      await s.from('journal_lines').insert(jl);
+    }
+
+    // حفظ السند
     const { data: vd, error: vdErr } = await s.from('voucher_disbursements')
-      .insert({ company_id: companyId, number: nextNum, date, disbursement_type, contact_id: contact_id || null, employee_id: employee_id || null, amount, bank_safe_id, reason, journal_entry_id: jeId, created_by: userId })
-      .select('*').single();
+      .insert({ 
+        company_id: companyId, 
+        number: nextNum, 
+        date, 
+        disbursement_type, 
+        contact_id: contact_id || null, 
+        employee_id: employee_id || null, 
+        amount, 
+        bank_safe_id, 
+        reason, 
+        journal_entry_id: jeId, 
+        created_by: userId 
+      })
+      .select('*')
+      .single();
+
     if (vdErr) throw vdErr;
 
-    // FIXED: Insert invoice items AFTER creating the voucher (use vd.id instead of nextNum)
+    // إذا كان هناك فواتير، تحديثها
     if (disbursement_type === 'supplier' && invoice_items && invoice_items.length > 0) {
       for (const item of invoice_items) {
-        await s.from('disbursement_invoice_items').insert({ 
-          disbursement_voucher_id: vd.id, 
-          purchase_invoice_id: item.purchase_invoice_id, 
-          amount: item.amount 
-        });
+        await s.from('disbursement_invoice_items')
+          .insert({ 
+            disbursement_voucher_id: vd.id, 
+            purchase_invoice_id: item.purchase_invoice_id, 
+            amount: item.amount 
+          });
       }
     }
 
@@ -149,18 +233,32 @@ export async function DELETE(request: NextRequest) {
     if (!id) return error('id is required');
 
     const { data: vd } = await s.from('voucher_disbursements')
-      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+
     if (!vd) return error('سند الصرف غير موجود');
 
     if (vd.journal_entry_id) {
       await s.from('journal_lines').delete().eq('journal_entry_id', vd.journal_entry_id);
       await s.from('journal_entries').delete().eq('id', vd.journal_entry_id);
     }
+
     if (vd.employee_id && vd.disbursement_type === 'employee_advance') {
       const { data: adv } = await s.from('employee_advances')
-        .select('id').eq('employee_id', vd.employee_id).eq('amount', vd.amount).eq('type', 'advance').limit(1).maybeSingle();
-      if (adv) await s.from('employee_advances').delete().eq('id', adv.id);
+        .select('id')
+        .eq('employee_id', vd.employee_id)
+        .eq('amount', vd.amount)
+        .eq('type', 'advance')
+        .limit(1)
+        .maybeSingle();
+
+      if (adv) {
+        await s.from('employee_advances').delete().eq('id', adv.id);
+      }
     }
+
     await s.from('voucher_disbursements').delete().eq('id', id);
     return success({ deleted: true });
   } catch (err) {
