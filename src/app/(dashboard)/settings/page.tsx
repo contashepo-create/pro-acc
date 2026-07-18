@@ -61,7 +61,7 @@ export default function SettingsPage() {
   const [testLoading, setTestLoading] = useState(false);
 
   // تليجرام الموحد للمنصة - يتم تعديله من خلال متغيرات المطور
-  const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'ProAccErpBot';
+  const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'Proaccwebcontroller_bot';
 
   useEffect(() => {
     // Load company data and settings
