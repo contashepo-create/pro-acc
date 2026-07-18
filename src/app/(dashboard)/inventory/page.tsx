@@ -1,30 +1,45 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Eye } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
-import { Badge } from '@/components/ui/Badge';
-import { Tabs } from '@/components/ui/Tabs';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatCurrency } from '@/lib/utils';
 
 export default function InventoryPage() {
   const [items, setItems] = useState<any[]>([]);
+  const [warehouses, setWarehouses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({
+    name: '',
+    code: '',
+    unit: '',
+    quantity: 0,
+    unit_price: 0,
+    warehouse_id: '',
+  });
 
   const handleSave = async () => {
+    if (!form.name || !form.code) {
+      setSaveError('الاسم والرمز مطلوبان');
+      return;
+    }
+    if (!form.warehouse_id) {
+      setSaveError('يجب اختيار المستودع');
+      return;
+    }
+
     setSaving(true);
     setSaveError('');
     try {
@@ -36,33 +51,44 @@ export default function InventoryPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({});
-        // Refresh data
+        setForm({
+          name: '',
+          code: '',
+          unit: '',
+          quantity: 0,
+          unit_price: 0,
+          warehouse_id: '',
+        });
         window.location.reload();
       } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
+        setSaveError(json.message || 'فشل الحفظ');
       }
     } catch (e: any) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+      setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
 
-
-
-
-
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const res = await fetch('/api/inventory');
-        const json = await res.json();
-        if (json.success) {
-          setItems(json.data?.items || []);
+        const [itemRes, whRes] = await Promise.all([
+          fetch('/api/inventory'),
+          fetch('/api/inventory/warehouses'),
+        ]);
+        const [itemJson, whJson] = await Promise.all([
+          itemRes.json(),
+          whRes.json(),
+        ]);
+        if (itemJson.success) {
+          setItems(itemJson.data?.items || []);
         } else {
-          setError(json.message || 'فشل تحميل البيانات');
+          setError(itemJson.message || 'فشل تحميل البيانات');
+        }
+        if (whJson.success) {
+          setWarehouses(whJson.data?.warehouses || []);
         }
       } catch {
         setError('فشل تحميل البيانات');
@@ -74,12 +100,11 @@ export default function InventoryPage() {
   }, []);
 
   const columns = [
-    { key: 'code', label: 'الكود', sortable: true },
-    { key: 'name', label: 'اسم الصنف', sortable: true },
-    { key: 'unit', label: 'الوحدة', sortable: true },
+    { key: 'code', label: 'الرمز', sortable: true },
+    { key: 'name', label: 'الاسم', sortable: true },
+    { key: 'unit', label: 'الوحدة' },
     { key: 'quantity', label: 'الكمية', sortable: true },
-    { key: 'unit_price', label: 'سعر الوحدة', sortable: true, render: (row: any) => formatCurrency(row.unit_price) },
-    { key: 'warehouse_name', label: 'المستودع', sortable: true },
+    { key: 'unit_price', label: 'السعر', render: (row: any) => formatCurrency(row.unit_price) },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
@@ -87,8 +112,8 @@ export default function InventoryPage() {
   if (error) {
     return (
       <div className="space-y-6">
-        <PageHeader title="المخزون" description="إدارة أصناف المخزون"
-          actions={<div className="flex gap-2"><Button variant="secondary" leftIcon={<Eye size={18} />}>الحركات</Button><Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة صنف</Button></div>}
+        <PageHeader title="المخزون" description="إدارة المخزون والأصناف"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة صنف</Button>}
         />
         <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
       </div>
@@ -97,31 +122,39 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="المخزون"
-        description="إدارة أصناف المخزون"
-        actions={
-          <div className="flex gap-2">
-            <Button variant="secondary" leftIcon={<Eye size={18} />}>الحركات</Button>
-            <Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة صنف</Button>
-          </div>
-        }
+      <PageHeader title="المخزون" description="إدارة المخزون والأصناف"
+        actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة صنف</Button>}
       />
-
       {items.length === 0 ? (
-        <EmptyState title="لا توجد أصناف" description="أضف صنفاً جديداً للمخزون" actionLabel="إضافة صنف" onAction={() => setShowModal(true)} />
+        <EmptyState title="لا توجد أصناف" actionLabel="إضافة صنف" onAction={() => setShowModal(true)} />
       ) : (
         <DataTable columns={columns} data={items} searchable searchKeys={['name', 'code']} />
       )}
-
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة صنف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="الكود" placeholder="كود الصنف" />
-          <Input label="الوحدة" placeholder="مثال: كيس، طن" />
-          <Input label="اسم الصنف" placeholder="اسم الصنف" className="col-span-2" />
-          <Select label="المستودع" options={[{ value: '', label: 'اختر مستودعاً' }]} className="col-span-2" />
-          <Input label="التصنيف" placeholder="اختياري" className="col-span-2" />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة صنف مخزون" footer={
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
+        </div>
+      }>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="الاسم" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} className="col-span-2" />
+            <Input label="الرمز" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
+            <Input label="الوحدة" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} placeholder="مثال: قطعة، كيلو" />
+            <Input label="الكمية" type="number" value={form.quantity} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
+            <Input label="سعر الوحدة" type="number" value={form.unit_price} onChange={(e) => setForm({...form, unit_price: parseFloat(e.target.value) || 0})} />
+            <Select
+              label="المستودع"
+              value={form.warehouse_id}
+              onChange={(value) => setForm({...form, warehouse_id: value})}
+              options={[
+                { value: '', label: 'اختر مستودعاً' },
+                ...warehouses.map(w => ({ value: w.id, label: w.name })),
+              ]}
+              className="col-span-2"
+            />
+          </div>
+          {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
     </div>

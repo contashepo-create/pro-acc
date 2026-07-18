@@ -8,22 +8,37 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
-import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
-import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function DailyWorkersPage() {
-  const [records, setRecords] = useState<any[]>([]);
+  const [workers, setWorkers] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({
+    name: '',
+    phone: '',
+    daily_wage: 0,
+    project_id: '',
+    date: new Date().toISOString().split('T')[0],
+    days: 1,
+  });
 
   const handleSave = async () => {
+    if (!form.name) {
+      setSaveError('اسم العامل مطلوب');
+      return;
+    }
+    if (!form.daily_wage || form.daily_wage <= 0) {
+      setSaveError('يجب إدخال الأجر اليومي');
+      return;
+    }
+
     setSaving(true);
     setSaveError('');
     try {
@@ -35,33 +50,44 @@ export default function DailyWorkersPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({});
-        // Refresh data
+        setForm({
+          name: '',
+          phone: '',
+          daily_wage: 0,
+          project_id: '',
+          date: new Date().toISOString().split('T')[0],
+          days: 1,
+        });
         window.location.reload();
       } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
+        setSaveError(json.message || 'فشل الحفظ');
       }
     } catch (e: any) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+      setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
 
-
-
-
-
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const res = await fetch('/api/daily-workers');
-        const json = await res.json();
-        if (json.success) {
-          setRecords(json.data?.records || []);
+        const [workRes, projRes] = await Promise.all([
+          fetch('/api/daily-workers'),
+          fetch('/api/projects'),
+        ]);
+        const [workJson, projJson] = await Promise.all([
+          workRes.json(),
+          projRes.json(),
+        ]);
+        if (workJson.success) {
+          setWorkers(workJson.data?.workers || []);
         } else {
-          setError(json.message || 'فشل تحميل البيانات');
+          setError(workJson.message || 'فشل تحميل البيانات');
+        }
+        if (projJson.success) {
+          setProjects(projJson.data?.projects || []);
         }
       } catch {
         setError('فشل تحميل البيانات');
@@ -73,13 +99,11 @@ export default function DailyWorkersPage() {
   }, []);
 
   const columns = [
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
-    { key: 'worker_name', label: 'الاسم', sortable: true },
-    { key: 'worker_type', label: 'النوع', render: (row: any) => <Badge variant={row.worker_type === 'foreman' ? 'info' : 'accent'}>{row.worker_type === 'foreman' ? 'رئيس عمال' : 'عامل'}</Badge> },
-    { key: 'daily_rate', label: 'السعر اليومي', render: (row: any) => formatCurrency(row.daily_rate) },
-    { key: 'hours_worked', label: 'ساعات العمل' },
-    { key: 'total_amount', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total_amount) },
-    { key: 'project_name', label: 'المشروع', sortable: true },
+    { key: 'name', label: 'الاسم', sortable: true },
+    { key: 'phone', label: 'الجوال' },
+    { key: 'daily_wage', label: 'الأجر اليومي' },
+    { key: 'days', label: 'الأيام' },
+    { key: 'total', label: 'الإجمالي' },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
@@ -87,7 +111,7 @@ export default function DailyWorkersPage() {
   if (error) {
     return (
       <div className="space-y-6">
-        <PageHeader title="العمال اليوميون" description="تسجيل العمال اليوميين في المشاريع"
+        <PageHeader title="العمالة اليومية" description="إدارة العمالة اليومية والأجور"
           actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عامل</Button>}
         />
         <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
@@ -97,24 +121,39 @@ export default function DailyWorkersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="العمال اليوميون" description="تسجيل العمال اليوميين في المشاريع"
+      <PageHeader title="العمالة اليومية" description="إدارة العمالة اليومية والأجور"
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عامل</Button>}
       />
-      {records.length === 0 ? (
-        <EmptyState title="لا توجد سجلات" actionLabel="إضافة عامل" onAction={() => setShowModal(true)} />
+      {workers.length === 0 ? (
+        <EmptyState title="لا يوجد عمال" actionLabel="إضافة عامل" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={records} searchable searchKeys={['worker_name', 'project_name']} />
+        <DataTable columns={columns} data={workers} searchable searchKeys={['name']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="تسجيل عامل يومي" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
-          <Select label="المشروع" options={[{ value: '', label: 'اختر' }]} className="col-span-2" />
-          <Input label="اسم العامل" />
-          <Select label="النوع" options={[{ value: 'worker', label: 'عامل' }, { value: 'foreman', label: 'رئيس عمال' }]} />
-          <Input label="التاريخ" type="date" />
-          <Input label="السعر اليومي" type="number" />
-          <Input label="ساعات العمل" type="number" defaultValue="8" />
-          <Input label="ملاحظات" className="col-span-2" />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عامل يومي" footer={
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
+        </div>
+      }>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="الاسم" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} className="col-span-2" />
+            <Input label="الجوال" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} />
+            <Input label="الأجر اليومي" type="number" value={form.daily_wage} onChange={(e) => setForm({...form, daily_wage: parseFloat(e.target.value) || 0})} />
+            <Input label="عدد الأيام" type="number" value={form.days} onChange={(e) => setForm({...form, days: parseInt(e.target.value) || 1})} />
+            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+            <Select
+              label="المشروع (اختياري)"
+              value={form.project_id}
+              onChange={(value) => setForm({...form, project_id: value})}
+              options={[
+                { value: '', label: 'بدون مشروع' },
+                ...projects.map(p => ({ value: p.id, label: p.name })),
+              ]}
+              className="col-span-2"
+            />
+          </div>
+          {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
     </div>

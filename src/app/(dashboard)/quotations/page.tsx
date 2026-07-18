@@ -8,23 +8,33 @@ import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
-import { Textarea } from '@/components/ui/Textarea';
 import { Badge } from '@/components/ui/Badge';
+import { Textarea } from '@/components/ui/Textarea';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function QuotationsPage() {
   const [quotations, setQuotations] = useState<any[]>([]);
+  const [clients, setClients] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({
+    date: new Date().toISOString().split('T')[0],
+    contact_id: '',
+    notes: '',
+  });
 
   const handleSave = async () => {
+    if (!form.contact_id) {
+      setSaveError('يجب اختيار عميل');
+      return;
+    }
+
     setSaving(true);
     setSaveError('');
     try {
@@ -36,47 +46,65 @@ export default function QuotationsPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({});
-        // Refresh data
+        setForm({
+          date: new Date().toISOString().split('T')[0],
+          contact_id: '',
+          notes: '',
+        });
         window.location.reload();
       } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
+        setSaveError(json.message || 'فشل الحفظ');
       }
     } catch (e: any) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+      setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
 
-
-
-
-
   useEffect(() => {
-    fetch('/api/quotations')
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.success) setQuotations(d.data?.quotations || d.data || []);
-        else setError(d.message || 'فشل تحميل البيانات');
-      })
-      .catch(() => setError('فشل تحميل البيانات'))
-      .finally(() => setLoading(false));
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const [quotRes, clientRes] = await Promise.all([
+          fetch('/api/quotations'),
+          fetch('/api/clients'),
+        ]);
+        const [quotJson, clientJson] = await Promise.all([
+          quotRes.json(),
+          clientRes.json(),
+        ]);
+        if (quotJson.success) {
+          setQuotations(quotJson.data?.quotations || []);
+        } else {
+          setError(quotJson.message || 'فشل تحميل البيانات');
+        }
+        if (clientJson.success) {
+          setClients(clientJson.data?.clients || []);
+        }
+      } catch {
+        setError('فشل تحميل البيانات');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
   }, []);
 
   const statusBadge = (status: string) => {
-    const map: Record<string, { variant: 'warning' | 'info' | 'success' | 'danger'; label: string }> = {
+    const map: Record<string, { variant: 'success' | 'warning' | 'info' | 'danger' | 'accent'; label: string }> = {
       draft: { variant: 'warning', label: 'مسودة' },
       sent: { variant: 'info', label: 'مرسل' },
       accepted: { variant: 'success', label: 'مقبول' },
       rejected: { variant: 'danger', label: 'مرفوض' },
+      converted: { variant: 'accent', label: 'محول' },
     };
-    const m = map[status] || { variant: 'warning' as const, label: status };
+    const m = map[status] || { variant: 'warning', label: status };
     return <Badge variant={m.variant}>{m.label}</Badge>;
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', render: (row: any) => `#${row.number || ''}` },
+    { key: 'number', label: 'الرقم', sortable: true },
     { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true },
     { key: 'total', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total) },
@@ -88,8 +116,8 @@ export default function QuotationsPage() {
   if (error) {
     return (
       <div className="space-y-6">
-        <PageHeader title="عروض الأسعار" description="إدارة عروض الأسعار للعملاء"
-          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عرض سعر</Button>}
+        <PageHeader title="عروض الأسعار" description="إدارة عروض الأسعار"
+          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عرض</Button>}
         />
         <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
       </div>
@@ -98,24 +126,46 @@ export default function QuotationsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="عروض الأسعار" description="إدارة عروض الأسعار للعملاء"
-        actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عرض سعر</Button>}
+      <PageHeader title="عروض الأسعار" description="إدارة عروض الأسعار"
+        actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة عرض</Button>}
       />
       {quotations.length === 0 ? (
-        <EmptyState title="لا توجد عروض أسعار" actionLabel="إضافة عرض سعر" onAction={() => setShowModal(true)} />
+        <EmptyState title="لا توجد عروض" actionLabel="إضافة عرض" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={quotations} searchable searchKeys={['contact_name']} />
+        <DataTable columns={columns} data={quotations} searchable searchKeys={['contact_name', 'number']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عرض سعر" size="xl"
-        footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عرض سعر" footer={
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
+        </div>
+      }>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="التاريخ" type="date" />
-            <Input label="صالح حتى" type="date" />
-            <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
+            <Input
+              label="التاريخ"
+              type="date"
+              value={form.date}
+              onChange={(e) => setForm({...form, date: e.target.value})}
+            />
+            <Select
+              label="العميل"
+              value={form.contact_id}
+              onChange={(value) => setForm({...form, contact_id: value})}
+              options={[
+                { value: '', label: 'اختر عميلاً' },
+                ...clients.map(c => ({ value: c.id, label: c.name })),
+              ]}
+            />
+            <Textarea
+              label="ملاحظات"
+              value={form.notes}
+              onChange={(e) => setForm({...form, notes: e.target.value})}
+              placeholder="ملاحظات عرض السعر"
+              className="col-span-2"
+            />
           </div>
-          <Textarea label="ملاحظات" />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+          {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
     </div>

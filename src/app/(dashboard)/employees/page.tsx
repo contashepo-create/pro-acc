@@ -1,14 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Eye } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
-import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
@@ -21,9 +19,26 @@ export default function EmployeesPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({
+    name: '',
+    phone: '',
+    email: '',
+    salary: 0,
+    department: '',
+    position: '',
+    hire_date: new Date().toISOString().split('T')[0],
+  });
 
   const handleSave = async () => {
+    if (!form.name) {
+      setSaveError('اسم الموظف مطلوب');
+      return;
+    }
+    if (!form.salary || form.salary <= 0) {
+      setSaveError('يجب إدخال الراتب');
+      return;
+    }
+
     setSaving(true);
     setSaveError('');
     try {
@@ -35,22 +50,25 @@ export default function EmployeesPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({});
-        // Refresh data
+        setForm({
+          name: '',
+          phone: '',
+          email: '',
+          salary: 0,
+          department: '',
+          position: '',
+          hire_date: new Date().toISOString().split('T')[0],
+        });
         window.location.reload();
       } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
+        setSaveError(json.message || 'فشل الحفظ');
       }
     } catch (e: any) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+      setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
-
-
-
-
 
   useEffect(() => {
     const fetchData = async () => {
@@ -74,12 +92,11 @@ export default function EmployeesPage() {
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
-    { key: 'phone', label: 'الجوال', sortable: true },
+    { key: 'phone', label: 'الجوال' },
+    { key: 'department', label: 'القسم' },
+    { key: 'position', label: 'الوظيفة' },
     { key: 'salary', label: 'الراتب', sortable: true, render: (row: any) => formatCurrency(row.salary) },
-    { key: 'department', label: 'القسم', sortable: true },
-    { key: 'position', label: 'المسمى', sortable: true },
     { key: 'hire_date', label: 'تاريخ التعيين', render: (row: any) => formatDate(row.hire_date) },
-    { key: 'is_active', label: 'الحالة', render: (row: any) => <Badge variant={row.is_active ? 'success' : 'danger'}>{row.is_active ? 'نشط' : 'غير نشط'}</Badge> },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
@@ -101,20 +118,27 @@ export default function EmployeesPage() {
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة موظف</Button>}
       />
       {employees.length === 0 ? (
-        <EmptyState title="لا توجد موظفين" description="أضف موظفاً جديداً" actionLabel="إضافة موظف" onAction={() => setShowModal(true)} />
+        <EmptyState title="لا يوجد موظفين" actionLabel="إضافة موظف" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={employees} searchable searchKeys={['name', 'phone', 'department']} />
+        <DataTable columns={columns} data={employees} searchable searchKeys={['name', 'department', 'position']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة موظف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="الاسم" placeholder="اسم الموظف" className="col-span-2" />
-          <Input label="الجوال" placeholder="05xxxxxxxx" />
-          <Input label="البريد الإلكتروني" type="email" />
-          <Input label="الراتب" type="number" />
-          <Input label="تاريخ التعيين" type="date" />
-          <Input label="القسم" />
-          <Input label="المسمى الوظيفي" />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة موظف" footer={
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
+        </div>
+      }>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="الاسم" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} className="col-span-2" />
+            <Input label="الجوال" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} />
+            <Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} />
+            <Input label="القسم" value={form.department} onChange={(e) => setForm({...form, department: e.target.value})} />
+            <Input label="الوظيفة" value={form.position} onChange={(e) => setForm({...form, position: e.target.value})} />
+            <Input label="الراتب" type="number" value={form.salary} onChange={(e) => setForm({...form, salary: parseFloat(e.target.value) || 0})} />
+            <Input label="تاريخ التعيين" type="date" value={form.hire_date} onChange={(e) => setForm({...form, hire_date: e.target.value})} />
+          </div>
+          {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
     </div>

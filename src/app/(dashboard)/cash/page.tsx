@@ -15,15 +15,37 @@ import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function CashPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [banks, setBanks] = useState<any[]>([]);
+  const [accounts, setAccounts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({
+    date: new Date().toISOString().split('T')[0],
+    type: 'revenue',
+    amount: 0,
+    bank_safe_id: '',
+    account_id: '',
+    reason: '',
+  });
 
   const handleSave = async () => {
+    if (!form.date) {
+      setSaveError('يجب إدخال التاريخ');
+      return;
+    }
+    if (!form.amount || form.amount <= 0) {
+      setSaveError('يجب إدخال مبلغ صحيح');
+      return;
+    }
+    if (!form.account_id) {
+      setSaveError('يجب اختيار الحساب');
+      return;
+    }
+
     setSaving(true);
     setSaveError('');
     try {
@@ -35,21 +57,24 @@ export default function CashPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({});
-        // Refresh data
+        setForm({
+          date: new Date().toISOString().split('T')[0],
+          type: 'revenue',
+          amount: 0,
+          bank_safe_id: '',
+          account_id: '',
+          reason: '',
+        });
         window.location.reload();
       } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
+        setSaveError(json.message || 'فشل الحفظ');
       }
     } catch (e: any) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+      setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
-
-
-
 
   const [typeTab, setTypeTab] = useState('all');
 
@@ -57,12 +82,26 @@ export default function CashPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const res = await fetch('/api/cash');
-        const json = await res.json();
-        if (json.success) {
-          setTransactions(json.data?.rows || []);
+        const [txRes, bankRes, accRes] = await Promise.all([
+          fetch('/api/cash'),
+          fetch('/api/banks'),
+          fetch('/api/accounts'),
+        ]);
+        const [txJson, bankJson, accJson] = await Promise.all([
+          txRes.json(),
+          bankRes.json(),
+          accRes.json(),
+        ]);
+        if (txJson.success) {
+          setTransactions(txJson.data?.rows || []);
         } else {
-          setError(json.message || 'فشل تحميل البيانات');
+          setError(txJson.message || 'فشل تحميل البيانات');
+        }
+        if (bankJson.success) {
+          setBanks(bankJson.data?.banks || []);
+        }
+        if (accJson.success) {
+          setAccounts(accJson.data?.accounts || []);
         }
       } catch {
         setError('فشل تحميل البيانات');
@@ -122,15 +161,66 @@ export default function CashPage() {
         <DataTable columns={columns} data={filtered} searchable searchKeys={['reason']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة معاملة نقدية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="التاريخ" type="date" />
-          <Select label="النوع" options={[{ value: 'revenue', label: 'قبض' }, { value: 'expense', label: 'صرف' }]} />
-          <Input label="المبلغ" type="number" />
-          <Select label="الخزينة/البنك" options={[{ value: '', label: 'اختر' }]} />
-          <Select label="الحساب" options={[{ value: '', label: 'اختر حساباً' }]} className="col-span-2" />
-          <Input label="البيان" className="col-span-2" placeholder="سبب المعاملة" />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة معاملة نقدية" size="lg" footer={
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
+        </div>
+      }>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="التاريخ"
+              type="date"
+              value={form.date}
+              onChange={(e) => setForm({...form, date: e.target.value})}
+            />
+            <Select
+              label="النوع"
+              value={form.type}
+              onChange={(value) => setForm({...form, type: value})}
+              options={[
+                { value: 'revenue', label: 'قبض' },
+                { value: 'expense', label: 'صرف' },
+              ]}
+            />
+            <Input
+              label="المبلغ"
+              type="number"
+              value={form.amount}
+              onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})}
+            />
+            <Select
+              label="الخزينة/البنك"
+              value={form.bank_safe_id}
+              onChange={(value) => setForm({...form, bank_safe_id: value})}
+              options={[
+                { value: '', label: 'اختر الخزينة/البنك (اختياري)' },
+                ...banks.map(b => ({ value: b.id, label: `${b.name} (${b.type === 'bank' ? 'بنك' : 'صندوق'})` })),
+              ]}
+            />
+            <Select
+              label="الحساب"
+              value={form.account_id}
+              onChange={(value) => setForm({...form, account_id: value})}
+              options={[
+                { value: '', label: 'اختر حساباً' },
+                ...accounts.filter(a => !a.parent_id || a.children?.length === 0).map(a => ({
+                  value: a.id,
+                  label: `${a.code} - ${a.name}`,
+                })),
+              ]}
+              className="col-span-2"
+            />
+            <Input
+              label="البيان"
+              value={form.reason}
+              onChange={(e) => setForm({...form, reason: e.target.value})}
+              placeholder="سبب المعاملة"
+              className="col-span-2"
+            />
+          </div>
+          {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
     </div>

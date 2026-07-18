@@ -7,7 +7,6 @@ import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatCurrency } from '@/lib/utils';
@@ -20,9 +19,21 @@ export default function ClientsPage() {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({
+    name: '',
+    phone: '',
+    email: '',
+    tax_number: '',
+    credit_limit: 0,
+    address: '',
+  });
 
   const handleSave = async () => {
+    if (!form.name) {
+      setSaveError('اسم العميل مطلوب');
+      return;
+    }
+
     setSaving(true);
     setSaveError('');
     try {
@@ -34,22 +45,24 @@ export default function ClientsPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({});
-        // Refresh data
+        setForm({
+          name: '',
+          phone: '',
+          email: '',
+          tax_number: '',
+          credit_limit: 0,
+          address: '',
+        });
         window.location.reload();
       } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
+        setSaveError(json.message || 'فشل الحفظ');
       }
     } catch (e: any) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+      setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
-
-
-
-
 
   useEffect(() => {
     const fetchData = async () => {
@@ -100,13 +113,50 @@ export default function ClientsPage() {
       ) : (
         <DataTable columns={columns} data={clients} searchable searchKeys={['name', 'phone']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عميل" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input label="الاسم" className="col-span-2" />
-          <Input label="الجوال" /><Input label="البريد الإلكتروني" type="email" />
-          <Input label="الرقم الضريبي" /><Input label="الحد الائتماني" type="number" />
-          <Input label="العنوان" className="col-span-2" />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عميل" footer={
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
+        </div>
+      }>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="الاسم"
+              value={form.name}
+              onChange={(e) => setForm({...form, name: e.target.value})}
+              className="col-span-2"
+            />
+            <Input
+              label="الجوال"
+              value={form.phone}
+              onChange={(e) => setForm({...form, phone: e.target.value})}
+            />
+            <Input
+              label="البريد الإلكتروني"
+              type="email"
+              value={form.email}
+              onChange={(e) => setForm({...form, email: e.target.value})}
+            />
+            <Input
+              label="الرقم الضريبي"
+              value={form.tax_number}
+              onChange={(e) => setForm({...form, tax_number: e.target.value})}
+            />
+            <Input
+              label="الحد الائتماني"
+              type="number"
+              value={form.credit_limit}
+              onChange={(e) => setForm({...form, credit_limit: parseFloat(e.target.value) || 0})}
+            />
+            <Input
+              label="العنوان"
+              value={form.address}
+              onChange={(e) => setForm({...form, address: e.target.value})}
+              className="col-span-2"
+            />
+          </div>
+          {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
     </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Eye } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -9,22 +9,33 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
-import { Tabs } from '@/components/ui/Tabs';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<any[]>([]);
+  const [clients, setClients] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({});
+  const [form, setForm] = useState<any>({
+    name: '',
+    client_id: '',
+    start_date: new Date().toISOString().split('T')[0],
+    end_date: '',
+    budget: 0,
+  });
 
   const handleSave = async () => {
+    if (!form.name) {
+      setSaveError('اسم المشروع مطلوب');
+      return;
+    }
+
     setSaving(true);
     setSaveError('');
     try {
@@ -36,34 +47,43 @@ export default function ProjectsPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({});
-        // Refresh data
+        setForm({
+          name: '',
+          client_id: '',
+          start_date: new Date().toISOString().split('T')[0],
+          end_date: '',
+          budget: 0,
+        });
         window.location.reload();
       } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
+        setSaveError(json.message || 'فشل الحفظ');
       }
     } catch (e: any) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + (e.message || ''));
+      setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
 
-
-
-
-  const [statusTab, setStatusTab] = useState('all');
-
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const res = await fetch('/api/projects');
-        const json = await res.json();
-        if (json.success) {
-          setProjects(json.data?.rows || []);
+        const [projRes, clientRes] = await Promise.all([
+          fetch('/api/projects'),
+          fetch('/api/clients'),
+        ]);
+        const [projJson, clientJson] = await Promise.all([
+          projRes.json(),
+          clientRes.json(),
+        ]);
+        if (projJson.success) {
+          setProjects(projJson.data?.projects || []);
         } else {
-          setError(json.message || 'فشل تحميل البيانات');
+          setError(projJson.message || 'فشل تحميل البيانات');
+        }
+        if (clientJson.success) {
+          setClients(clientJson.data?.clients || []);
         }
       } catch {
         setError('فشل تحميل البيانات');
@@ -75,23 +95,22 @@ export default function ProjectsPage() {
   }, []);
 
   const statusBadge = (status: string) => {
-    const map: Record<string, { variant: 'success' | 'warning' | 'danger'; label: string }> = {
+    const map: Record<string, { variant: 'success' | 'warning' | 'info' | 'danger'; label: string }> = {
       active: { variant: 'success', label: 'نشط' },
-      completed: { variant: 'warning', label: 'منتهي' },
-      cancelled: { variant: 'danger', label: 'ملغي' },
+      completed: { variant: 'info', label: 'مكتمل' },
+      cancelled: { variant: 'danger', label: 'ملغى' },
     };
-    const m = map[status] || { variant: 'default' as const, label: status };
+    const m = map[status] || { variant: 'warning', label: status };
     return <Badge variant={m.variant}>{m.label}</Badge>;
   };
-
-  const filtered = statusTab === 'all' ? projects : projects.filter(p => p.status === statusTab);
 
   const columns = [
     { key: 'name', label: 'اسم المشروع', sortable: true },
     { key: 'client_name', label: 'العميل', sortable: true },
-    { key: 'contract_value', label: 'قيمة العقد', sortable: true, render: (row: any) => formatCurrency(row.contract_value) },
-    { key: 'status', label: 'الحالة', sortable: true, render: (row: any) => statusBadge(row.status) },
-    { key: 'start_date', label: 'تاريخ البداية', render: (row: any) => formatDate(row.start_date) },
+    { key: 'start_date', label: 'تاريخ البدء', render: (row: any) => formatDate(row.start_date) },
+    { key: 'end_date', label: 'تاريخ الانتهاء', render: (row: any) => row.end_date ? formatDate(row.end_date) : '-' },
+    { key: 'budget', label: 'الميزانية', render: (row: any) => formatCurrency(row.budget) },
+    { key: 'status', label: 'الحالة', render: (row: any) => statusBadge(row.status) },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
@@ -109,37 +128,38 @@ export default function ProjectsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="المشاريع"
-        description="إدارة المشاريع"
-        actions={
-          <Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>
-            إضافة مشروع
-          </Button>
-        }
+      <PageHeader title="المشاريع" description="إدارة المشاريع"
+        actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة مشروع</Button>}
       />
-
-      <Tabs items={[
-        { id: 'all', label: 'الكل' },
-        { id: 'active', label: 'نشط' },
-        { id: 'completed', label: 'منتهي' },
-        { id: 'cancelled', label: 'ملغي' },
-      ]} activeTab={statusTab} onChange={setStatusTab} />
-
-      {filtered.length === 0 ? (
-        <EmptyState title="لا توجد مشاريع" description="أضف مشروعاً جديداً" actionLabel="إضافة مشروع" onAction={() => setShowModal(true)} />
+      {projects.length === 0 ? (
+        <EmptyState title="لا توجد مشاريع" actionLabel="إضافة مشروع" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={filtered} searchable searchKeys={['name', 'client_name']} />
+        <DataTable columns={columns} data={projects} searchable searchKeys={['name', 'client_name']} />
       )}
-
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة مشروع جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="اسم المشروع" placeholder="اسم المشروع" className="col-span-2" />
-          <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
-          <Input label="قيمة العقد" type="number" />
-          <Input label="تاريخ البداية" type="date" />
-          <Input label="تاريخ النهاية" type="date" />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة مشروع" footer={
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
+        </div>
+      }>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="اسم المشروع" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} className="col-span-2" />
+            <Select
+              label="العميل"
+              value={form.client_id}
+              onChange={(value) => setForm({...form, client_id: value})}
+              options={[
+                { value: '', label: 'اختر عميلاً (اختياري)' },
+                ...clients.map(c => ({ value: c.id, label: c.name })),
+              ]}
+              className="col-span-2"
+            />
+            <Input label="تاريخ البدء" type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} />
+            <Input label="تاريخ الانتهاء" type="date" value={form.end_date} onChange={(e) => setForm({...form, end_date: e.target.value})} />
+            <Input label="الميزانية" type="number" value={form.budget} onChange={(e) => setForm({...form, budget: parseFloat(e.target.value) || 0})} className="col-span-2" />
+          </div>
+          {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
     </div>
