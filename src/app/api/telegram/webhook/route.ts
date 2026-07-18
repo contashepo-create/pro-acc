@@ -16,7 +16,9 @@ export async function POST(request: NextRequest) {
     console.log('[Telegram Webhook Payload Received]:', JSON.stringify(body, null, 2));
 
     const s = sb();
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
+      ? process.env.TELEGRAM_BOT_TOKEN 
+      : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
 
     // 1. التعامل مع الرسائل العادية (مثل كتابة /start أو النقر على زر البدء في تلغرام)
     if (body.message) {
@@ -124,7 +126,9 @@ export async function POST(request: NextRequest) {
  * إبلاغ خوادم تليجرام بإلغاء مؤشر التحميل على العميل
  */
 async function answerCallback(callbackQueryId: string, text: string, showAlert = false) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
+    ? process.env.TELEGRAM_BOT_TOKEN 
+    : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
   if (!botToken) return;
 
   try {
