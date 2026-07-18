@@ -3,6 +3,7 @@ import { success, error, parseBody, getPaginationParams, requireApiAuth, handleA
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 import { getNextJournalNumber } from '@/lib/numbering';
+import { checkApprovalThreshold } from '@/lib/notifications';
 
 const sb = () => getSupabase();
 
@@ -76,6 +77,12 @@ export async function POST(request: NextRequest) {
     }
     if (body.amount <= 0) {
       return error('المبلغ يجب أن يكون أكبر من صفر');
+    }
+
+    // ✅ التحقق من حد الموافقة وإرسال تنبيه إذا لزم الأمر
+    const approvalCheck = await checkApprovalThreshold(auth.companyId, body.amount, 'cash_transaction', auth.userId);
+    if (approvalCheck.requiresApproval) {
+      console.log(`Approval required for cash transaction: ${body.amount} (threshold exceeded)`);
     }
 
     const txId = generateId();

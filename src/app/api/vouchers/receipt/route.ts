@@ -3,6 +3,7 @@ import { success, error, parseBody, getPaginationParams, getDateRangeParams, req
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { getNextJournalNumber, getNextVoucherNumber } from '@/lib/numbering';
+import { checkApprovalThreshold } from '@/lib/notifications';
 
 const sb = () => getSupabase();
 
@@ -77,6 +78,12 @@ export async function POST(request: NextRequest) {
 
     const companyId = auth.companyId;
     const userId = auth.userId;
+
+    // ✅ التحقق من حد الموافقة وإرسال تنبيه إذا لزم الأمر
+    const approvalCheck = await checkApprovalThreshold(companyId, amount, 'voucher_receipt', userId);
+    if (approvalCheck.requiresApproval) {
+      console.log(`Approval required for receipt: ${amount} (threshold exceeded)`);
+    }
 
     // الحصول على رقم السند
     const nextNum = await getNextVoucherNumber(companyId, 'voucher_receipts');

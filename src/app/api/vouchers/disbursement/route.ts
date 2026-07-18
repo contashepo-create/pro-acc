@@ -3,6 +3,7 @@ import { success, error, parseBody, getPaginationParams, getDateRangeParams, req
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
+import { checkBankBalance, checkApprovalThreshold } from '@/lib/notifications';
 
 const sb = () => getSupabase();
 
@@ -80,6 +81,20 @@ export async function POST(request: NextRequest) {
 
     const companyId = auth.companyId;
     const userId = auth.userId;
+
+    // ✅ التحقق من رصيد البنك/الخزينة
+    const balanceCheck = await checkBankBalance(bank_safe_id, amount, companyId);
+    if (!balanceCheck.allowed) {
+      return error(balanceCheck.message || 'الرصيد غير كافٍ');
+    }
+
+    // ✅ التحقق من حد الموافقة وإرسال تنبيه إذا لزم الأمر
+    const approvalCheck = await checkApprovalThreshold(companyId, amount, 'voucher_disbursement', userId);
+    if (approvalCheck.requiresApproval) {
+      console.log(`Approval required for disbursement: ${amount} (threshold exceeded)`);
+      // يمكن إضافة منطق هنا لانتظار الموافقة قبل إنشاء القيد
+      // أو إنشاء القيد مع وضع "pending approval"
+    }
 
     const nextNum = await getNextVoucherNumber(companyId, 'voucher_disbursements');
 
