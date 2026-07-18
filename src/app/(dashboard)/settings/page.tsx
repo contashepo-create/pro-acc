@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { 
   Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone, 
-  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw 
+  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, Copy, ExternalLink 
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -59,6 +59,9 @@ export default function SettingsPage() {
   const [testRunId, setTestRunId] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<string>(''); // '', 'pending', 'accepted', 'rejected', 'expired'
   const [testLoading, setTestLoading] = useState(false);
+
+  // تليجرام الموحد للمنصة - يتم تعديله من خلال متغيرات المطور
+  const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'ProAccErpBot';
 
   useEffect(() => {
     // Load company data and settings
@@ -599,26 +602,60 @@ export default function SettingsPage() {
             </Card>
           ) : (
             <>
-              <Card title="إعدادات ربط تليجرام الذكي">
+              {/* Detailed Step-by-Step Customer Interactive Guide Card */}
+              <Card title="دليل تفعيل البوت المحاسبي التفاعلي للعملاء 📖">
                 <div className="space-y-4">
-                  <div className="p-4 rounded-xl bg-accent/5 border border-accent/10 flex items-start gap-3">
-                    <Bot size={22} className="text-accent shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <h4 className="text-sm font-bold text-text-primary">كيفية تفعيل البوت المحاسبي؟</h4>
+                  <p className="text-sm text-text-secondary leading-relaxed">
+                    برجاء اتباع الخطوات الـ 3 البسيطة التالية بدقة لربط حسابك وتفعيل الإشعارات والموافقات الفورية على جوالك:
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="p-4 rounded-xl bg-bg-secondary border border-border space-y-2 flex flex-col justify-between">
+                      <div>
+                        <div className="w-8 h-8 rounded-lg bg-accent text-white flex items-center justify-center font-bold text-sm mb-2">1</div>
+                        <h4 className="text-sm font-bold text-text-primary">البحث عن البوت الرسمي</h4>
+                        <p className="text-xs text-text-muted leading-relaxed">
+                          افتح تطبيق تلغرام وابحث عن البوت الرسمي للمنصة:
+                          <span className="block mt-1 font-mono text-accent font-bold">@{TELEGRAM_BOT_USERNAME}</span>
+                        </p>
+                      </div>
+                      <a 
+                        href={`https://t.me/${TELEGRAM_BOT_USERNAME}`} 
+                        target="_blank" 
+                        rel="noreferrer" 
+                        className="mt-3 text-xs text-accent font-bold hover:underline inline-flex items-center gap-1"
+                      >
+                        فتح البوت في تليجرام <ExternalLink size={12} />
+                      </a>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-bg-secondary border border-border space-y-2">
+                      <div className="w-8 h-8 rounded-lg bg-accent text-white flex items-center justify-center font-bold text-sm mb-2">2</div>
+                      <h4 className="text-sm font-bold text-text-primary">الحصول على المعرف الرقمي</h4>
                       <p className="text-xs text-text-muted leading-relaxed">
-                        1. قم بالبحث عن البوت في تيليجرام: <a href="https://t.me/pro_acc_bot" className="text-accent font-bold hover:underline" target="_blank">@pro_acc_bot</a>.
+                        اضغط على زر <b>ابدأ (Start)</b> أو أرسل أمر <code className="font-mono text-accent">/start</code> داخل المحادثة.
                         <br />
-                        2. اضغط على زر ابدأ <b>/start</b> للحصول على معرف الدردشة الخاص بك (Chat ID).
-                        <br />
-                        3. أدخل المعرف الرقمي في الخانة أدناه وقم بتفعيل الربط للحفظ والمزامنة الفورية.
+                        سيقوم البوت بالترحيب بك وإرسال <b>معرّف الدردشة الرقمي الفريد</b> الخاص بك فوراً على الشاشة.
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-bg-secondary border border-border space-y-2">
+                      <div className="w-8 h-8 rounded-lg bg-accent text-white flex items-center justify-center font-bold text-sm mb-2">3</div>
+                      <h4 className="text-sm font-bold text-text-primary">ربط المعرّف في الموقع</h4>
+                      <p className="text-xs text-text-muted leading-relaxed">
+                        قم بنسخ المعرّف الرقمي المكون من أرقام فقط (مثال: <code className="font-mono text-accent">876543210</code>) وضعه في خانة <b>Chat ID</b> بالبطاقة أدناه، ثم علم على خيار "تفعيل" واضغط على حفظ الإعدادات!
                       </p>
                     </div>
                   </div>
+                </div>
+              </Card>
 
+              <Card title="بيانات الربط والتحكم بالتنبيهات">
+                <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <Input 
                       label="معرف الدردشة تيليجرام (Chat ID)" 
-                      placeholder="مثال: 987654321" 
+                      placeholder="أدخل الأرقام هنا (مثال: 987654321)" 
                       value={telegramConfig.chat_id} 
                       onChange={(e: any) => setTelegramConfig({...telegramConfig, chat_id: e.target.value})} 
                     />
@@ -630,7 +667,7 @@ export default function SettingsPage() {
                           checked={telegramConfig.is_enabled} 
                           onChange={(e) => setTelegramConfig({...telegramConfig, is_enabled: e.target.checked})} 
                         />
-                        <span className="text-sm font-semibold">تفعيل البوت العام</span>
+                        <span className="text-sm font-semibold">تفعيل البوت والربط المباشر</span>
                       </label>
                     </div>
                   </div>
