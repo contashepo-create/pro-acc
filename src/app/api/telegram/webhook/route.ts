@@ -6,28 +6,70 @@ const sb = () => getSupabase();
 /**
  * POST /api/telegram/webhook
  * واجهة استقبال نداءات تليجرام التفاعلية الرسمية (Telegram Webhook API Receiver)
- * يدعم الاستدعاءات العامة التفاعلية والتحقق من صحتها وتحديث قواعد البيانات لحظياً
+ * يدعم:
+ * 1. الرسائل العادية (مثل /start) للترحيب بالمستخدم وإعطائه معرفه الرقمي (Chat ID)
+ * 2. الاستدعاءات العامة التفاعلية (Callback Query) وتحديث حالة الفحص اللحظية
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     console.log('[Telegram Webhook Payload Received]:', JSON.stringify(body, null, 2));
 
-    // 1. التحقق من وجود نقرة تفاعلية (Callback Query)
+    const s = sb();
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+
+    // 1. التعامل مع الرسائل العادية (مثل كتابة /start أو النقر على زر البدء في تلغرام)
+    if (body.message) {
+      const chatId = body.message.chat?.id;
+      const text = (body.message.text || '').trim();
+
+      if (chatId && (text.startsWith('/start') || text.toLowerCase() === 'start')) {
+        // التحقق من وجود التوكن السري في الخادم
+        if (!botToken) {
+          console.warn('[Telegram Webhook] TELEGRAM_BOT_TOKEN is missing in server environment variables.');
+          return NextResponse.json({ 
+            success: false, 
+            message: 'Server missing TELEGRAM_BOT_TOKEN. Please configure on Vercel.' 
+          }, { status: 200 });
+        }
+
+        const welcomeMessage = `🤖 *مرحباً بك في بوت برو أكاونت الموحد للأنظمة المحاسبية\\!*
+
+🔐 معرّف الدردشة الرقمي الخاص بك (Chat ID) هو:
+\`${chatId}\`
+
+👉 قم بنسخ هذا الرقم (انقر نقرة مطولة عليه للنسخ) وضعه في خانة **Chat ID** في صفحة إعدادات تيليجرام بالموقع لتفعيل الربط والاعتمادات اللحظية عبر الجوال\\!`;
+
+        const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: welcomeMessage,
+            parse_mode: 'MarkdownV2',
+          })
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          console.error('[Telegram Webhook] Failed to send welcome message:', response.status, errText);
+        }
+      }
+      
+      return NextResponse.json({ success: true, message: 'Message update processed' }, { status: 200 });
+    }
+
+    // 2. التحقق من وجود نقرة تفاعلية (Callback Query) على الأزرار
     if (!body.callback_query) {
       return NextResponse.json({ success: true, message: 'Not a callback query' }, { status: 200 });
     }
 
-    const s = sb();
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
     const callbackQuery = body.callback_query;
     const callbackData = callbackQuery.data || '';
     const callbackQueryId = callbackQuery.id;
     const chatId = callbackQuery.message?.chat?.id;
     const messageId = callbackQuery.message?.message_id;
 
-    // تقسيم البيانات المشفرة المستخرجة من الزر
-    // التنسيق المتوقع للـ test run: "test:accept:UUID" أو "test:reject:UUID"
     const parts = callbackData.split(':');
     
     if (parts[0] === 'test' && parts.length === 3) {
@@ -36,7 +78,7 @@ export async function POST(request: NextRequest) {
 
       const statusValue = action === 'accept' ? 'accepted' : 'rejected';
 
-      // تحديث حالة الفحص في قاعدة البيانات علائقيًا في السوبابيز
+      // تحديث حالة الفحص في قاعدة البيانات في السوبابيز
       const { error: updateErr } = await s.from('telegram_test_runs')
         .update({
           status: statusValue,
@@ -46,26 +88,24 @@ export async function POST(request: NextRequest) {
 
       if (updateErr) {
         console.error('Failed to update telegram test run status:', updateErr);
-        // التبليغ بفشل العملية للمستخدم على التليجرام
         await answerCallback(callbackQueryId, 'حدث خطأ في الخادم أثناء تحديث حالة الفحص', true);
         return NextResponse.json({ success: true }, { status: 200 });
       }
 
-      // 2. تأكيد الاستلام لتليجرام لإيقاف مؤشر الانتظار (Stop Spinner)
+      // تأكيد الاستلام لتليجرام لإيقاف مؤشر الانتظار (Stop Spinner)
       const feedbackMsg = action === 'accept' ? 'تم القبول بنجاح! ✅' : 'تم الرفض بنجاح! ❌';
       await answerCallback(callbackQueryId, feedbackMsg);
 
-      // 3. تعديل نص الرسالة في تليجرام لإظهار النتيجة النهائية للمشرف
+      // تعديل نص الرسالة في تليجرام لإظهار النتيجة النهائية للمشرف
       if (botToken) {
         const finalStatusText = action === 'accept' 
-          ? '🟢 *تم تأكيد فحص الربط التفاعلي بنجاح\\!*\n\nالحالة المعتمدة: *مقبول (موافق) ✅*'
-          : '🔴 *تم تأكيد فحص الربط التفاعلي بنجاح\\!*\n\nالحالة المعتمدة: *مرفوض (تم الرفض) ❌*';
+          ? '🟢 *تم تأكيد فحص الربط التفاعلي بنجاح\\!*'
+          : '🔴 *تم تأكيد فحص الربط التفاعلي بنجاح\\!*';
 
         await editTelegramMessage(botToken, chatId, messageId, finalStatusText);
       }
 
     } else if (parts[0] === 'approve' && parts.length === 3) {
-      // ميزة الاعتمادات المحاسبية المستقبلية (Future-proof)
       const action = parts[1]; // approve, reject
       const orderId = parts[2]; // UUID
 
@@ -76,7 +116,6 @@ export async function POST(request: NextRequest) {
 
   } catch (err) {
     console.error('[Telegram Webhook Error]:', err);
-    // تليجرام يتطلب دائماً استجابة 200 لتفادي إعادة إرسال نداءات الويب المتكررة
     return NextResponse.json({ success: false, error: 'Internal logic error' }, { status: 200 });
   }
 }
