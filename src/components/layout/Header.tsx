@@ -204,50 +204,56 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               </button>
 
               {userMenuOpen && typeof window !== 'undefined' && createPortal(
-                <>
-                  <div className="fixed inset-0 z-[99980] bg-transparent" onClick={() => setUserMenuOpen(false)} style={{ pointerEvents: 'auto' }} />
-                  <div className="fixed w-64 border border-border rounded-xl shadow-2xl py-1 z-[99999] animate-[fade-in_0.15s_ease-out]" 
-                       style={{ 
-                         top: `${dropdownPosition.top}px`, 
-                         left: `${dropdownPosition.left}px`,
-                         backgroundColor: 'var(--color-bg-card)', 
-                         boxShadow: '0 30px 80px rgba(0,0,0,0.5)', 
-                         border: '1px solid var(--color-border)',
-                       }}>
-                    <div className="px-4 py-3 border-b border-border">
-                      <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
-                      <div className="text-xs text-text-muted">{user?.email || ''}</div>
-                      <div className="text-[11px] text-text-muted mt-0.5">
-                        {user?.role === 'admin' ? 'مدير النظام' : 'محاسب'}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => { setUserMenuOpen(false); router.push('/settings'); }}
-                      className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
-                    >
-                      <Settings size={16} />
-                      الإعدادات
-                    </button>
-                    {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
-                      <button
-                        onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
-                        className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
-                      >
-                        <ShieldAlert size={16} />
-                        لوحة المطور
-                      </button>
-                    )}
-                    <div className="border-t border-border mt-1 pt-1">
-                      <button
-                        onClick={() => { setUserMenuOpen(false); handleLogout(); }}
-                        className="w-full text-right px-4 py-2.5 text-sm text-danger hover:bg-danger-light/20 flex items-center gap-3 transition-colors"
-                      >
-                        <LogOut size={16} />
-                        تسجيل الخروج
-                      </button>
+                <div className="fixed w-64 border border-border rounded-xl shadow-2xl py-1 z-[99999] animate-[fade-in_0.15s_ease-out]" 
+                     style={{ 
+                       top: `${dropdownPosition.top}px`, 
+                       left: `${dropdownPosition.left}px`,
+                       backgroundColor: 'var(--color-bg-card)', 
+                       boxShadow: '0 30px 80px rgba(0,0,0,0.5)', 
+                       border: '1px solid var(--color-border)',
+                     }}>
+                  <div className="px-4 py-3 border-b border-border">
+                    <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
+                    <div className="text-xs text-text-muted">{user?.email || ''}</div>
+                    <div className="text-[11px] text-text-muted mt-0.5">
+                      {user?.role === 'admin' ? 'مدير النظام' : 'محاسب'}
                     </div>
                   </div>
-                </>,
+                  <button
+                    onClick={() => { setUserMenuOpen(false); router.push('/settings'); }}
+                    className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
+                  >
+                    <Settings size={16} />
+                    الإعدادات
+                  </button>
+                  <button
+                    onClick={() => { setUserMenuOpen(false); router.push('/dashboard'); }}
+                    className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                    </svg>
+                    لوحة التحكم
+                  </button>
+                  {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
+                    <button
+                      onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
+                      className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
+                    >
+                      <ShieldAlert size={16} />
+                      لوحة المطور
+                    </button>
+                  )}
+                  <div className="border-t border-border mt-1 pt-1">
+                    <button
+                      onClick={() => { setUserMenuOpen(false); handleLogout(); }}
+                      className="w-full text-right px-4 py-2.5 text-sm text-danger hover:bg-danger-light/20 flex items-center gap-3 transition-colors"
+                    >
+                      <LogOut size={16} />
+                      تسجيل الخروج
+                    </button>
+                  </div>
+                </div>,
                 document.body
               )}
               {/* Old dropdown kept for reference but hidden - will be removed */}
