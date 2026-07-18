@@ -7,7 +7,7 @@ const sb = () => getSupabase();
  * POST /api/telegram/webhook
  * واجهة استقبال نداءات تليجرام التفاعلية الرسمية (Telegram Webhook API Receiver)
  * يدعم:
- * 1. الرسائل العادية (مثل /start) للترحيب بالمستخدم وإعطائه معرفه الرقمي (Chat ID)
+ * 1. الرسائل العادية (مثل /start) للترحيب بالمستخدم وإعطائه معرفه الرقمي (Chat ID) باستخدام HTML لضمان ثبات الإرسال
  * 2. الاستدعاءات العامة التفاعلية (Callback Query) وتحديث حالة الفحص اللحظية
  */
 export async function POST(request: NextRequest) {
@@ -35,12 +35,13 @@ export async function POST(request: NextRequest) {
           }, { status: 200 });
         }
 
-        const welcomeMessage = `🤖 *مرحباً بك في بوت برو أكاونت الموحد للأنظمة المحاسبية\\!*
+        // FIXED: استخدام تنسيق HTML لضمان تسليم الرسالة 100% وتفادي خطأ 400 البدائي في تلغرام بوجود الأقواس والرموز المفتوحة
+        const welcomeMessage = `🤖 <b>مرحباً بك في بوت برو أكاونت الموحد للأنظمة المحاسبية!</b>
 
 🔐 معرّف الدردشة الرقمي الخاص بك (Chat ID) هو:
-\`${chatId}\`
+<code>${chatId}</code>
 
-👉 قم بنسخ هذا الرقم (انقر نقرة مطولة عليه للنسخ) وضعه في خانة **Chat ID** في صفحة إعدادات تيليجرام بالموقع لتفعيل الربط والاعتمادات اللحظية عبر الجوال\\!`;
+👉 قم بنسخ هذا الرقم (بالضغط المطول عليه للنسخ السريع) وضعه في خانة <b>Chat ID</b> في صفحة إعدادات تيليجرام بالموقع لتفعيل الربط والاعتمادات اللحظية عبر الجوال!`;
 
         const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
           method: 'POST',
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
           body: JSON.stringify({
             chat_id: chatId,
             text: welcomeMessage,
-            parse_mode: 'MarkdownV2',
+            parse_mode: 'HTML',
           })
         });
 
@@ -101,8 +102,8 @@ export async function POST(request: NextRequest) {
       // تعديل نص الرسالة في تليجرام لإظهار النتيجة النهائية للمشرف
       if (botToken) {
         const finalStatusText = action === 'accept' 
-          ? '🟢 *تم تأكيد فحص الربط التفاعلي بنجاح\\!*'
-          : '🔴 *تم تأكيد فحص الربط التفاعلي بنجاح\\!*';
+          ? '🟢 <b>تم تأكيد فحص الربط التفاعلي بنجاح!</b>\n\nالحالة المعتمدة: <b>مقبول وموافق عليه ✅</b>'
+          : '🔴 <b>تم تأكيد فحص الربط التفاعلي بنجاح!</b>\n\nالحالة المعتمدة: <b>تم الرفض والمرفوض ❌</b>';
 
         await editTelegramMessage(botToken, chatId, messageId, finalStatusText);
       }
@@ -158,7 +159,7 @@ async function editTelegramMessage(botToken: string, chatId: any, messageId: any
         chat_id: chatId,
         message_id: messageId,
         text: newText,
-        parse_mode: 'MarkdownV2'
+        parse_mode: 'HTML'
       })
     });
   } catch (e) {

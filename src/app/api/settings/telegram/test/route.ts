@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
       ? process.env.TELEGRAM_BOT_TOKEN 
       : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
 
-    const message = `🧪 *طلب فحص الربط التفاعلي* 🚀\n\nلقد أرسل موقعك الإلكتروني المحاسبي طلباً تفاعلياً للتأكد من جاهزية البوت لاستقبال الموافقات والتنبيهات المباشرة\\.\n\nالرجاء الضغط على أحد الأزرار أدناه لتأكيد حالة الربط:`;
+    const message = `🧪 <b>طلب فحص الربط التفاعلي</b> 🚀\n\nلقد أرسل موقعك الإلكتروني المحاسبي طلباً تفاعلياً للتأكد من جاهزية البوت لاستقبال الموافقات والتنبيهات المباشرة.\n\nالرجاء الضغط على أحد الأزرار أدناه لتأكيد حالة الربط:`;
 
     const telegramApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
     const replyMarkup = {
@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         chat_id: chatId,
         text: message,
-        parse_mode: 'MarkdownV2',
+        parse_mode: 'HTML',
         reply_markup: replyMarkup
       })
     });
