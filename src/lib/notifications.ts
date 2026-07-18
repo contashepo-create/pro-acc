@@ -2,8 +2,9 @@
  * نظام التنبيهات والتحقق من الرصيد
  * 
  * يوفر:
- * 1. إرسال تنبيهات بوت عند تجاوز حد الموافقة
+ * 1. إرسال تنبيهات بوت مع أزرار الموافقة/الرفض
  * 2. التحقق من رصيد البنك قبل إجراء المعاملات
+ * 3. معالجة الردود عبر webhook
  */
 
 import { getSupabase } from '@/lib/supabase-client';
@@ -58,7 +59,6 @@ export async function getAccountBalance(accountId: string, companyId: string): P
 
 /**
  * التحقق من رصيد البنك/الخزينة
- * يُرجع: { allowed: boolean, balance: number, message?: string }
  */
 export async function checkBankBalance(
   bankSafeId: string,
@@ -67,7 +67,6 @@ export async function checkBankBalance(
 ): Promise<{ allowed: boolean; balance: number; message?: string }> {
   const s = sb();
   
-  // جلب الحساب المرتبط بالبنك/الخزينة
   const { data: bankAcc } = await s.from('banks_safes')
     .select('account_id, name, opening_balance')
     .eq('id', bankSafeId)
@@ -82,17 +81,14 @@ export async function checkBankBalance(
     };
   }
   
-  // حساب الرصيد الحالي
   let currentBalance = 0;
   
   if (bankAcc.account_id) {
     currentBalance = await getAccountBalance(bankAcc.account_id, companyId);
   } else {
-    // إذا لم يكن هناك حساب، استخدم الرصيد الافتتاحي
     currentBalance = parseFloat(bankAcc.opening_balance as any) || 0;
   }
   
-  // التحقق من أن الرصيد كافٍ
   if (currentBalance < amount) {
     return {
       allowed: false,
@@ -109,13 +105,13 @@ export async function checkBankBalance(
 
 /**
  * التحقق من حد الموافقة وإرسال تنبيه إذا لزم الأمر
- * يُرجع: { requiresApproval: boolean, message?: string }
  */
 export async function checkApprovalThreshold(
   companyId: string,
   amount: number,
   transactionType: string,
-  userId: string
+  userId: string,
+  transactionId?: string // ID of the transaction to approve
 ): Promise<{ requiresApproval: boolean; message?: string }> {
   const config = await getTelegramConfig(companyId);
   
@@ -126,9 +122,8 @@ export async function checkApprovalThreshold(
   const threshold = config.approval_threshold || 0;
   
   if (threshold > 0 && amount > threshold) {
-    // إرسال تنبيه بوت
     try {
-      await sendApprovalNotification(config, amount, transactionType, userId);
+      await sendApprovalNotification(config, amount, transactionType, userId, transactionId);
       
       return {
         requiresApproval: true,
@@ -147,17 +142,17 @@ export async function checkApprovalThreshold(
 }
 
 /**
- * إرسال تنبيه الموافقة عبر بوت التيليجرام
+ * إرسال تنبيه الموافقة عبر بوت التيليجرام مع أزرار Inline
  */
 async function sendApprovalNotification(
   config: TelegramConfig,
   amount: number,
   transactionType: string,
-  userId: string
+  userId: string,
+  transactionId?: string
 ): Promise<void> {
   const s = sb();
   
-  // جلب معلومات المستخدم
   const { data: user } = await s.from('users')
     .select('name, email')
     .eq('id', userId)
@@ -177,7 +172,7 @@ async function sendApprovalNotification(
   const typeName = typeNames[transactionType] || transactionType;
   
   const message = `
-🔔 <b>تنبيه موافقة Required</b>
+🔔 <b>تنبيه موافقة مطلوب</b>
 
 📋 <b>نوع المعاملة:</b> ${typeName}
 💰 <b>المبلغ:</b> ${amount.toFixed(2)} ر.س
@@ -186,10 +181,25 @@ async function sendApprovalNotification(
 
 ⚠️ المبلغ يتجاوز حد الموافقة المحدد (${config.approval_threshold.toFixed(2)} ر.س)
 
-يرجى مراجعة المعاملة والموافقة عليها إذا كانت صحيحة.
+يرجى مراجعة المعاملة واتخاذ الإجراء:
   `.trim();
   
-  // إرسال عبر تيليجرام
+  // أزرار Inline Keyboard
+  const inlineKeyboard = {
+    inline_keyboard: [
+      [
+        {
+          text: '✅ موافق',
+          callback_data: `approve_${transactionType}_${transactionId || 'unknown'}_${userId}`
+        },
+        {
+          text: '❌ رافض',
+          callback_data: `reject_${transactionType}_${transactionId || 'unknown'}_${userId}`
+        }
+      ]
+    ]
+  };
+  
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken || !config.chat_id) {
     throw new Error('Telegram bot not configured');
@@ -202,12 +212,104 @@ async function sendApprovalNotification(
       chat_id: config.chat_id,
       text: message,
       parse_mode: 'HTML',
+      reply_markup: inlineKeyboard,
     }),
   });
   
   if (!response.ok) {
     throw new Error('Failed to send Telegram message');
   }
+  
+  // حفظ الطلب في قاعدة البيانات لتتبعه
+  if (transactionId) {
+    try {
+      await s.from('approval_requests').insert({
+        company_id: config.company_id,
+        transaction_type: transactionType,
+        transaction_id: transactionId,
+        amount,
+        requester_id: userId,
+        status: 'pending',
+        message: `تنبيه موافقة لـ ${typeName} بمبلغ ${amount.toFixed(2)} ر.س`,
+        created_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn('Failed to save approval request:', err);
+    }
+  }
+}
+
+/**
+ * معالجة الرد على طلب الموافقة (من callback query)
+ */
+export async function handleApprovalResponse(
+  action: 'approve' | 'reject',
+  transactionType: string,
+  transactionId: string,
+  userId: string,
+  approverChatId: string
+): Promise<{ success: boolean; message: string }> {
+  const s = sb();
+  
+  // جلب إعدادات التيليجرام للشركة
+  const { data: transaction } = await s.from('approval_requests')
+    .select('company_id')
+    .eq('transaction_id', transactionId)
+    .eq('transaction_type', transactionType)
+    .maybeSingle();
+  
+  if (!transaction) {
+    return { success: false, message: 'طلب الموافقة غير موجود' };
+  }
+  
+  const companyId = (transaction as any).company_id;
+  
+  // تحديث حالة الطلب
+  const newStatus = action === 'approve' ? 'approved' : 'rejected';
+  
+  await s.from('approval_requests')
+    .update({
+      status: newStatus,
+      approver_chat_id: approverChatId,
+      approved_at: new Date().toISOString(),
+    })
+    .eq('transaction_id', transactionId)
+    .eq('transaction_type', transactionType);
+  
+  // تحديث حالة المعاملة الأصلية إذا تم الرفض
+  if (action === 'reject') {
+    const tableMap: Record<string, string> = {
+      'voucher_disbursement': 'voucher_disbursements',
+      'voucher_receipt': 'voucher_receipts',
+      'cash_transaction': 'cash_transactions',
+    };
+    
+    const tableName = tableMap[transactionType];
+    if (tableName) {
+      await s.from(tableName)
+        .update({ status: 'rejected' })
+        .eq('id', transactionId);
+    }
+  }
+  
+  // إرسال رسالة تأكيد
+  const message = action === 'approve'
+    ? `✅ تم الموافقة على المعاملة بنجاح`
+    : `❌ تم رفض المعاملة`;
+  
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (botToken) {
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: approverChatId,
+        text: message,
+      }),
+    });
+  }
+  
+  return { success: true, message };
 }
 
 /**
