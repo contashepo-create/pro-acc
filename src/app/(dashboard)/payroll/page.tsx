@@ -72,8 +72,8 @@ export default function PayrollPage() {
       )}
       <Modal isOpen={showProcess} onClose={() => setShowProcess(false)} title="معالجة الرواتب" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowProcess(false)}>إلغاء</Button><Button>معالجة</Button></div>}>
         <div className="space-y-4">
-          <Input label="الشهر" type="month" value={form.month} onChange={(e) => setForm({...form, month: e.target.value})} />
-          <Select label="الموظفين" options={[{ value: 'all', label: 'جميع الموظفين' }]} value={form.الموظفين} onChange={(value) => setForm({...form, الموظفين: value})} />
+          <Input label="الشهر" type="month" />
+          <Select label="الموظفين" options={[{ value: 'all', label: 'جميع الموظفين' }]} />
           <p className="text-sm text-text-muted">سيتم إنشاء قيد محاسبي (Dr مصروفات رواتب / Cr رواتب مستحقة + Cr سلف موظفين)</p>
         </div>
       </Modal>

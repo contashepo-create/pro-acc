@@ -85,15 +85,15 @@ export default function SubcontractorsPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={tab === 'contracts' ? 'إضافة عقد' : 'إضافة شهادة'} size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button>حفظ</Button></div>}>
         {tab === 'contracts' ? (
           <div className="grid grid-cols-2 gap-4">
-            <Input label="رقم العقد" value={form.رقم_العقد} onChange={(e) => setForm({...form, رقم_العقد: e.target.value})} /><Select label="مقاول الباطن" options={[{ value: '', label: 'اختر' }]} className="col-span-2" value={form.مقاول_الباطن} onChange={(value) => setForm({...form, مقاول_الباطن: value})} />
-            <Input label="قيمة العقد" type="number" value={form.contract_value} onChange={(e) => setForm({...form, contract_value: e.target.value})} /><Input label="نسبة الاحتجاز" type="number" value={form.retention_percentage} onChange={(e) => setForm({...form, retention_percentage: e.target.value})} />
-            <Input label="تاريخ البداية" type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} /><Input label="تاريخ النهاية" type="date" value={form.end_date} onChange={(e) => setForm({...form, end_date: e.target.value})} />
+            <Input label="رقم العقد" /><Select label="مقاول الباطن" options={[{ value: '', label: 'اختر' }]} className="col-span-2" />
+            <Input label="قيمة العقد" type="number" /><Input label="نسبة الاحتجاز" type="number" />
+            <Input label="تاريخ البداية" type="date" /><Input label="تاريخ النهاية" type="date" />
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-4">
-            <Input label="رقم الشهادة" value={form.رقم_الشهادة} onChange={(e) => setForm({...form, رقم_الشهادة: e.target.value})} /><Select label="العقد" options={[{ value: '', label: 'اختر' }]} value={form.العقد} onChange={(value) => setForm({...form, العقد: value})} />
-            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} /><Input label="المبلغ الإجمالي" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} />
-            <Input label="نسبة الاحتجاز" type="number" value={form.retention_percentage} onChange={(e) => setForm({...form, retention_percentage: e.target.value})} />
+            <Input label="رقم الشهادة" /><Select label="العقد" options={[{ value: '', label: 'اختر' }]} />
+            <Input label="التاريخ" type="date" /><Input label="المبلغ الإجمالي" type="number" />
+            <Input label="نسبة الاحتجاز" type="number" />
           </div>
         )}
       </Modal>

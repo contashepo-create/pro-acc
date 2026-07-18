@@ -87,9 +87,9 @@ export default function BankReconciliationPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="تسوية بنكية جديدة" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button>حفظ التسوية</Button></div>}>
         <div className="space-y-4">
-          <Select label="البنك/الخزينة" options={[{ value: '', label: 'اختر' }]} value={form.البنك/الخزينة} onChange={(value) => setForm({...form, البنك/الخزينة: value})} />
-          <Input label="تاريخ التسوية" type="date" value={form.date} onChange={(e) => setForm({...form, تاريخ_التسوية: e.target.value})} />
-          <Input label="الرصيد الختامي حسب كشف الحساب" type="number" value={form.closing_balance} onChange={(e) => setForm({...form, الرصيد_الختامي_حسب_كشف_الحساب: e.target.value})} />
+          <Select label="البنك والخزينة" options={[{ value: '', label: 'اختر' }]} />
+          <Input label="تاريخ التسوية" type="date" />
+          <Input label="الرصيد الختامي حسب كشف الحساب" type="number" />
           <div className="border border-border rounded-lg p-4">
             <h3 className="font-medium mb-3">حركات كشف الحساب</h3>
             <div className="space-y-2">

@@ -20,39 +20,6 @@ export default function InventoryPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({"code": "", "name": "", "unit": "", "quantity": "", "unit_price": ""});
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveError('');
-    try {
-      const res = await fetch('/api/inventory', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setShowModal(false);
-        setForm({});
-        // Refresh data
-        window.location.reload();
-      } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
-      }
-    } catch (e) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + ('خطأ'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-
-
-
-
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -114,14 +81,13 @@ export default function InventoryPage() {
         <DataTable columns={columns} data={items} searchable searchKeys={['name', 'code']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة صنف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة صنف جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="الكود" placeholder="كود الصنف" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
-          <Input label="الوحدة" placeholder="مثال: كيس، طن" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} />
-          <Input label="اسم الصنف" placeholder="اسم الصنف" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, اسم_الصنف: e.target.value})} />
-          <Select label="المستودع" options={[{ value: '', label: 'اختر مستودعاً' }]} className="col-span-2" value={form.warehouse_id} onChange={(value) => setForm({...form, warehouse_id: value})} />
-          <Input label="التصنيف" placeholder="اختياري" className="col-span-2" value={form.التصنيف} onChange={(e) => setForm({...form, التصنيف: e.target.value})} />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+          <Input label="الكود" placeholder="كود الصنف" />
+          <Input label="الوحدة" placeholder="مثال: كيس، طن" />
+          <Input label="اسم الصنف" placeholder="اسم الصنف" className="col-span-2" />
+          <Select label="المستودع" options={[{ value: '', label: 'اختر مستودعاً' }]} className="col-span-2" />
+          <Input label="التصنيف" placeholder="اختياري" className="col-span-2" />
         </div>
       </Modal>
     </div>

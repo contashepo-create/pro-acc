@@ -30,10 +30,7 @@ export default function ComplaintsPage() {
     setLoading(false);
   };
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadData();
-  }, []);
+  useEffect(() => { loadData(); }, []);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();

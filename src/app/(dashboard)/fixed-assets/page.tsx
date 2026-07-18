@@ -20,39 +20,6 @@ export default function FixedAssetsPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({"name": "", "code": "", "purchase_cost": "", "useful_life_years": ""});
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveError('');
-    try {
-      const res = await fetch('/api/fixed-assets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setShowModal(false);
-        setForm({});
-        // Refresh data
-        window.location.reload();
-      } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
-      }
-    } catch (e) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + ('خطأ'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-
-
-
-
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -106,16 +73,15 @@ export default function FixedAssetsPage() {
       ) : (
         <DataTable columns={columns} data={assets} searchable searchKeys={['name', 'code', 'category']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة أصل ثابت" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة أصل ثابت" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="الكود" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} /><Input label="اسم الأصل" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, اسم_الأصل: e.target.value})} />
-          <Select label="التصنيف" options={[{ value: 'مركبات', label: 'مركبات' }, { value: 'أجهزة', label: 'أجهزة' }, { value: 'مباني', label: 'مباني' }, { value: 'أثاث', label: 'أثاث' }, { value: 'أخرى', label: 'أخرى' }]} value={form.التصنيف} onChange={(value) => setForm({...form, التصنيف: value})} />
-          <Input label="تاريخ الشراء" type="date" value={form.purchase_date} onChange={(e) => setForm({...form, purchase_date: e.target.value})} />
-          <Input label="تكلفة الشراء" type="number" value={form.purchase_cost} onChange={(e) => setForm({...form, purchase_cost: e.target.value})} />
-          <Input label="العمر الإنتاجي (سنوات)" type="number" value={form.العمر_الإنتاجي_(سنوات)} onChange={(e) => setForm({...form, العمر_الإنتاجي_(سنوات): e.target.value})} />
-          <Select label="طريقة الإهلاك" options={[{ value: 'straight_line', label: 'القسط الثابت' }, { value: 'declining_balance', label: 'الرصيد المتناقص' }]} value={form.طريقة_الإهلاك} onChange={(value) => setForm({...form, طريقة_الإهلاك: value})} />
-          <Input label="الموقع" value={form.location} onChange={(e) => setForm({...form, location: e.target.value})} /><Input label="ملاحظات" className="col-span-2" value={form.notes} onChange={(e) => setForm({...form, ملاحظات: e.target.value})} />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+          <Input label="الكود" /><Input label="اسم الأصل" className="col-span-2" />
+          <Select label="التصنيف" options={[{ value: 'مركبات', label: 'مركبات' }, { value: 'أجهزة', label: 'أجهزة' }, { value: 'مباني', label: 'مباني' }, { value: 'أثاث', label: 'أثاث' }, { value: 'أخرى', label: 'أخرى' }]} />
+          <Input label="تاريخ الشراء" type="date" />
+          <Input label="تكلفة الشراء" type="number" />
+          <Input label="العمر الإنتاجي (سنوات)" type="number" />
+          <Select label="طريقة الإهلاك" options={[{ value: 'straight_line', label: 'القسط الثابت' }, { value: 'declining_balance', label: 'الرصيد المتناقص' }]} />
+          <Input label="الموقع" /><Input label="ملاحظات" className="col-span-2" />
         </div>
       </Modal>
     </div>

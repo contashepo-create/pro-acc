@@ -18,39 +18,6 @@ export default function ContactsPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({"name": "", "type": "", "phone": "", "email": ""});
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveError('');
-    try {
-      const res = await fetch('/api/contacts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setShowModal(false);
-        setForm({});
-        // Refresh data
-        window.location.reload();
-      } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
-      }
-    } catch (e) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + ('خطأ'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-
-
-
-
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -102,14 +69,13 @@ export default function ContactsPage() {
       ) : (
         <DataTable columns={columns} data={contacts} searchable searchKeys={['name', 'phone', 'email']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة جهة اتصال" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة جهة اتصال" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
-          <Select label="النوع" options={[{ value: 'client', label: 'عميل' }, { value: 'supplier', label: 'مورد' }, { value: 'subcontractor', label: 'مقاول باطن' }, { value: 'both', label: 'عميل ومورد' }]} value={form.type} onChange={(value) => setForm({...form, type: value})} />
-          <Input label="الجوال" type="tel" type="tel" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} /><Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} />
-          <Input label="العنوان" className="col-span-2" value={form.address} onChange={(e) => setForm({...form, address: e.target.value})} />
-          <Input label="الرقم الضريبي" value={form.tax_number} onChange={(e) => setForm({...form, tax_number: e.target.value})} /><Input label="السجل التجاري" value={form.commercial_registration} onChange={(e) => setForm({...form, commercial_registration: e.target.value})} />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+          <Input label="الاسم" className="col-span-2" />
+          <Select label="النوع" options={[{ value: 'client', label: 'عميل' }, { value: 'supplier', label: 'مورد' }, { value: 'subcontractor', label: 'مقاول باطن' }, { value: 'both', label: 'عميل ومورد' }]} />
+          <Input label="الجوال" /><Input label="البريد الإلكتروني" type="email" />
+          <Input label="العنوان" className="col-span-2" />
+          <Input label="الرقم الضريبي" /><Input label="السجل التجاري" />
         </div>
       </Modal>
     </div>

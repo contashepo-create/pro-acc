@@ -19,39 +19,6 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({"name": "", "contract_value": "", "client_id": "", "start_date": ""});
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveError('');
-    try {
-      const res = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setShowModal(false);
-        setForm({});
-        // Refresh data
-        window.location.reload();
-      } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
-      }
-    } catch (e) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + ('خطأ'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-
-
-
   const [statusTab, setStatusTab] = useState('all');
 
   useEffect(() => {
@@ -132,14 +99,13 @@ export default function ProjectsPage() {
         <DataTable columns={columns} data={filtered} searchable searchKeys={['name', 'client_name']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة مشروع جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة مشروع جديد" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="اسم المشروع" placeholder="اسم المشروع" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, اسم_المشروع: e.target.value})} />
-          <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" value={form.client_id} onChange={(value) => setForm({...form, client_id: value})} />
-          <Input label="قيمة العقد" type="number" value={form.قيمة_العقد} onChange={(e) => setForm({...form, قيمة_العقد: e.target.value})} />
-          <Input label="تاريخ البداية" type="date" value={form.start_date} onChange={(e) => setForm({...form, تاريخ_البداية: e.target.value})} />
-          <Input label="تاريخ النهاية" type="date" value={form.end_date} onChange={(e) => setForm({...form, تاريخ_النهاية: e.target.value})} />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+          <Input label="اسم المشروع" placeholder="اسم المشروع" className="col-span-2" />
+          <Select label="العميل" options={[{ value: '', label: 'اختر عميلاً' }]} className="col-span-2" />
+          <Input label="قيمة العقد" type="number" />
+          <Input label="تاريخ البداية" type="date" />
+          <Input label="تاريخ النهاية" type="date" />
         </div>
       </Modal>
     </div>

@@ -2,14 +2,12 @@
 
 import { useRouter, usePathname } from 'next/navigation';
 import { useEffect } from 'react';
-import { Loader2 } from 'lucide-react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { AnnouncementBar } from '@/components/AnnouncementBar';
 import { SubscriptionBanner } from '@/components/SubscriptionBanner';
 import { useSidebarStore } from '@/store/sidebar-store';
-import { useAuthStore } from '@/store/auth-store';
 
 const pageTitles: Record<string, string> = {
   '': 'لوحة التحكم',
@@ -97,7 +95,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const pathname = usePathname();
   const { setActive } = useSidebarStore();
-  const { isAuthenticated, isLoading } = useAuthStore();
 
   const page = pathname.replace(/^\//, '');
   const sectionAccent = getSectionAccent(page);
@@ -105,20 +102,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     setActive(page);
   }, [page, setActive]);
-
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.replace('/login');
-    }
-  }, [isLoading, isAuthenticated, router]);
-
-  if (isLoading || !isAuthenticated) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 size={32} className="animate-spin text-accent" />
-      </div>
-    );
-  }
 
   const handleNavigate = (page: string) => {
     router.push(page ? `/${page}` : '/dashboard');

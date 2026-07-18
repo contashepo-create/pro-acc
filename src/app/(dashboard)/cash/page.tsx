@@ -18,39 +18,6 @@ export default function CashPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({"type": "", "amount": "", "account_id": "", "reason": ""});
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveError('');
-    try {
-      const res = await fetch('/api/cash', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setShowModal(false);
-        setForm({});
-        // Refresh data
-        window.location.reload();
-      } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
-      }
-    } catch (e) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + ('خطأ'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-
-
-
   const [typeTab, setTypeTab] = useState('all');
 
   useEffect(() => {
@@ -122,15 +89,14 @@ export default function CashPage() {
         <DataTable columns={columns} data={filtered} searchable searchKeys={['reason']} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة معاملة نقدية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة معاملة نقدية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
-          <Select label="النوع" options={[{ value: 'revenue', label: 'قبض' }, { value: 'expense', label: 'صرف' }]} value={form.type} onChange={(value) => setForm({...form, type: value})} />
-          <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} />
-          <Select label="الخزينة/البنك" options={[{ value: '', label: 'اختر' }]} value={form.الخزينة/البنك} onChange={(value) => setForm({...form, الخزينة/البنك: value})} />
-          <Select label="الحساب" options={[{ value: '', label: 'اختر حساباً' }]} className="col-span-2" value={form.account_id} onChange={(value) => setForm({...form, account_id: value})} />
-          <Input label="البيان" className="col-span-2" placeholder="سبب المعاملة" value={form.description} onChange={(e) => setForm({...form, البيان: e.target.value})} />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+          <Input label="التاريخ" type="date" />
+          <Select label="النوع" options={[{ value: 'revenue', label: 'قبض' }, { value: 'expense', label: 'صرف' }]} />
+          <Input label="المبلغ" type="number" />
+          <Select label="الخزينة والبنك" options={[{ value: '', label: 'اختر' }]} />
+          <Select label="الحساب" options={[{ value: '', label: 'اختر حساباً' }]} className="col-span-2" />
+          <Input label="البيان" className="col-span-2" placeholder="سبب المعاملة" />
         </div>
       </Modal>
     </div>

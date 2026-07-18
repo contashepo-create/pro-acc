@@ -85,12 +85,12 @@ export default function SalarySheetsPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة كشف مرتبات" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button>حفظ</Button></div>}>
         <div className="space-y-4">
-          <Input label="اسم الكشف" placeholder="مثال: مرتبات يوليو 2026" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
+          <Input label="اسم الكشف" placeholder="مثال: مرتبات يوليو 2026" />
           <div className="grid grid-cols-2 gap-4">
-            <Select label="الشهر" options={Array.from({ length: 12 }, (_, i) = value={form.الشهر} onChange={(value) => setForm({...form, الشهر: value})}> ({ value: String(i + 1), label: monthNames[i + 1] }))} />
-            <Input label="السنة" type="number" defaultValue="2026" value={form.year} onChange={(e) => setForm({...form, year: e.target.value})} />
+            <Select label="الشهر" options={Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: monthNames[i + 1] }))} />
+            <Input label="السنة" type="number" defaultValue="2026" />
           </div>
-          <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+          <Input label="التاريخ" type="date" />
           <div className="border border-border rounded-lg p-4">
             <h3 className="font-medium mb-3">الموظفون</h3>
             <p className="text-sm text-text-muted">سيتم جلب الموظفين النشطين تلقائياً عند الحفظ</p>

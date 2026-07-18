@@ -28,10 +28,7 @@ export default function MessagesPage() {
     setLoading(false);
   };
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadMessages();
-  }, []);
+  useEffect(() => { loadMessages(); }, []);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();

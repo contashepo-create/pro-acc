@@ -19,39 +19,6 @@ export default function BoqPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
 
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({"project_id": "", "description": "", "quantity": "", "unit_price": ""});
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaveError('');
-    try {
-      const res = await fetch('/api/boq', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setShowModal(false);
-        setForm({});
-        // Refresh data
-        window.location.reload();
-      } else {
-        setSaveError(json.message || 'فشل الحفظ: ' + JSON.stringify(json));
-      }
-    } catch (e) {
-      setSaveError('خطأ في الاتصال بالخادم: ' + ('خطأ'));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-
-
-
-
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -105,13 +72,12 @@ export default function BoqPage() {
       ) : (
         <DataTable columns={columns} data={boqItems} searchable searchKeys={['item_code', 'description', 'project_name']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة بند كمية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة بند كمية" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={() => {}}>حفظ</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          <Select label="المشروع" options={[{ value: '', label: 'اختر مشروعاً' }]} className="col-span-2" value={form.project_id} onChange={(value) => setForm({...form, project_id: value})} />
-          <Input label="كود البند" value={form.code} onChange={(e) => setForm({...form, كود_البند: e.target.value})} /><Input label="الوحدة" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} />
-          <Input label="البيان" className="col-span-2" value={form.description} onChange={(e) => setForm({...form, البيان: e.target.value})} />
-          <Input label="الكمية" type="number" value={form.quantity} onChange={(e) => setForm({...form, quantity: e.target.value})} /><Input label="سعر الوحدة" type="number" value={form.unit_price} onChange={(e) => setForm({...form, unit_price: e.target.value})} />
-                  {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+          <Select label="المشروع" options={[{ value: '', label: 'اختر مشروعاً' }]} className="col-span-2" />
+          <Input label="كود البند" /><Input label="الوحدة" />
+          <Input label="البيان" className="col-span-2" />
+          <Input label="الكمية" type="number" /><Input label="سعر الوحدة" type="number" />
         </div>
       </Modal>
     </div>

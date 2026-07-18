@@ -77,9 +77,9 @@ export default function CurrenciesPage() {
       )}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة عملة" size="sm" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button>حفظ</Button></div>}>
         <div className="space-y-4">
-          <Input label="كود العملة" placeholder="مثال: USD" value={form.code} onChange={(e) => setForm({...form, كود_العملة: e.target.value})} />
-          <Input label="اسم العملة" placeholder="مثال: دولار أمريكي" value={form.name} onChange={(e) => setForm({...form, اسم_العملة: e.target.value})} />
-          <Input label="سعر الصرف" type="number" placeholder="مقابل العملة الأساسية" value={form.rate} onChange={(e) => setForm({...form, rate: e.target.value})} />
+          <Input label="كود العملة" placeholder="مثال: USD" />
+          <Input label="اسم العملة" placeholder="مثال: دولار أمريكي" />
+          <Input label="سعر الصرف" type="number" placeholder="مقابل العملة الأساسية" />
         </div>
       </Modal>
     </div>
