@@ -39,29 +39,19 @@ export async function POST(request: NextRequest) {
 
     // Verify HMAC signature to ensure not tampered
     const jsonString = JSON.stringify(backupData, null, 2);
-    const expectedHash = createHmac('sha256', BACKUP_SECRET).update(jsonString).digest('hex').substring(0, 16);
+    const expectedFullHmac = createHmac('sha256', BACKUP_SECRET).update(jsonString).digest('hex');
+    const expectedHash = expectedFullHmac.substring(0, 16);
     
-    // Also check if this hash exists in backup_logs (was legitimately downloaded)
-    const { data: log } = await s.from('backup_logs')
-      .select('id, hmac_signature')
+    // Secure verification: search database logs for a record matching the CALCULATED full hmac signature of the actual uploaded content.
+    // If the content was modified by even one character, the calculated HMAC will change, and it will not find any log entry.
+    const { data: logByHmac } = await s.from('backup_logs')
+      .select('id')
       .eq('company_id', auth.companyId)
-      .eq('file_hash', fileHash)
-      .order('created_at', { ascending: false })
-      .limit(1)
+      .eq('hmac_signature', expectedFullHmac)
       .maybeSingle();
 
-    if (!log) {
-      // If not found in logs, do strict HMAC check
-      const expectedFullHmac = createHmac('sha256', BACKUP_SECRET).update(jsonString).digest('hex');
-      const { data: logByHmac } = await s.from('backup_logs')
-        .select('id')
-        .eq('company_id', auth.companyId)
-        .eq('hmac_signature', expectedFullHmac)
-        .maybeSingle();
-      
-      if (!logByHmac) {
-        return error('النسخة الاحتياطية غير صالحة أو تم التلاعب بها. يجب أن تكون نفس الملف المحمل بدون تعديل', 400);
-      }
+    if (!logByHmac) {
+      return error('النسخة الاحتياطية غير صالحة أو تم التلاعب بها. يجب أن تكون نفس الملف المحمل بدون تعديل', 400);
     }
 
     // Verify no data leakage - ensure only this company's data
