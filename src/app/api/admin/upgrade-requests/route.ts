@@ -19,53 +19,37 @@ export async function GET(req: NextRequest) {
     const s = sb();
     const status = req.nextUrl.searchParams.get('status') || 'pending';
 
-    // استخدام استعلام أبسط بدون joins معقدة
-    let query = s.from('upgrade_requests')
+    // جلب طلبات الترقية مع البيانات الأساسية
+    const { data: requests, error: reqErr } = await s.from('upgrade_requests')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (status !== 'all') {
-      query = query.eq('status', status);
-    }
-
-    const { data, error: err } = await query;
-    if (err) {
-      console.error('Error fetching upgrade requests:', err);
+    if (reqErr) {
+      console.error('Error fetching upgrade requests:', reqErr);
       // إذا كان الجدول غير موجود
-      if (err.code === '42P01') {
+      if (reqErr.code === '42P01') {
         return success({ requests: [] });
       }
-      throw err;
+      throw reqErr;
     }
 
-    // جلب بيانات الشركات والمستخدمين يدوياً
-    const requestsWithData = await Promise.all((data || []).map(async (req: any) => {
-      let companyName = '';
-      let userName = '';
-      let userEmail = '';
-      let planName = '';
-      let planCode = '';
+    let filtered = requests || [];
+    if (status !== 'all') {
+      filtered = filtered.filter((r: any) => r.status === status);
+    }
+
+    // جلب بيانات الشركات والباقات يدوياً
+    const enriched = await Promise.all(filtered.map(async (req: any) => {
+      let companyData = { name: '', email: '', phone: '' };
+      let planData = { name: '', code: '' };
+      let userData = { name: '', email: '' };
 
       try {
         const { data: company } = await s.from('companies')
           .select('name, email, phone')
           .eq('id', req.company_id)
           .maybeSingle();
-        if (company) {
-          companyName = (company as any).name || '';
-          userEmail = (company as any).email || '';
-        }
-      } catch {}
-
-      try {
-        const { data: user } = await s.from('users')
-          .select('name, email')
-          .eq('id', req.user_id)
-          .maybeSingle();
-        if (user) {
-          userName = (user as any).name || '';
-          userEmail = (user as any).email || userEmail;
-        }
+        if (company) companyData = company as any;
       } catch {}
 
       try {
@@ -73,24 +57,26 @@ export async function GET(req: NextRequest) {
           .select('name, code')
           .eq('id', req.requested_plan_id)
           .maybeSingle();
-        if (plan) {
-          planName = (plan as any).name || '';
-          planCode = (plan as any).code || '';
-        }
+        if (plan) planData = plan as any;
+      } catch {}
+
+      try {
+        const { data: user } = await s.from('users')
+          .select('name, email')
+          .eq('id', req.user_id)
+          .maybeSingle();
+        if (user) userData = user as any;
       } catch {}
 
       return {
         ...req,
-        company_name: companyName,
-        company_email: userEmail,
-        user_name: userName,
-        user_email: userEmail,
-        plan_name: planName,
-        plan_code: planCode,
+        companies: companyData,
+        subscription_plans: planData,
+        users: userData,
       };
     }));
 
-    return success({ requests: requestsWithData });
+    return success({ requests: enriched });
   } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     console.error('Upgrade requests GET error:', e);
@@ -109,7 +95,7 @@ export async function PUT(req: NextRequest) {
 
     const s = sb();
 
-    // جلب الطلب الموجود
+    // جلب الطلب
     const { data: existing, error: fetchErr } = await s.from('upgrade_requests')
       .select('*')
       .eq('id', id)
@@ -134,19 +120,20 @@ export async function PUT(req: NextRequest) {
       .eq('id', id);
 
     if (updateErr) {
-      console.error('Error updating upgrade request:', updateErr);
+      console.error('Error updating request status:', updateErr);
       throw updateErr;
     }
 
-    // إذا تم الموافقة، قم بترقية الاشتراك
+    // إذا تم قبول الطلب، نقوم بترقية الاشتراك
     if (status === 'approved') {
       try {
+        // حساب تاريخ الانتهاء
         const durationDays = reqData.duration_type === 'yearly' ? 365 : 30;
         const endDate = new Date();
         endDate.setDate(endDate.getDate() + durationDays);
 
         // جلب كود الباقة
-        let planCode = reqData.requested_plan_code || 'basic';
+        let planCode = 'basic';
         if (reqData.requested_plan_id) {
           const { data: plan } = await s.from('subscription_plans')
             .select('code')
@@ -164,16 +151,14 @@ export async function PUT(req: NextRequest) {
           .maybeSingle();
 
         if (currentSub) {
-          // تحديث الاشتراك
           await s.from('subscriptions').update({
             plan_id: reqData.requested_plan_id || null,
             plan_code: planCode,
             status: 'active',
             end_date: endDate.toISOString().split('T')[0],
             updated_at: new Date().toISOString(),
-          }).eq('id', (currentSub as Record<string, any>).id);
+          }).eq('id', (currentSub as any).id);
         } else {
-          // إنشاء اشتراك جديد
           await s.from('subscriptions').insert({
             company_id: reqData.company_id,
             plan_id: reqData.requested_plan_id || null,
@@ -184,24 +169,23 @@ export async function PUT(req: NextRequest) {
           });
         }
 
-        // إضافة إشعار للشركة
+        // إشعار الشركة
         try {
-          await s.from('notifications').insert({
+          await s.from('company_messages').insert({
             company_id: reqData.company_id,
-            title: 'تمت الموافقة على طلب الترقية',
+            subject: 'تمت الموافقة على طلب الترقية',
             body: `تمت الموافقة على ترقيتك. استمتع بالمميزات الجديدة!`,
-            type: 'subscription',
+            type: 'upgrade',
+            status: 'open',
           });
-        } catch (notifErr) {
-          console.warn('Failed to create notification:', notifErr);
-        }
+        } catch {}
       } catch (upgradeErr) {
         console.error('Error upgrading subscription:', upgradeErr);
-        // لا نرجع خطأ هنا لأن الطلب تم تحديثه بنجاح
+        // لا نرجع خطأ لأن الطلب تم تحديثه بنجاح
       }
     }
 
-    return success({ message: status === 'approved' ? 'تمت الموافقة على الطلب وترقية الاشتراك' : 'تم رفض الطلب' });
+    return success({ message: status === 'approved' ? 'تم قبول الطلب وترقية الاشتراك' : 'تم رفض الطلب' });
   } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     console.error('Upgrade requests PUT error:', e);

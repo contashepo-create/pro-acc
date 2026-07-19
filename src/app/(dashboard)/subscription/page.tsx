@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Check, Loader2, CreditCard, Crown, AlertTriangle, Upload, DollarSign, Calendar, Clock, Image as ImageIcon, Send } from 'lucide-react';
+import { Check, Loader2, CreditCard, Crown, AlertTriangle, Upload, DollarSign, Calendar, Clock, Image as ImageIcon, Send, Key as KeyIcon } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -34,6 +34,13 @@ export default function SubscriptionPageEnhanced() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<any>(null);
 
+  // Activation code state
+  const [activationCode, setActivationCode] = useState('');
+  const [codePreview, setCodePreview] = useState<any>(null);
+  const [codeChecking, setCodeChecking] = useState(false);
+  const [activating, setActivating] = useState(false);
+  const [activationMsg, setActivationMsg] = useState<any>(null);
+
   useEffect(() => {
     Promise.all([
       fetch('/api/auth/subscription').then(r=>r.json()),
@@ -55,6 +62,60 @@ export default function SubscriptionPageEnhanced() {
     const price = duration === 'yearly' ? (plan.price_yearly || plan.price_monthly * 12 * (1 - plan.yearly_discount_percent/100)) : plan.price_monthly;
     setForm(prev => ({ ...prev, amount: String(Math.round(price)) }));
     setShowUpgradeModal(true);
+  };
+
+  const checkCode = async () => {
+    if (!activationCode.trim()) return;
+    setCodeChecking(true);
+    setActivationMsg(null);
+    setCodePreview(null);
+    try {
+      const res = await fetch(`/api/subscription/activate-code?code=${encodeURIComponent(activationCode.trim())}`);
+      const json = await res.json();
+      if (json.success && json.data.valid) {
+        setCodePreview(json.data);
+      } else {
+        setActivationMsg({ type: 'error', text: json.message || 'كود غير صحيح' });
+      }
+    } catch {
+      setActivationMsg({ type: 'error', text: 'خطأ في الاتصال' });
+    } finally {
+      setCodeChecking(false);
+    }
+  };
+
+  const activateCode = async () => {
+    if (!activationCode.trim()) return;
+    setActivating(true);
+    setActivationMsg(null);
+    try {
+      const res = await fetch('/api/subscription/activate-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: activationCode.trim() }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setActivationMsg({ 
+          type: 'success', 
+          text: `✅ تم تفعيل الباقة "${json.data.plan_name}" لمدة ${json.data.duration_months} شهر! تنتهي في ${json.data.end_date}` 
+        });
+        setActivationCode('');
+        setCodePreview(null);
+        // Refresh subscription data
+        const subData = await fetch('/api/auth/subscription').then(r => r.json());
+        if (subData.success) {
+          setPlans(subData.data.plans || []);
+          setSubscription(subData.data.subscription);
+        }
+      } else {
+        setActivationMsg({ type: 'error', text: json.message || 'فشل التفعيل' });
+      }
+    } catch {
+      setActivationMsg({ type: 'error', text: 'خطأ في الاتصال' });
+    } finally {
+      setActivating(false);
+    }
   };
 
   const submitUpgrade = async () => {
@@ -132,6 +193,52 @@ export default function SubscriptionPageEnhanced() {
           </div>
         </Card>
       )}
+
+      {/* ============ تفعيل بكود ============ */}
+      <Card>
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
+            <KeyIcon size={20} className="text-green-600" />
+          </div>
+          <div>
+            <h3 className="font-bold">تفعيل بكود</h3>
+            <p className="text-xs text-text-muted">أدخل كود التفعيل لتفعيل الباقة فوراً</p>
+          </div>
+        </div>
+        {activationMsg && (
+          <div className={`mb-3 p-3 rounded-lg text-sm ${activationMsg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+            {activationMsg.text}
+          </div>
+        )}
+        {codePreview && (
+          <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700">
+            <div><strong>الباقة:</strong> {codePreview.plan_name}</div>
+            <div><strong>المدة:</strong> {codePreview.duration_months} شهر</div>
+          </div>
+        )}
+        <div className="flex gap-2">
+          <Input 
+            placeholder="أدخل كود التفعيل هنا..." 
+            value={activationCode} 
+            onChange={(e) => { setActivationCode(e.target.value); setCodePreview(null); }}
+            dir="ltr"
+            className="flex-1"
+          />
+          <Button 
+            variant="outline" 
+            onClick={checkCode} 
+            disabled={!activationCode || codeChecking}
+          >
+            {codeChecking ? '...' : 'تحقق'}
+          </Button>
+          <Button 
+            onClick={activateCode} 
+            disabled={!activationCode || !codePreview || codePreview?.is_used || activating}
+          >
+            {activating ? 'جاري التفعيل...' : 'تفعيل'}
+          </Button>
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {plans.map((plan) => {
