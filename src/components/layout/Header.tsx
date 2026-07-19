@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import {
   Sun, Moon, Search, Bell, ChevronDown, LogOut, Settings,
-  Clock, Calendar, Menu, ShieldAlert,
+  Clock, Calendar, Menu, ShieldAlert, User, LayoutDashboard,
 } from 'lucide-react';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
@@ -47,20 +47,35 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
   const { setMobileOpen, mobileOpen } = useSidebarStore();
   const [searchOpen, setSearchOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const userMenuRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const { time, date } = useClock();
 
+  // إغلاق القائمة عند النقر خارجها - تشمل الزر والقائمة المنسدلة معاً
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const isInsideContainer = containerRef.current && containerRef.current.contains(target);
+      const isInsideDropdown = dropdownRef.current && dropdownRef.current.contains(target);
+      
+      if (!isInsideContainer && !isInsideDropdown) {
         setUserMenuOpen(false);
       }
     }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
-  // Close search when user menu opens and vice versa
+    if (userMenuOpen) {
+      // تأخير بسيط لتجنب الإغلاق الفوري عند فتح القائمة
+      const timer = setTimeout(() => {
+        document.addEventListener('mousedown', handleClickOutside);
+      }, 10);
+      return () => {
+        clearTimeout(timer);
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [userMenuOpen]);
+
+  // إغلاق البحث عند فتح القائمة والعكس
   useEffect(() => {
     if (userMenuOpen) setSearchOpen(false);
   }, [userMenuOpen]);
@@ -79,17 +94,36 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
     router.push('/login');
   };
 
-  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0 });
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
 
-  useEffect(() => {
-    if (userMenuOpen && userMenuRef.current) {
-      const rect = userMenuRef.current.getBoundingClientRect();
-      setDropdownPosition({
+  const updateDropdownPosition = useCallback(() => {
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      setDropdownPos({
         top: rect.bottom + 8,
-        left: Math.max(10, rect.left - 180), // Adjust to show fully
+        left: Math.max(10, rect.right - 270),
       });
     }
-  }, [userMenuOpen]);
+  }, []);
+
+  useEffect(() => {
+    if (userMenuOpen) {
+      updateDropdownPosition();
+      window.addEventListener('resize', updateDropdownPosition);
+      window.addEventListener('scroll', updateDropdownPosition, true);
+      return () => {
+        window.removeEventListener('resize', updateDropdownPosition);
+        window.removeEventListener('scroll', updateDropdownPosition, true);
+      };
+    }
+  }, [userMenuOpen, updateDropdownPosition]);
+
+  const ROLE_LABELS: Record<string, string> = {
+    admin: 'مدير النظام',
+    manager: 'مدير',
+    accountant: 'محاسب',
+    supervisor: 'مراقب',
+  };
 
   return (
     <>
@@ -146,7 +180,7 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
           </div>
 
           {/* Actions + User */}
-          <div className="flex items-center gap-1 relative">
+          <div className="flex items-center gap-1">
             <button
               onClick={() => setSearchOpen(!searchOpen)}
               className="btn btn-ghost btn-icon relative z-10"
@@ -155,7 +189,7 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               <Search size={17} />
             </button>
             {searchOpen && (
-              <div className="absolute right-0 top-full mt-2 z-20">
+              <div className="absolute left-0 top-full mt-2 z-20">
                 <input
                   type="text"
                   placeholder="بحث..."
@@ -187,10 +221,12 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
               {isDark ? <Sun size={17} /> : <Moon size={17} />}
             </button>
 
-            <div className="relative" ref={userMenuRef} style={{ zIndex: 9999 }}>
+            {/* زر المستخدم والقائمة المنسدلة */}
+            <div className="relative" ref={containerRef}>
               <button
                 onClick={() => setUserMenuOpen(!userMenuOpen)}
-                className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-bg-hover transition-colors relative z-[10000]"
+                className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-bg-hover transition-colors"
+                id="user-menu-button"
               >
                 <div className="w-7 h-7 rounded-full bg-[var(--section-accent,var(--color-accent))] flex items-center justify-center text-text-inverse text-xs font-bold">
                   {initials}
@@ -200,103 +236,102 @@ export function Header({ title, breadcrumbs }: HeaderProps) {
                     {user?.name || 'المستخدم'}
                   </div>
                 </div>
-                <ChevronDown size={14} className="text-text-muted hidden lg:block" />
+                <ChevronDown size={14} className={`text-text-muted hidden lg:block transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} />
               </button>
-
-              {userMenuOpen && typeof window !== 'undefined' && createPortal(
-                <div className="fixed w-64 border border-border rounded-xl shadow-2xl py-1 z-[99999] animate-[fade-in_0.15s_ease-out]" 
-                     style={{ 
-                       top: `${dropdownPosition.top}px`, 
-                       left: `${dropdownPosition.left}px`,
-                       backgroundColor: 'var(--color-bg-card)', 
-                       boxShadow: '0 30px 80px rgba(0,0,0,0.5)', 
-                       border: '1px solid var(--color-border)',
-                     }}>
-                  <div className="px-4 py-3 border-b border-border">
-                    <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
-                    <div className="text-xs text-text-muted">{user?.email || ''}</div>
-                    <div className="text-[11px] text-text-muted mt-0.5">
-                      {user?.role === 'admin' ? 'مدير النظام' : 'محاسب'}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => { setUserMenuOpen(false); router.push('/settings'); }}
-                    className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
-                  >
-                    <Settings size={16} />
-                    الإعدادات
-                  </button>
-                  <button
-                    onClick={() => { setUserMenuOpen(false); router.push('/dashboard'); }}
-                    className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                    </svg>
-                    لوحة التحكم
-                  </button>
-                  {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
-                    <button
-                      onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
-                      className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
-                    >
-                      <ShieldAlert size={16} />
-                      لوحة المطور
-                    </button>
-                  )}
-                  <div className="border-t border-border mt-1 pt-1">
-                    <button
-                      onClick={() => { setUserMenuOpen(false); handleLogout(); }}
-                      className="w-full text-right px-4 py-2.5 text-sm text-danger hover:bg-danger-light/20 flex items-center gap-3 transition-colors"
-                    >
-                      <LogOut size={16} />
-                      تسجيل الخروج
-                    </button>
-                  </div>
-                </div>,
-                document.body
-              )}
-              {/* Old dropdown kept for reference but hidden - will be removed */}
-              {false && userMenuOpen && (
-                <div className="absolute left-0 top-full mt-2 w-64 border border-border rounded-xl shadow-2xl py-1 z-[10000] animate-[fade-in_0.15s_ease-out] isolate" style={{ backgroundColor: 'var(--color-bg-card)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', border: '1px solid var(--color-border)' }}>
-                  <div className="px-4 py-3 border-b border-border">
-                    <div className="text-sm font-medium text-text-primary">{user?.name || 'المستخدم'}</div>
-                    <div className="text-xs text-text-muted">{user?.email || ''}</div>
-                    <div className="text-[11px] text-text-muted mt-0.5">
-                      {user?.role === 'admin' ? 'مدير النظام' : 'محاسب'}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => { setUserMenuOpen(false); router.push('/settings'); }}
-                    className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
-                  >
-                    <Settings size={16} />
-                    الإعدادات
-                  </button>
-                  {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
-                    <button
-                      onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
-                      className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
-                    >
-                      <ShieldAlert size={16} />
-                      لوحة المطور
-                    </button>
-                  )}
-                  <div className="border-t border-border mt-1 pt-1">
-                    <button
-                      onClick={() => { setUserMenuOpen(false); handleLogout(); }}
-                      className="w-full text-right px-4 py-2.5 text-sm text-danger hover:bg-danger-light/20 flex items-center gap-3 transition-colors"
-                    >
-                      <LogOut size={16} />
-                      تسجيل الخروج
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
       </header>
+
+      {/* القائمة المنسدلة - تُرسم في body لتجنب مشاكل الز-index */}
+      {userMenuOpen && typeof window !== 'undefined' && createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed w-72 rounded-xl shadow-2xl overflow-hidden animate-[fade-in_0.15s_ease-out]"
+          style={{
+            top: `${dropdownPos.top}px`,
+            left: `${dropdownPos.left}px`,
+            backgroundColor: 'var(--color-bg-card, #fff)',
+            boxShadow: '0 25px 60px rgba(0,0,0,0.25), 0 0 0 1px var(--color-border, #e5e7eb)',
+            border: '1px solid var(--color-border, #e5e7eb)',
+            zIndex: 999999,
+          }}
+        >
+          {/* معلومات المستخدم */}
+          <div className="px-4 py-3 bg-gradient-to-l from-accent/5 to-transparent border-b border-border">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-[var(--section-accent,var(--color-accent))] flex items-center justify-center text-white text-sm font-bold">
+                {initials}
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-text-primary">{user?.name || 'المستخدم'}</div>
+                <div className="text-xs text-text-muted">{user?.email || ''}</div>
+                <div className="text-[11px] text-accent mt-0.5 font-medium">
+                  {ROLE_LABELS[user?.role || ''] || user?.role || 'مستخدم'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* الخيارات */}
+          <div className="py-1">
+            <button
+              onClick={() => { setUserMenuOpen(false); router.push('/dashboard'); }}
+              className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
+            >
+              <LayoutDashboard size={16} className="text-text-muted" />
+              لوحة التحكم
+            </button>
+            <button
+              onClick={() => { setUserMenuOpen(false); router.push('/settings'); }}
+              className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
+            >
+              <Settings size={16} className="text-text-muted" />
+              الإعدادات
+            </button>
+            <button
+              onClick={() => { setUserMenuOpen(false); router.push('/permissions'); }}
+              className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
+            >
+              <ShieldAlert size={16} className="text-text-muted" />
+              الصلاحيات
+            </button>
+            <button
+              onClick={() => { setUserMenuOpen(false); router.push('/profile'); }}
+              className="w-full text-right px-4 py-2.5 text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary flex items-center gap-3 transition-colors"
+            >
+              <User size={16} className="text-text-muted" />
+              الملف الشخصي
+            </button>
+
+            {/* لوحة المطور - فقط للبريد المحدد */}
+            {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
+              <>
+                <div className="border-t border-border my-1" />
+                <button
+                  onClick={() => { setUserMenuOpen(false); window.open('/zerocold/login', '_blank'); }}
+                  className="w-full text-right px-4 py-2.5 text-sm text-accent hover:bg-accent/10 flex items-center gap-3 transition-colors"
+                >
+                  <ShieldAlert size={16} />
+                  لوحة المطور
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* تسجيل الخروج */}
+          <div className="border-t border-border">
+            <button
+              onClick={() => { setUserMenuOpen(false); handleLogout(); }}
+              className="w-full text-right px-4 py-2.5 text-sm text-danger hover:bg-danger/10 flex items-center gap-3 transition-colors"
+            >
+              <LogOut size={16} />
+              تسجيل الخروج
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
     </>
   );
 }
