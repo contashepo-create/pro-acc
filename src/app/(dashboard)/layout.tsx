@@ -6,6 +6,8 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import { PageContainer } from '@/components/layout/PageContainer';
 import { AnnouncementBar } from '@/components/AnnouncementBar';
+import { AdBanner } from '@/components/AdBanner';
+import { AdPopup } from '@/components/AdPopup';
 import { SubscriptionBanner } from '@/components/SubscriptionBanner';
 import { useSidebarStore } from '@/store/sidebar-store';
 
@@ -122,6 +124,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <main className="flex-1 overflow-auto">
           <PageContainer>
             <AnnouncementBar />
+            <AdBanner />
+            <AdPopup />
             <SubscriptionBanner />
             {children}
           </PageContainer>

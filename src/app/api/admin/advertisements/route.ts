@@ -16,14 +16,19 @@ function requireAdmin(request: NextRequest) {
 export async function GET(req: NextRequest) {
   try {
     const activeParam = req.nextUrl.searchParams.get('active');
+    const displayMode = req.nextUrl.searchParams.get('display_mode');
     
     let query = sb().from('advertisements').select('*');
     
     if (activeParam === 'true') {
       query = query.eq('is_active', true);
     }
+    
+    if (displayMode) {
+      query = query.eq('display_mode', displayMode);
+    }
 
-    const { data: ads, error: err } = await query.order('created_at', { ascending: false });
+    const { data: ads, error: err } = await query.order('priority', { ascending: false }).order('created_at', { ascending: false });
     
     if (err) {
       console.error('Error fetching ads:', err);
@@ -58,7 +63,7 @@ export async function POST(req: NextRequest) {
   try {
     const admin = requireAdmin(req);
     const body = await parseBody(req);
-    const { title, body: bodyText, type, linkUrl, linkText, showDuration, expiresAt } = body;
+    const { title, body: bodyText, type, display_mode, priority, linkUrl, linkText, showDuration, expiresAt } = body;
 
     if (!title || !bodyText) return error('العنوان والنص مطلوبان');
 
@@ -76,11 +81,13 @@ export async function POST(req: NextRequest) {
       title: title.trim(),
       body: bodyText.trim(),
       type: type || 'announcement',
+      display_mode: display_mode || 'top_bar',
+      priority: priority || 0,
       link_url: linkUrl || null,
       link_text: linkText || null,
       is_active: true,
       expires_at: finalExpiresAt,
-      show_until: finalExpiresAt, // نفس التاريخ للمستخدمين
+      show_until: finalExpiresAt,
     }).select().single();
 
     if (insertErr) throw insertErr;
@@ -95,12 +102,26 @@ export async function PATCH(req: NextRequest) {
   try {
     requireAdmin(req);
     const body = await parseBody(req);
-    const { id, isActive } = body;
+    const { id, isActive, title, body: bodyText, type, display_mode, priority, linkUrl, linkText, expiresAt } = body;
 
     if (!id) return error('id مطلوب');
 
+    const updateData: any = { updated_at: new Date().toISOString() };
+    if (isActive !== undefined) updateData.is_active = isActive;
+    if (title !== undefined) updateData.title = title.trim();
+    if (bodyText !== undefined) updateData.body = bodyText.trim();
+    if (type !== undefined) updateData.type = type;
+    if (display_mode !== undefined) updateData.display_mode = display_mode;
+    if (priority !== undefined) updateData.priority = priority;
+    if (linkUrl !== undefined) updateData.link_url = linkUrl;
+    if (linkText !== undefined) updateData.link_text = linkText;
+    if (expiresAt !== undefined) {
+      updateData.expires_at = expiresAt;
+      updateData.show_until = expiresAt;
+    }
+
     const { data, error: updateErr } = await sb().from('advertisements')
-      .update({ is_active: isActive, updated_at: new Date().toISOString() })
+      .update(updateData)
       .eq('id', id)
       .select()
       .single();

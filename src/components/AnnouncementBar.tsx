@@ -69,7 +69,7 @@ export function AnnouncementBar() {
 
   useEffect(() => {
     // جلب الإعلانات النشطة
-    fetch('/api/admin/advertisements?active=true')
+    fetch('/api/admin/advertisements?active=true&display_mode=top_bar')
       .then((r) => r.json())
       .then((d) => { 
         if (d.success) setAds(d.data || []); 

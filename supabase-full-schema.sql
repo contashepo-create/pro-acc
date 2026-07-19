@@ -943,15 +943,36 @@ CREATE TABLE IF NOT EXISTS advertisements (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   title TEXT NOT NULL,
   body TEXT NOT NULL,
-  type TEXT CHECK (type IN ('announcement', 'banner', 'promotion')) DEFAULT 'announcement',
+  type TEXT NOT NULL DEFAULT 'announcement',
+  -- الأنواع المدعومة:
+  -- announcement: إعلان عام
+  -- promotion: عرض ترويجي
+  -- banner: بانر إعلاني
+  -- upgrade: رسالة ترقية
+  -- alert: تنبيه عاجل
+  -- info: معلومة
+  -- feature: ميزة جديدة
+  -- premium: محتوى حصري
+  display_mode TEXT NOT NULL DEFAULT 'top_bar',
+  -- طرق العرض:
+  -- top_bar: شريط علوي (AnnouncementBar)
+  -- banner: بانر في الصفحة
+  -- popup: نافذة منبثقة عند تسجيل الدخول
   is_active BOOLEAN DEFAULT TRUE,
+  priority INTEGER DEFAULT 0,
   starts_at TIMESTAMPTZ DEFAULT NOW(),
   expires_at TIMESTAMPTZ,
+  show_until DATE,
   link_url TEXT,
   link_text TEXT,
+  created_by UUID,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_advertisements_active ON advertisements(is_active, starts_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_advertisements_type ON advertisements(type);
+CREATE INDEX IF NOT EXISTS idx_advertisements_display_mode ON advertisements(display_mode);
 
 CREATE INDEX IF NOT EXISTS idx_advertisements_active ON advertisements(is_active, starts_at, expires_at);
 
