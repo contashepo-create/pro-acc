@@ -11,7 +11,7 @@ const sb = () => getSupabase();
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, \'reports\', \'read\');
+    const auth = await requireModulePermission(request, 'reports', 'read');
     const s = sb();
     const url = new URL(request.url);
     

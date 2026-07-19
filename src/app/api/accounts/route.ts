@@ -7,7 +7,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, \'accounts\', \'read\');
+    const auth = await requireModulePermission(request, 'accounts', 'read');
     const s = sb();
 
     const { data, error: queryError } = await s.from('accounts')
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, \'accounts\', \'create\');
+    const auth = await requireModulePermission(request, 'accounts', 'create');
     const s = sb();
 
     const body = await parseBody(request);

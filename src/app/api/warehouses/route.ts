@@ -7,7 +7,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, \'warehouses\', \'read\');
+    const auth = await requireModulePermission(request, 'warehouses', 'read');
     const s = sb();
 
     const { data: warehouses } = await s.from('warehouses')
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, \'warehouses\', \'create\');
+    const auth = await requireModulePermission(request, 'warehouses', 'create');
     const s = sb();
     const body = await request.json();
 

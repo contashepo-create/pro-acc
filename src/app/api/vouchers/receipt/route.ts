@@ -11,7 +11,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, \'receipts\', \'read\');
+    const auth = await requireModulePermission(request, 'receipts', 'read');
     const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, \'receipts\', \'create\');
+    const auth = await requireModulePermission(request, 'receipts', 'create');
     const s = sb();
     const data = await parseBody(request);
     const { date, receipt_type, contact_id, amount, bank_safe_id, reason, reference_type, reference_id, invoice_items, account_id } = data;
