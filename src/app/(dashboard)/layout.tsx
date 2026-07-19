@@ -3,13 +3,13 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
-import { Header } from '@/components/layout/Header';
+import Header from '@/components/layout/Header'; // FIXED: Default import instead of named import
 import { PageContainer } from '@/components/layout/PageContainer';
 import { AnnouncementBar } from '@/components/AnnouncementBar';
 import { AdBanner } from '@/components/AdBanner';
 import { AdPopup } from '@/components/AdPopup';
 import { SubscriptionBanner } from '@/components/SubscriptionBanner';
-import { useAuthStore } from '@/lib/auth';
+import { useAuthStore } from '@/store/auth-store'; // FIXED: Import from store instead of lib/auth
 import { Loader2 } from 'lucide-react';
 
 export default function DashboardLayout({

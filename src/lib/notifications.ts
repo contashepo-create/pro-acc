@@ -389,3 +389,17 @@ function getTransactionTypeName(type: string): string {
   };
   return names[type] || type;
 }
+
+export async function checkApprovalThreshold(
+  companyId: string,
+  amount: number,
+  transactionType: string,
+  userId: string
+): Promise<{ requiresApproval: boolean }> {
+  const config = await getTelegramConfig(companyId);
+  if (!config || !config.is_enabled || !config.approvals_enabled) {
+    return { requiresApproval: false };
+  }
+  const threshold = config.approval_threshold || 0;
+  return { requiresApproval: threshold > 0 && amount > threshold };
+}
