@@ -1,72 +1,94 @@
 import { NextRequest } from 'next/server';
-import { success, handleApiError, parseBody, requireApiAuth, requireAdmin } from '@/lib/api-helpers';
+import { success, error, requireApiAuth } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
-export async function GET(req: NextRequest) {
+/**
+ * GET /api/settings
+ * Get company settings with key validation
+ */
+export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireApiAuth(request);
     const s = sb();
 
-    // Get company info
-    const { data: company } = await s.from('companies')
-      .select('id, name, commercial_registration, tax_number, phone, email, address, currency_symbol')
-      .eq('id', auth.companyId).single();
+    // Only fetch whitelisted keys
+    const { data: allowedKeys } = await s.from('allowed_settings_keys')
+      .select('key_name')
+      .eq('is_sensitive', false);
 
-    // Get settings
-    const { data: settingsData } = await s.from('settings')
-      .select('key, value').eq('company_id', auth.companyId);
+    const validKeys = (allowedKeys || []).map((k: any) => k.key_name);
 
-    const settingsMap: Record<string, string> = {};
-    for (const row of (settingsData || [])) { settingsMap[row.key] = row.value; }
+    if (validKeys.length === 0) {
+      return success({});
+    }
 
-    return success({ company: company || {}, settings: settingsMap });
+    const { data: settings } = await s.from('settings')
+      .select('key, value')
+      .eq('company_id', auth.companyId)
+      .in('key', validKeys);
+
+    const settingsMap: Record<string, any> = {};
+    (settings || []).forEach((item: any) => {
+      try {
+        settingsMap[item.key] = JSON.parse(item.value);
+      } catch {
+        settingsMap[item.key] = item.value;
+      }
+    });
+
+    return success(settingsMap);
   } catch (err) {
-    return handleApiError(err);
+    console.error('Failed to fetch settings:', err);
+    return error('فشل تحميل الإعدادات', 500);
   }
 }
 
-export async function PUT(req: NextRequest) {
+/**
+ * PUT /api/settings
+ * Update company settings with validation
+ */
+export async function PUT(request: NextRequest) {
   try {
-    // RBAC: Only admin can modify company settings
-    const auth = await requireAdmin(req);
+    const auth = await requireApiAuth(request);
+    const body = await request.json();
     const s = sb();
-    const body = await parseBody(req);
 
-    // If body has company fields, update the companies table directly
-    const companyFields = ['company_name', 'commercial_registration', 'tax_number', 'phone', 'email', 'address', 'currency_symbol'];
-    const companyUpdate: any = {};
+    // Validate that we're only updating whitelisted keys
+    const { data: allowedKeys } = await s.from('allowed_settings_keys')
+      .select('key_name');
 
-    for (const field of companyFields) {
-      if (body[field] !== undefined) {
-        const dbField = field === 'company_name' ? 'name' : field;
-        companyUpdate[dbField] = body[field];
-      }
+    const validKeys = new Set((allowedKeys || []).map((k: any) => k.key_name));
+
+    // Check for invalid keys
+    const invalidKeys = Object.keys(body.settings || {}).filter(
+      key => !validKeys.has(key)
+    );
+
+    if (invalidKeys.length > 0) {
+      return error(
+        `مفاتيح إعدادات غير صالحة: ${invalidKeys.join(', ')}`,
+        400
+      );
     }
 
-    if (Object.keys(companyUpdate).length > 0) {
-      companyUpdate.updated_at = new Date().toISOString();
-      const { error: updateErr } = await s.from('companies')
-        .update(companyUpdate).eq('id', auth.companyId);
-      if (updateErr) throw updateErr;
-    }
+    // Update each setting
+    const updates = Object.entries(body.settings || {}).map(([key, value]) => ({
+      company_id: auth.companyId,
+      key,
+      value: typeof value === 'object' ? JSON.stringify(value) : String(value),
+      updated_at: new Date().toISOString(),
+    }));
 
-    // Also save key-value settings if provided
-    if (body.settings) {
-      for (const [key, value] of Object.entries(body.settings)) {
-        const { data: existing } = await s.from('settings')
-          .select('id').eq('company_id', auth.companyId).eq('key', key).maybeSingle();
-        if (existing) {
-          await s.from('settings').update({ value: String(value) }).eq('id', existing.id);
-        } else {
-          await s.from('settings').insert({ company_id: auth.companyId, key, value: String(value) });
-        }
-      }
+    if (updates.length > 0) {
+      await s.from('settings')
+        .upsert(updates, { onConflict: 'company_id,key' });
     }
 
     return success({ updated: true });
   } catch (err) {
-    return handleApiError(err);
+    console.error('Failed to update settings:', err);
+    return error('فشل تحديث الإعدادات', 500);
   }
 }

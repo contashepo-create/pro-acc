@@ -1,107 +1,184 @@
 import { NextRequest } from 'next/server';
-import { success, handleApiError } from '@/lib/api-helpers';
-import { requireApiAuth } from '@/lib/api-helpers';
+import { success, error, serverError, requireApiAuth } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const { companyId } = await requireApiAuth(request);
+    const auth = await requireApiAuth(request);
     const s = sb();
+    
+    // Parallelize all queries for better performance
+    const [
+      revenueResult,
+      expenseResult,
+      arResult,
+      apResult,
+      projectsResult,
+      overdueInvoicesResult,
+      cashResult,
+      revenueThisMonth,
+      expenseThisMonth
+    ] = await Promise.allSettled([
+      // Revenue
+      s.from('journal_lines')
+        .select('credit')
+        .eq('company_id', auth.companyId)
+        .gte('created_at', new Date(new Date().setDate(1)).toISOString()),
+      // Expenses
+      s.from('journal_lines')
+        .select('debit')
+        .eq('company_id', auth.companyId)
+        .gte('created_at', new Date(new Date().setDate(1)).toISOString()),
+      // Accounts Receivable
+      s.from('journal_lines')
+        .select('debit, credit')
+        .eq('company_id', auth.companyId)
+        .gt('debit', 0),
+      // Accounts Payable
+      s.from('journal_lines')
+        .select('credit, debit')
+        .eq('company_id', auth.companyId)
+        .gt('credit', 0),
+      // Projects
+      s.from('projects')
+        .select('id, name, status, contract_value, start_date, end_date')
+        .eq('company_id', auth.companyId),
+      // Overdue Invoices
+      s.from('invoices')
+        .select('id, number, total, due_date, contacts(name)')
+        .eq('company_id', auth.companyId)
+        .lt('due_date', new Date().toISOString())
+        .neq('status', 'paid'),
+      // Cash Balance
+      s.from('banks_safes')
+        .select('type, account_id')
+        .eq('company_id', auth.companyId),
+      // Revenue this month
+      s.from('journal_lines')
+        .select('credit')
+        .eq('company_id', auth.companyId)
+        .gte('created_at', new Date(new Date().setFullYear(new Date().getFullYear(), new Date().getMonth(), 1)).toISOString()),
+      // Expense this month
+      s.from('journal_lines')
+        .select('debit')
+        .eq('company_id', auth.companyId)
+        .gte('created_at', new Date(new Date().setFullYear(new Date().getFullYear(), new Date().getMonth(), 1)).toISOString()),
+    ]);
 
-    let totalRevenue = 0, totalExpenses = 0, accountsReceivable = 0, accountsPayable = 0;
-    let cashBalance = 0, activeProjects = 0, overdueInvoices = 0;
+    // Process results with proper error handling
+    const totalRevenue = revenueResult.status === 'fulfilled' && revenueResult.value.data 
+      ? revenueResult.value.data.reduce((sum: number, item: any) => sum + (parseFloat(item.credit) || 0), 0)
+      : 0;
+    
+    const totalExpense = expenseResult.status === 'fulfilled' && expenseResult.value.data
+      ? expenseResult.value.data.reduce((sum: number, item: any) => sum + (parseFloat(item.debit) || 0), 0)
+      : 0;
+    
+    const accountsReceivable = arResult.status === 'fulfilled' && arResult.value.data
+      ? arResult.value.data.reduce((sum: number, item: any) => (parseFloat(item.debit) || 0) - (parseFloat(item.credit) || 0), 0)
+      : 0;
+    
+    const accountsPayable = apResult.status === 'fulfilled' && apResult.value.data
+      ? apResult.value.data.reduce((sum: number, item: any) => (parseFloat(item.credit) || 0) - (parseFloat(item.debit) || 0), 0)
+      : 0;
+    
+    const projects = projectsResult.status === 'fulfilled' && projectsResult.value.data
+      ? projectsResult.value.data
+      : [];
+    
+    const overdueInvoices = overdueInvoicesResult.status === 'fulfilled' && overdueInvoicesResult.data
+      ? overdueInvoices.value.data
+      : [];
+    
+    const cashBalance = cashResult.status === 'fulfilled' && cashResult.value.data
+      ? await calculateCashBalance(s, cashResult.value.data)
+      : 0;
 
-    // FIXED: Calculate revenue/expenses from journal_lines joined with accounts
-    try {
-      const { data: accounts } = await s.from('accounts')
-        .select('id, type')
-        .eq('company_id', companyId)
-        .in('type', ['revenue', 'expense']);
+    const revenueMonth = revenueThisMonth.status === 'fulfilled' && revenueThisMonth.value.data
+      ? revenueThisMonth.value.data.reduce((sum: number, item: any) => sum + (parseFloat(item.credit) || 0), 0)
+      : 0;
 
-      if (accounts && accounts.length > 0) {
-        const revenueIds = accounts.filter((a: any) => a.type === 'revenue').map((a: any) => a.id);
-        const expenseIds = accounts.filter((a: any) => a.type === 'expense').map((a: any) => a.id);
-
-        if (revenueIds.length > 0) {
-          const { data: revLines } = await s.from('journal_lines')
-            .select('credit, debit')
-            .in('account_id', revenueIds);
-          if (revLines) {
-            totalRevenue = revLines.reduce((sum: number, l: any) => sum + (parseFloat(l.credit) - parseFloat(l.debit) || 0), 0);
-          }
-        }
-
-        if (expenseIds.length > 0) {
-          const { data: expLines } = await s.from('journal_lines')
-            .select('credit, debit')
-            .in('account_id', expenseIds);
-          if (expLines) {
-            totalExpenses = expLines.reduce((sum: number, l: any) => sum + (parseFloat(l.debit) - parseFloat(l.credit) || 0), 0);
-          }
-        }
-
-        // AR/AP calculation
-        // More accurate: get 1130 and 2110 codes
-        const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', '1130').maybeSingle();
-        const { data: apAcc } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', '2110').maybeSingle();
-        
-        if (arAcc) {
-          const { data: arLines } = await s.from('journal_lines').select('debit, credit').eq('account_id', arAcc.id);
-          if (arLines) {
-            accountsReceivable = arLines.reduce((sum: number, l: any) => sum + (parseFloat(l.debit) - parseFloat(l.credit) || 0), 0);
-          }
-        }
-        if (apAcc) {
-          const { data: apLines } = await s.from('journal_lines').select('debit, credit').eq('account_id', apAcc.id);
-          if (apLines) {
-            accountsPayable = apLines.reduce((sum: number, l: any) => sum + (parseFloat(l.credit) - parseFloat(l.debit) || 0), 0);
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Dashboard calc error:', e);
-    }
-
-    try {
-      const { count } = await s.from('projects').select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId).eq('status', 'active');
-      activeProjects = count || 0;
-    } catch {}
-
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const { count } = await s.from('invoices').select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId).lt('due_date', today).neq('status', 'paid');
-      overdueInvoices = count || 0;
-    } catch {}
-
-    try {
-      const { data: banks } = await s.from('banks_safes').select('balance')
-        .eq('company_id', companyId).eq('is_active', true);
-      if (banks) cashBalance = banks.reduce((sum: number, b: any) => sum + (Number(b.balance) || 0), 0);
-    } catch {}
-
-    // Fallback: try cash table
-    if (cashBalance === 0) {
-      try {
-        const { data: cash } = await s.from('cash_accounts').select('balance').eq('company_id', companyId);
-        if (cash) cashBalance = cash.reduce((sum: number, b: any) => sum + (Number(b.balance) || 0), 0);
-      } catch {}
-    }
+    const expenseMonth = expenseThisMonth.status === 'fulfilled' && expenseThisMonth.value.data
+      ? expenseThisMonth.value.data.reduce((sum: number, item: any) => sum + (parseFloat(item.debit) || 0), 0)
+      : 0;
 
     return success({
-      total_revenue: totalRevenue,
-      total_expenses: totalExpenses,
-      net_profit: totalRevenue - totalExpenses,
-      accounts_receivable: accountsReceivable,
-      accounts_payable: accountsPayable,
-      cash_balance: cashBalance,
-      active_projects: activeProjects,
-      overdue_invoices: overdueInvoices,
-    }, 200, { cache: "private", maxAge: 30, staleWhileRevalidate: 10 });
+      totalRevenue,
+      totalExpense,
+      netProfit: totalRevenue - totalExpense,
+      accountsReceivable,
+      accountsPayable,
+      cashBalance,
+      totalProjects: projects.length,
+      activeProjects: projects.filter((p: any) => p.status === 'active').length,
+      overdueInvoices: overdueInvoices.length,
+      overdueAmount: overdueInvoices.reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0),
+      revenueThisMonth: revenueMonth,
+      expenseThisMonth: expenseMonth,
+      projects: projects.map((p: any) => ({
+        ...p,
+        progress: calculateProjectProgress(p),
+      })),
+      recentActivity: await getRecentActivity(s, auth.companyId),
+    });
   } catch (err) {
-    return handleApiError(err);
+    console.error('Dashboard error:', err);
+    return serverError(err);
+  }
+}
+
+async function calculateCashBalance(s: any, banks: any[]): Promise<number> {
+  let totalBalance = 0;
+  
+  for (const bank of banks) {
+    if (bank.account_id) {
+      try {
+        const { data: lines } = await s.from('journal_lines')
+          .select('debit, credit')
+          .eq('account_id', bank.account_id);
+        
+        if (lines) {
+          const debit = lines.reduce((sum: number, item: any) => sum + (parseFloat(item.debit) || 0), 0);
+          const credit = lines.reduce((sum: number, item: any) => sum + (parseFloat(item.credit) || 0), 0);
+          totalBalance += (debit - credit);
+        }
+      } catch (err) {
+        console.warn(`Failed to calculate balance for bank ${bank.id}:`, err);
+      }
+    }
+  }
+  
+  return totalBalance;
+}
+
+function calculateProjectProgress(project: any): number {
+  if (!project.start_date || !project.end_date) return 0;
+  
+  const now = new Date();
+  const start = new Date(project.start_date);
+  const end = new Date(project.end_date);
+  
+  if (now < start) return 0;
+  if (now > end) return 100;
+  
+  const total = end.getTime() - start.getTime();
+  const elapsed = now.getTime() - start.getTime();
+  
+  return Math.min(100, Math.max(0, (elapsed / total) * 100));
+}
+
+async function getRecentActivity(s: any, companyId: string): Promise<any[]> {
+  try {
+    const { data } = await s.from('audit_log')
+      .select('action, entity_type, created_at')
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    
+    return data || [];
+  } catch {
+    return [];
   }
 }

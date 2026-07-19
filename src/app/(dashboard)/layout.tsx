@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
@@ -9,126 +9,58 @@ import { AnnouncementBar } from '@/components/AnnouncementBar';
 import { AdBanner } from '@/components/AdBanner';
 import { AdPopup } from '@/components/AdPopup';
 import { SubscriptionBanner } from '@/components/SubscriptionBanner';
-import { useSidebarStore } from '@/store/sidebar-store';
+import { useAuthStore } from '@/lib/auth';
+import { Loader2 } from 'lucide-react';
 
-const pageTitles: Record<string, string> = {
-  '': 'لوحة التحكم',
-  dashboard: 'لوحة التحكم',
-  accounts: 'دليل الحسابات',
-  journal: 'القيود المحاسبية',
-  invoices: 'الفواتير',
-  'vouchers/receipt': 'سندات القبض',
-  'vouchers/disbursement': 'سندات الصرف',
-  cash: 'النقدية',
-  'bank-reconciliation': 'تسوية البنوك',
-  projects: 'المشاريع',
-  boq: 'بنود الكميات',
-  'progress-billing': 'الفواتير المرحلية',
-  quotations: 'عروض الأسعار',
-  'purchases/orders': 'أوامر الشراء',
-  'purchases/invoices': 'فواتير المشتريات',
-  inventory: 'المخزون',
-  subcontractors: 'مقاولو الباطن',
-  employees: 'الموظفين',
-  payroll: 'الرواتب',
-  'salary-sheets': 'كشوف المرتبات',
-  'daily-workers': 'العمال اليوميون',
-  custodies: 'العهد',
-  'fixed-assets': 'الأصول الثابتة',
-  banks: 'البنوك',
-  currencies: 'العملات',
-  reports: 'التقارير',
-  notifications: 'الإشعارات',
-  contacts: 'جهات الاتصال',
-  clients: 'العملاء',
-  fiscal: 'السنوات المالية',
-  settings: 'الإعدادات',
-  permissions: 'الصلاحيات',
-  profile: 'الملف الشخصي',
-  subscription: 'الباقات والاشتراك',
-  messages: 'الرسائل',
-  complaints: 'الشكاوي والاقتراحات',
-};
-
-function getPageTitle(page: string): string {
-  return page ? (pageTitles[page] || page) : pageTitles[''];
-}
-
-const sectionAccentMap: Record<string, string> = {
-  '': '#D4893B',
-  dashboard: '#D4893B',
-  accounts: '#D4893B',
-  journal: '#D4893B',
-  invoices: '#D4893B',
-  'vouchers/receipt': '#D4893B',
-  'vouchers/disbursement': '#D4893B',
-  cash: '#D4893B',
-  'bank-reconciliation': '#D4893B',
-  banks: '#4A7BD4',
-  currencies: '#4A7BD4',
-  'fixed-assets': '#4A7BD4',
-  projects: '#3D9B5A',
-  boq: '#3D9B5A',
-  'progress-billing': '#3D9B5A',
-  quotations: '#3D9B5A',
-  'purchases/orders': '#2A9D8F',
-  'purchases/invoices': '#2A9D8F',
-  inventory: '#2A9D8F',
-  subcontractors: '#8B5CF6',
-  employees: '#D45A7A',
-  payroll: '#D45A7A',
-  'salary-sheets': '#D45A7A',
-  'daily-workers': '#D45A7A',
-  custodies: '#D45A7A',
-  reports: '#D4A84B',
-  settings: '#7A6E7E',
-  permissions: '#7C3AED',
-  profile: '#0EA5E9',
-  contacts: '#7A6E7E',
-  clients: '#7A6E7E',
-  fiscal: '#7A6E7E',
-  notifications: '#7A6E7E',
-  subscription: '#8B5CF6',
-  messages: '#3B82F6',
-  complaints: '#F59E0B',
-};
-
-function getSectionAccent(page: string): string {
-  return sectionAccentMap[page] || sectionAccentMap[''];
-}
-
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
-  const { setActive } = useSidebarStore();
+  const router = useRouter();
+  const { isAuthenticated, isLoading, checkSession } = useAuthStore();
 
-  const page = pathname.replace(/^\//, '');
-  const sectionAccent = getSectionAccent(page);
-
+  // Check authentication status
   useEffect(() => {
-    setActive(page);
-  }, [page, setActive]);
+    checkSession();
+  }, [checkSession]);
 
-  const handleNavigate = (page: string) => {
-    router.push(page ? `/${page}` : '/dashboard');
-  };
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      router.push(`/login?redirect=${encodeURIComponent(pathname)}`);
+    }
+  }, [isLoading, isAuthenticated, pathname, router]);
+
+  // Show loading state while checking auth
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 animate-spin text-accent mx-auto mb-4" />
+          <p className="text-text-muted">جاري التحميل...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Don't render dashboard content until authenticated
+  if (!isAuthenticated) {
+    return null;
+  }
 
   return (
-    <div
-      className="flex h-screen overflow-hidden"
-      style={{ '--section-accent': sectionAccent } as React.CSSProperties}
-    >
-      <Sidebar onNavigate={handleNavigate} />
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <Header title={getPageTitle(page)} />
-        <main className="flex-1 overflow-auto">
-          <PageContainer>
-            <AnnouncementBar />
-            <AdBanner />
-            <AdPopup />
-            <SubscriptionBanner />
-            {children}
-          </PageContainer>
+    <div className="min-h-screen bg-bg-primary">
+      <Sidebar />
+      <div className="lg:mr-64">
+        <Header />
+        <main className="pt-20">
+          <AnnouncementBar />
+          <AdBanner />
+          <AdPopup />
+          <SubscriptionBanner />
+          <PageContainer>{children}</PageContainer>
         </main>
       </div>
     </div>
