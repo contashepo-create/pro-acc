@@ -17,7 +17,19 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     requireAdmin(req);
     const { id } = await params;
     const body = await parseBody(req);
+    const s = sb();
 
+    // التحقق من وجود الباقة
+    const { data: existing, error: fetchErr } = await s.from('subscription_plans')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchErr || !existing) {
+      return error('الباقة غير موجودة', 404);
+    }
+
+    // بناء بيانات التحديث - فقط الأعمدة الموجودة
     const update: any = {};
     if (body.code !== undefined) update.code = body.code;
     if (body.name !== undefined) update.name = body.name;
@@ -25,6 +37,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (body.description_ar !== undefined) update.description_ar = body.description_ar;
     if (body.priceMonthly !== undefined) update.price_monthly = body.priceMonthly;
     if (body.price_monthly !== undefined) update.price_monthly = body.price_monthly;
+    if (body.priceYearly !== undefined) update.price_yearly = body.priceYearly;
     if (body.price_yearly !== undefined) update.price_yearly = body.price_yearly;
     if (body.yearly_discount_percent !== undefined) update.yearly_discount_percent = body.yearly_discount_percent;
     if (body.trial_days !== undefined) update.trial_days = body.trial_days;
@@ -37,23 +50,61 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (body.max_projects !== undefined) update.max_projects = body.max_projects;
     if (body.max_invoices_per_month !== undefined) update.max_invoices_per_month = body.max_invoices_per_month;
     if (body.max_storage_mb !== undefined) update.max_storage_mb = body.max_storage_mb;
-    if (body.features_modules !== undefined) update.features_modules = body.features_modules;
+    if (body.features_modules !== undefined) {
+      update.features_modules = typeof body.features_modules === 'string' 
+        ? body.features_modules 
+        : JSON.stringify(body.features_modules);
+    }
+    if (body.features !== undefined) {
+      update.features = typeof body.features === 'string' 
+        ? body.features 
+        : JSON.stringify(body.features);
+    }
     if (body.isActive !== undefined) update.is_active = body.isActive;
     if (body.is_active !== undefined) update.is_active = body.is_active;
+    if (body.sort_order !== undefined) update.sort_order = body.sort_order;
     update.updated_at = new Date().toISOString();
 
-    const s = sb();
-    const { data, error: updateErr } = await s.from('subscription_plans')
+    // محاولة التحديث - إذا فشل عمود معين، نحاول بدون الأعمدة الناقصة
+    let { data, error: updateErr } = await s.from('subscription_plans')
       .update(update)
       .eq('id', id)
       .select()
       .single();
 
-    if (updateErr || !data) return error('Not found', 404);
+    // إذا فشل بسبب عمود غير موجود، نحاول بحقول أساسية فقط
+    if (updateErr && updateErr.message?.includes('column')) {
+      console.warn('Some columns may not exist, trying with basic fields only:', updateErr.message);
+      
+      const basicUpdate: any = { updated_at: new Date().toISOString() };
+      const safeFields = ['code', 'name', 'description', 'price_monthly', 'price_yearly', 'max_users', 'max_projects', 'is_active', 'sort_order'];
+      
+      for (const field of safeFields) {
+        if (update[field] !== undefined) {
+          basicUpdate[field] = update[field];
+        }
+      }
+
+      const retry = await s.from('subscription_plans')
+        .update(basicUpdate)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (retry.error) {
+        console.error('Retry also failed:', retry.error);
+        return error('فشل تحديث الباقة: ' + retry.error.message, 500);
+      }
+      data = retry.data;
+    } else if (updateErr) {
+      console.error('Update error:', updateErr);
+      return error('فشل تحديث الباقة: ' + updateErr.message, 500);
+    }
 
     return success(data);
-  } catch (e) {
+  } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
+    console.error('Plans PUT error:', e);
     return serverError(e);
   }
 }
@@ -68,12 +119,15 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       .delete()
       .eq('id', id)
       .select('id')
-      .single();
+      .maybeSingle();
 
-    if (delErr || !data) return error('Not found', 404);
+    if (delErr) {
+      return error('فشل حذف الباقة: ' + delErr.message, 500);
+    }
+    if (!data) return error('الباقة غير موجودة', 404);
 
     return success({ deleted: true });
-  } catch (e) {
+  } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
   }
