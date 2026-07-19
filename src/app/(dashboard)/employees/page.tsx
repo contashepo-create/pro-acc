@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
+import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function EmployeesPage() {
@@ -16,7 +17,7 @@ export default function EmployeesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-
+  const [editingEmployee, setEditingEmployee] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
@@ -42,14 +43,18 @@ export default function EmployeesPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const res = await fetch('/api/employees', {
-        method: 'POST',
+      const url = editingEmployee ? `/api/employees/${editingEmployee.id}` : '/api/employees';
+      const method = editingEmployee ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       });
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
+        setEditingEmployee(null);
         setForm({
           name: '',
           phone: '',
@@ -70,6 +75,42 @@ export default function EmployeesPage() {
     }
   };
 
+  const handleEdit = async (employee: any) => {
+    try {
+      const res = await fetch(`/api/employees/${employee.id}`);
+      const json = await res.json();
+      if (json.success) {
+        setEditingEmployee(employee);
+        setForm({
+          name: json.data.name,
+          phone: json.data.phone || '',
+          email: json.data.email || '',
+          salary: json.data.salary,
+          department: json.data.department || '',
+          position: json.data.position || '',
+          hire_date: json.data.hire_date,
+        });
+        setShowModal(true);
+      }
+    } catch (e) {
+      console.error('Failed to load employee:', e);
+    }
+  };
+
+  const handleDelete = async (employee: any) => {
+    try {
+      const res = await fetch(`/api/employees/${employee.id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        window.location.reload();
+      } else {
+        alert(json.message || 'فشل الحذف');
+      }
+    } catch (e) {
+      alert('خطأ في الاتصال بالخادم');
+    }
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -79,7 +120,7 @@ export default function EmployeesPage() {
         if (json.success) {
           setEmployees(json.data?.employees || []);
         } else {
-          setError(json.message || 'فشل تحميل البيانات');
+          setError(json.message || 'فشل');
         }
       } catch {
         setError('فشل تحميل البيانات');
@@ -97,39 +138,54 @@ export default function EmployeesPage() {
     { key: 'position', label: 'الوظيفة' },
     { key: 'salary', label: 'الراتب', sortable: true, render: (row: any) => formatCurrency(row.salary) },
     { key: 'hire_date', label: 'تاريخ التعيين', render: (row: any) => formatDate(row.hire_date) },
+    {
+      key: 'actions',
+      label: 'إجراءات',
+      render: (row: any) => (
+        <ActionButtons
+          item={row}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+        />
+      ),
+    },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
-
-  if (error) {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="الموظفين" description="إدارة بيانات الموظفين"
-          actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة موظف</Button>}
-        />
-        <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>
-      </div>
-    );
-  }
+  if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
 
   return (
     <div className="space-y-6">
-      <PageHeader title="الموظفين" description="إدارة بيانات الموظفين"
-        actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة موظف</Button>}
+      <PageHeader
+        title="الموظفين"
+        description="إدارة بيانات الموظفين"
+        actions={
+          <Button onClick={() => { setEditingEmployee(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>
+            إضافة موظف
+          </Button>
+        }
       />
+
       {employees.length === 0 ? (
         <EmptyState title="لا يوجد موظفين" actionLabel="إضافة موظف" onAction={() => setShowModal(true)} />
       ) : (
         <DataTable columns={columns} data={employees} searchable searchKeys={['name', 'department', 'position']} />
       )}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة موظف" footer={
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button>
-        </div>
-      }>
+
+      <Modal
+        isOpen={showModal}
+        onClose={() => { setShowModal(false); setEditingEmployee(null); }}
+        title={editingEmployee ? `تعديل موظف: ${editingEmployee.name}` : 'إضافة موظف'}
+        size="lg"
+        footer={
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => { setShowModal(false); setEditingEmployee(null); }}>إلغاء</Button>
+            <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button>
+          </div>
+        }
+      >
         <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <Input label="الاسم" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} className="col-span-2" />
             <Input label="الجوال" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} />
             <Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} />

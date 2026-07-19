@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/Textarea';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
+import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 interface JournalLine { accountCode: string; debit: number; credit: number; description: string; }
@@ -22,6 +23,7 @@ export default function JournalPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [showDetail, setShowDetail] = useState<any>(null);
+  const [editingEntry, setEditingEntry] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
@@ -39,14 +41,60 @@ export default function JournalPage() {
     if (Math.abs(totalDebit - totalCredit) > 0.01) { setSaveError(`القيد غير متوازن: مدين ${totalDebit} != دائن ${totalCredit}`); return; }
     setSaving(true); setSaveError('');
     try {
-      const res = await fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const url = editingEntry ? `/api/journal/${editingEntry.id}` : '/api/journal';
+      const method = editingEntry ? 'PUT' : 'POST';
+      
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: form.date, type: form.type, description: form.description,
           lines: form.lines.map(l => ({ accountCode: l.accountCode, debit: l.debit, credit: l.credit, description: l.description })) }) });
       const json = await res.json();
-      if (json.success) { setShowModal(false); setForm({ date: new Date().toISOString().split('T')[0], type: 'general', description: '',
-        lines: [{ accountCode: '', debit: 0, credit: 0, description: '' }, { accountCode: '', debit: 0, credit: 0, description: '' }] }); window.location.reload(); }
+      if (json.success) { 
+        setShowModal(false); 
+        setEditingEntry(null);
+        setForm({ date: new Date().toISOString().split('T')[0], type: 'general', description: '',
+          lines: [{ accountCode: '', debit: 0, credit: 0, description: '' }, { accountCode: '', debit: 0, credit: 0, description: '' }] }); 
+        window.location.reload(); 
+      }
       else { setSaveError(json.message || 'فشل الحفظ'); }
     } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+  };
+
+  const handleEdit = async (entry: any) => {
+    try {
+      const res = await fetch(`/api/journal/${entry.id}`);
+      const json = await res.json();
+      if (json.success) {
+        setEditingEntry(entry);
+        setForm({
+          date: json.data.date,
+          type: json.data.type,
+          description: json.data.description,
+          lines: json.data.lines?.map((l: any) => ({
+            accountCode: l.account_code,
+            debit: l.debit,
+            credit: l.credit,
+            description: l.description || '',
+          })) || [{ accountCode: '', debit: 0, credit: 0, description: '' }, { accountCode: '', debit: 0, credit: 0, description: '' }],
+        });
+        setShowModal(true);
+      }
+    } catch (e) {
+      console.error('Failed to load journal entry:', e);
+    }
+  };
+
+  const handleDelete = async (entry: any) => {
+    try {
+      const res = await fetch(`/api/journal/${entry.id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        window.location.reload();
+      } else {
+        alert(json.message || 'فشل الحذف');
+      }
+    } catch (e) {
+      alert('خطأ في الاتصال بالخادم');
+    }
   };
 
   const addLine = () => setForm({ ...form, lines: [...form.lines, { accountCode: '', debit: 0, credit: 0, description: '' }] });
@@ -80,7 +128,18 @@ export default function JournalPage() {
     { key: 'type', label: 'النوع', sortable: true, render: (row: any) => <Badge variant={row.type === 'closing' ? 'warning' : 'info'}>{row.type}</Badge> },
     { key: 'total_debit', label: 'المدين', render: (row: any) => formatCurrency(row.total_debit || 0) },
     { key: 'total_credit', label: 'الدائن', render: (row: any) => formatCurrency(row.total_credit || 0) },
-    { key: 'actions', label: '', render: (row: any) => <Button variant="ghost" size="sm" onClick={() => setShowDetail(row)}><Eye size={16} /></Button> },
+    { 
+      key: 'actions', 
+      label: 'إجراءات',
+      render: (row: any) => (
+        <ActionButtons
+          item={row}
+          onView={(item) => setShowDetail(item)}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+        />
+      )
+    },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
@@ -89,9 +148,9 @@ export default function JournalPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="القيود المحاسبية" description="إدخال وعرض القيود اليومية"
-        actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة قيد</Button>} />
+        actions={<Button onClick={() => { setEditingEntry(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة قيد</Button>} />
       {entries.length === 0 ? <EmptyState title="لا توجد قيود" description="أضف قيداً محاسبياً جديداً" actionLabel="إضافة قيد" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={entries} searchable searchKeys={['description', 'number']} />}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة قيد محاسبي" size="xl" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingEntry(null); }} title={editingEntry ? `تعديل قيد رقم #${editingEntry.number}` : 'إضافة قيد محاسبي'} size="xl" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingEntry(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ"}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />

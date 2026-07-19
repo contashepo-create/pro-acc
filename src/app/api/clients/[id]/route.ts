@@ -13,17 +13,19 @@ export async function GET(
     const { id } = await params;
     const s = sb();
 
-    const { data: project } = await s.from('projects')
-      .select('*, contacts(name)')
+    const { data: client } = await s.from('contacts')
+      .select('*, accounts(code, name)')
       .eq('id', id)
       .eq('company_id', auth.companyId)
+      .eq('type', 'client')
       .maybeSingle();
 
-    if (!project) return notFound();
+    if (!client) return notFound();
 
     return success({
-      ...(project as any),
-      client_name: (project as any).contacts?.name || null,
+      ...(client as any),
+      account_code: (client as any).accounts?.code || null,
+      account_name: (client as any).accounts?.name || null,
     });
   } catch (err) {
     return handleApiError(err);
@@ -40,7 +42,7 @@ export async function PUT(
     const s = sb();
     const body = await request.json();
 
-    const { data: existing } = await s.from('projects')
+    const { data: existing } = await s.from('contacts')
       .select('id')
       .eq('id', id)
       .eq('company_id', auth.companyId)
@@ -50,13 +52,13 @@ export async function PUT(
 
     const updateData: any = {};
     if (body.name !== undefined) updateData.name = body.name;
-    if (body.client_id !== undefined) updateData.client_id = body.client_id;
-    if (body.start_date !== undefined) updateData.start_date = body.start_date;
-    if (body.end_date !== undefined) updateData.end_date = body.end_date;
-    if (body.budget !== undefined) updateData.budget = body.budget;
-    if (body.status !== undefined) updateData.status = body.status;
+    if (body.phone !== undefined) updateData.phone = body.phone;
+    if (body.email !== undefined) updateData.email = body.email;
+    if (body.tax_number !== undefined) updateData.tax_number = body.tax_number;
+    if (body.credit_limit !== undefined) updateData.credit_limit = body.credit_limit;
+    if (body.address !== undefined) updateData.address = body.address;
 
-    const { data: updated, error: updateErr } = await s.from('projects')
+    const { data: updated, error: updateErr } = await s.from('contacts')
       .update(updateData)
       .eq('id', id)
       .select('*')
@@ -79,7 +81,7 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    const { data: existing } = await s.from('projects')
+    const { data: existing } = await s.from('contacts')
       .select('id')
       .eq('id', id)
       .eq('company_id', auth.companyId)
@@ -87,17 +89,17 @@ export async function DELETE(
 
     if (!existing) return notFound();
 
-    // Check if project has invoices
+    // Check if client has invoices
     const { data: invoices } = await s.from('invoices')
       .select('id')
-      .eq('project_id', id)
+      .eq('contact_id', id)
       .limit(1);
 
     if (invoices && invoices.length > 0) {
-      return error('لا يمكن حذف المشروع لأنه مرتبط بفواتير');
+      return error('لا يمكن حذف العميل لأنه مرتبط بفواتير');
     }
 
-    await s.from('projects').delete().eq('id', id);
+    await s.from('contacts').delete().eq('id', id);
 
     return success({ deleted: true });
   } catch (err) {
