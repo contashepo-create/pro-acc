@@ -10,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { requireApiAuth } = await import('@/lib/api-helpers');
+    const { requireApiAuth, requireModulePermission } = await import('@/lib/api-helpers');
     const ctx = await requireApiAuth(request);
     const { id } = await params;
     const s = sb();

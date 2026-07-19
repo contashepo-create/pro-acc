@@ -131,6 +131,34 @@ export async function requireAccountantOrAbove(request: Request) {
   return requireRole(request, ['admin', 'manager', 'accountant']);
 }
 
+/**
+ * RBAC + Module Permission Check
+ * يتحقق من الدور AND الصلاحيات المخصصة للوحدة
+ * إذا كانت الصلاحيات المخصصة فارغة [] → ممنوع الوصول تماماً
+ */
+export async function requireModulePermission(
+  request: Request,
+  module: string,
+  action: string
+): Promise<{ companyId: string; userId: string; role: string }> {
+  const auth = await requireApiAuth(request);
+
+  // الأدمن دائماً لديه صلاحية
+  if (auth.role === 'admin') return auth;
+
+  // التحقق من الصلاحيات المخصصة والدور
+  const { hasModulePermission } = await import('@/lib/permissions');
+  const allowed = await hasModulePermission(auth.userId, auth.companyId, module, action);
+
+  if (!allowed) {
+    throw new AuthError(
+      `ليس لديك صلاحية "${action}" على "${module}". تواصل مع مدير النظام.`
+    );
+  }
+
+  return auth;
+}
+
 export async function requireAdminAuth(request: Request): Promise<{ userId: string; email: string }> {
   const req = request ;
   const adminToken = req.cookies?.get

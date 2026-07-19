@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, error, handleApiError, parseBody, getPaginationParams, requireApiAuth } from '@/lib/api-helpers';
+import { success, error, handleApiError, parseBody, getPaginationParams, requireApiAuth, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'employees', 'read');
     const s = sb();
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'employees', 'create');
     const s = sb();
     const data = await parseBody(req);
     const { name, phone, email, salary, department, position, hire_date } = data;

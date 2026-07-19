@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { journalEntrySchema } from '@/lib/validation';
 import { getNextJournalNumber } from '@/lib/numbering';
@@ -17,7 +17,7 @@ interface SequenceRow { last_number: number }
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'journal\', \'read\');
     const s = sb();
     const url = request.nextUrl;
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'journal\', \'create\');
     const s = sb();
     const body = await parseBody(request);
     const parsed = journalEntrySchema.safeParse(body);

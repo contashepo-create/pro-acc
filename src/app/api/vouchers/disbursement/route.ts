@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, requireModulePermission, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
@@ -11,7 +11,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'disbursements\', \'read\');
     const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
@@ -95,7 +95,7 @@ async function getCurrentBankBalance(bankSafeId: string): Promise<{ balance: num
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'disbursements\', \'create\');
     const s = sb();
     const data = await parseBody(request);
     const { date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, invoice_items, account_id } = data;

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
+import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import type { } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
@@ -39,7 +39,7 @@ export async function PUT(
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'accounts', 'update');
     const { id } = await paramsPromise;
     const s = sb();
 

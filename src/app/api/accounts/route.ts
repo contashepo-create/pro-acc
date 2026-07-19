@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { accountSchema } from '@/lib/validation';
 
@@ -7,7 +7,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'accounts\', \'read\');
     const s = sb();
 
     const { data, error: queryError } = await s.from('accounts')
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'accounts\', \'create\');
     const s = sb();
 
     const body = await parseBody(request);

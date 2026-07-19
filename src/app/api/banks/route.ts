@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { createAutoAccount } from '@/lib/auto-account';
 import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
@@ -8,7 +8,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'banks\', \'read\');
     const s = sb();
     const { page, pageSize } = getPaginationParams(request.url);
 
@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'banks\', \'create\');
     const s = sb();
     const data = await parseBody(request);
     const { name, type, account_number, opening_balance } = data;

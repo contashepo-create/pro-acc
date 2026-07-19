@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'fiscal\', \'read\');
     const s = sb();
     const { data, error: queryError } = await s.from('fiscal_years')
       .select('*').eq('company_id', auth.companyId).order('start_date', { ascending: false });
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, \'fiscal\', \'create\');
     const s = sb();
     const data = await parseBody(request);
     const { name, start_date, end_date } = data;

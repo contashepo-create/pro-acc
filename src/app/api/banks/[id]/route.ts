@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import type { } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
@@ -63,7 +63,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'banks', 'update');
     const { id } = await params;
     const s = sb();
     const body = await request.json();
