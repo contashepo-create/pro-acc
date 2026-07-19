@@ -1,334 +1,228 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import {
-  Users, Search, Loader2, RefreshCw,
-  CheckCircle, XCircle, ChevronLeft, Filter, Eye
-} from 'lucide-react';
-import Link from 'next/link';
+import { Users, Search, Loader2, Eye, Shield, Calendar, Clock } from 'lucide-react';
 
-interface AppUser {
+interface User {
   id: string;
   name: string;
   email: string;
-  company_name: string;
-  company_id: string;
   role: string;
-  status: 'active' | 'suspended';
+  is_active: boolean;
+  email_verified: boolean;
   last_login: string | null;
+  created_at: string;
+  company: {
+    id: string;
+    name: string;
+    is_active: boolean;
+  };
 }
 
-export default function ZerocoldUsersPage() {
-  const router = useRouter();
-  const [users, setUsers] = useState<AppUser[]>([]);
-  const [companies, setCompanies] = useState<{ id: string; name: string }[]>([]);
+export default function AdminUsersPage() {
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [search, setSearch] = useState('');
-  const [companyFilter, setCompanyFilter] = useState('');
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
-  const [userActivity, setUserActivity] = useState<{ action: string; timestamp: string }[]>([]);
-  const [activityLoading, setActivityLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
 
-  const fetchData = async () => {
-    setLoading(true);
-    setError('');
+  const loadUsers = async () => {
     try {
-      const [usersRes, companiesRes] = await Promise.all([
-        fetch('/api/admin/users'),
-        fetch('/api/admin/companies'),
-      ]);
-
-      if (usersRes.status === 401) {
-        router.replace('/zerocold/login');
-        return;
+      setLoading(true);
+      const res = await fetch('/api/admin/users');
+      const data = await res.json();
+      if (data.success) {
+        setUsers(data.data || []);
       }
-
-      const usersBody = await usersRes.json();
-      const companiesBody = await companiesRes.json();
-
-      if (!usersBody.success) {
-        setError(usersBody.message || 'حدث خطأ');
-        return;
-      }
-
-      const rawUsers = usersBody.data?.users ?? (Array.isArray(usersBody.data) ? usersBody.data : []);
-      setUsers(rawUsers.map((u: any) => ({
-        ...u,
-        status: u.is_active ? 'active' : 'suspended',
-      })));
-      if (companiesBody.success) {
-        const companiesData = companiesBody.data?.companies ?? (Array.isArray(companiesBody.data) ? companiesBody.data : []);
-        setCompanies(companiesData);
-      }
-    } catch {
-      setError('حدث خطأ في الاتصال بالخادم');
+    } catch (error) {
+      console.error('Failed to load users:', error);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadUsers();
   }, []);
 
-  const toggleStatus = async (userId: string, currentStatus: string) => {
-    const masterPassword = prompt('يرجى إدخال كلمة السر الرئيسية:');
-    if (!masterPassword) return;
+  const filteredUsers = users.filter(user => {
+    const matchesSearch = searchTerm === '' || 
+      user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.company.name.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesStatus = filterStatus === 'all' ||
+      (filterStatus === 'active' && user.is_active) ||
+      (filterStatus === 'inactive' && !user.is_active);
 
-    setActionLoading(userId);
-    try {
-      const res = await fetch('/api/admin/users/toggle-status', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-master-password': masterPassword,
-        },
-        body: JSON.stringify({ userId, is_active: currentStatus !== 'active' }),
-      });
-
-      const body = await res.json();
-      if (!res.ok || !body.success) {
-        alert(body.message || 'فشل التحديث');
-        return;
-      }
-
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === userId
-            ? { ...u, status: u.status === 'active' ? 'suspended' : 'active', is_active: u.status !== 'active' }
-            : u
-        )
-      );
-    } catch {} finally {
-      setActionLoading(null);
-    }
-  };
-
-  const showUserActivity = async (user: AppUser) => {
-    setSelectedUser(user);
-    setActivityLoading(true);
-    try {
-      const res = await fetch(`/api/admin/users/${user.id}/activity`);
-      const body = await res.json();
-      setUserActivity(body.success ? body.data : []);
-    } catch {
-      setUserActivity([]);
-    } finally {
-      setActivityLoading(false);
-    }
-  };
-
-  const filtered = users.filter((u) => {
-    const matchesSearch =
-      u.name.toLowerCase().includes(search.toLowerCase()) ||
-      u.email.toLowerCase().includes(search.toLowerCase());
-    const matchesCompany = !companyFilter || u.company_id === companyFilter;
-    return matchesSearch && matchesCompany;
+    return matchesSearch && matchesStatus;
   });
 
   const roleLabels: Record<string, string> = {
-    admin: 'مدير',
+    admin: 'مدير النظام',
+    manager: 'مدير',
     accountant: 'محاسب',
-    manager: 'مشرف',
-    supervisor: 'مراقب',
+    supervisor: 'مشرف',
   };
+
+  const statusBadge = (active: boolean) => (
+    <span className={`px-2 py-1 rounded-full text-xs border ${
+      active 
+        ? 'bg-green-100 text-green-700 border-green-200' 
+        : 'bg-gray-100 text-gray-700 border-gray-200'
+    }`}>
+      {active ? 'نشط' : 'غير نشط'}
+    </span>
+  );
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
-        <Loader2 size={32} className="text-amber-500 animate-spin" />
+      <div className="flex items-center justify-center py-20">
+        <div className="text-center">
+          <Loader2 size={40} className="animate-spin text-accent mx-auto mb-4" />
+          <p className="text-text-muted">جاري تحميل المستخدمين...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f]">
-      <div className="max-w-6xl mx-auto px-4 py-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <Link href="/zerocold/" className="p-2 rounded-lg hover:bg-[#12101a] transition-all">
-              <ChevronLeft size={18} className="text-amber-500/70" />
-            </Link>
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-600 to-green-700 flex items-center justify-center">
-              <Users className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-amber-50">إدارة المستخدمين</h1>
-              <p className="text-[0.7rem] text-amber-400/50">{users.length} مستخدم</p>
-            </div>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+            <Users size={20} className="text-white" />
           </div>
-          <button
-            onClick={fetchData}
-            className="p-2 rounded-xl bg-[#12101a] border border-[#2a1f0a] text-amber-500/70 hover:text-amber-400 transition-all"
-            title="تحديث"
-          >
-            <RefreshCw size={16} />
-          </button>
-        </div>
-
-        <div className="flex items-center gap-3 mb-4">
-          <div className="relative flex-1">
-            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-600/50" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="بحث عن مستخدم..."
-              className="w-full pr-10 pl-4 py-2.5 bg-[#12101a] border border-[#2a1f0a] rounded-xl text-amber-50 placeholder-amber-700/50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm"
-            />
-          </div>
-          <div className="relative">
-            <Filter size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-600/50 pointer-events-none" />
-            <select
-              value={companyFilter}
-              onChange={(e) => setCompanyFilter(e.target.value)}
-              className="pr-10 pl-4 py-2.5 bg-[#12101a] border border-[#2a1f0a] rounded-xl text-amber-50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm appearance-none cursor-pointer"
-            >
-              <option value="">كل الشركات</option>
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+          <div>
+            <h1 className="text-xl font-bold text-text-primary">المستخدمون</h1>
+            <p className="text-xs text-text-muted">{users.length} مستخدم مسجل</p>
           </div>
         </div>
-
-        {error && (
-          <div className="bg-red-950/40 border border-red-800/40 text-red-400 text-sm rounded-xl px-4 py-2.5 text-center mb-4">
-            {error}
-          </div>
-        )}
-
-        {filtered.length === 0 && !error ? (
-          <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-8 text-center">
-            <Users size={32} className="text-amber-600/30 mx-auto mb-2" />
-            <p className="text-amber-600/50 text-sm">لا يوجد مستخدمون مطابقون للبحث</p>
-          </div>
-        ) : (
-          <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-[#2a1f0a]">
-                    <th className="text-right p-3 text-[0.7rem] text-amber-500/60 font-medium">الاسم</th>
-                    <th className="text-right p-3 text-[0.7rem] text-amber-500/60 font-medium">البريد الإلكتروني</th>
-                    <th className="text-right p-3 text-[0.7rem] text-amber-500/60 font-medium">الشركة</th>
-                    <th className="text-center p-3 text-[0.7rem] text-amber-500/60 font-medium">الدور</th>
-                    <th className="text-center p-3 text-[0.7rem] text-amber-500/60 font-medium">الحالة</th>
-                    <th className="text-right p-3 text-[0.7rem] text-amber-500/60 font-medium">آخر دخول</th>
-                    <th className="text-center p-3 text-[0.7rem] text-amber-500/60 font-medium">الإجراءات</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((user) => (
-                    <tr key={user.id} className="border-b border-[#1f1725] last:border-0 hover:bg-[#1a1625] transition-all">
-                      <td className="p-3">
-                        <span className="text-sm text-amber-200 font-medium">{user.name}</span>
-                      </td>
-                      <td className="p-3">
-                        <span className="text-xs text-amber-400/60 font-mono" dir="ltr">{user.email}</span>
-                      </td>
-                      <td className="p-3">
-                        <span className="text-xs text-amber-400/80">{user.company_name}</span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className="text-xs text-amber-400/60">{roleLabels[user.role] || user.role}</span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.65rem] font-medium ${
-                            user.status === 'active'
-                              ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/30'
-                              : 'bg-red-950/40 text-red-400 border border-red-800/30'
-                          }`}
-                        >
-                          {user.status === 'active' ? (
-                            <CheckCircle size={10} />
-                          ) : (
-                            <XCircle size={10} />
-                          )}
-                          {user.status === 'active' ? 'نشط' : 'موقوف'}
-                        </span>
-                      </td>
-                      <td className="p-3">
-                        <span className="text-xs text-amber-400/60">{user.last_login || '--'}</span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            onClick={() => showUserActivity(user)}
-                            className="px-2.5 py-1 rounded-lg bg-sky-950/20 text-sky-400/70 border border-sky-800/20 hover:bg-sky-950/40 hover:text-sky-400 text-[0.65rem] font-medium transition-all"
-                          >
-                            <Eye size={12} className="inline ml-1" />
-                            النشاطات
-                          </button>
-                          <button
-                            onClick={() => toggleStatus(user.id, user.status)}
-                            disabled={actionLoading === user.id}
-                            className={`px-2.5 py-1 rounded-lg text-[0.65rem] font-medium transition-all border ${
-                              user.status === 'active'
-                                ? 'bg-red-950/20 text-red-400/70 border-red-800/20 hover:bg-red-950/40 hover:text-red-400'
-                                : 'bg-emerald-950/20 text-emerald-400/70 border-emerald-800/20 hover:bg-emerald-950/40 hover:text-emerald-400'
-                            }`}
-                          >
-                            {actionLoading === user.id ? (
-                              <Loader2 size={12} className="animate-spin" />
-                            ) : user.status === 'active' ? (
-                              'تعليق'
-                            ) : (
-                              'تفعيل'
-                            )}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {selectedUser && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setSelectedUser(null)} />
-            <div className="relative bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-5 w-full max-w-md shadow-2xl modal-content">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold text-amber-200">نشاطات المستخدم</h3>
-                <button
-                  onClick={() => setSelectedUser(null)}
-                  className="text-amber-600/60 hover:text-amber-400 text-sm transition-colors"
-                >
-                  إغلاق
-                </button>
-              </div>
-              <p className="text-xs text-amber-400/60 mb-4">
-                {selectedUser.name} — {selectedUser.email}
-              </p>
-              {activityLoading ? (
-                <div className="flex justify-center py-6">
-                  <Loader2 size={20} className="text-amber-500 animate-spin" />
-                </div>
-              ) : userActivity.length > 0 ? (
-                <div className="space-y-1 max-h-60 overflow-y-auto">
-                  {userActivity.map((act, i) => (
-                    <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-[#1a1625]">
-                      <span className="text-xs text-amber-300/70">{act.action}</span>
-                      <span className="text-[0.65rem] text-amber-600/40">{act.timestamp}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-amber-600/50 text-xs text-center py-6">لا توجد نشاطات مسجلة</p>
-              )}
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Filters */}
+      <div className="glass rounded-xl p-4">
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1">
+            <div className="relative">
+              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted" />
+              <input
+                type="text"
+                placeholder="بحث بالاسم، البريد الإلكتروني، أو اسم الشركة..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="input-base w-full pr-10"
+              />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setFilterStatus('all')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                filterStatus === 'all'
+                  ? 'bg-accent text-white'
+                  : 'bg-gray-100 text-text-muted hover:bg-gray-200'
+              }`}
+            >
+              الكل
+            </button>
+            <button
+              onClick={() => setFilterStatus('active')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                filterStatus === 'active'
+                  ? 'bg-accent text-white'
+                  : 'bg-gray-100 text-text-muted hover:bg-gray-200'
+              }`}
+            >
+              نشط
+            </button>
+            <button
+              onClick={() => setFilterStatus('inactive')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                filterStatus === 'inactive'
+                  ? 'bg-accent text-white'
+                  : 'bg-gray-100 text-text-muted hover:bg-gray-200'
+              }`}
+            >
+              غير نشط
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Users List */}
+      {filteredUsers.length === 0 ? (
+        <div className="text-center py-12">
+          <Users size={40} className="mx-auto text-gray-300 mb-3" />
+          <p className="text-text-muted">
+            {searchTerm || filterStatus !== 'all' 
+              ? 'لا توجد نتائج مطابقة' 
+              : 'لا يوجد مستخدمين مسجلين'}
+          </p>
+        </div>
+      ) : (
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredUsers.map((user) => (
+            <div
+              key={user.id}
+              className="glass rounded-xl p-5 hover:shadow-lg transition-shadow cursor-pointer group"
+              onClick={() => window.location.href = `/zerocold/users/${user.id}`}
+            >
+              <div className="flex items-start gap-4">
+                {/* Avatar */}
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xl font-bold shrink-0">
+                  {user.name.charAt(0)}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  {/* User Name & Email */}
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-text-primary truncate">{user.name}</h3>
+                      <p className="text-xs text-text-muted truncate" dir="ltr">{user.email}</p>
+                    </div>
+                    <Eye size={18} className="text-accent opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-2" />
+                  </div>
+
+                  {/* Company Info */}
+                  <div className="mb-3">
+                    <p className="text-sm font-medium text-text-primary truncate">
+                      {user.company.name}
+                    </p>
+                  </div>
+
+                  {/* Badges */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs px-2 py-1 bg-accent/10 text-accent rounded font-medium">
+                      {roleLabels[user.role] || user.role}
+                    </span>
+                    {statusBadge(user.is_active)}
+                    {user.email_verified && (
+                      <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded">
+                        ✓ موثق
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Footer Info */}
+                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200">
+                    <div className="flex items-center gap-1 text-xs text-text-muted">
+                      <Calendar size={12} />
+                      <span dir="ltr">{new Date(user.created_at).toLocaleDateString('ar-SA')}</span>
+                    </div>
+                    {user.last_login && (
+                      <div className="flex items-center gap-1 text-xs text-text-muted">
+                        <Clock size={12} />
+                        <span dir="ltr">{new Date(user.last_login).toLocaleDateString('ar-SA')}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

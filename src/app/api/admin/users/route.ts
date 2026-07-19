@@ -1,62 +1,103 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, getPaginationParams } from '@/lib/api-helpers';
+import { success, error, serverError } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-export async function GET(request: NextRequest) {
-  try {
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
+function requireAdmin(request: NextRequest) {
+  const token = request.cookies.get('admin_token')?.value;
+  if (!token) throw new Error('Unauthorized');
+  const payload = verifyToken(token);
+  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
+  return payload;
+}
 
-    const { page, pageSize } = getPaginationParams(request.url);
-    const companyId = request.nextUrl.searchParams.get('company_id');
+// Get all users with full profile data
+export async function GET(req: NextRequest) {
+  try {
+    const admin = requireAdmin(req);
+    const userId = req.nextUrl.searchParams.get('user_id');
+    const companyId = req.nextUrl.searchParams.get('company_id');
+
     const s = sb();
 
-    let countBuilder = s.from('users').select('*', { count: 'exact', head: true });
-    if (companyId) {
-      countBuilder = countBuilder.eq('company_id', companyId);
-    }
-    const { count: total, error: countErr } = await countBuilder;
-    if (countErr) throw countErr;
+    if (userId) {
+      // Get single user with full profile
+      const { data: user, error: userError } = await s
+        .from('users')
+        .select(`
+          *,
+          company:companies!inner(
+            id, name, commercial_registration, tax_number, 
+            phone, email, address, currency_symbol, 
+            is_active, created_at, updated_at
+          ),
+          permissions:user_permissions(
+            module, permissions, bypass_telegram_confirmation
+          )
+        `)
+        .eq('id', userId)
+        .single();
 
-    let dataBuilder = s.from('users')
-      .select('id, name, email, role, is_active, last_login, created_at, company_id')
+      if (userError) throw userError;
+
+      // Get user activity
+      const { data: activity } = await s
+        .from('admin_audit_log')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      // Get subscription info
+      const { data: subscription } = await s
+        .from('subscriptions')
+        .select(`
+          *,
+          plan:subscription_plans(
+            id, name, price_monthly, max_users, features
+          )
+        `)
+        .eq('company_id', (user as any).company_id)
+        .eq('status', 'active')
+        .single();
+
+      return success({
+        user,
+        activity: activity || [],
+        subscription,
+      });
+    }
+
+    if (companyId) {
+      // Get all users for a company
+      const { data: users, error: usersError } = await s
+        .from('users')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false });
+
+      if (usersError) throw usersError;
+      return success(users || []);
+    }
+
+    // Get all users with companies
+    const { data: users, error: usersError } = await s
+      .from('users')
+      .select(`
+        *,
+        company:companies(
+          id, name, is_active
+        )
+      `)
       .order('created_at', { ascending: false })
-      .range((page - 1) * pageSize, page * pageSize - 1);
+      .limit(100);
 
-    if (companyId) {
-      dataBuilder = dataBuilder.eq('company_id', companyId);
-    }
+    if (usersError) throw usersError;
 
-    const { data: users, error: err } = await dataBuilder;
-    if (err) throw err;
-
-    // Get company names
-    const companyIds = (users || []).map((u: any) => u.company_id).filter(Boolean);
-    const companyMap: Record<string, string> = {};
-    if (companyIds.length > 0) {
-      const { data: companies } = await s.from('companies')
-        .select('id, name')
-        .in('id', [...new Set(companyIds)]);
-      (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
-    }
-
-    const result = (users || []).map((u: any) => ({
-      ...u,
-      company_name: companyMap[u.company_id] || null,
-    }));
-
-    return success({
-      users: result,
-      total: total || 0,
-      page,
-      pageSize,
-    });
-  } catch (err) {
-    return serverError(err);
+    return success(users || []);
+  } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
+    return serverError(e);
   }
 }

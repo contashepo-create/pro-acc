@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  Megaphone, Plus, Loader2, Trash2, EyeOff, Eye,
+  Megaphone, Plus, Loader2, Trash2, EyeOff, Eye, Edit2, BarChart3, Users,
   Gift, Image, Crown, AlertTriangle, Info, Bell, Zap, Star
 } from 'lucide-react';
 
@@ -11,6 +11,10 @@ interface Ad {
   title: string;
   body: string;
   type: string;
+  display_mode?: string;
+  views?: number;
+  clicks?: number;
+  notifications_sent?: number;
   is_active: boolean;
   link_url: string | null;
   link_text: string | null;
@@ -91,13 +95,19 @@ export default function AdminAdvertisementsPage() {
   const [ads, setAds] = useState<Ad[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [editingAd, setEditingAd] = useState<Ad | null>(null);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [type, setType] = useState('announcement');
+  const [displayMode, setDisplayMode] = useState('banner');
   const [linkUrl, setLinkUrl] = useState('');
   const [linkText, setLinkText] = useState('');
   const [showDuration, setShowDuration] = useState('7'); // أيام
   const [saving, setSaving] = useState(false);
+  const [showTracking, setShowTracking] = useState(false);
+  const [selectedAdId, setSelectedAdId] = useState<string | null>(null);
+  const [trackingData, setTrackingData] = useState<any>(null);
+  const [loadingTracking, setLoadingTracking] = useState(false);
 
   const loadAds = async () => {
     const res = await fetch('/api/admin/advertisements');
@@ -106,23 +116,31 @@ export default function AdminAdvertisementsPage() {
     setLoading(false);
   };
 
+  const loadTrackingData = async (adId: string) => {
+    setLoadingTracking(true);
+    try {
+      const res = await fetch(`/api/admin/advertisements/tracking?ad_id=${adId}`);
+      const data = await res.json();
+      if (data.success) {
+        setTrackingData(data.data);
+        setSelectedAdId(adId);
+        setShowTracking(true);
+      }
+    } catch (error) {
+      console.error('Failed to load tracking data:', error);
+    } finally {
+      setLoadingTracking(false);
+    }
+  };
+
   useEffect(() => {
     loadAds();
   }, []);
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim() || !body.trim()) return;
-    setSaving(true);
-    await fetch('/api/admin/advertisements', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, body, type, linkUrl, linkText, showDuration }),
-    });
-    setTitle(''); setBody(''); setLinkUrl(''); setLinkText(''); setShowDuration('7');
-    setShowForm(false);
-    setSaving(false);
-    loadAds();
+  const openAddModal = () => {
+    setEditingAd(null);
+    setTitle(''); setBody(''); setType('announcement'); setDisplayMode('banner'); setLinkUrl(''); setLinkText(''); setShowDuration('7');
+    setShowForm(true);
   };
 
   const toggleActive = async (id: string, current: boolean) => {
@@ -144,6 +162,56 @@ export default function AdminAdvertisementsPage() {
     loadAds();
   };
 
+  const handleEdit = (ad: Ad) => {
+    setEditingAd(ad);
+    setTitle(ad.title);
+    setBody(ad.body);
+    setType(ad.type);
+    setDisplayMode(ad.display_mode || 'banner');
+    setLinkUrl(ad.link_url || '');
+    setLinkText(ad.link_text || '');
+    setShowForm(true);
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !body.trim()) return;
+    setSaving(true);
+    await fetch('/api/admin/advertisements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body, type, display_mode: displayMode, linkUrl, linkText, showDuration }),
+    });
+    setTitle(''); setBody(''); setDisplayMode('banner'); setLinkUrl(''); setLinkText(''); setShowDuration('7');
+    setShowForm(false);
+    setSaving(false);
+    loadAds();
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !body.trim()) return;
+    setSaving(true);
+    await fetch('/api/admin/advertisements', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        id: editingAd?.id, 
+        title, 
+        body, 
+        type, 
+        display_mode: displayMode,
+        linkUrl, 
+        linkText 
+      }),
+    });
+    setEditingAd(null);
+    setTitle(''); setBody(''); setDisplayMode('banner'); setLinkUrl(''); setLinkText(''); setShowDuration('7');
+    setShowForm(false);
+    setSaving(false);
+    loadAds();
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -156,14 +224,14 @@ export default function AdminAdvertisementsPage() {
             <p className="text-xs text-text-muted">{ads.length} إعلان — كل نوع بلون وأيقونة مختلفة</p>
           </div>
         </div>
-        <button onClick={() => setShowForm(!showForm)} className="btn btn-primary text-sm gap-2">
+        <button onClick={openAddModal} className="btn btn-primary text-sm gap-2">
           <Plus size={16} /> إعلان جديد
         </button>
       </div>
 
       {showForm && (
-        <form onSubmit={handleCreate} className="glass rounded-xl p-6 mb-6">
-          <h3 className="font-bold text-text-primary mb-4">إعلان جديد</h3>
+        <form onSubmit={editingAd ? handleUpdate : handleCreate} className="glass rounded-xl p-6 mb-6">
+          <h3 className="font-bold text-text-primary mb-4">{editingAd ? `تعديل: ${editingAd.title}` : 'إعلان جديد'}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium text-text-secondary mb-1.5">العنوان</label>
@@ -177,6 +245,15 @@ export default function AdminAdvertisementsPage() {
                 ))}
               </select>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-text-secondary mb-1.5">طريقة العرض</label>
+              <select value={displayMode} onChange={(e) => setDisplayMode(e.target.value)} className="input-base w-full">
+                <option value="banner">بانر — عرض كاملاً في الصفحة</option>
+                <option value="popup">نافذة منبثقة — تظهر عند التحميل</option>
+                <option value="notification">إشعار — داخل أيقونة الإشعارات</option>
+              </select>
+              <p className="text-[10px] text-text-muted mt-1">حدد كيف سيظهر الإعلان للمستخدمين</p>
+            </div>
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-text-secondary mb-1.5">النص</label>
               <textarea value={body} onChange={(e) => setBody(e.target.value)} className="input-base w-full min-h-[80px] resize-none" rows={3} required />
@@ -189,11 +266,13 @@ export default function AdminAdvertisementsPage() {
               <label className="block text-sm font-medium text-text-secondary mb-1.5">نص الرابط</label>
               <input type="text" value={linkText} onChange={(e) => setLinkText(e.target.value)} className="input-base w-full" placeholder="اعرف المزيد" />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-text-secondary mb-1.5">مدة العرض (أيام)</label>
-              <input type="number" min="1" max="365" value={showDuration} onChange={(e) => setShowDuration(e.target.value)} className="input-base w-full" placeholder="7" />
-              <p className="text-[10px] text-text-muted mt-1">سيتم إخفاء الإعلان تلقائياً بعد هذه المدة لكل مستخدم</p>
-            </div>
+            {!editingAd && (
+              <div>
+                <label className="block text-sm font-medium text-text-secondary mb-1.5">مدة العرض (أيام)</label>
+                <input type="number" min="1" max="365" value={showDuration} onChange={(e) => setShowDuration(e.target.value)} className="input-base w-full" placeholder="7" />
+                <p className="text-[10px] text-text-muted mt-1">سيتم إخفاء الإعلان تلقائياً بعد هذه المدة لكل مستخدم</p>
+              </div>
+            )}
           </div>
           {/* معاينة النوع المختار */}
           {AD_TYPES[type] && (() => {
@@ -208,12 +287,154 @@ export default function AdminAdvertisementsPage() {
           })()}
           <div className="flex gap-2">
             <button type="submit" disabled={saving} className="btn btn-primary text-sm gap-2">
-              {saving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-              حفظ
+              {saving ? <Loader2 size={16} className="animate-spin" /> : editingAd ? <Edit2 size={16} /> : <Plus size={16} />}
+              {editingAd ? 'تحديث' : 'حفظ'}
             </button>
-            <button type="button" onClick={() => setShowForm(false)} className="btn btn-ghost text-sm">إلغاء</button>
+            <button type="button" onClick={() => { setShowForm(false); setEditingAd(null); }} className="btn btn-ghost text-sm">إلغاء</button>
           </div>
         </form>
+      )}
+
+      {/* قسم عرض التتبع والإحصائيات */}
+      {showTracking && trackingData && (
+        <div className="glass rounded-xl p-6 mb-6 border border-accent/30">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-text-primary flex items-center gap-2">
+              <BarChart3 size={20} className="text-accent" />
+              إحصائيات وتتبع الإعلان
+            </h3>
+            <button onClick={() => setShowTracking(false)} className="btn btn-ghost btn-icon">
+              ✕
+            </button>
+          </div>
+
+          {/* بطاقات الإحصائيات */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-blue-600 mb-2">
+                <Eye size={18} />
+                <span className="text-sm font-medium">المشاهدات</span>
+              </div>
+              <div className="text-2xl font-bold text-blue-700">{trackingData.statistics.totalViews}</div>
+              <div className="text-xs text-blue-600 mt-1">
+                {trackingData.statistics.uniqueCompaniesViewed} شركة • {trackingData.statistics.uniqueUsersViewed} مستخدم
+              </div>
+            </div>
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-green-600 mb-2">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+                </svg>
+                <span className="text-sm font-medium">النقرات</span>
+              </div>
+              <div className="text-2xl font-bold text-green-700">{trackingData.statistics.totalClicks}</div>
+              <div className="text-xs text-green-600 mt-1">
+                {trackingData.statistics.totalViews > 0 
+                  ? `${((trackingData.statistics.totalClicks / trackingData.statistics.totalViews) * 100).toFixed(1)}% معدل النقر`
+                  : '-'
+                }
+              </div>
+            </div>
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-purple-600 mb-2">
+                <Bell size={18} />
+                <span className="text-sm font-medium">الإشعارات</span>
+              </div>
+              <div className="text-2xl font-bold text-purple-700">{trackingData.statistics.totalNotifications}</div>
+              <div className="text-xs text-purple-600 mt-1">تم الإرسال للمستخدمين</div>
+            </div>
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-orange-600 mb-2">
+                <Users size={18} />
+                <span className="text-sm font-medium">الشركات الفريدة</span>
+              </div>
+              <div className="text-2xl font-bold text-orange-700">{trackingData.statistics.uniqueCompaniesViewed}</div>
+              <div className="text-xs text-orange-600 mt-1">شركة شاهدت الإعلان</div>
+            </div>
+          </div>
+
+          {/* قوائم المستخدمين */}
+          <div className="grid md:grid-cols-3 gap-6">
+            {/* المشاهدات */}
+            <div>
+              <h4 className="font-medium text-text-primary mb-3 flex items-center gap-2">
+                <Eye size={16} className="text-blue-500" />
+                آخر المشاهدات
+              </h4>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {trackingData.views.length === 0 ? (
+                  <p className="text-sm text-text-muted">لا توجد مشاهدات</p>
+                ) : (
+                  trackingData.views.map((view: any, idx: number) => (
+                    <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
+                      <div className="font-medium text-text-primary">{view.companies?.name || 'غير معروف'}</div>
+                      <div className="text-xs text-text-muted flex items-center justify-between mt-1">
+                        <span>{view.users?.name || 'مستخدم'}</span>
+                        <span dir="ltr">{new Date(view.viewed_at).toLocaleString('ar-SA')}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* النقرات */}
+            <div>
+              <h4 className="font-medium text-text-primary mb-3 flex items-center gap-2">
+                <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+                </svg>
+                آخر النقرات
+              </h4>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {trackingData.clicks.length === 0 ? (
+                  <p className="text-sm text-text-muted">لا توجد نقرات</p>
+                ) : (
+                  trackingData.clicks.map((click: any, idx: number) => (
+                    <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
+                      <div className="font-medium text-text-primary">{click.companies?.name || 'غير معروف'}</div>
+                      <div className="text-xs text-text-muted flex items-center justify-between mt-1">
+                        <span>{click.users?.name || 'مستخدم'}</span>
+                        <span dir="ltr">{new Date(click.clicked_at).toLocaleString('ar-SA')}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* الإشعارات */}
+            <div>
+              <h4 className="font-medium text-text-primary mb-3 flex items-center gap-2">
+                <Bell size={16} className="text-purple-500" />
+                الإشعارات المرسلة
+              </h4>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {trackingData.notifications.length === 0 ? (
+                  <p className="text-sm text-text-muted">لا توجد إشعارات مرسلة</p>
+                ) : (
+                  trackingData.notifications.map((notif: any, idx: number) => (
+                    <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
+                      <div className="font-medium text-text-primary">{notif.companies?.name || 'غير معروف'}</div>
+                      <div className="text-xs text-text-muted flex items-center justify-between mt-1">
+                        <span>{notif.users?.name || 'مستخدم'}</span>
+                        <span dir="ltr">{new Date(notif.sent_at).toLocaleString('ar-SA')}</span>
+                      </div>
+                      <div className="mt-2 flex items-center gap-2 text-xs">
+                        <span className={`px-2 py-0.5 rounded ${notif.delivered ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                          {notif.delivered ? '✓ تم التوصيل' : 'قيد الانتظار'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">
+                          {notif.delivery_method}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {loading ? (
@@ -238,7 +459,7 @@ export default function AdminAdvertisementsPage() {
                     </div>
                     
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1.5">
+                      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                         <h3 className="font-bold text-text-primary text-lg">{ad.title}</h3>
                         <span className={`text-xs px-2.5 py-0.5 rounded-full border ${typeInfo.badgeClass}`}>
                           {typeInfo.label}
@@ -248,6 +469,27 @@ export default function AdminAdvertisementsPage() {
                             مخفي
                           </span>
                         )}
+                        {/* عرض طريقة العرض */}
+                        {ad.display_mode && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                            {ad.display_mode === 'banner' ? 'بانر' : ad.display_mode === 'popup' ? 'نافذة منبثقة' : 'إشعار'}
+                          </span>
+                        )}
+                        {/* عرض الإحصائيات */}
+                        <div className="flex items-center gap-3 text-xs text-text-muted ml-auto">
+                          <span className="flex items-center gap-1">
+                            <Eye size={12} /> {ad.views || 0}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+                            </svg>
+                            {ad.clicks || 0}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Bell size={12} /> {ad.notifications_sent || 0}
+                          </span>
+                        </div>
                       </div>
                       <p className="text-sm text-text-secondary leading-relaxed">{ad.body}</p>
                       {ad.link_url && (
@@ -259,6 +501,12 @@ export default function AdminAdvertisementsPage() {
                   </div>
                   
                   <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => loadTrackingData(ad.id)} className="btn btn-ghost btn-icon text-accent" title="عرض التتبع والإحصائيات">
+                      <BarChart3 size={16} />
+                    </button>
+                    <button onClick={() => handleEdit(ad)} className="btn btn-ghost btn-icon" title="تعديل">
+                      <Edit2 size={16} />
+                    </button>
                     <button onClick={() => toggleActive(ad.id, ad.is_active)} className="btn btn-ghost btn-icon" title={ad.is_active ? 'إخفاء' : 'إظهار'}>
                       {ad.is_active ? <Eye size={16} /> : <EyeOff size={16} />}
                     </button>
