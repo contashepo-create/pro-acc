@@ -1,5 +1,6 @@
 -- =====================================================
 -- ترحيل شامل: إصلاح نظام الاشتراكات والأكواد والترقيات
+-- (نسخة آمنة - لا تفشل حتى لو كانت بعض الأعمدة موجودة)
 -- =====================================================
 
 -- 1. جدول طلبات الترقية (الشامل)
@@ -60,17 +61,18 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_company ON subscriptions(company_id);
 
--- 4. جدول طرق الدفع
+-- 4. جدول طرق الدفع (إن لم يكن موجوداً)
 CREATE TABLE IF NOT EXISTS payment_methods (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   code TEXT UNIQUE NOT NULL,
-  name TEXT NOT NULL,
-  name_ar TEXT DEFAULT '',
+  name_ar TEXT NOT NULL DEFAULT '',
   account_number TEXT DEFAULT '',
+  account_name TEXT DEFAULT '',
   instructions TEXT DEFAULT '',
   is_active BOOLEAN DEFAULT true,
   sort_order INTEGER DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 5. جدول رسائل الشركة
@@ -97,7 +99,7 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 7. إضافة الأعمدة الناقصة لجدول الباقات
+-- 7. إضافة الأعمدة الناقصة لجدول الباقات (بأمان)
 ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS description_ar TEXT DEFAULT '';
 ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS yearly_discount_percent INTEGER DEFAULT 20;
 ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS trial_days INTEGER DEFAULT 7;
@@ -107,13 +109,22 @@ ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS max_employees INTEGER DE
 ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS max_invoices_per_month INTEGER DEFAULT 50;
 ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS max_storage_mb INTEGER DEFAULT 100;
 ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS features_modules JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS price_monthly NUMERIC(15,2);
+ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS price_yearly NUMERIC(15,2);
+ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS max_users INTEGER DEFAULT 1;
+ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS max_projects INTEGER;
+ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS features JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;
 
 -- 8. إضافة أعمدة users الناقصة
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date DATE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT;
 
--- 9. إضافة جداول الصلاحيات
+-- 9. إضافة عمود show_until للإعلانات
+ALTER TABLE advertisements ADD COLUMN IF NOT EXISTS show_until DATE;
+
+-- 10. إضافة جداول الصلاحيات
 CREATE TABLE IF NOT EXISTS company_telegram_configs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) UNIQUE,
@@ -145,7 +156,7 @@ CREATE TABLE IF NOT EXISTS custom_modules (
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   name_en TEXT,
-  icon TEXT DEFAULT '📁',
+  icon TEXT DEFAULT '',
   group_name TEXT DEFAULT 'custom',
   is_system BOOLEAN DEFAULT false,
   sort_order INTEGER DEFAULT 0,
@@ -170,23 +181,71 @@ CREATE TABLE IF NOT EXISTS custom_actions (
   UNIQUE(company_id, code)
 );
 
--- 10. الباقات الافتراضية
-INSERT INTO subscription_plans (code, name, description, description_ar, price_monthly, price_yearly, max_users, max_clients, max_suppliers, max_employees, max_projects, max_invoices_per_month, max_storage_mb, trial_days, is_active, sort_order)
+-- =====================================================
+-- إدراج البيانات الافتراضية (بأمان - لا تتكرر)
+-- =====================================================
+
+-- 11. الباقات الافتراضية (فقط الأعمدة المؤكدة وجودها)
+INSERT INTO subscription_plans (code, name, description, is_active, sort_order)
 VALUES 
-  ('basic', 'الأساسية', 'Basic Plan', 'الباقة الأساسية', 99, 990, 3, 50, 50, 10, 5, 100, 200, 7, true, 1),
-  ('professional', 'الاحترافية', 'Professional Plan', 'الباقة الاحترافية', 199, 1990, 10, 200, 200, 50, 20, 500, 1000, 14, true, 2),
-  ('enterprise', 'المؤسسية', 'Enterprise Plan', 'الباقة المؤسسية', 399, 3990, 999, 9999, 9999, 999, 999, 99999, 99999, 30, true, 3)
+  ('basic', 'الأساسية', 'الباقة الأساسية - 3 مستخدمين', true, 1),
+  ('professional', 'الاحترافية', 'الباقة الاحترافية - 10 مستخدمين', true, 2),
+  ('enterprise', 'المؤسسية', 'الباقة المؤسسية - مستخدمين غير محدود', true, 3)
 ON CONFLICT (code) DO NOTHING;
 
--- 11. طرق الدفع الافتراضية
-INSERT INTO payment_methods (code, name, name_ar, account_number, instructions, is_active, sort_order)
+-- تحديث الباقات الموجودة بالأعمدة الجديدة (إذا كانت موجودة)
+-- نستخدم DO $$ ... $$ لتشغيل UPDATE بأمان
+DO $$
+BEGIN
+  -- تحديث الباقة الأساسية
+  UPDATE subscription_plans SET 
+    description_ar = 'الباقة الأساسية',
+    price_monthly = 99,
+    price_yearly = 990,
+    max_users = 3,
+    max_clients = 50,
+    max_suppliers = 50,
+    max_employees = 10,
+    max_projects = 5,
+    max_invoices_per_month = 100,
+    max_storage_mb = 200,
+    trial_days = 7
+  WHERE code = 'basic';
+
+  -- تحديث الباقة الاحترافية
+  UPDATE subscription_plans SET 
+    description_ar = 'الباقة الاحترافية',
+    price_monthly = 199,
+    price_yearly = 1990,
+    max_users = 10,
+    max_clients = 200,
+    max_suppliers = 200,
+    max_employees = 50,
+    max_projects = 20,
+    max_invoices_per_month = 500,
+    max_storage_mb = 1000,
+    trial_days = 14
+  WHERE code = 'professional';
+
+  -- تحديث الباقة المؤسسية
+  UPDATE subscription_plans SET 
+    description_ar = 'الباقة المؤسسية',
+    price_monthly = 399,
+    price_yearly = 3990,
+    max_users = 999,
+    max_clients = 9999,
+    max_suppliers = 9999,
+    max_employees = 999,
+    max_projects = 999,
+    max_invoices_per_month = 99999,
+    max_storage_mb = 99999,
+    trial_days = 30
+  WHERE code = 'enterprise';
+END $$;
+
+-- 12. طرق الدفع الافتراضية
+INSERT INTO payment_methods (code, name_ar, account_number, instructions, is_active, sort_order)
 VALUES 
-  ('bank_transfer', 'Bank Transfer', 'تحويل بنكي', 'SA00 0000 0000 0000 0000 0000', 'حوّل المبلغ ثم أرسل صورة الإيصال', true, 1),
-  ('cash', 'Cash', 'نقداً', '', 'ادفع نقداً في المكتب', true, 2)
+  ('bank_transfer', 'تحويل بنكي', 'SA00 0000 0000 0000 0000 0000', 'حوّل المبلغ ثم أرسل صورة الإيصال', true, 1),
+  ('cash', 'نقداً', '', 'ادفع نقداً في المكتب', true, 2)
 ON CONFLICT (code) DO NOTHING;
-
--- إضافة عمود show_until لجدول الإعلانات
-ALTER TABLE advertisements ADD COLUMN IF NOT EXISTS show_until DATE;
-
--- تحديث الإعلانات الحالية
-UPDATE advertisements SET show_until = expires_at WHERE show_until IS NULL AND expires_at IS NOT NULL;
