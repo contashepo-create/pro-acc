@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
+import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatCurrency } from '@/lib/utils';
 
 export default function BanksPage() {
@@ -18,9 +19,10 @@ export default function BanksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [editingBank, setEditingBank] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', type: 'bank', account_number: '', opening_balance: '' });
+  const [form, setForm] = useState<any>({ name: '', type: 'bank', account_number: '', opening_balance: 0 });
 
   const fetchData = async () => {
     try {
@@ -39,8 +41,11 @@ export default function BanksPage() {
     if (!form.name || !form.type) { setSaveError('الاسم والنوع مطلوبان'); return; }
     setSaving(true); setSaveError('');
     try {
-      const res = await fetch('/api/banks', {
-        method: 'POST',
+      const url = editingBank ? `/api/banks/${editingBank.id}` : '/api/banks';
+      const method = editingBank ? 'PUT' : 'POST';
+      
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: form.name,
@@ -52,10 +57,44 @@ export default function BanksPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({ name: '', type: 'bank', account_number: '', opening_balance: '' });
+        setEditingBank(null);
+        setForm({ name: '', type: 'bank', account_number: '', opening_balance: 0 });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
     } catch (e:any) { setSaveError('خطأ في الاتصال: ' + (e.message || '')); } finally { setSaving(false); }
+  };
+
+  const handleEdit = async (bank: any) => {
+    try {
+      const res = await fetch(`/api/banks/${bank.id}`);
+      const json = await res.json();
+      if (json.success) {
+        setEditingBank(bank);
+        setForm({
+          name: json.data.name,
+          type: json.data.type,
+          account_number: json.data.account_number || '',
+          opening_balance: json.data.opening_balance || 0,
+        });
+        setShowModal(true);
+      }
+    } catch (e) {
+      console.error('Failed to load bank:', e);
+    }
+  };
+
+  const handleDelete = async (bank: any) => {
+    try {
+      const res = await fetch(`/api/banks/${bank.id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        fetchData();
+      } else {
+        alert(json.message || 'فشل الحذف');
+      }
+    } catch (e) {
+      alert('خطأ في الاتصال بالخادم');
+    }
   };
 
   const columns = [
@@ -63,7 +102,19 @@ export default function BanksPage() {
     { key: 'type', label: 'النوع', render: (row: any) => <Badge variant={row.type === 'bank' ? 'info' : 'accent'}>{row.type === 'bank' ? 'بنك' : 'صندوق'}</Badge> },
     { key: 'account_number', label: 'رقم الحساب' },
     { key: 'opening_balance', label: 'الرصيد الافتتاحي', render: (row: any) => formatCurrency(row.opening_balance) },
+    { key: 'balance', label: 'الرصيد الحالي', render: (row: any) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(row.balance)}</span> },
     { key: 'is_active', label: 'الحالة', render: (row: any) => <Badge variant={row.is_active ? 'success' : 'danger'}>{row.is_active ? 'نشط' : 'غير نشط'}</Badge> },
+    {
+      key: 'actions',
+      label: 'إجراءات',
+      render: (row: any) => (
+        <ActionButtons
+          item={row}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+        />
+      ),
+    },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
@@ -71,14 +122,14 @@ export default function BanksPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="البنوك والخزائن" description="إدارة الحسابات البنكية والخزائن النقدية" actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>إضافة بنك/خزينة</Button>} />
+      <PageHeader title="البنوك والخزائن" description="إدارة الحسابات البنكية والخزائن النقدية" actions={<Button onClick={() => { setEditingBank(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة بنك/خزينة</Button>} />
       {banks.length === 0 ? <EmptyState title="لا توجد بنوك أو خزائن" actionLabel="إضافة بنك/خزينة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={banks} searchable searchKeys={['name', 'account_number']} />}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة بنك/خزينة" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingBank(null); }} title={editingBank ? `تعديل: ${editingBank.name}` : 'إضافة بنك/خزينة'} size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingBank(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="grid grid-cols-2 gap-4">
           <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e:any)=>setForm({...form, name: e.target.value})} placeholder="مثلاً: البنك الأهلي - حساب رئيسي" />
           <Select label="النوع" value={form.type} onChange={(value)=>setForm({...form, type: value})} options={[{ value: 'bank', label: 'بنك' }, { value: 'safe', label: 'صندوق' }]} />
           <Input label="رقم الحساب" value={form.account_number} onChange={(e:any)=>setForm({...form, account_number: e.target.value})} placeholder="1234567890" />
-          <Input label="الرصيد الافتتاحي" type="number" value={form.opening_balance} onChange={(e:any)=>setForm({...form, opening_balance: e.target.value})} placeholder="0" />
+          <Input label="الرصيد الافتتاحي" type="number" value={form.opening_balance} onChange={(e:any)=>setForm({...form, opening_balance: parseFloat(e.target.value) || 0})} placeholder="0" />
           {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

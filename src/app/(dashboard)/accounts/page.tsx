@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/Select';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
+import { ActionButtons } from '@/components/ui/ActionButtons';
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -65,6 +66,20 @@ export default function AccountsPage() {
     });
     setSaveError('');
     setShowModal(true);
+  };
+
+  const handleDelete = async (account: any) => {
+    try {
+      const res = await fetch(`/api/accounts/${account.id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        fetchData();
+      } else {
+        alert(json.message || 'فشل الحذف');
+      }
+    } catch (e) {
+      alert('خطأ في الاتصال بالخادم');
+    }
   };
 
   const handleSeedDefaults = async () => {
@@ -177,7 +192,17 @@ export default function AccountsPage() {
       {flatData.length === 0 ? (
         <EmptyState title="لا توجد حسابات" description="اضغط إنشاء الحسابات الافتراضية للحصول على 50 حساب معروف أو أضف حساباً جديداً" actionLabel="إنشاء الحسابات الافتراضية" onAction={handleSeedDefaults} />
       ) : (
-        <DataTable columns={[...columns, { key: 'actions', label: 'إجراءات', render: (row:any) => <Button variant="ghost" size="sm" onClick={() => handleOpenEdit(row)}>تعديل</Button> }]} data={flatData} searchable searchKeys={['name', 'code']} />
+        <DataTable columns={[...columns, { 
+          key: 'actions', 
+          label: 'إجراءات', 
+          render: (row:any) => (
+            <ActionButtons
+              item={row}
+              onEdit={handleOpenEdit}
+              onDelete={handleDelete}
+            />
+          )
+        }]} data={flatData} searchable searchKeys={['name', 'code']} />
       )}
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editingAccount ? `تعديل حساب ${editingAccount.code}` : "إضافة حساب جديد"} size="lg"
