@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { checkApprovalThreshold } from '@/lib/notifications';
+import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -79,16 +79,11 @@ export async function POST(request: NextRequest) {
       return error('المبلغ يجب أن يكون أكبر من صفر');
     }
 
-    // ✅ التحقق من حد الموافقة وإرسال تنبيه إذا لزم الأمر
     const approvalCheck = await checkApprovalThreshold(auth.companyId, body.amount, 'cash_transaction', auth.userId);
     if (approvalCheck.requiresApproval) {
       console.log(`Approval required for cash transaction: ${body.amount} (threshold exceeded)`);
     }
 
-    const txId = generateId();
-    const jeId = generateId();
-
-    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1 to prevent race conditions
     const nextSeq = await getNextJournalNumber(auth.companyId, body.date);
 
     let bankAccountId: string | null = null;
@@ -106,72 +101,72 @@ export async function POST(request: NextRequest) {
 
     const desc = `${body.type === 'receipt' ? 'قبض' : 'صرف'}: ${body.reason}`;
 
-    const { error: jeError } = await s.from('journal_entries')
+    // إنشاء القيد المحاسبي (type must be 'general' per schema constraint)
+    const { data: jeData, error: jeError } = await s.from('journal_entries')
       .insert({
-        id: jeId,
         company_id: auth.companyId,
         number: nextSeq,
         date: body.date,
-        type: 'cash',
+        type: 'general',
         description: desc,
         project_id: body.project_id || null,
         created_by: auth.userId,
-      });
+      })
+      .select('id')
+      .single();
+
     if (jeError) throw jeError;
+    const jeId = jeData.id;
 
+    // إنشاء سطور القيد باستخدام الدالة المساعدة (تضمن إضافة جميع الحقول المطلوبة)
     if (body.type === 'receipt') {
-      const { error: l1Err } = await s.from('journal_lines').insert({
-        id: generateId(),
-        journal_entry_id: jeId,
-        account_id: bankAccountId || body.account_id,
-        debit: body.amount,
-        credit: 0,
-        description: body.reason,
-        project_id: body.project_id || null,
-        contact_id: body.contact_id || null,
-      });
-      if (l1Err) throw l1Err;
-
-      const { error: l2Err } = await s.from('journal_lines').insert({
-        id: generateId(),
-        journal_entry_id: jeId,
-        account_id: body.account_id,
-        debit: 0,
-        credit: body.amount,
-        description: body.reason,
-        project_id: body.project_id || null,
-        contact_id: body.contact_id || null,
-      });
-      if (l2Err) throw l2Err;
+      const { error: jlErr } = await insertJournalLines(auth.companyId, [
+        {
+          journal_entry_id: jeId,
+          account_id: bankAccountId || body.account_id,
+          debit: body.amount,
+          credit: 0,
+          description: body.reason,
+          project_id: body.project_id || null,
+          contact_id: body.contact_id || null,
+        },
+        {
+          journal_entry_id: jeId,
+          account_id: body.account_id,
+          debit: 0,
+          credit: body.amount,
+          description: body.reason,
+          project_id: body.project_id || null,
+          contact_id: body.contact_id || null,
+        },
+      ]);
+      if (jlErr) throw jlErr;
     } else {
-      const { error: l1Err } = await s.from('journal_lines').insert({
-        id: generateId(),
-        journal_entry_id: jeId,
-        account_id: body.account_id,
-        debit: body.amount,
-        credit: 0,
-        description: body.reason,
-        project_id: body.project_id || null,
-        contact_id: body.contact_id || null,
-      });
-      if (l1Err) throw l1Err;
-
-      const { error: l2Err } = await s.from('journal_lines').insert({
-        id: generateId(),
-        journal_entry_id: jeId,
-        account_id: bankAccountId || body.account_id,
-        debit: 0,
-        credit: body.amount,
-        description: body.reason,
-        project_id: body.project_id || null,
-        contact_id: body.contact_id || null,
-      });
-      if (l2Err) throw l2Err;
+      const { error: jlErr } = await insertJournalLines(auth.companyId, [
+        {
+          journal_entry_id: jeId,
+          account_id: body.account_id,
+          debit: body.amount,
+          credit: 0,
+          description: body.reason,
+          project_id: body.project_id || null,
+          contact_id: body.contact_id || null,
+        },
+        {
+          journal_entry_id: jeId,
+          account_id: bankAccountId || body.account_id,
+          debit: 0,
+          credit: body.amount,
+          description: body.reason,
+          project_id: body.project_id || null,
+          contact_id: body.contact_id || null,
+        },
+      ]);
+      if (jlErr) throw jlErr;
     }
 
     const { data: txData, error: txError } = await s.from('cash_transactions')
       .insert({
-        id: txId,
         company_id: auth.companyId,
         date: body.date,
         type: body.type,
@@ -196,6 +191,7 @@ export async function POST(request: NextRequest) {
       journal_entry_number: result.journal_entries?.number || null,
     }, 201);
   } catch (err) {
+    console.error('Cash POST error:', err);
     return handleApiError(err);
   }
 }

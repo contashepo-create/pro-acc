@@ -4,6 +4,21 @@ import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
+// الجداول التي تشير إلى journal_entries
+const REFERENCING_TABLES = [
+  { table: 'voucher_receipts', name: 'سند قبض' },
+  { table: 'voucher_disbursements', name: 'سند صرف' },
+  { table: 'custodies', name: 'عهدة' },
+  { table: 'custody_settlements', name: 'تسوية عهدة' },
+  { table: 'custody_deposits', name: 'إيداع عهدة' },
+  { table: 'invoices', name: 'فاتورة' },
+  { table: 'purchase_invoices', name: 'فاتورة شراء' },
+  { table: 'employee_advances', name: 'سلفة موظف' },
+  { table: 'salary_sheets', name: 'كشف رواتب' },
+  { table: 'fixed_assets', name: 'أصل ثابت' },
+  { table: 'inventory_transactions', name: 'حركة مخزون' },
+];
+
 export async function GET(
   request: NextRequest,
   { params: paramsPromise }: { params: Promise<{ id: string }> }
@@ -42,28 +57,75 @@ export async function DELETE(
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
-    // RBAC: Only admin and manager can delete journal entries
     const auth = await requireManagerOrAbove(request);
     const { id } = await paramsPromise;
     const s = sb();
 
+    // التحقق من وجود القيد
     const { data: entryRes } = await s.from('journal_entries')
-      .select('id, number, date, type').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      .select('id, number, date, type, description')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+    
     if (!entryRes) return notFound();
 
+    // التحقق من وجود قيود عكسية
     const { data: reversalRes } = await s.from('journal_entries')
-      .select('id').eq('reference', id).eq('company_id', auth.companyId).limit(1);
+      .select('id')
+      .eq('reference', id)
+      .eq('company_id', auth.companyId)
+      .limit(1);
+    
     if (reversalRes && reversalRes.length > 0) {
       return error('لا يمكن حذف قيد له قيود عكسية. قم بحذف القيود العكسية أولاً');
     }
 
-    const { error: lErr } = await s.from('journal_lines').delete().eq('journal_entry_id', id);
-    if (lErr) throw lErr;
-    const { error: jeErr } = await s.from('journal_entries').delete().eq('id', id);
-    if (jeErr) throw jeErr;
+    // التحقق من وجود سجلات مرتبطة في الجداول الأخرى
+    const references: string[] = [];
+    
+    for (const ref of REFERENCING_TABLES) {
+      try {
+        const { data: refs } = await s.from(ref.table)
+          .select('id')
+          .eq('journal_entry_id', id)
+          .limit(1);
+        
+        if (refs && refs.length > 0) {
+          references.push(ref.name);
+        }
+      } catch {
+        // الجدول قد لا يحتوي على هذا العمود - تجاهل
+      }
+    }
+
+    if (references.length > 0) {
+      return error(`لا يمكن حذف هذا القيد لأنه مرتبط بـ: ${references.join('، ')}. قم بحذف السجلات المرتبطة أولاً أو قم بتصفير تأثير القيد يدوياً`);
+    }
+
+    // حذف سطور القيد أولاً
+    const { error: lErr } = await s.from('journal_lines')
+      .delete()
+      .eq('journal_entry_id', id);
+    
+    if (lErr) {
+      console.error('Error deleting journal lines:', lErr);
+      throw lErr;
+    }
+
+    // حذف القيد نفسه
+    const { error: jeErr } = await s.from('journal_entries')
+      .delete()
+      .eq('id', id);
+    
+    if (jeErr) {
+      console.error('Error deleting journal entry:', jeErr);
+      throw jeErr;
+    }
 
     return success({ message: 'تم حذف القيد بنجاح' });
   } catch (err) {
+    console.error('Journal DELETE error:', err);
     return handleApiError(err);
   }
 }

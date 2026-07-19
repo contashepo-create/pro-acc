@@ -3,9 +3,9 @@ import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
+import { insertJournalLines } from '@/lib/journal-utils';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 /**
  * Record invoice/expense and deduct from custody WITHOUT duplication
@@ -108,10 +108,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         .select('id')
         .single();
 
-      await s.from('journal_lines').insert([
-        { journal_entry_id: je.id, account_id: expenseAcc.id, account_code: expenseCode, debit: amount, credit: 0, description },
-        { journal_entry_id: je.id, account_id: custodyAcc.id, account_code: ACCOUNT_CODES.EMPLOYEE_CUSTODIES, debit: 0, credit: amount, description: `خصم من عهدة ${custody.employee_id}` },
+      // استخدام الدالة المساعدة لإدراج سطور القيد بجميع الحقول المطلوبة
+      const { error: jlErr } = await insertJournalLines(auth.companyId, [
+        { journal_entry_id: je.id, account_id: expenseAcc.id, debit: amount, credit: 0, description },
+        { journal_entry_id: je.id, account_id: custodyAcc.id, debit: 0, credit: amount, description: `خصم من عهدة ${custody.employee_id}` },
       ]);
+      if (jlErr) console.error('Journal lines error:', jlErr);
     }
 
     // Update remaining via trigger will happen, but also update manually for immediate feedback

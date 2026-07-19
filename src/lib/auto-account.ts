@@ -4,6 +4,7 @@
  */
 
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -13,7 +14,7 @@ interface CreateAccountParams {
   name: string;
   nameEn?: string;
   type: 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
-  parentCode: string; // رمز الحساب الأب (مثال: '1120')
+  parentCode: string;
   openingBalance?: number;
 }
 
@@ -65,44 +66,89 @@ export async function createAutoAccount(params: CreateAccountParams): Promise<{ 
 
     // 4. إذا كان رصيد افتتاحي، إنشاء قيد افتتاحي
     if (params.openingBalance && params.openingBalance !== 0) {
-      const { data: jeNum } = await s.rpc('next_journal_number', {
-        p_company_id: params.companyId,
-        p_year: new Date().getFullYear(),
-      });
+      const jeNum = await getNextJournalNumber(params.companyId, new Date().toISOString());
 
-      if (jeNum) {
-        const { data: je } = await s.from('journal_entries')
-          .insert({
+      // الحصول على حساب رأس المال أو الحساب المقابل
+      const { data: capitalAcc } = await s.from('accounts')
+        .select('id, code, name')
+        .eq('company_id', params.companyId)
+        .eq('code', '3100') // رأس المال
+        .maybeSingle();
+
+      const { data: je, error: jeErr } = await s.from('journal_entries')
+        .insert({
+          company_id: params.companyId,
+          number: jeNum,
+          date: new Date().toISOString().split('T')[0],
+          type: 'opening_balance',
+          description: `رصيد افتتاحي - ${params.name}`,
+          created_by: (await s.from('users').select('id').eq('company_id', params.companyId).limit(1).maybeSingle()).data?.id || '00000000-0000-0000-0000-000000000000',
+        })
+        .select('id')
+        .single();
+
+      if (jeErr) {
+        console.error('Failed to create opening balance journal entry:', jeErr);
+      } else if (je) {
+        // إنشاء سطور القيد مع جميع الحقول المطلوبة
+        const lines: any[] = [];
+        
+        if (params.openingBalance > 0) {
+          // مدين: الحساب الجديد
+          lines.push({
             company_id: params.companyId,
-            number: jeNum,
-            date: new Date().toISOString().split('T')[0],
-            type: 'opening_balance',
-            description: `رصيد افتتاحي - ${params.name}`,
-          })
-          .select('id')
-          .single();
-
-        if (je) {
-          if (params.openingBalance > 0) {
-            // مدين
-            await s.from('journal_lines').insert({
+            journal_entry_id: je.id,
+            account_id: newAccount.id,
+            account_code: params.code,
+            account_name: params.name,
+            debit: params.openingBalance,
+            credit: 0,
+            description: 'رصيد افتتاحي',
+          });
+          // دائن: رأس المال (إذا وجد)
+          if (capitalAcc) {
+            lines.push({
+              company_id: params.companyId,
               journal_entry_id: je.id,
-              account_id: newAccount.id,
-              account_code: params.code,
-              debit: params.openingBalance,
+              account_id: capitalAcc.id,
+              account_code: capitalAcc.code,
+              account_name: capitalAcc.name,
+              debit: 0,
+              credit: params.openingBalance,
+              description: 'رصيد افتتاحي',
+            });
+          }
+        } else {
+          // دائن: الحساب الجديد
+          lines.push({
+            company_id: params.companyId,
+            journal_entry_id: je.id,
+            account_id: newAccount.id,
+            account_code: params.code,
+            account_name: params.name,
+            debit: 0,
+            credit: Math.abs(params.openingBalance),
+            description: 'رصيد افتتاحي',
+          });
+          // مدين: رأس المال (إذا وجد)
+          if (capitalAcc) {
+            lines.push({
+              company_id: params.companyId,
+              journal_entry_id: je.id,
+              account_id: capitalAcc.id,
+              account_code: capitalAcc.code,
+              account_name: capitalAcc.name,
+              debit: Math.abs(params.openingBalance),
               credit: 0,
               description: 'رصيد افتتاحي',
             });
-          } else {
-            // دائن
-            await s.from('journal_lines').insert({
-              journal_entry_id: je.id,
-              account_id: newAccount.id,
-              account_code: params.code,
-              debit: 0,
-              credit: Math.abs(params.openingBalance),
-              description: 'رصيد افتتاحي',
-            });
+          }
+        }
+
+        if (lines.length > 0) {
+          const { error: jlErr } = await s.from('journal_lines').insert(lines);
+          if (jlErr) {
+            console.error('Failed to insert opening balance journal lines:', jlErr);
           }
         }
       }

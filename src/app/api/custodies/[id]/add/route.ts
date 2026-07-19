@@ -3,9 +3,9 @@ import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
+import { insertJournalLines } from '@/lib/journal-utils';
 
-// @ts-ignore
-const sb = () => getSupabase() as any;
+const sb = () => getSupabase();
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -40,36 +40,44 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .select()
       .single();
 
-    if (txErr) throw txErr;
+    if (txErr) {
+      console.warn('custody_transactions insert failed (table may not exist):', txErr);
+    }
 
     // Journal: debit custody, credit bank
-    const { data: custAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_CUSTODIES).maybeSingle();
+    const { data: custAcc } = await s.from('accounts').select('id, code, name').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_CUSTODIES).maybeSingle();
     const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
 
     if (custAcc && bankAcc?.account_id) {
       const jeNum = await getNextJournalNumber(auth.companyId, new Date().toISOString());
-      const { data: je } = await s.from('journal_entries')
+      const { data: je, error: jeErr } = await s.from('journal_entries')
         .insert({
           company_id: auth.companyId,
           number: jeNum,
           date: new Date().toISOString().split('T')[0],
           type: 'general',
-          description: `إضافة عهدة: ${description || ''} - ${custody.description || ''}`,
+          description: `إضافة عهدة: ${description || ''}`,
           created_by: auth.userId,
         })
         .select('id')
         .single();
 
-      await s.from('journal_lines').insert([
-        { journal_entry_id: je.id, account_id: custAcc.id, debit: amount, credit: 0, description: `إضافة عهدة ${id}` },
-        { journal_entry_id: je.id, account_id: bankAcc.account_id, debit: 0, credit: amount, description: `صرف عهدة ${id}` },
-      ]);
+      if (jeErr) {
+        console.error('Journal entry error for custody add:', jeErr);
+      } else if (je) {
+        // استخدام الدالة المساعدة لإدراج سطور القيد بجميع الحقول المطلوبة
+        const { error: jlErr } = await insertJournalLines(auth.companyId, [
+          { journal_entry_id: je.id, account_id: custAcc.id, debit: amount, credit: 0, description: `إضافة عهدة ${id}` },
+          { journal_entry_id: je.id, account_id: bankAcc.account_id, debit: 0, credit: amount, description: `صرف عهدة ${id}` },
+        ]);
+        if (jlErr) console.error('Journal lines error:', jlErr);
+      }
     }
 
-    // Update custody file totals via trigger, but also update for safety
+    // Update remaining amount
+    const currentRemaining = parseFloat(custody.remaining_amount) || parseFloat(custody.amount) || 0;
     await s.from('custodies').update({
-      total_received: (parseFloat(custody.total_received) || parseFloat(custody.amount) || 0) + parseFloat(amount),
-      remaining_amount: (parseFloat(custody.remaining_amount) || parseFloat(custody.amount) || 0) + parseFloat(amount),
+      remaining_amount: currentRemaining + parseFloat(amount),
     }).eq('id', id);
 
     return success({ transaction, message: 'تمت إضافة المبلغ للعهدة' }, 201);

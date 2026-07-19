@@ -3,6 +3,7 @@ import { success, error, serverError, notFound, requireApiAuth, parseBody } from
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { getNextJournalNumber } from '@/lib/numbering';
+import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -252,7 +253,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         }
       }
 
-      await s.from('journal_lines').insert(journalLines);
+      const { error: jlErr } = await insertJournalLines(custody.company_id, journalLines);
+      if (jlErr) {
+        console.error('Failed to insert settlement journal lines:', jlErr);
+      }
     }
 
     // Financial audit log

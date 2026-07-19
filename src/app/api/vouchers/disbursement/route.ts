@@ -3,7 +3,9 @@ import { success, error, parseBody, getPaginationParams, getDateRangeParams, req
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
-import { checkBankBalance, checkApprovalThreshold } from '@/lib/notifications';
+import { checkApprovalThreshold, sendTransactionNotification } from '@/lib/notifications';
+import { insertJournalLines, getAccountBalanceFromJournal } from '@/lib/journal-utils';
+import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
 const sb = () => getSupabase();
 
@@ -69,6 +71,28 @@ export async function GET(request: NextRequest) {
   }
 }
 
+/**
+ * حساب رصيد البنك/الخزينة الحالي من القيود المحاسبية
+ * الرصيد الحالي = مجموع المدين - مجموع الدائن في حساب البنك
+ */
+async function getCurrentBankBalance(bankSafeId: string): Promise<{ balance: number; accountId: string | null }> {
+  const s = sb();
+
+  const { data: bank } = await s.from('banks_safes')
+    .select('account_id, name')
+    .eq('id', bankSafeId)
+    .maybeSingle();
+
+  if (!bank?.account_id) {
+    return { balance: 0, accountId: null };
+  }
+
+  // حساب الرصيد من جميع القيود المحاسبية (يشمل الرصيد الافتتاحي + كل العمليات)
+  const balance = await getAccountBalanceFromJournal(bank.account_id);
+
+  return { balance, accountId: bank.account_id };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
@@ -77,36 +101,30 @@ export async function POST(request: NextRequest) {
     const { date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, invoice_items, account_id } = data;
 
     if (!date || !disbursement_type || !amount || !bank_safe_id || !reason)
-      return error('date, disbursement_type, amount, bank_safe_id, reason are required');
+      return error('التاريخ ونوع السند والمبلغ والبنك/الخزينة والبيان مطلوب');
 
     const companyId = auth.companyId;
     const userId = auth.userId;
 
-    // ✅ التحقق من رصيد البنك/الخزينة
-    const balanceCheck = await checkBankBalance(bank_safe_id, amount, companyId);
-    if (!balanceCheck.allowed) {
-      return error(balanceCheck.message || 'الرصيد غير كافٍ');
+    // ✅ التحقق من رصيد البنك/الخزينة - الرصيد الحالي من القيود المحاسبية
+    const { balance: currentBalance, accountId: bankAccountId } = await getCurrentBankBalance(bank_safe_id);
+    
+    if (!bankAccountId) {
+      return error('الحساب البنكي غير موجود لهذا البنك/الخزينة. يرجى ربط البنك بحساب محاسبي');
+    }
+
+    const parsedAmount = parseFloat(amount);
+    if (currentBalance < parsedAmount) {
+      return error(`الرصيد غير كافٍ. الرصيد الحالي: ${currentBalance.toFixed(2)} ر.س، المبلغ المطلوب: ${parsedAmount.toFixed(2)} ر.س`);
     }
 
     // ✅ التحقق من حد الموافقة وإرسال تنبيه إذا لزم الأمر
-    const approvalCheck = await checkApprovalThreshold(companyId, amount, 'voucher_disbursement', userId);
+    const approvalCheck = await checkApprovalThreshold(companyId, parsedAmount, 'voucher_disbursement', userId);
     if (approvalCheck.requiresApproval) {
-      console.log(`Approval required for disbursement: ${amount} (threshold exceeded)`);
-      // يمكن إضافة منطق هنا لانتظار الموافقة قبل إنشاء القيد
-      // أو إنشاء القيد مع وضع "pending approval"
+      console.log(`Approval required for disbursement: ${parsedAmount} (threshold exceeded)`);
     }
 
     const nextNum = await getNextVoucherNumber(companyId, 'voucher_disbursements');
-
-    // الحصول على حساب البنك/الخزينة
-    const { data: bankAcc } = await s.from('banks_safes')
-      .select('account_id')
-      .eq('id', bank_safe_id)
-      .maybeSingle();
-
-    if (!bankAcc?.account_id) {
-      return error('الحساب البنكي غير موجود لهذا البنك/الصندوق');
-    }
 
     // إنشاء القيد المحاسبي
     const jeNum = await getNextJournalNumber(companyId, date);
@@ -122,25 +140,27 @@ export async function POST(request: NextRequest) {
       .select('id')
       .single();
 
-    if (jeErr) throw jeErr;
+    if (jeErr) {
+      console.error('Journal entry creation error:', jeErr);
+      throw jeErr;
+    }
     const jeId = je.id;
 
-    // إنشاء سطور القيد
-    const jl: any[] = [];
+    // إنشاء سطور القيد باستخدام الدالة المساعدة
+    const linesInput: any[] = [];
     
     // دائن: البنك/الخزينة
-    jl.push({ 
+    linesInput.push({ 
       journal_entry_id: jeId, 
-      account_id: bankAcc.account_id, 
+      account_id: bankAccountId, 
       debit: 0, 
-      credit: amount 
+      credit: parsedAmount 
     });
 
     // مدين: الحساب المقابل بناءً على نوع السند
     let counterpartAccountId: string | null = null;
 
     if (disbursement_type === 'supplier' || disbursement_type === 'supplier_advance') {
-      // دفع لمورد -> مدين: الموردون (2110)
       const { data: apAcc } = await s.from('accounts')
         .select('id')
         .eq('company_id', companyId)
@@ -148,7 +168,6 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       counterpartAccountId = apAcc?.id || null;
     } else if (disbursement_type === 'client_refund') {
-      // رد لعميل -> مدين: العملاء (1130)
       const { data: arAcc } = await s.from('accounts')
         .select('id')
         .eq('company_id', companyId)
@@ -156,7 +175,6 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       counterpartAccountId = arAcc?.id || null;
     } else if (disbursement_type === 'employee_advance') {
-      // سلفة موظف -> مدين: سلف الموظفين (1160)
       const { data: advAcc } = await s.from('accounts')
         .select('id')
         .eq('company_id', companyId)
@@ -171,12 +189,11 @@ export async function POST(request: NextRequest) {
             employee_id, 
             date, 
             type: 'advance', 
-            amount, 
+            amount: parsedAmount, 
             description: reason 
           });
       }
     } else if (disbursement_type === 'subcontractor') {
-      // دفع مقاول باطن -> مدين: مقاولو الباطن (2150)
       const { data: subAcc } = await s.from('accounts')
         .select('id')
         .eq('company_id', companyId)
@@ -184,21 +201,22 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       counterpartAccountId = subAcc?.id || null;
     } else if (account_id) {
-      // حساب محدد
       counterpartAccountId = account_id;
     }
 
     if (counterpartAccountId) {
-      jl.push({ 
+      linesInput.push({ 
         journal_entry_id: jeId, 
         account_id: counterpartAccountId, 
-        debit: amount, 
+        debit: parsedAmount, 
         credit: 0 
       });
     }
 
-    if (jl.length > 0) {
-      await s.from('journal_lines').insert(jl);
+    const { error: jlErr } = await insertJournalLines(companyId, linesInput);
+    if (jlErr) {
+      console.error('Journal lines insert error:', jlErr);
+      throw jlErr;
     }
 
     // حفظ السند
@@ -210,7 +228,7 @@ export async function POST(request: NextRequest) {
         disbursement_type, 
         contact_id: contact_id || null, 
         employee_id: employee_id || null, 
-        amount, 
+        amount: parsedAmount, 
         bank_safe_id, 
         reason, 
         journal_entry_id: jeId, 
@@ -219,13 +237,17 @@ export async function POST(request: NextRequest) {
       .select('*')
       .single();
 
-    if (vdErr) throw vdErr;
+    if (vdErr) {
+      console.error('Voucher disbursement insert error:', vdErr);
+      throw vdErr;
+    }
 
     // إذا كان هناك فواتير، تحديثها
     if (disbursement_type === 'supplier' && invoice_items && invoice_items.length > 0) {
       for (const item of invoice_items) {
         await s.from('disbursement_invoice_items')
           .insert({ 
+            company_id: companyId,
             disbursement_voucher_id: vd.id, 
             purchase_invoice_id: item.purchase_invoice_id, 
             amount: item.amount 
@@ -233,8 +255,40 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // إرسال إشعار تيليجرام للمعاملات الكبيرة
+    try {
+      const { data: bankInfo } = await s.from('banks_safes')
+        .select('name')
+        .eq('id', bank_safe_id)
+        .maybeSingle();
+      
+      const { data: userInfo } = await s.from('users')
+        .select('name')
+        .eq('id', userId)
+        .maybeSingle();
+
+      const bypassTelegram = await canBypassTelegramConfirmation(userId, companyId);
+      
+      if (!bypassTelegram) {
+        const notifResult = await sendTransactionNotification(companyId, 'disbursement', {
+          amount: parsedAmount,
+          reason,
+          bankName: bankInfo?.name,
+          userName: userInfo?.name,
+          date,
+        });
+        
+        if (notifResult.notified) {
+          return success({ ...vd, telegram_notified: true }, 201);
+        }
+      }
+    } catch (notifErr) {
+      console.warn('Telegram notification failed:', notifErr);
+    }
+
     return success(vd, 201);
   } catch (err) {
+    console.error('Disbursement POST error:', err);
     return handleApiError(err);
   }
 }

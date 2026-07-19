@@ -3,7 +3,9 @@ import { success, error, parseBody, getPaginationParams, getDateRangeParams, req
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { getNextJournalNumber, getNextVoucherNumber } from '@/lib/numbering';
-import { checkApprovalThreshold } from '@/lib/notifications';
+import { checkApprovalThreshold, sendTransactionNotification } from '@/lib/notifications';
+import { insertJournalLines } from '@/lib/journal-utils';
+import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
 const sb = () => getSupabase();
 
@@ -74,7 +76,7 @@ export async function POST(request: NextRequest) {
     const { date, receipt_type, contact_id, amount, bank_safe_id, reason, reference_type, reference_id, invoice_items, account_id } = data;
 
     if (!date || !receipt_type || !amount || !bank_safe_id || !reason)
-      return error('date, receipt_type, amount, bank_safe_id, reason are required');
+      return error('التاريخ ونوع السند والمبلغ والبنك/الخزينة والبيان مطلوب');
 
     const companyId = auth.companyId;
     const userId = auth.userId;
@@ -95,10 +97,10 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (!bankAccount?.account_id) {
-      return error('الحساب البنكي غير موجود لهذا البنك/الصندوق');
+      return error('الحساب البنكي غير موجود لهذا البنك/الخزينة. يرجى ربط البنك بحساب محاسبي');
     }
 
-    // إنشاء القيد المحاسبي دائماً (حتى بدون فواتير)
+    // إنشاء القيد المحاسبي
     const jeNum = await getNextJournalNumber(companyId, date);
     const { data: je, error: jeErr } = await s.from('journal_entries')
       .insert({ 
@@ -112,14 +114,16 @@ export async function POST(request: NextRequest) {
       .select('id')
       .single();
 
-    if (jeErr) throw jeErr;
+    if (jeErr) {
+      console.error('Journal entry creation error:', jeErr);
+      throw jeErr;
+    }
     const jeId = je.id;
 
     // تحديد الحساب المقابل بناءً على نوع السند
     let counterpartAccountId: string | null = null;
     
     if (receipt_type === 'client' && contact_id) {
-      // قبض من عميل -> دائن: العملاء (1130)
       const { data: arAccount } = await s.from('accounts')
         .select('id')
         .eq('company_id', companyId)
@@ -127,7 +131,6 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       counterpartAccountId = arAccount?.id || null;
     } else if (receipt_type === 'supplier_refund') {
-      // استرداد من مورد -> دائن: الموردون (2110)
       const { data: apAccount } = await s.from('accounts')
         .select('id')
         .eq('company_id', companyId)
@@ -135,15 +138,14 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       counterpartAccountId = apAccount?.id || null;
     } else if (account_id) {
-      // حساب محدد
       counterpartAccountId = account_id;
     }
 
-    // إنشاء سطور القيد
-    const jl: any[] = [];
+    // إنشاء سطور القيد باستخدام الدالة المساعدة (تضمن إضافة جميع الحقول المطلوبة)
+    const linesInput: any[] = [];
     
     // مدين: البنك/الخزينة
-    jl.push({ 
+    linesInput.push({ 
       journal_entry_id: jeId, 
       account_id: bankAccount.account_id, 
       debit: amount, 
@@ -152,7 +154,7 @@ export async function POST(request: NextRequest) {
 
     // دائن: الحساب المقابل
     if (counterpartAccountId) {
-      jl.push({ 
+      linesInput.push({ 
         journal_entry_id: jeId, 
         account_id: counterpartAccountId, 
         debit: 0, 
@@ -160,8 +162,10 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (jl.length > 0) {
-      await s.from('journal_lines').insert(jl);
+    const { error: jlErr } = await insertJournalLines(companyId, linesInput);
+    if (jlErr) {
+      console.error('Journal lines insert error:', jlErr);
+      throw jlErr;
     }
 
     // حفظ السند
@@ -183,7 +187,10 @@ export async function POST(request: NextRequest) {
       .select('*')
       .single();
 
-    if (vrErr) throw vrErr;
+    if (vrErr) {
+      console.error('Voucher receipt insert error:', vrErr);
+      throw vrErr;
+    }
 
     // إذا كان هناك فواتير، تحديثها
     if (receipt_type === 'client' && invoice_items && invoice_items.length > 0) {
@@ -209,6 +216,7 @@ export async function POST(request: NextRequest) {
 
           await s.from('receipt_invoice_items')
             .insert({ 
+              company_id: companyId,
               voucher_receipt_id: vr.id, 
               invoice_id: item.invoice_id, 
               amount: item.amount 
@@ -217,8 +225,42 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // إرسال إشعار تيليجرام للمعاملات الكبيرة
+    try {
+      const { data: bankInfo } = await s.from('banks_safes')
+        .select('name')
+        .eq('id', bank_safe_id)
+        .maybeSingle();
+      
+      const { data: userInfo } = await s.from('users')
+        .select('name')
+        .eq('id', userId)
+        .maybeSingle();
+
+      const bypassTelegram = await canBypassTelegramConfirmation(userId, companyId);
+      
+      if (!bypassTelegram) {
+        const notifResult = await sendTransactionNotification(companyId, 'receipt', {
+          amount: parseFloat(amount),
+          reason,
+          bankName: bankInfo?.name,
+          userName: userInfo?.name,
+          date,
+        });
+        
+        // إضافة معلومات الإشعار للرد
+        if (notifResult.notified) {
+          return success({ ...vr, telegram_notified: true }, 201);
+        }
+      }
+    } catch (notifErr) {
+      console.warn('Telegram notification failed:', notifErr);
+      // لا نوقف العملية إذا فشل الإشعار
+    }
+
     return success(vr, 201);
   } catch (err) {
+    console.error('Receipt POST error:', err);
     return handleApiError(err);
   }
 }

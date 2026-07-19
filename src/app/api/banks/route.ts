@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { createAutoAccount } from '@/lib/auto-account';
+import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -21,31 +22,34 @@ export async function GET(request: NextRequest) {
 
     if (queryError) throw queryError;
 
-    // Calculate balance for each bank/safe from journal entries
+    // حساب الرصيد لكل بنك/خزينة من القيود المحاسبية
     const banksWithBalance = await Promise.all((data || []).map(async (bs: any) => {
-      let balance = 0;
+      let openingBalance = 0;
+      let currentBalance = 0;
       
-      // If the bank has an associated account, calculate balance from journal_lines
       if (bs.account_id) {
-        const { data: lines } = await s.from('journal_lines')
-          .select('debit, credit')
+        // حساب الرصيد الحالي من جميع القيود (يشمل الافتتاحي + العمليات)
+        currentBalance = await getAccountBalanceFromJournal(bs.account_id);
+        
+        // حساب الرصيد الافتتاحي من القيود من نوع opening_balance فقط
+        const { data: openingLines } = await s.from('journal_lines')
+          .select('debit, credit, journal_entries!inner(type)')
           .eq('account_id', bs.account_id);
         
-        if (lines) {
-          const totalDebit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
-          const totalCredit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.credit) || 0), 0);
-          balance = totalDebit - totalCredit;
+        if (openingLines) {
+          openingBalance = openingLines
+            .filter((l: any) => l.journal_entries?.type === 'opening_balance')
+            .reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0) - (parseFloat(l.credit) || 0), 0);
         }
-      } else {
-        // Fallback to opening_balance if no account linked
-        balance = parseFloat(bs.opening_balance) || 0;
       }
 
       return {
         ...bs,
         account_code: bs.accounts?.code || null,
         account_name: bs.accounts?.name || null,
-        balance, // Add calculated balance
+        opening_balance: openingBalance,   // الرصيد الافتتاحي (من قيود افتتاحية فقط)
+        current_balance: currentBalance,    // الرصيد الحالي (من كل القيود)
+        balance: currentBalance,            // للتوافق مع الواجهة
       };
     }));
 
@@ -64,6 +68,8 @@ export async function POST(request: NextRequest) {
 
     if (!name || !type) return error('name, type are required');
 
+    const parsedOpeningBalance = parseFloat(opening_balance) || 0;
+
     // Create auto account in chart of accounts
     const accountCode = `${type === 'bank' ? '1120' : '1110'}-${Date.now().toString().slice(-4)}`;
     const parentCode = type === 'bank' ? '1120' : '1110';
@@ -76,7 +82,7 @@ export async function POST(request: NextRequest) {
       name: name,
       type: 'asset',
       parentCode: parentCode,
-      openingBalance: opening_balance || 0,
+      openingBalance: parsedOpeningBalance,
     });
 
     if (!newAccount) {
@@ -86,15 +92,14 @@ export async function POST(request: NextRequest) {
 
     console.log(`Auto account created successfully: ${newAccount.id}`);
 
-    // Create bank/safe and link to account
+    // Create bank/safe and link to account (without opening_balance - it's tracked in journal)
     const { data: result, error: insertError } = await s.from('banks_safes')
       .insert({
         company_id: auth.companyId,
         name,
         type,
         account_number: account_number || null,
-        account_id: newAccount.id, // Link to auto-created account
-        opening_balance: opening_balance || 0,
+        account_id: newAccount.id,
         is_active: true,
       })
       .select('*')
@@ -111,7 +116,9 @@ export async function POST(request: NextRequest) {
       ...result,
       account_code: newAccount.code,
       account_name: newAccount.name,
-      balance: opening_balance || 0, // Include initial balance
+      opening_balance: parsedOpeningBalance,
+      current_balance: parsedOpeningBalance,
+      balance: parsedOpeningBalance,
     }, 201);
   } catch (err) {
     console.error('Error in POST /api/banks:', err);

@@ -38,14 +38,22 @@ export async function getTelegramConfig(companyId: string): Promise<TelegramConf
 
 /**
  * حساب رصيد حساب معين من القيود المحاسبية
+ * الرصيد = إجمالي المدين - إجمالي الدائن
+ * يشمل الرصيد الافتتاحي وجميع العمليات
  */
-export async function getAccountBalance(accountId: string, companyId: string): Promise<number> {
+export async function getAccountBalance(accountId: string, companyId?: string): Promise<number> {
   const s = sb();
   
-  const { data: lines } = await s.from('journal_lines')
+  let query = s.from('journal_lines')
     .select('debit, credit')
-    .eq('account_id', accountId)
-    .eq('company_id', companyId);
+    .eq('account_id', accountId);
+  
+  // company_id اختياري - journal_lines له company_id لكن نتجنب الأخطاء
+  if (companyId) {
+    query = query.eq('company_id', companyId);
+  }
+  
+  const { data: lines } = await query;
   
   if (!lines || lines.length === 0) {
     return 0;
@@ -59,6 +67,7 @@ export async function getAccountBalance(accountId: string, companyId: string): P
 
 /**
  * التحقق من رصيد البنك/الخزينة
+ * يحسب الرصيد الحالي من جميع القيود المحاسبية (افتتاحي + عمليات)
  */
 export async function checkBankBalance(
   bankSafeId: string,
@@ -68,7 +77,7 @@ export async function checkBankBalance(
   const s = sb();
   
   const { data: bankAcc } = await s.from('banks_safes')
-    .select('account_id, name, opening_balance')
+    .select('account_id, name')
     .eq('id', bankSafeId)
     .eq('company_id', companyId)
     .maybeSingle();
@@ -84,9 +93,8 @@ export async function checkBankBalance(
   let currentBalance = 0;
   
   if (bankAcc.account_id) {
-    currentBalance = await getAccountBalance(bankAcc.account_id, companyId);
-  } else {
-    currentBalance = parseFloat(bankAcc.opening_balance as any) || 0;
+    // حساب الرصيد من جميع القيود المحاسبية (يشمل الرصيد الافتتاحي + كل العمليات)
+    currentBalance = await getAccountBalance(bankAcc.account_id);
   }
   
   if (currentBalance < amount) {
@@ -318,20 +326,20 @@ export async function handleApprovalResponse(
 export async function sendTelegramNotification(
   companyId: string,
   message: string
-): Promise<void> {
+): Promise<{ success: boolean; error?: string }> {
   const config = await getTelegramConfig(companyId);
   
   if (!config || !config.is_enabled || !config.chat_id) {
-    return;
+    return { success: false, error: 'إعدادات التيليجرام غير مفعلة أو chat_id غير محدد' };
   }
   
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {
-    return;
+    return { success: false, error: 'TELEGRAM_BOT_TOKEN غير محدد في متغيرات البيئة' };
   }
   
   try {
-    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -340,7 +348,64 @@ export async function sendTelegramNotification(
         parse_mode: 'HTML',
       }),
     });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error('Telegram API error:', errorData);
+      return { success: false, error: `فشل إرسال الرسالة: ${response.status}` };
+    }
+    
+    return { success: true };
   } catch (err) {
     console.error('Failed to send Telegram notification:', err);
+    return { success: false, error: 'خطأ في الاتصال بخوادم التيليجرام' };
   }
+}
+
+/**
+ * إرسال إشعار معاملة مالية عبر التيليجرام
+ * يُستخدم لإشعار المدير عند إنشاء سند قبض/صرف بمبلغ كبير
+ */
+export async function sendTransactionNotification(
+  companyId: string,
+  type: 'receipt' | 'disbursement',
+  details: {
+    amount: number;
+    reason: string;
+    bankName?: string;
+    userName?: string;
+    date: string;
+  }
+): Promise<{ notified: boolean; message?: string }> {
+  const config = await getTelegramConfig(companyId);
+  
+  // إذا لم يكن التيليجرام مفعلاً أو إشعارات المعاملات موقفة
+  if (!config || !config.is_enabled) {
+    return { notified: false };
+  }
+  
+  // التحقق من حد الإشعار (إذا تم تعيينه)
+  const threshold = config.approval_threshold || 0;
+  if (threshold > 0 && details.amount < threshold) {
+    return { notified: false };
+  }
+  
+  const typeLabel = type === 'receipt' ? '📥 سند قبض' : '📤 سند صرف';
+  
+  const message = `
+${typeLabel}
+
+💰 <b>المبلغ:</b> ${details.amount.toFixed(2)} ر.س
+📋 <b>البيان:</b> ${details.reason}
+🏦 <b>البنك/الخزينة:</b> ${details.bankName || 'غير محدد'}
+📅 <b>التاريخ:</b> ${details.date}
+👤 <b>المستخدم:</b> ${details.userName || 'غير معروف'}
+  `.trim();
+  
+  const result = await sendTelegramNotification(companyId, message);
+  
+  return {
+    notified: result.success,
+    message: result.success ? 'تم إرسال إشعار التيليجرام بنجاح' : result.error,
+  };
 }

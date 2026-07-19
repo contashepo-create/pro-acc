@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import type { } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -25,21 +26,22 @@ export async function GET(
     }
 
     const bank = bankRes as Record<string, any>;
-    let balance = 0;
+    let currentBalance = 0;
+    let openingBalance = 0;
 
     if (bank.account_id) {
-      const { data: jes } = await s.from('journal_entries')
-        .select('id')
-        .eq('company_id', auth.companyId);
-      const jeIds = (jes || []).map((je: any) => je.id);
-      if (jeIds.length > 0) {
-        const { data: lines } = await s.from('journal_lines')
-          .select('debit, credit')
-          .eq('account_id', bank.account_id)
-          .in('journal_entry_id', jeIds);
-        const totalDebit = (lines || []).reduce((s: number, l: any) => s + (parseFloat(l.debit) || 0), 0);
-        const totalCredit = (lines || []).reduce((s: number, l: any) => s + (parseFloat(l.credit) || 0), 0);
-        balance = totalDebit - totalCredit;
+      // الرصيد الحالي = كل القيود (افتتاحي + عمليات)
+      currentBalance = await getAccountBalanceFromJournal(bank.account_id);
+      
+      // الرصيد الافتتاحي = قيود من نوع opening_balance فقط
+      const { data: openingLines } = await s.from('journal_lines')
+        .select('debit, credit, journal_entries!inner(type)')
+        .eq('account_id', bank.account_id);
+      
+      if (openingLines) {
+        openingBalance = (openingLines as any[])
+          .filter((l: any) => l.journal_entries?.type === 'opening_balance')
+          .reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0) - (parseFloat(l.credit) || 0), 0);
       }
     }
 
@@ -47,7 +49,9 @@ export async function GET(
       ...bank,
       account_code: bank.accounts?.code || null,
       account_name: bank.accounts?.name || null,
-      balance,
+      opening_balance: openingBalance,   // الرصيد الافتتاحي فقط
+      current_balance: currentBalance,    // الرصيد الحالي (يشمل كل العمليات)
+      balance: currentBalance,            // للتوافق مع الواجهة القديمة
     });
   } catch (err) {
     return handleApiError(err);
