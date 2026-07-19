@@ -1,119 +1,130 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, requireAdminAuth, handleApiError, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-export async function GET(request: NextRequest) {
+function requireAdmin(request: NextRequest) {
+  const token = request.cookies.get('admin_token')?.value;
+  if (!token) throw new Error('Unauthorized');
+  const payload = verifyToken(token);
+  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
+  return payload;
+}
+
+export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const activeOnly = searchParams.get('active') === 'true';
-
-    const s = sb();
-    let queryBuilder = s.from('advertisements').select('*');
-
-    if (activeOnly) {
-      queryBuilder = queryBuilder.eq('is_active', true);
+    const activeParam = req.nextUrl.searchParams.get('active');
+    
+    let query = sb().from('advertisements').select('*');
+    
+    if (activeParam === 'true') {
+      query = query.eq('is_active', true);
     }
 
-    queryBuilder = queryBuilder.order('created_at', { ascending: false });
+    const { data: ads, error: err } = await query.order('created_at', { ascending: false });
+    
+    if (err) {
+      console.error('Error fetching ads:', err);
+      // إذا كان الجدول غير موجود
+      if (err.code === '42P01') return success([]);
+      throw err;
+    }
 
-    const { data, error: err } = await queryBuilder;
-    if (err) throw err;
-
-    // Filter by date in JS if activeOnly
-    let result = data || [];
-    if (activeOnly) {
-      const now = new Date();
-      result = result.filter((item: any) => {
-        if (item.starts_at && new Date(item.starts_at) > now) return false;
-        if (item.expires_at && new Date(item.expires_at) < now) return false;
+    // للعملاء: إرجاع الإعلانات النشطة فقط التي لم تنتهِ
+    if (activeParam === 'true') {
+      const now = new Date().toISOString();
+      const filtered = (ads || []).filter((ad: any) => {
+        // يجب أن تكون نشطة
+        if (!ad.is_active) return false;
+        // إذا كان هناك تاريخ انتهاء، تحقق منه
+        if (ad.expires_at && new Date(ad.expires_at) < new Date(now)) return false;
+        // إذا كان هناك تاريخ بدء، تحقق منه
+        if (ad.starts_at && new Date(ad.starts_at) > new Date(now)) return false;
         return true;
       });
+      return success(filtered);
     }
 
-    return success(result);
-  } catch (err) {
-    return serverError(err);
+    return success(ads || []);
+  } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
+    return serverError(e);
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    await requireAdminAuth(request);
-    const body = await parseBody<{
-      title: string; body: string; type?: string;
-      startsAt?: string; expiresAt?: string; linkUrl?: string; linkText?: string;
-    }>(request);
+    const admin = requireAdmin(req);
+    const body = await parseBody(req);
+    const { title, body: bodyText, type, linkUrl, linkText, showDuration, expiresAt } = body;
 
-    if (!body.title?.trim()) return error('العنوان مطلوب');
-    if (!body.body?.trim()) return error('النص مطلوب');
+    if (!title || !bodyText) return error('العنوان والنص مطلوبان');
 
-    const type = body.type || 'announcement';
-    if (!['announcement', 'banner', 'promotion'].includes(type)) return error('نوع غير صالح');
+    // حساب تاريخ انتهاء العرض بناءً على مدة العرض
+    let finalExpiresAt = expiresAt || null;
+    if (!finalExpiresAt && showDuration) {
+      const durationDays = parseInt(showDuration) || 7;
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + durationDays);
+      finalExpiresAt = endDate.toISOString().split('T')[0];
+    }
 
     const s = sb();
-    const insertData: any = {
-      title: body.title.trim(),
-      body: body.body.trim(),
-      type,
-      starts_at: body.startsAt || new Date().toISOString(),
-      expires_at: body.expiresAt || null,
-      link_url: body.linkUrl || null,
-      link_text: body.linkText || null,
-    };
+    const { data, error: insertErr } = await s.from('advertisements').insert({
+      title: title.trim(),
+      body: bodyText.trim(),
+      type: type || 'announcement',
+      link_url: linkUrl || null,
+      link_text: linkText || null,
+      is_active: true,
+      expires_at: finalExpiresAt,
+      show_until: finalExpiresAt, // نفس التاريخ للمستخدمين
+    }).select().single();
 
-    const { data, error: insertErr } = await s.from('advertisements').insert(insertData).select().single();
     if (insertErr) throw insertErr;
-
-    return success(data, 201);
-  } catch (err) {
-    if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
-    return serverError(err);
+    return success(data);
+  } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
+    return serverError(e);
   }
 }
 
-export async function PATCH(request: NextRequest) {
+export async function PATCH(req: NextRequest) {
   try {
-    await requireAdminAuth(request);
-    const body = await parseBody<{ id: string; title?: string; body?: string; isActive?: boolean; expiresAt?: string }>(request);
+    requireAdmin(req);
+    const body = await parseBody(req);
+    const { id, isActive } = body;
 
-    if (!body.id) return error('المعرف مطلوب');
+    if (!id) return error('id مطلوب');
 
-    const update: any = {};
-    if (body.title !== undefined) update.title = body.title;
-    if (body.body !== undefined) update.body = body.body;
-    if (body.isActive !== undefined) update.is_active = body.isActive;
-    if (body.expiresAt !== undefined) update.expires_at = body.expiresAt;
+    const { data, error: updateErr } = await sb().from('advertisements')
+      .update({ is_active: isActive, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
 
-    if (Object.keys(update).length === 0) return success({ message: 'لا توجد تحديثات' });
-
-    update.updated_at = new Date().toISOString();
-
-    const s = sb();
-    const { error: updateErr } = await s.from('advertisements').update(update).eq('id', body.id);
     if (updateErr) throw updateErr;
-
-    return success({ ok: true });
-  } catch (err) {
-    if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
-    return serverError(err);
+    return success(data);
+  } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
+    return serverError(e);
   }
 }
 
-export async function DELETE(request: NextRequest) {
+export async function DELETE(req: NextRequest) {
   try {
-    await requireAdminAuth(request);
-    const body = await parseBody<{ id: string }>(request);
+    requireAdmin(req);
+    const body = await parseBody(req);
+    const { id } = body;
 
-    if (!body.id) return error('المعرف مطلوب');
-    const s = sb();
-    const { error: deleteErr } = await s.from('advertisements').delete().eq('id', body.id);
-    if (deleteErr) throw deleteErr;
+    if (!id) return error('id مطلوب');
 
-    return success({ ok: true });
-  } catch (err) {
-    if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
-    return serverError(err);
+    await sb().from('advertisements').delete().eq('id', id);
+    return success({ deleted: true });
+  } catch (e: any) {
+    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
+    return serverError(e);
   }
 }

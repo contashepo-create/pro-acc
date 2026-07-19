@@ -96,6 +96,7 @@ export default function AdminAdvertisementsPage() {
   const [type, setType] = useState('announcement');
   const [linkUrl, setLinkUrl] = useState('');
   const [linkText, setLinkText] = useState('');
+  const [showDuration, setShowDuration] = useState('7'); // أيام
   const [saving, setSaving] = useState(false);
 
   const loadAds = async () => {
@@ -116,9 +117,9 @@ export default function AdminAdvertisementsPage() {
     await fetch('/api/admin/advertisements', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, body, type, linkUrl, linkText }),
+      body: JSON.stringify({ title, body, type, linkUrl, linkText, showDuration }),
     });
-    setTitle(''); setBody(''); setLinkUrl(''); setLinkText('');
+    setTitle(''); setBody(''); setLinkUrl(''); setLinkText(''); setShowDuration('7');
     setShowForm(false);
     setSaving(false);
     loadAds();
@@ -187,6 +188,11 @@ export default function AdminAdvertisementsPage() {
             <div>
               <label className="block text-sm font-medium text-text-secondary mb-1.5">نص الرابط</label>
               <input type="text" value={linkText} onChange={(e) => setLinkText(e.target.value)} className="input-base w-full" placeholder="اعرف المزيد" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-text-secondary mb-1.5">مدة العرض (أيام)</label>
+              <input type="number" min="1" max="365" value={showDuration} onChange={(e) => setShowDuration(e.target.value)} className="input-base w-full" placeholder="7" />
+              <p className="text-[10px] text-text-muted mt-1">سيتم إخفاء الإعلان تلقائياً بعد هذه المدة لكل مستخدم</p>
             </div>
           </div>
           {/* معاينة النوع المختار */}

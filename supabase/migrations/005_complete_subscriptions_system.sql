@@ -184,3 +184,9 @@ VALUES
   ('bank_transfer', 'Bank Transfer', 'تحويل بنكي', 'SA00 0000 0000 0000 0000 0000', 'حوّل المبلغ ثم أرسل صورة الإيصال', true, 1),
   ('cash', 'Cash', 'نقداً', '', 'ادفع نقداً في المكتب', true, 2)
 ON CONFLICT (code) DO NOTHING;
+
+-- إضافة عمود show_until لجدول الإعلانات
+ALTER TABLE advertisements ADD COLUMN IF NOT EXISTS show_until DATE;
+
+-- تحديث الإعلانات الحالية
+UPDATE advertisements SET show_until = expires_at WHERE show_until IS NULL AND expires_at IS NOT NULL;
