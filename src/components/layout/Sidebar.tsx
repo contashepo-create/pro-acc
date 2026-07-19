@@ -11,6 +11,7 @@ import {
   Building2,
   BarChart3,
   Settings,
+  Shield,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -106,6 +107,7 @@ const navGroups: NavGroup[] = [
     icon: Settings,
     items: [
       { id: 'settings', label: 'الإعدادات' },
+      { id: 'permissions', label: 'الصلاحيات' },
       { id: 'subscription', label: 'الباقات والاشتراك' },
       { id: 'messages', label: 'الرسائل' },
       { id: 'complaints', label: 'الشكاوي والاقتراحات' },
