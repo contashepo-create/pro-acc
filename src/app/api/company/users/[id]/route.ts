@@ -1,9 +1,36 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireAdmin, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireAdmin, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword } from '@/lib/auth';
 
 const sb = () => getSupabase();
+
+/**
+ * GET /api/company/users/[id] - Get user details
+ */
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const auth = await requireApiAuth(request);
+    const { id } = await params;
+    const s = sb();
+
+    const { data: user, error: queryError } = await s
+      .from('users')
+      .select('id, email, name, role, is_active, last_login, created_at, phone, birth_date, city')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+
+    if (queryError || !user) return notFound();
+
+    return success(user);
+  } catch (err) {
+    return handleApiError(err);
+  }
+}
 
 /**
  * PUT /api/company/users/[id] - Update user details
@@ -70,11 +97,14 @@ export async function PUT(
     }
     if (body.is_active !== undefined) updateData.is_active = body.is_active;
     if (body.password) {
-      if (body.password.length < 8) {
-        return error('كلمة المرور يجب أن تكون 8 أحرف على الأقل');
+      if (body.password.length < 6) {
+        return error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
       }
       updateData.password_hash = await hashPassword(body.password);
     }
+    if (body.phone !== undefined) updateData.phone = body.phone || null;
+    if (body.birth_date !== undefined) updateData.birth_date = body.birth_date || null;
+    if (body.city !== undefined) updateData.city = body.city || null;
 
     if (Object.keys(updateData).length === 0) {
       return error('لا توجد بيانات للتحديث');
@@ -85,7 +115,7 @@ export async function PUT(
       .update(updateData)
       .eq('id', id)
       .eq('company_id', auth.companyId)
-      .select('id, email, name, role, is_active')
+      .select('id, email, name, role, is_active, phone, birth_date, city')
       .single();
 
     if (updateError) throw updateError;
