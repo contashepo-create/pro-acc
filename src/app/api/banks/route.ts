@@ -24,32 +24,21 @@ export async function GET(request: NextRequest) {
 
     // حساب الرصيد لكل بنك/خزينة من القيود المحاسبية
     const banksWithBalance = await Promise.all((data || []).map(async (bs: any) => {
-      let openingBalance = 0;
+      let openingBalance = parseFloat(bs.opening_balance) || 0;
       let currentBalance = 0;
       
       if (bs.account_id) {
         // حساب الرصيد الحالي من جميع القيود (يشمل الافتتاحي + العمليات)
         currentBalance = await getAccountBalanceFromJournal(bs.account_id);
-        
-        // حساب الرصيد الافتتاحي من القيود من نوع opening_balance فقط
-        const { data: openingLines } = await s.from('journal_lines')
-          .select('debit, credit, journal_entries!inner(type)')
-          .eq('account_id', bs.account_id);
-        
-        if (openingLines) {
-          openingBalance = openingLines
-            .filter((l: any) => l.journal_entries?.type === 'opening_balance')
-            .reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0) - (parseFloat(l.credit) || 0), 0);
-        }
       }
 
       return {
         ...bs,
         account_code: bs.accounts?.code || null,
         account_name: bs.accounts?.name || null,
-        opening_balance: openingBalance,   // الرصيد الافتتاحي (من قيود افتتاحية فقط)
-        current_balance: currentBalance,    // الرصيد الحالي (من كل القيود)
-        balance: currentBalance,            // للتوافق مع الواجهة
+        opening_balance: openingBalance,
+        current_balance: currentBalance,
+        balance: currentBalance,
       };
     }));
 
@@ -92,7 +81,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`Auto account created successfully: ${newAccount.id}`);
 
-    // Create bank/safe and link to account (without opening_balance - it's tracked in journal)
+    // Create bank/safe and link to account (save opening_balance in table)
     const { data: result, error: insertError } = await s.from('banks_safes')
       .insert({
         company_id: auth.companyId,
@@ -100,6 +89,7 @@ export async function POST(request: NextRequest) {
         type,
         account_number: account_number || null,
         account_id: newAccount.id,
+        opening_balance: parsedOpeningBalance,
         is_active: true,
       })
       .select('*')
