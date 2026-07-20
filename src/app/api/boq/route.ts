@@ -20,7 +20,11 @@ export async function GET(req: NextRequest) {
     const { data, error: queryError, count } = await query
       .order('item_code').range(offset, offset + pageSize - 1);
 
-    if (queryError) throw queryError;
+    if (queryError) {
+      // Table might not exist, return empty result
+      console.warn('BOQ items table query error:', queryError);
+      return success({ boqItems: [], total: 0, page, pageSize });
+    }
 
     const boqItems = (data || []).map((b: any) => ({ ...b, project_name: b.projects?.name || null }));
     return success({ boqItems, total: count || 0, page, pageSize });

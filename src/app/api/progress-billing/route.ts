@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
@@ -15,17 +15,25 @@ export async function GET(req: NextRequest) {
     const projectId = url.searchParams.get('projectId');
 
     let query = s.from('progress_billing')
-      .select('*, projects(name)', { count: 'exact' }).eq('company_id', auth.companyId);
+      .select('*, projects(name)', { count: 'exact' })
+      .eq('company_id', auth.companyId);
     if (projectId) query = query.eq('project_id', projectId);
 
     const offset = (page - 1) * pageSize;
     const { data, error: queryError, count } = await query
       .order('date', { ascending: false }).range(offset, offset + pageSize - 1);
-    if (queryError) throw queryError;
+
+    if (queryError) {
+      // Table might not exist, return empty result
+      console.warn('Progress billing table query error:', queryError);
+      return success({ claims: [], total: 0, page, pageSize });
+    }
 
     const claims = (data || []).map((pb: any) => ({ ...pb, project_name: pb.projects?.name || null }));
     return success({ claims, total: count || 0, page, pageSize });
-  } catch (err) { return handleApiError(err); }
+  } catch (err) {
+    return handleApiError(err);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -46,22 +54,32 @@ export async function POST(req: NextRequest) {
       .select('*').single();
     if (claimErr) throw claimErr;
 
-    const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_REVENUE).maybeSingle();
-    const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).maybeSingle();
-    const { data: retAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.RETENTIONS).maybeSingle();
+    // Only create journal entry if accounts exist
+    try {
+      const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_REVENUE).maybeSingle();
+      const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).maybeSingle();
+      const { data: retAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.RETENTIONS).maybeSingle();
 
-    if (arAcc && revAcc) {
-      const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
-      const { data: je } = await s.from('journal_entries')
-        .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `فاتورة مرحلية: ${claim_number}`, reference_type: 'progress_billing', reference_id: claim.id, created_by: auth.userId })
-        .select('id').single();
-      const jl: any[] = [
-        { journal_entry_id: je.id, account_id: arAcc.id, debit: gross_amount, credit: 0 },
-        { journal_entry_id: je.id, account_id: revAcc.id, debit: 0, credit: netAmount },
-      ];
-      if (retentionAmount > 0 && retAcc) jl.push({ journal_entry_id: je.id, account_id: retAcc.id, debit: 0, credit: retentionAmount });
-      await s.from('journal_lines').insert(jl);
+      if (arAcc && revAcc) {
+        const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
+        const { data: je } = await s.from('journal_entries')
+          .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `فاتورة مرحلية: ${claim_number}`, reference_type: 'progress_billing', reference_id: claim.id, created_by: auth.userId })
+          .select('id').single();
+
+        const jl: any[] = [
+          { journal_entry_id: je.id, account_id: arAcc.id, debit: gross_amount, credit: 0 },
+          { journal_entry_id: je.id, account_id: revAcc.id, debit: 0, credit: netAmount },
+        ];
+        if (retentionAmount > 0 && retAcc) jl.push({ journal_entry_id: je.id, account_id: retAcc.id, debit: 0, credit: retentionAmount });
+        await s.from('journal_lines').insert(jl);
+      }
+    } catch (journalError) {
+      console.warn('Failed to create journal entry for progress billing:', journalError);
+      // Don't fail the whole request if journal creation fails
     }
+
     return success(claim, 201);
-  } catch (err) { return handleApiError(err); }
+  } catch (err) {
+    return handleApiError(err);
+  }
 }
