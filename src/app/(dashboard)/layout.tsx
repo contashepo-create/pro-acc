@@ -52,10 +52,14 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-bg-primary flex">
-      <Sidebar />
-      <div className="lg:mr-64 flex-1 flex flex-col min-h-screen">
+      <aside className="hidden lg:flex flex-col h-screen bg-sidebar-bg border-l border-border transition-all duration-300"
+        style={{ width: '260px' }}
+      >
+        <Sidebar />
+      </aside>
+      <div className="flex-1 flex flex-col min-h-screen overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-auto pt-16">
+        <main className="flex-1 overflow-auto">
           <div className="p-4 md:p-6">
             <AnnouncementBar />
             <AdBanner />
@@ -65,6 +69,14 @@ export default function DashboardLayout({
         </main>
       </div>
       <AdPopup />
+      
+      {/* Mobile drawer */}
+      <div className="lg:hidden fixed inset-0 z-50">
+        <div className="absolute inset-0 bg-black/50" onClick={() => {}} />
+        <div className="absolute right-0 top-0 bottom-0 w-64 bg-sidebar-bg border-l border-border">
+          <Sidebar />
+        </div>
+      </div>
     </div>
   );
 }
