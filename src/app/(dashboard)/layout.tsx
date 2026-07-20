@@ -51,18 +51,20 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="min-h-screen bg-bg-primary">
+    <div className="min-h-screen bg-bg-primary flex">
       <Sidebar />
-      <div className="lg:mr-64">
+      <div className="lg:mr-64 flex-1 flex flex-col min-h-screen">
         <Header />
-        <main className="pt-20">
-          <AnnouncementBar />
-          <AdBanner />
-          <AdPopup />
-          <SubscriptionBanner />
-          <PageContainer>{children}</PageContainer>
+        <main className="flex-1 overflow-auto pt-16">
+          <div className="p-4 md:p-6">
+            <AnnouncementBar />
+            <AdBanner />
+            <SubscriptionBanner />
+            <PageContainer>{children}</PageContainer>
+          </div>
         </main>
       </div>
+      <AdPopup />
     </div>
   );
 }
