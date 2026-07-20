@@ -1,0 +1,19 @@
+// Fix empty catch blocks in Ad components
+
+// AdBanner.tsx - Empty catch fix
+  }, () => {
+    try {
+      fetch('/api/admin/advertisements?active=true&display_mode=banner')
+        .then((r) => r.json())
+        .then((d) => { 
+          if (d.success) setAds(d.data || []); 
+        })
+        .catch((err) => {
+          console.error('Failed to fetch banner ads:', err);
+          setAds([]); // Set empty array on error
+        });
+    } catch (err) {
+      console.error('Banner ad component error:', err);
+      setAds([]); // Handle component-level errors
+    }
+  });

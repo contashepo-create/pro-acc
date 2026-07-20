@@ -386,6 +386,14 @@ function getTransactionTypeName(type: string): string {
     cash_transaction: 'معاملة نقدية',
     journal_entry: 'قيد يومية',
     purchase_invoice: 'فاتورة شراء',
+    payroll: 'رواتب',
+    fixed_assets: 'أصل ثابت',
+    inventory_transaction: 'حركة مخزون',
+    project_expense: 'صرف مشروع',
+    employee_advance: 'سلفة موظف',
+    subcontractor_payment: 'دفع مقاول',
+    client_payment: 'قبض عميل',
+    payment_disbursement: 'دفع دائن',
   };
   return names[type] || type;
 }

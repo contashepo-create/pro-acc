@@ -6,8 +6,8 @@ import {
   Search, Bell, Moon, Sun, User, LogOut, Menu, 
   Settings, HelpCircle, ChevronDown 
 } from 'lucide-react';
-import { useThemeStore } from '@/store/theme-store'; // FIXED: Correct import path
-import { useAuthStore } from '@/store/auth-store'; // FIXED: Correct import path
+import { useThemeStore } from '@/store/theme-store';
+import { useAuthStore } from '@/store/auth-store';
 import { toast } from '@/components/ui/Toast';
 
 interface HeaderProps {

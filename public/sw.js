@@ -1,7 +1,7 @@
-// Service Worker for Push Notifications
-// Handles background push events and shows notifications
+// Service Worker for Pro Acc Application
+// Handles background sync and offline support
 
-const CACHE_NAME = 'pro-acc-v2';
+const CACHE_NAME = 'proacc-v2';
 const STATIC_ASSETS = [
   '/',
   '/dashboard',
@@ -44,55 +44,6 @@ self.addEventListener('fetch', (event) => {
         return response;
       })
       .catch(() => caches.match(event.request))
-  );
-});
-
-// Push event — show notification
-self.addEventListener('push', (event) => {
-  const data = event.data ? event.data.json() : {};
-  const title = data.title || 'إشعار جديد';
-  const options = {
-    body: data.body || '',
-    icon: data.icon || '/window.svg',
-    badge: '/window.svg',
-    dir: 'rtl',
-    lang: 'ar',
-    tag: data.tag || 'default',
-    data: {
-      url: data.url || '/dashboard',
-      entityType: data.entityType || null,
-      entityId: data.entityId || null,
-    },
-    actions: data.actions || [
-      { action: 'open', title: 'فتح' },
-      { action: 'dismiss', title: 'إغلاق' },
-    ],
-    vibrate: [200, 100, 200],
-    requireInteraction: data.requireInteraction || false,
-  };
-
-  event.waitUntil(self.registration.showNotification(title, options));
-});
-
-// Notification click — open the app
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-
-  if (event.action === 'dismiss') return;
-
-  const url = event.notification.data?.url || '/dashboard';
-
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-      // Focus existing window if available
-      for (const client of list) {
-        if (client.url.includes(url) && 'focus' in client) {
-          return client.focus();
-        }
-      }
-      // Open new window
-      return clients.openWindow(url);
-    })
   );
 });
 

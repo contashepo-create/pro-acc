@@ -1,0 +1,9 @@
+// Add error handling to empty catch blocks throughout the codebase
+// These should replace empty catch {} blocks with proper error logging and user feedback
+
+// Example pattern to use:
+catch (error) {
+  console.error('[ComponentName] Operation failed:', error);
+  toast.error('حدث خطأ أثناء العملية');
+  setState(emptyState); // Provide fallback state
+}

@@ -1,0 +1,30 @@
+// Fix for fail-open subscription logic in api-helpers.ts
+
+// Current problematic code:
+// } catch (e) {
+//   if (e instanceof AuthError) throw e;
+//   // ignore subscription check errors (fail open for now, log)
+//   console.warn('Subscription check failed:', e);
+// }
+
+// FIXED VERSION:
+// } catch (e) {
+//   if (e instanceof AuthError) throw e;
+//   
+//   // Log the error for debugging
+//   console.error('Subscription check failed:', e);
+//   
+//   // In production, fail CLOSED - require valid subscription
+//   if (process.env.NODE_ENV === 'production') {
+//     throw new AuthError(
+//       'تعذر التحقق من حالة الاشتراك. يرجى المحاولة مرة أخرى أو التواصل مع الدعم الفني.'
+//     );
+//   }
+//   
+//   // In development, fail open but still log
+//   console.warn('Development: allowing access despite subscription check failure');
+// }
+
+// Also fix the CSRF check to be enforced in all environments:
+// OLD: if (process.env.NODE_ENV === 'production') { ... }
+// NEW: if (process.env.CSRF_BYPASS === 'true') { ... }

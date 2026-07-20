@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { toast } from '@/components/ui/Toast';
 import { formatCurrency } from '@/lib/utils';
 
 export default function ClientsPage() {
@@ -28,6 +29,26 @@ export default function ClientsPage() {
     credit_limit: 0,
     address: '',
   });
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const res = await fetch('/api/clients');
+      const json = await res.json();
+      if (json.success) {
+        setClients(json.data?.clients || []);
+      } else {
+        setError(json.message || 'فشل');
+        toast.error(json.message || 'فشل تحميل البيانات');
+      }
+    } catch (err) {
+      setError('فشل تحميل البيانات');
+      toast.error('خطأ في الاتصال بالخادم');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!form.name) {
@@ -51,7 +72,8 @@ export default function ClientsPage() {
         setShowModal(false);
         setEditingClient(null);
         setForm({ name: '', phone: '', email: '', tax_number: '', credit_limit: 0, address: '' });
-        window.location.reload();
+        toast.success(editingClient ? 'تم تحديث العميل بنجاح' : 'تم إضافة العميل بنجاح');
+        fetchData();
       } else {
         setSaveError(json.message || 'فشل الحفظ');
       }
@@ -77,9 +99,11 @@ export default function ClientsPage() {
           address: json.data.address || '',
         });
         setShowModal(true);
+      } else {
+        toast.error(json.message || 'فشل تحميل البيانات');
       }
     } catch (e) {
-      console.error('Failed to load client:', e);
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
@@ -88,32 +112,17 @@ export default function ClientsPage() {
       const res = await fetch(`/api/clients/${client.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        window.location.reload();
+        toast.success('تم حذف العميل بنجاح');
+        fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        toast.error(json.message || 'فشل الحذف');
       }
     } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const res = await fetch('/api/clients');
-        const json = await res.json();
-        if (json.success) {
-          setClients(json.data?.clients || []);
-        } else {
-          setError(json.message || 'فشل');
-        }
-      } catch {
-        setError('فشل تحميل البيانات');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchData();
   }, []);
 

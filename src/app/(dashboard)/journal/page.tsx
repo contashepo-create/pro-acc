@@ -12,6 +12,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 interface JournalLine { accountCode: string; debit: number; credit: number; description: string; }
@@ -52,8 +53,9 @@ export default function JournalPage() {
         setShowModal(false); 
         setEditingEntry(null);
         setForm({ date: new Date().toISOString().split('T')[0], type: 'general', description: '',
-          lines: [{ accountCode: '', debit: 0, credit: 0, description: '' }, { accountCode: '', debit: 0, credit: 0, description: '' }] }); 
-        window.location.reload(); 
+          lines: [{ accountCode: '', debit: 0, credit: 0, description: '' }, { accountCode: '', debit: 0, credit: 0, description: '' }] });
+        toast.success('تم حفظ القيد بنجاح');
+        fetchData();
       }
       else { setSaveError(json.message || 'فشل الحفظ'); }
     } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
@@ -88,12 +90,13 @@ export default function JournalPage() {
       const res = await fetch(`/api/journal/${entry.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        window.location.reload();
+        toast.success('تم حذف القيد بنجاح');
+        fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        toast.error(json.message || 'فشل الحذف');
       }
     } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
@@ -107,17 +110,27 @@ export default function JournalPage() {
   const totalCredit = form.lines.reduce((sum, l) => sum + l.credit, 0);
   const isBalanced = Math.abs(totalDebit - totalCredit) <= 0.01;
 
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const [entRes, accRes] = await Promise.all([fetch('/api/journal'), fetch('/api/accounts')]);
+      const [entJson, accJson] = await Promise.all([entRes.json(), accRes.json()]);
+      if (entJson.success) setEntries(entJson.data?.entries || []);
+      else {
+        setError(entJson.message || 'فشل');
+        toast.error(entJson.message || 'فشل تحميل البيانات');
+      }
+      if (accJson.success) setAccounts(accJson.data?.accounts || []);
+    } catch (err) {
+      setError('فشل تحميل البيانات');
+      toast.error('خطأ في الاتصال بالخادم');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const [entRes, accRes] = await Promise.all([fetch('/api/journal'), fetch('/api/accounts')]);
-        const [entJson, accJson] = await Promise.all([entRes.json(), accRes.json()]);
-        if (entJson.success) setEntries(entJson.data?.entries || []);
-        else setError(entJson.message || 'فشل');
-        if (accJson.success) setAccounts(accJson.data?.accounts || []);
-      } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
-    };
     fetchData();
   }, []);
 

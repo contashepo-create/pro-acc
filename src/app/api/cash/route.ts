@@ -1,197 +1,230 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, serverError, requireApiAuth, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
-import { checkApprovalThreshold } from '@/lib/notifications';
 import { insertJournalLines } from '@/lib/journal-utils';
+import { checkBankBalance } from '@/lib/notifications';
 
 const sb = () => getSupabase();
 
+/**
+ * GET /api/cash
+ */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'cash', 'read');
     const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
-    const dateFrom = url.searchParams.get('date_from');
-    const dateTo = url.searchParams.get('date_to');
+    const { from, to } = getDateRangeParams(url);
     const type = url.searchParams.get('type');
     const accountId = url.searchParams.get('account_id');
     const contactId = url.searchParams.get('contact_id');
+    const employeeId = url.searchParams.get('employee_id');
+    const bankSafeId = url.searchParams.get('bank_safe_id');
 
     let query = s.from('cash_transactions')
-      .select('*, banks_safes(name), accounts(name), contacts(name), journal_entries(number)', { count: 'exact' })
+      .select(`
+        *,
+        accounts(name),
+        categories(name),
+        bank_safes(name),
+        contacts(name),
+        employees(name)
+      `, { count: 'exact' })
       .eq('company_id', auth.companyId);
 
-    if (dateFrom) query = query.gte('date', dateFrom);
-    if (dateTo) query = query.lte('date', dateTo);
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
     if (type) query = query.eq('type', type);
     if (accountId) query = query.eq('account_id', accountId);
     if (contactId) query = query.eq('contact_id', contactId);
+    if (employeeId) query = query.eq('employee_id', employeeId);
+    if (bankSafeId) query = query.eq('bank_safe_id', bankSafeId);
 
     const offset = (page - 1) * pageSize;
-    const { data, error: queryError, count } = await query
-      .order('created_at', { ascending: false })
+    const result = await query
+      .order('date', { ascending: false })
       .range(offset, offset + pageSize - 1);
 
-    if (queryError) throw queryError;
-
-    const rows = (data || []).map((ct: any) => ({
-      ...ct,
-      bank_safe_name: ct.banks_safes?.name || null,
-      account_name: ct.accounts?.name || null,
-      contact_name: ct.contacts?.name || null,
-      journal_entry_number: ct.journal_entries?.number || null,
-    }));
+    if (result.error) {
+      console.error('Cash fetch error:', result.error);
+      throw result.error;
+    }
 
     return success({
-      rows,
-      total: count || 0,
+      transactions: result.data || [],
+      total: result.count || 0,
       page,
       pageSize,
-      totalPages: Math.ceil((count || 0) / pageSize),
+      totalPages: Math.ceil((result.count || 0) / pageSize),
     });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
+/**
+ * POST /api/cash
+ */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'cash', 'create');
+    const auth = await requireApiAuth(request);
     const s = sb();
-    const body = await parseBody<{
-      date: string;
-      type: string;
-      amount: number;
-      account_id: string;
-      bank_safe_id?: string | null;
-      contact_id?: string | null;
-      project_id?: string | null;
-      category_id?: string | null;
-      reason: string;
-    }>(request);
+    const body = await request.json();
 
-    if (!body.date || !body.type || !body.amount || !body.account_id || !body.reason) {
-      return error('جميع الحقول المطلوبة يجب أن تكون مدخلة');
+    const {
+      date,
+      type,
+      amount,
+      accountId,
+      categoryId,
+      bankSafeId,
+      contactId,
+      employeeId,
+      projectId,
+      reason,
+      description,
+      referenceType,
+      referenceId,
+      receiptId,
+      disbursementId,
+    } = body;
+
+    if (!date || !type || !amount || !reason) {
+      return error('التاريخ، النوع، المبلغ، والسبب مطلوبة', 400);
     }
-    if (body.amount <= 0) {
-      return error('المبلغ يجب أن يكون أكبر من صفر');
+
+    if (parseFloat(amount) <= 0) {
+      return error('المبلغ يجب أن يكون أكبر من صفر', 400);
     }
 
-    const approvalCheck = await checkApprovalThreshold(auth.companyId, body.amount, 'cash_transaction', auth.userId);
-    if (approvalCheck.requiresApproval) {
-      console.log(`Approval required for cash transaction: ${body.amount} (threshold exceeded)`);
+    // Get account info if specified
+    let accountInfo = null;
+    if (accountId) {
+      const { data } = await s.from('accounts')
+        .select('id, name, type, name_en, current_balance')
+        .eq('id', accountId)
+        .single();
+      accountInfo = data;
     }
 
-    const nextSeq = await getNextJournalNumber(auth.companyId, body.date);
+    // Get bank safe info if specified
+    let bankSafeInfo = null;
+    if (bankSafeId) {
+      const { data } = await s.from('banks_safes')
+        .select('id, name, type, account_id')
+        .eq('id', bankSafeId)
+        .single();
+      bankSafeInfo = data;
+    }
 
-    let bankAccountId: string | null = null;
-    if (body.bank_safe_id) {
-      const { data: bank } = await s.from('banks_safes')
-        .select('account_id')
-        .eq('id', body.bank_safe_id)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-      if (!bank || !bank.account_id) {
-        return error('الخزينة/البنك غير موجود');
+    // Check bank balance if bank safe provided
+    if (bankSafeInfo && bankSafeInfo.account_id) {
+      const balance = await checkBankBalance(
+        bankSafeInfo.id,
+        parseFloat(amount),
+        auth.companyId
+      );
+      if (!balance.allowed) {
+        return error(balance.message || 'الرصيد غير كافٍ للصرف هذا المبلغ', 400);
       }
-      bankAccountId = bank.account_id;
     }
 
-    const desc = `${body.type === 'receipt' ? 'قبض' : 'صرف'}: ${body.reason}`;
+    // Create journal entry
+    const journalId = await getNextJournalNumber(auth.companyId);
+    const journalDate = new Date(date).toISOString().split('T')[0];
+    
+    const accountDebitId = accountId || bankSafeInfo?.account_id;
+    const initialCreditAccountId = bankSafeInfo?.account_id;
 
-    // إنشاء القيد المحاسبي (type must be 'general' per schema constraint)
-    const { data: jeData, error: jeError } = await s.from('journal_entries')
-      .insert({
-        company_id: auth.companyId,
-        number: nextSeq,
-        date: body.date,
-        type: 'general',
-        description: desc,
-        project_id: body.project_id || null,
-        created_by: auth.userId,
-      })
-      .select('id')
-      .single();
-
-    if (jeError) throw jeError;
-    const jeId = jeData.id;
-
-    // إنشاء سطور القيد باستخدام الدالة المساعدة (تضمن إضافة جميع الحقول المطلوبة)
-    if (body.type === 'receipt') {
-      const { error: jlErr } = await insertJournalLines(auth.companyId, [
-        {
-          journal_entry_id: jeId,
-          account_id: bankAccountId || body.account_id,
-          debit: body.amount,
-          credit: 0,
-          description: body.reason,
-          project_id: body.project_id || null,
-          contact_id: body.contact_id || null,
-        },
-        {
-          journal_entry_id: jeId,
-          account_id: body.account_id,
-          debit: 0,
-          credit: body.amount,
-          description: body.reason,
-          project_id: body.project_id || null,
-          contact_id: body.contact_id || null,
-        },
-      ]);
-      if (jlErr) throw jlErr;
-    } else {
-      const { error: jlErr } = await insertJournalLines(auth.companyId, [
-        {
-          journal_entry_id: jeId,
-          account_id: body.account_id,
-          debit: body.amount,
-          credit: 0,
-          description: body.reason,
-          project_id: body.project_id || null,
-          contact_id: body.contact_id || null,
-        },
-        {
-          journal_entry_id: jeId,
-          account_id: bankAccountId || body.account_id,
-          debit: 0,
-          credit: body.amount,
-          description: body.reason,
-          project_id: body.project_id || null,
-          contact_id: body.contact_id || null,
-        },
-      ]);
-      if (jlErr) throw jlErr;
+    // Get credit account based on transaction type
+    let creditAccountId: string | null = initialCreditAccountId;
+    if (type === 'revenue') {
+      creditAccountId = ACCOUNT_CODES.REVENUE;
+    } else if (type === 'expense') {
+      creditAccountId = ACCOUNT_CODES.EXPENSE;
+    } else if (type === 'payment_in') {
+      creditAccountId = ACCOUNT_NAMES.PAYMENTS;
     }
 
-    const { data: txData, error: txError } = await s.from('cash_transactions')
+    const debitAccountId = bankSafeInfo?.account_id;
+
+    const { data: transaction, error: insertErr } = await s.from('cash_transactions')
       .insert({
         company_id: auth.companyId,
-        date: body.date,
-        type: body.type,
-        amount: body.amount,
-        account_id: body.account_id,
-        bank_safe_id: body.bank_safe_id || null,
-        contact_id: body.contact_id || null,
-        project_id: body.project_id || null,
-        category_id: body.category_id || null,
-        reason: body.reason,
-        journal_entry_id: jeId,
+        date,
+        type,
+        amount: parseFloat(amount),
+        account_id: debitAccountId || null,
+        bank_safe_id: bankSafeId || null,
+        contact_id: contactId || null,
+        employee_id: employeeId || null,
+        project_id: projectId || null,
+        category_id: categoryId || null,
+        reason,
+        description: description || null,
+        reference_type: referenceType || null,
+        reference_id: referenceId || null,
+        receipt_id: receiptId || null,
+        disbursement_id: disbursementId || null,
         created_by: auth.userId,
+        updated_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
       })
-      .select('*, journal_entries(number)')
+      .select()
       .single();
 
-    if (txError) throw txError;
+    if (insertErr) throw insertErr;
 
-    const result = txData as Record<string, any>;
-    return success({
-      ...result,
-      journal_entry_number: result.journal_entries?.number || null,
-    }, 201);
+    // Create journal entry for the transaction
+    const { data: journal, error: journalErr } = await insertJournalLines(
+      auth.companyId,
+      {
+        date: journalDate,
+        type: type,
+        description: description || reason,
+        lines: [
+          {
+            account_id: debitAccountId || null,
+            debit: parseFloat(amount),
+            credit: 0,
+            contact_id: contactId || null,
+            project_id: projectId || null,
+            category_id: categoryId || null,
+            contact_id: contactId || null,
+            project_id: projectId || null,
+            description: description || null,
+            reference_type: referenceType || null,
+            reference_id: referenceId || null,
+            created_by: auth.userId,
+          },
+          {
+            account_id: creditAccountId || null,
+            debit: 0,
+            credit: parseFloat(amount),
+            contact_id: contactId || null,
+            project_id: projectId || null,
+            category_id: categoryId || null,
+            description: description || null,
+            contact_id: contactId || null,
+            project_id: projectId || null,
+            description: description || null,
+            reference_type: referenceType || null,
+            reference_id: referenceId || null,
+            created_by: auth.userId,
+          },
+        ],
+        reference_type: referenceType || null,
+        reference_id: referenceId || null,
+        created_by: auth.userId,
+      }
+    );
+
+    if (journalErr) throw journalErr;
+
+    return success(transaction, 201);
   } catch (err) {
-    console.error('Cash POST error:', err);
     return handleApiError(err);
   }
 }

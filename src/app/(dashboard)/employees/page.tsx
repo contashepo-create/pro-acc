@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function EmployeesPage() {
@@ -29,6 +30,26 @@ export default function EmployeesPage() {
     position: '',
     hire_date: new Date().toISOString().split('T')[0],
   });
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const res = await fetch('/api/employees');
+      const json = await res.json();
+      if (json.success) {
+        setEmployees(json.data?.employees || []);
+      } else {
+        setError(json.message || 'فشل');
+        toast.error(json.message || 'فشل تحميل البيانات');
+      }
+    } catch (err) {
+      setError('فشل تحميل البيانات');
+      toast.error('خطأ في الاتصال بالخادم');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!form.name) {
@@ -64,7 +85,8 @@ export default function EmployeesPage() {
           position: '',
           hire_date: new Date().toISOString().split('T')[0],
         });
-        window.location.reload();
+        toast.success(editingEmployee ? 'تم تحديث الموظف بنجاح' : 'تم إضافة الموظف بنجاح');
+        fetchData();
       } else {
         setSaveError(json.message || 'فشل الحفظ');
       }
@@ -91,9 +113,11 @@ export default function EmployeesPage() {
           hire_date: json.data.hire_date,
         });
         setShowModal(true);
+      } else {
+        toast.error(json.message || 'فشل تحميل البيانات');
       }
     } catch (e) {
-      console.error('Failed to load employee:', e);
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
@@ -102,32 +126,17 @@ export default function EmployeesPage() {
       const res = await fetch(`/api/employees/${employee.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        window.location.reload();
+        toast.success('تم حذف الموظف بنجاح');
+        fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        toast.error(json.message || 'فشل الحذف');
       }
     } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const res = await fetch('/api/employees');
-        const json = await res.json();
-        if (json.success) {
-          setEmployees(json.data?.employees || []);
-        } else {
-          setError(json.message || 'فشل');
-        }
-      } catch {
-        setError('فشل تحميل البيانات');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchData();
   }, []);
 

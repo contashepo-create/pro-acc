@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function CashPage() {
@@ -34,6 +35,39 @@ export default function CashPage() {
     contact_id: '',
     reason: '',
   });
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const [txRes, bankRes, accRes, conRes] = await Promise.all([
+        fetch('/api/cash'),
+        fetch('/api/banks'),
+        fetch('/api/accounts'),
+        fetch('/api/contacts'),
+      ]);
+      const [txJson, bankJson, accJson, conJson] = await Promise.all([
+        txRes.json(),
+        bankRes.json(),
+        accRes.json(),
+        conRes.json(),
+      ]);
+      if (txJson.success) {
+        setTransactions(txJson.data?.rows || []);
+      } else {
+        setError(txJson.message || 'فشل');
+        toast.error(txJson.message || 'فشل تحميل البيانات');
+      }
+      if (bankJson.success) setBanks(bankJson.data?.banks || []);
+      if (accJson.success) setAccounts(accJson.data?.accounts || []);
+      if (conJson.success) setContacts(conJson.data?.contacts || []);
+    } catch (err) {
+      setError('فشل تحميل البيانات');
+      toast.error('خطأ في الاتصال بالخادم');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!form.amount || form.amount <= 0) {
@@ -69,7 +103,8 @@ export default function CashPage() {
           contact_id: '',
           reason: '',
         });
-        window.location.reload();
+        toast.success(editingTransaction ? 'تم تحديث المعاملة بنجاح' : 'تم إضافة المعاملة بنجاح');
+        fetchData();
       } else {
         setSaveError(json.message || 'فشل الحفظ');
       }
@@ -96,9 +131,11 @@ export default function CashPage() {
           reason: json.data.reason || '',
         });
         setShowModal(true);
+      } else {
+        toast.error(json.message || 'فشل تحميل البيانات');
       }
     } catch (e) {
-      console.error('Failed to load transaction:', e);
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
@@ -107,44 +144,19 @@ export default function CashPage() {
       const res = await fetch(`/api/cash/${transaction.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        window.location.reload();
+        toast.success('تم حذف المعاملة بنجاح');
+        fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        toast.error(json.message || 'فشل الحذف');
       }
     } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
   const [typeTab, setTypeTab] = useState('all');
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const [txRes, bankRes, accRes, conRes] = await Promise.all([
-          fetch('/api/cash'),
-          fetch('/api/banks'),
-          fetch('/api/accounts'),
-          fetch('/api/contacts'),
-        ]);
-        const [txJson, bankJson, accJson, conJson] = await Promise.all([
-          txRes.json(),
-          bankRes.json(),
-          accRes.json(),
-          conRes.json(),
-        ]);
-        if (txJson.success) setTransactions(txJson.data?.rows || []);
-        else setError(txJson.message || 'فشل');
-        if (bankJson.success) setBanks(bankJson.data?.banks || []);
-        if (accJson.success) setAccounts(accJson.data?.accounts || []);
-        if (conJson.success) setContacts(conJson.data?.contacts || []);
-      } catch {
-        setError('فشل تحميل البيانات');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchData();
   }, []);
 

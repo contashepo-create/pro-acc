@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { verifyAdminToken } from '@/lib/auth';
+import { sendTelegramNotification } from '@/lib/notifications';
+import { executeApprovedTransaction, updateTransactionStatus } from '@/lib/approval-execution-helper';
 
 const sb = () => getSupabase();
 
@@ -224,6 +226,7 @@ async function editTelegramMessage(botToken: string, chatId: any, messageId: any
   }
 }
 
+// Local helper function for transaction type names
 function getTransactionTypeName(type: string): string {
   const names: Record<string, string> = {
     voucher_disbursement: 'سند صرف',

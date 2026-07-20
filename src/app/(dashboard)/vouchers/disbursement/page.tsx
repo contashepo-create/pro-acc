@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function DisbursementPage() {
@@ -34,6 +35,39 @@ export default function DisbursementPage() {
     amount: 0,
     reason: '',
   });
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const [disRes, bankRes, supRes, empRes] = await Promise.all([
+        fetch('/api/vouchers/disbursement'),
+        fetch('/api/banks'),
+        fetch('/api/contacts?type=supplier'),
+        fetch('/api/employees'),
+      ]);
+      const [disJson, bankJson, supJson, empJson] = await Promise.all([
+        disRes.json(),
+        bankRes.json(),
+        supJson.json(),
+        empJson.json(),
+      ]);
+      if (disJson.success) setDisbursements(disJson.data?.disbursements || []);
+      else setError(disJson.message || 'فشل تحميل البيانات');
+      if (bankJson.success) setBanks(bankJson.data?.banks || []);
+      if (supJson.success) setSuppliers(supJson.data?.contacts || []);
+      if (empJson.success) setEmployees(empJson.data?.employees || []);
+    } catch (err) {
+      setError('فشل تحميل البيانات');
+      console.error('Failed to fetch disbursement data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
 
   const handleSave = async () => {
     if (!form.bank_safe_id) {
@@ -58,6 +92,7 @@ export default function DisbursementPage() {
       });
       const json = await res.json();
       if (json.success) {
+        toast.success(editingDisbursement ? 'تم تعديل السند بنجاح' : 'تم إنشاء السند بنجاح');
         setShowModal(false);
         setEditingDisbursement(null);
         setForm({
@@ -69,12 +104,15 @@ export default function DisbursementPage() {
           amount: 0,
           reason: '',
         });
-        window.location.reload();
+        await fetchData(); // Refresh data instead of reload
       } else {
         setSaveError(json.message || 'فشل الحفظ');
+        toast.error(json.message || 'فشل الحفظ');
       }
-    } catch (e: any) {
+    } catch (err) {
       setSaveError('خطأ في الاتصال بالخادم');
+      toast.error('خطأ في الاتصال بالخادم');
+      console.error('Failed to save disbursement:', err);
     } finally {
       setSaving(false);
     }
@@ -96,55 +134,32 @@ export default function DisbursementPage() {
           reason: json.data.reason || '',
         });
         setShowModal(true);
+      } else {
+        toast.error(json.message || 'فشل تحميل السند');
       }
-    } catch (e) {
-      console.error('Failed to load disbursement:', e);
+    } catch (err) {
+      console.error('Failed to load disbursement:', err);
+      toast.error('خطأ في تحميل السند');
     }
   };
 
   const handleDelete = async (disbursement: any) => {
+    if (!confirm('هل أنت متأكد من حذف هذا السند؟')) return;
+    
     try {
       const res = await fetch(`/api/vouchers/disbursement/${disbursement.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        window.location.reload();
+        toast.success('تم حذف السند بنجاح');
+        await fetchData(); // Refresh data instead of reload
       } else {
-        alert(json.message || 'فشل الحذف');
+        toast.error(json.message || 'فشل الحذف');
       }
-    } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
+    } catch (err) {
+      console.error('Failed to delete disbursement:', err);
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const [disRes, bankRes, supRes, empRes] = await Promise.all([
-          fetch('/api/vouchers/disbursement'),
-          fetch('/api/banks'),
-          fetch('/api/contacts?type=supplier'),
-          fetch('/api/employees'),
-        ]);
-        const [disJson, bankJson, supJson, empJson] = await Promise.all([
-          disRes.json(),
-          bankRes.json(),
-          supRes.json(),
-          empRes.json(),
-        ]);
-        if (disJson.success) setDisbursements(disJson.data?.disbursements || []);
-        else setError(disJson.message || 'فشل');
-        if (bankJson.success) setBanks(bankJson.data?.banks || []);
-        if (supJson.success) setSuppliers(supJson.data?.contacts || []);
-        if (empJson.success) setEmployees(empJson.data?.employees || []);
-      } catch {
-        setError('فشل تحميل البيانات');
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
-  }, []);
 
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'danger' | 'warning' | 'info' | 'accent'; label: string }> = {

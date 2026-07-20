@@ -1,7 +1,11 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, requireApiAuth, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextVoucherNumber } from '@/lib/numbering';
+import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
+import { insertJournalLines } from '@/lib/journal-utils';
+import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
+import { requireModulePermission } from '@/lib/permissions';
+import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
 const sb = () => getSupabase();
 
@@ -35,12 +39,11 @@ export async function GET(request: NextRequest) {
     const offset = (page - 1) * pageSize;
     const result = await query
       .order('date', { ascending: false })
-      .order('number', { ascending: false })
       .range(offset, offset + pageSize - 1);
 
     if (result.error) {
       console.error('Receipt fetch error:', result.error);
-      return error('فشل تحميل بيانات السندات', 500);
+      throw result.error;
     }
 
     return success({
@@ -83,7 +86,7 @@ export async function POST(request: NextRequest) {
       return error('المبلغ يجب أن يكون أكبر من صفر', 400);
     }
 
-    const nextNumber = await getNextVoucherNumber('voucher_receipts', auth.companyId);
+    // Get bank safe info
     const { data: bankSafe } = await s.from('banks_safes')
       .select('account_id')
       .eq('id', bankSafeId)
@@ -94,18 +97,43 @@ export async function POST(request: NextRequest) {
       return error('البنك/الخزينة غير موجود', 404);
     }
 
+    // Check account balance
+    if (bankSafe.account_id) {
+      const balance = await getAccountBalanceFromJournal(bankSafe.account_id, auth.companyId);
+      if (balance < parseFloat(amount)) {
+        return error(`الرصيد غير كافٍ. الرصيد الحالي: ${balance.toFixed(2)} ر.س، المبلغ المطلوب: ${amount} ر.س`, 400);
+      }
+    }
+
+    // Check bypass permission
+    const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
+    if (!canBypass) {
+      const { data: config } = await s.from('company_telegram_configs')
+        .select('approvals_enabled, approval_threshold')
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
+
+      if (config && config.approvals_enabled && parseFloat(amount) > (config.approval_threshold || 0)) {
+        return error('هذه العملية تتطلب اعتماد تيليجرام تقديراً لإدارة النظام', 400);
+      }
+    }
+
+    // Create receipt
+    const nextNumber = await getNextVoucherNumber('voucher_receipts', auth.companyId);
+    const receiptDate = new Date(date).toISOString().split('T')[0];
+
     const { data: receipt, error: receiptError } = await s.from('voucher_receipts')
       .insert({
         company_id: auth.companyId,
         number: nextNumber,
-        date,
+        date: receiptDate,
         receipt_type: receiptType,
         contact_id: contactId || null,
         amount: parseFloat(amount),
         bank_safe_id: bankSafeId,
         reason,
         created_by: auth.userId,
-        status: 'approved', // Use proper status instead of hardcoded
+        status: 'approved',
         created_at: new Date().toISOString(),
       })
       .select()
@@ -113,9 +141,61 @@ export async function POST(request: NextRequest) {
 
     if (receiptError) throw receiptError;
 
+    // Create journal entry
+    const { data: journal, error: journalError } = await insertJournalLines(
+      auth.companyId,
+      {
+        date: receiptDate,
+        type: 'general',
+        description: `سند قبض رقم ${nextNumber}: ${reason}`,
+        lines: [
+          {
+            account_id: bankSafe.account_id,
+            debit: parseFloat(amount),
+            credit: 0,
+            bank_safe_id: bankSafeId,
+            contact_id: contactId || null,
+          },
+          {
+            account_id: getAccountCode(receiptType),
+            debit: 0,
+            credit: parseFloat(amount),
+          },
+        ],
+        reference_type: 'voucher_receipt',
+        reference_id: (receipt as any).id,
+        created_by: auth.userId,
+      }
+    );
+
+    if (journalError) throw journalError;
+
     return success(receipt, 201);
   } catch (err) {
     console.error('Receipt creation error:', err);
+    return handleApiError(err);
+  }
+}
+
+/**
+ * DELETE /api/vouchers/receipt/[id]/route.ts
+ */
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireApiAuth(request);
+    const { id } = await params;
+    const s = sb();
+
+    // Delete receipt
+    const { error: deleteError } = await s.from('voucher_receipts')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', auth.companyId);
+
+    if (deleteError) throw deleteError;
+
+    return success({ deleted: true });
+  } catch (err) {
     return handleApiError(err);
   }
 }

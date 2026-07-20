@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 interface InvoiceItem {
@@ -41,6 +42,36 @@ export default function InvoicesPage() {
     notes: '',
     items: [{ description: '', quantity: 1, unitPrice: 0, total: 0 }] as InvoiceItem[],
   });
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const [invRes, cliRes, projRes] = await Promise.all([
+        fetch('/api/invoices'),
+        fetch('/api/clients'),
+        fetch('/api/projects'),
+      ]);
+      const [invJson, cliJson, projJson] = await Promise.all([
+        invRes.json(),
+        cliRes.json(),
+        projRes.json(),
+      ]);
+      if (invJson.success) {
+        setInvoices(invJson.data?.invoices || []);
+      } else {
+        setError(invJson.message || 'فشل');
+        toast.error(invJson.message || 'فشل تحميل البيانات');
+      }
+      if (cliJson.success) setClients(cliJson.data?.clients || []);
+      if (projJson.success) setProjects(projJson.data?.projects || []);
+    } catch (err) {
+      setError('فشل تحميل البيانات');
+      toast.error('خطأ في الاتصال بالخادم');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!form.client_id) {
@@ -96,7 +127,8 @@ export default function InvoicesPage() {
           notes: '',
           items: [{ description: '', quantity: 1, unitPrice: 0, total: 0 }],
         });
-        window.location.reload();
+        toast.success(editingInvoice ? 'تم تحديث الفاتورة بنجاح' : 'تم إضافة الفاتورة بنجاح');
+        fetchData();
       } else {
         setSaveError(json.message || 'فشل الحفظ');
       }
@@ -128,9 +160,11 @@ export default function InvoicesPage() {
           })) || [{ description: '', quantity: 1, unitPrice: 0, total: 0 }],
         });
         setShowModal(true);
+      } else {
+        toast.error(json.message || 'فشل تحميل البيانات');
       }
     } catch (e) {
-      console.error('Failed to load invoice:', e);
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
@@ -139,12 +173,13 @@ export default function InvoicesPage() {
       const res = await fetch(`/api/invoices/${invoice.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        window.location.reload();
+        toast.success('تم حذف الفاتورة بنجاح');
+        fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        toast.error(json.message || 'فشل الحذف');
       }
     } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
