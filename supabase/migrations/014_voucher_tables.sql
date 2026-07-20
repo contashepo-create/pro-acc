@@ -4,7 +4,26 @@
 -- Description: Create tables for voucher receipts and disbursements with all dependencies
 -- ============================================================
 
--- 1. Banks and Safes (البنوك والخزينة)
+CREATE TABLE IF NOT EXISTS banks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
+  type TEXT NOT NULL CHECK(type IN ('bank', 'safe') DEFAULT 'bank'),
+  balance NUMERIC DEFAULT 0,
+  is_default BOOLEAN DEFAULT false,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes for banks
+CREATE INDEX IF NOT EXISTS idx_banks_company ON banks(company_id);
+CREATE INDEX IF NOT EXISTS idx_banks_type ON banks(type);
+CREATE INDEX IF NOT EXISTS idx_banks_is_default ON banks(is_default, company_id);
+CREATE INDEX IF NOT EXISTS idx_banks_account_id ON banks(account_id);
+
+-- Banks and Safes (البنوك والخزينة)
 CREATE TABLE IF NOT EXISTS banks_safes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
