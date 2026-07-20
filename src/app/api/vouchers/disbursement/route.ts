@@ -1,11 +1,11 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, requireModulePermission, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
+import { getNextVoucherNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { requireApproval } from '@/lib/notifications';
 import { checkTransactionBeforeSave } from '@/lib/approval-helpers';
-import { insertJournalLines, getAccountBalanceFromJournal } from '@/lib/journal-utils';
+import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
 const sb = () => getSupabase();
@@ -170,7 +170,7 @@ export async function POST(request: NextRequest) {
       creditAccountId = ACCOUNT_CODES.SUBCONTRACTORS_PAYABLE;
     }
 
-    const { error: journalError } = await insertJournalLines(
+    const { error: journalError } = await createJournalEntry(
       auth.companyId,
       {
         date,
@@ -181,6 +181,7 @@ export async function POST(request: NextRequest) {
             account_id: debitAccountId,
             debit: Number(amount),
             credit: 0,
+            bank_safe_id: bankSafeId,
           },
           {
             account_id: creditAccountId,

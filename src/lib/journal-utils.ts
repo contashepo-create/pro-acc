@@ -4,6 +4,7 @@
  */
 
 import { getSupabase } from '@/lib/supabase-client';
+import { getNextJournalNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -105,4 +106,73 @@ export async function getAccountBalanceFromJournal(
   const totalCredit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.credit) || 0), 0);
 
   return totalDebit - totalCredit;
+}
+
+/**
+ * إنشاء قيد محاسبي كامل مع السطور
+ * هذه الدالة تنشئ القيد والسطور معاً
+ */
+export async function createJournalEntry(
+  companyId: string,
+  {
+    date,
+    type,
+    description,
+    lines,
+    reference_type,
+    reference_id,
+    created_by,
+  }: {
+    date: string;
+    type: string;
+    description: string;
+    lines: Array<{
+      account_id: string;
+      debit: number;
+      credit: number;
+      description?: string | null;
+      project_id?: string | null;
+      contact_id?: string | null;
+      bank_safe_id?: string | null;
+    }>;
+    reference_type?: string | null;
+    reference_id?: string | null;
+    created_by?: string;
+  }
+): Promise<{ journalId: string; error: any | null }> {
+  const s = sb();
+
+  try {
+    // إنشاء القيد المحاسبي
+    const journalNumber = await getNextJournalNumber(companyId, date);
+    const { data: journal, error: journalError } = await s.from('journal_entries')
+      .insert({
+        company_id: companyId,
+        number: journalNumber,
+        date,
+        type,
+        description,
+        reference_type,
+        reference_id,
+        created_by,
+      })
+      .select('id')
+      .single();
+
+    if (journalError) throw journalError;
+
+    // إنشاء السطور
+    const { error: linesError } = await insertJournalLines(companyId, 
+      lines.map(line => ({
+        journal_entry_id: journal.id,
+        ...line
+      }))
+    );
+
+    if (linesError) throw linesError;
+
+    return { journalId: journal.id, error: null };
+  } catch (error) {
+    return { journalId: '', error };
+  }
 }

@@ -1,13 +1,27 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
-import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
-import { requireModulePermission } from '@/lib/permissions';
-import { canBypassTelegramConfirmation } from '@/lib/permissions';
+import { getNextVoucherNumber } from '@/lib/numbering';
+import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
+import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
+
+/**
+ * Helper function to get account ID based on receipt type
+ */
+function getAccountCode(receiptType: string): string {
+  switch (receiptType) {
+    case 'client':
+      return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
+    case 'supplier_refund':
+      return ACCOUNT_CODES.ACCOUNTS_PAYABLE;
+    case 'general':
+      return ACCOUNT_CODES.CASH;
+    default:
+      return ACCOUNT_CODES.CASH;
+  }
+}
 
 /**
  * GET /api/vouchers/receipt
@@ -142,7 +156,7 @@ export async function POST(request: NextRequest) {
     if (receiptError) throw receiptError;
 
     // Create journal entry
-    const { data: journal, error: journalError } = await insertJournalLines(
+    const { error: journalError } = await createJournalEntry(
       auth.companyId,
       {
         date: receiptDate,
