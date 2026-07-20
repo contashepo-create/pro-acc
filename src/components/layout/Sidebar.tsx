@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Calculator,
@@ -117,11 +118,8 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-interface SidebarProps {
-  onNavigate: (pageId: string) => void;
-}
-
-export function Sidebar({ onNavigate }: SidebarProps) {
+export function Sidebar() {
+  const router = useRouter();
   const { isCollapsed, toggle, activeItem, setActive, mobileOpen, setMobileOpen } = useSidebarStore();
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
@@ -137,7 +135,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
 
   const handleNav = (id: string) => {
     setActive(id);
-    onNavigate(id);
+    router.push(id || '/dashboard');
     setMobileOpen(false);
   };
 
