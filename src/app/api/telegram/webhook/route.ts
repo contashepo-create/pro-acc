@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { verifyAdminToken } from '@/lib/auth';
-import { sendTelegramNotification } from '@/lib/notifications';
-import { executeApprovedTransaction, updateTransactionStatus } from '@/lib/approval-execution-helper';
 
 const sb = () => getSupabase();
 
@@ -11,7 +8,9 @@ const sb = () => getSupabase();
  * واجهة استقبال نداءات تليجرام التفاعلية الرسمية (Telegram Webhook API Receiver)
  * يدعم:
  * 1. الرسائل العادية (مثل /start) للترحيب بالمستخدم وإعطائه معرفه الرقمي (Chat ID)
- * 2. الاستدعاءات العامة التفاعلية (Callback Query) للاعتمادات
+ * 2. الاستدعاءات التفاعلية (Callback Query) المدمجة:
+ *    أ. فحص الاتصال التفاعلي (Test Run) المفرز بنقطتين مثل "test:accept:UUID"
+ *    ب. الاعتمادات والموافقات المالية الحقيقية المفرزة بشرطة سفلية مثل "approve_approve_TYPE_ID_USER"
  */
 export async function POST(request: NextRequest) {
   try {
@@ -23,7 +22,7 @@ export async function POST(request: NextRequest) {
       ? process.env.TELEGRAM_BOT_TOKEN 
       : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
 
-    // 1. التعامل مع الرسائل العادية (مثل كتابة /start أو النقر على زر البدء في تلغرام)
+    // 1. التعامل مع الرسائل العادية (مثل كتابة /start)
     if (body.message) {
       const chatId = body.message.chat?.id;
       const text = (body.message.text || '').trim();
@@ -31,15 +30,15 @@ export async function POST(request: NextRequest) {
       if (chatId && (text.startsWith('/start') || text.toLowerCase() === 'start')) {
         if (!botToken) {
           console.warn('[Telegram Webhook] TELEGRAM_BOT_TOKEN is missing.');
-          return NextResponse.json({ success: false }, { status: 200 });
+          return NextResponse.json({ success: false, message: 'Server missing bot token' }, { status: 200 });
         }
 
-        const welcomeMessage = `🤖 <b>مرحباً بك في بوت برو أكاونت!</b>
+        const welcomeMessage = `🤖 <b>مرحباً بك في بوت برو أكاونت الموحد للأنظمة المحاسبية!</b>
 
 🔐 معرّف الدردشة الرقمي الخاص بك (Chat ID) هو:
 <code>${chatId}</code>
 
-👉 قم بنسخ هذا الرقم وضعه في خانة <b>Chat ID</b> في صفحة إعدادات تيليجرام بالموقع لتفعيل الربط والاعتمادات!`;
+👉 قم بنسخ هذا الرقم (بالضغط المطول عليه للنسخ السريع) وضعه في خانة <b>Chat ID</b> في صفحة إعدادات تيليجرام بالموقع لتفعيل الربط والاعتمادات اللحظية عبر الجوال!`;
 
         const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
           method: 'POST',
@@ -52,16 +51,17 @@ export async function POST(request: NextRequest) {
         });
 
         if (!response.ok) {
-          console.error('[Telegram Webhook] Failed to send welcome message:', response.status);
+          const errText = await response.text();
+          console.error('[Telegram Webhook] Failed to send welcome message:', response.status, errText);
         }
       }
       
-      return NextResponse.json({ success: true }, { status: 200 });
+      return NextResponse.json({ success: true, message: 'Message update processed' }, { status: 200 });
     }
 
     // 2. التحقق من وجود نقرة تفاعلية (Callback Query) على الأزرار
     if (!body.callback_query) {
-      return NextResponse.json({ success: true }, { status: 200 });
+      return NextResponse.json({ success: true, message: 'Not a callback query' }, { status: 200 });
     }
 
     const callbackQuery = body.callback_query;
@@ -70,113 +70,75 @@ export async function POST(request: NextRequest) {
     const chatId = callbackQuery.message?.chat?.id;
     const messageId = callbackQuery.message?.message_id;
 
-    const parts = callbackData.split('_');
-    
-    // TEST CONNECTION LOGIC
-    if (parts[0] === 'test' && parts.length === 3) {
-      const action = parts[1]; 
-      const testRunId = parts[2];
+    // معالجة فحص الاتصال اللحظي التفاعلي (Test Run)
+    if (callbackData.startsWith('test:')) {
+      const parts = callbackData.split(':');
+      if (parts.length === 3) {
+        const action = parts[1]; // accept أو reject
+        const testRunId = parts[2]; // UUID
+        const statusValue = action === 'accept' ? 'accepted' : 'rejected';
 
-      const statusValue = action === 'accept' ? 'accepted' : 'rejected';
-
-      const { error: updateErr } = await s.from('telegram_test_runs')
-        .update({ status: statusValue, updated_at: new Date().toISOString() })
-        .eq('id', testRunId);
-
-      const feedbackMsg = updateErr 
-        ? 'حدث خطأ في الخادم' 
-        : (action === 'accept' ? 'تم القبول بنجاح! ✅' : 'تم الرفض بنجاح! ❌');
-      
-      await answerCallback(callbackQueryId, feedbackMsg, !!updateErr);
-
-      if (botToken && !updateErr) {
-        const finalText = action === 'accept' 
-          ? '🟢 <b>تم تأكيد فحص الربط التفاعلي بنجاح!</b>'
-          : '🔴 <b>تم تأكيد فحص الربط التفاعلي بنجاح!</b>';
-        await editTelegramMessage(botToken, chatId, messageId, finalText);
-      }
-
-    } 
-    // APPROVAL REQUEST LOGIC (FIXED)
-    else if (parts[0] === 'approve' && parts.length >= 4) {
-      const action = parts[1]; // approve or reject
-      const transactionType = parts[2]; 
-      const transactionId = parts[3];
-      
-      await answerCallback(callbackQueryId, 'جاري معالجة الطلب...');
-
-      try {
-        // 1. Find pending approval request by transaction details
-        // Note: We use a query to find the request ID based on transaction info
-        let query = s.from('approval_requests')
-          .select('id, company_id, approver_chat_id, transaction_type, transaction_id')
-          .eq('status', 'pending')
-          .eq('transaction_type', transactionType)
-          .eq('transaction_id', transactionId);
-
-        // If we had the userId in the callback, we could add it for extra security
-        // e.g., .eq('requester_id', userId) 
-        // For now, we assume type+id is enough for a specific company context or we add security checks.
-
-        const { data: req, error: findErr } = await query.maybeSingle();
-
-        if (findErr || !req) {
-          console.error(`[Webhook] Approval request not found for ${transactionType}:${transactionId}`);
-          await editTelegramMessage(botToken, chatId, messageId, '❌ لم يتم العثور على طلب الاعتماد أو تمت معالجته بالفعل.');
-          return NextResponse.json({ success: true }, { status: 200 });
-        }
-
-        const approvalReq = req as any;
-        
-        // 2. Verify the Approver (Security Check)
-        // Get company's telegram config
-        const { data: config } = await s.from('company_telegram_configs')
-          .select('chat_id, approvals_enabled')
-          .eq('company_id', approvalReq.company_id)
-          .maybeSingle();
-
-        if (!config || !config.approvals_enabled || String(config.chat_id) !== String(chatId)) {
-          console.error(`[Webhook] Unauthorized approval attempt for company ${approvalReq.company_id}`);
-          await editTelegramMessage(botToken, chatId, messageId, '❌ غير مصرح لك بهذا الإجراء.');
-          return NextResponse.json({ success: true }, { status: 200 });
-        }
-
-        // 3. Call the internal Approval API
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-        const apiUrl = `${baseUrl}/api/approvals/${approvalReq.id}`;
-        
-        // We need to act as a system admin or authenticate. 
-        // Since this is internal webhook->internal API, we might need a system token or bypass.
-        // The `approvals/[id]/route.ts` checks `requireApiAuth`. 
-        // To bypass this for the webhook, we should either:
-        // a) Create a system user token
-        // b) Modify the approvals route to allow a specific webhook secret
-        // c) Execute the DB logic directly here (cleanest for webhooks to avoid circular auth)
-
-        // Let's go with option (c): Execute DB logic directly to avoid auth complexity in webhook loop
-        const newStatus = action === 'approve' ? 'approved' : 'rejected';
-        const now = new Date().toISOString();
-
-        const { error: updateErr } = await s.from('approval_requests')
+        // تحديث قاعدة البيانات
+        const { error: updateErr } = await s.from('telegram_test_runs')
           .update({
-            status: newStatus,
-            approver_chat_id: String(chatId),
-            approved_at: now,
+            status: statusValue,
+            updated_at: new Date().toISOString()
           })
-          .eq('id', approvalReq.id);
+          .eq('id', testRunId);
 
-        if (updateErr) throw updateErr;
+        if (updateErr) {
+          console.error('Failed to update telegram test run status:', updateErr);
+          await answerCallback(callbackQueryId, 'حدث خطأ في الخادم أثناء تحديث حالة الفحص', true);
+          return NextResponse.json({ success: true }, { status: 200 });
+        }
 
-        // 4. Update the response message
-        const msg = action === 'approve' 
-          ? `✅ تم الموافقة على ${getTransactionTypeName(transactionType)} بنجاح!` 
-          : `❌ تم رفض ${getTransactionTypeName(transactionType)}.`;
-        
-        await editTelegramMessage(botToken, chatId, messageId, msg);
+        const feedbackMsg = action === 'accept' ? 'تم القبول بنجاح! ✅' : 'تم الرفض بنجاح! ❌';
+        await answerCallback(callbackQueryId, feedbackMsg);
 
-      } catch (err) {
-        console.error('[Webhook] Error processing approval:', err);
-        await editTelegramMessage(botToken, chatId, messageId, '❌ حدث خطأ أثناء معالجة الطلب.');
+        if (botToken) {
+          const finalStatusText = action === 'accept' 
+            ? '🟢 <b>تم تأكيد فحص الربط التفاعلي بنجاح!</b>\n\nالحالة المعتمدة: <b>مقبول وموافق عليه ✅</b>'
+            : '🔴 <b>تم تأكيد فحص الربط التفاعلي بنجاح!</b>\n\nالحالة المعتمدة: <b>تم الرفض والمرفوض ❌</b>';
+
+          await editTelegramMessage(botToken, chatId, messageId, finalStatusText);
+        }
+      }
+    } 
+    // معالجة الاعتمادات والموافقات المالية الحقيقية (Real-time Approvals)
+    else if (callbackData.startsWith('approve_')) {
+      const parts = callbackData.split('_');
+      if (parts.length >= 4) {
+        const action = parts[1] as 'approve' | 'reject'; // approve أو reject
+        const requesterId = parts[parts.length - 1]; // معرف منشئ القيد
+        const transactionId = parts[parts.length - 2]; // UUID المعاملة
+        const transactionType = parts.slice(2, parts.length - 2).join('_'); // نوع المعاملة
+
+        if (!['approve', 'reject'].includes(action)) {
+          await answerCallback(callbackQueryId, 'إجراء غير صالح', true);
+          return NextResponse.json({ success: true }, { status: 200 });
+        }
+
+        // استدعاء دالة معالجة الاعتماد المالية الرسمية من النظام
+        const { handleApprovalResponse } = await import('@/lib/notifications');
+        const result = await handleApprovalResponse(
+          action,
+          transactionType,
+          transactionId,
+          requesterId,
+          chatId?.toString() || ''
+        );
+
+        // إرسال إشعار تجميد الأزرار لتليجرام لإيقاف مؤشر الانتظار (Stop Spinner)
+        await answerCallback(callbackQueryId, result.message);
+
+        // تحديث رسالة تليجرام لعرض الحالة النهائية المعتمدة
+        if (botToken) {
+          const finalStatusText = action === 'approve'
+            ? `🟢 <b>تم اعتماد المعاملة بنجاح!</b>\n\nالإجراء: <b>موافق ومعتمد ✅</b>\nبواسطة مشرف الدردشة رقم: <code>${chatId}</code>`
+            : `🔴 <b>تم رفض اعتماد المعاملة!</b>\n\nالإجراء: <b>مرفوض وملغى ❌</b>\nبواسطة مشرف الدردشة رقم: <code>${chatId}</code>`;
+
+          await editTelegramMessage(botToken, chatId, messageId, finalStatusText);
+        }
       }
     }
 
@@ -184,10 +146,13 @@ export async function POST(request: NextRequest) {
 
   } catch (err) {
     console.error('[Telegram Webhook Error]:', err);
-    return NextResponse.json({ success: false }, { status: 200 });
+    return NextResponse.json({ success: false, error: 'Internal logic error' }, { status: 200 });
   }
 }
 
+/**
+ * إبلاغ خوادم تليجرام بإلغاء مؤشر التحميل على العميل
+ */
 async function answerCallback(callbackQueryId: string, text: string, showAlert = false) {
   const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
     ? process.env.TELEGRAM_BOT_TOKEN 
@@ -209,6 +174,9 @@ async function answerCallback(callbackQueryId: string, text: string, showAlert =
   }
 }
 
+/**
+ * تعديل رسالة تليجرام القائمة لإبراز النتيجة المحدثة
+ */
 async function editTelegramMessage(botToken: string, chatId: any, messageId: any, newText: string) {
   try {
     await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
@@ -224,16 +192,4 @@ async function editTelegramMessage(botToken: string, chatId: any, messageId: any
   } catch (e) {
     console.error('Failed to edit Telegram message:', e);
   }
-}
-
-// Local helper function for transaction type names
-function getTransactionTypeName(type: string): string {
-  const names: Record<string, string> = {
-    voucher_disbursement: 'سند صرف',
-    voucher_receipt: 'سند قبض',
-    cash_transaction: 'معاملة نقدية',
-    journal_entry: 'قيد يومية',
-    purchase_invoice: 'فاتورة شراء',
-  };
-  return names[type] || type;
 }
