@@ -10,6 +10,10 @@ import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
 const sb = () => getSupabase();
 
+/**
+ * GET /api/vouchers/disbursement
+ * جلب سندات الصرف مع تراجع تلقائي مرن وسليم في حال فشل العلاقات بقاعدة البيانات
+ */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'disbursements', 'read');
@@ -19,56 +23,56 @@ export async function GET(request: NextRequest) {
     const { from, to } = getDateRangeParams(url);
     const disbType = url.searchParams.get('disbursementType');
 
-    let data, count, queryError;
-    try {
-      let query = s.from('voucher_disbursements')
-        .select('*, contacts(name), employees(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
-        .eq('company_id', auth.companyId);
-      if (from) query = query.gte('date', from);
-      if (to) query = query.lte('date', to);
-      if (disbType) query = query.eq('disbursement_type', disbType);
+    const offset = (page - 1) * pageSize;
 
-      const offset = (page - 1) * pageSize;
-      const result = await query
-        .order('date', { ascending: false }).order('number', { ascending: false })
-        .range(offset, offset + pageSize - 1);
-      
-      data = result.data;
-      count = result.count;
-      queryError = result.error;
-    } catch (joinErr) {
-      console.warn('Disbursement GET with joins failed, trying simple:', joinErr);
-      let query = s.from('voucher_disbursements')
+    // محاولة جلب العلاقات أولاً
+    const result = await s.from('voucher_disbursements')
+      .select('*, contacts(name), employees(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
+      .eq('company_id', auth.companyId)
+      .gte('date', from || '1970-01-01')
+      .lte('date', to || '2999-12-31')
+      .or(disbType ? `disbursement_type.eq.${disbType}` : 'disbursement_type.neq.null')
+      .order('date', { ascending: false })
+      .order('number', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+
+    let data = result.data;
+    let count = result.count || 0;
+
+    // في حال حدوث خطأ بروتوكولي أو فقدان العلاقات بقاعدة البيانات
+    if (result.error) {
+      console.warn('[Disbursement GET] Joined query failed, falling back to simple select:', result.error);
+      const fallbackResult = await s.from('voucher_disbursements')
         .select('*', { count: 'exact' })
-        .eq('company_id', auth.companyId);
-      if (from) query = query.gte('date', from);
-      if (to) query = query.lte('date', to);
-      if (disbType) query = query.eq('disbursement_type', disbType);
-
-      const offset = (page - 1) * pageSize;
-      const result = await query
-        .order('date', { ascending: false }).order('number', { ascending: false })
+        .eq('company_id', auth.companyId)
+        .gte('date', from || '1970-01-01')
+        .lte('date', to || '2999-12-31')
+        .or(disbType ? `disbursement_type.eq.${disbType}` : 'disbursement_type.neq.null')
+        .order('date', { ascending: false })
+        .order('number', { ascending: false })
         .range(offset, offset + pageSize - 1);
-      
-      data = result.data;
-      count = result.count;
-      queryError = result.error;
-    }
 
-    if (queryError) throw queryError;
+      if (fallbackResult.error) throw fallbackResult.error;
+      data = fallbackResult.data;
+      count = fallbackResult.count || 0;
+    }
 
     return success({
       vouchers: data || [],
-      total: count || 0,
+      total: count,
       page,
       pageSize,
-      totalPages: Math.ceil((count || 0) / pageSize),
+      totalPages: Math.ceil(count / pageSize) || 1,
     });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
+/**
+ * POST /api/vouchers/disbursement
+ * إنشاء سند صرف جديد
+ */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireManagerOrAbove(request);
@@ -105,8 +109,7 @@ export async function POST(request: NextRequest) {
       );
       
       if (approvalCheck.blocked) {
-        // المعاملة محظورة - نحفظها بحالة pending فقط
-        // لكننا لا نكمل إنشاء القيد المحاسبي
+        // المعاملة محظورة - نحفظها بحالة pending فقط ولا نكمل إنشاء القيد
         return success({
           requiresApproval: true,
           blocked: true,
