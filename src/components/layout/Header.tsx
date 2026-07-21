@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
+import { useSidebarStore } from '@/store/sidebar-store'; // FIXED: Imported sidebar store for mobile toggle
 import { toast } from '@/components/ui/Toast';
 
 interface HeaderProps {
@@ -25,6 +26,7 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
   const router = useRouter();
   const { theme, toggleTheme } = useThemeStore();
   const { user, logout } = useAuthStore();
+  const { setMobileOpen } = useSidebarStore(); // FIXED: Read setMobileOpen action
 
   // Fetch notification count
   useEffect(() => {
@@ -80,9 +82,13 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
   return (
     <header className="fixed top-0 left-0 right-0 z-40 bg-bg-card/95 backdrop-blur-md border-b border-border">
       <div className="h-14 px-4 lg:px-6 flex items-center justify-between">
-        {/* Mobile: Hamburger + Title */}
+        {/* Mobile: Hamburger + Title — FIXED: Added onClick to open sidebar drawer */}
         <div className="lg:hidden flex items-center gap-3">
-          <button className="btn btn-ghost btn-icon" aria-label="القائمة">
+          <button 
+            className="btn btn-ghost btn-icon" 
+            aria-label="القائمة"
+            onClick={() => setMobileOpen(true)}
+          >
             <Menu size={20} />
           </button>
           <h1 className="text-base font-bold text-text-primary truncate max-w-[200px]">

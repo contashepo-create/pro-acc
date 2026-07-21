@@ -10,6 +10,7 @@ import { AdBanner } from '@/components/AdBanner';
 import { AdPopup } from '@/components/AdPopup';
 import { SubscriptionBanner } from '@/components/SubscriptionBanner';
 import { useAuthStore } from '@/store/auth-store';
+import { useSidebarStore } from '@/store/sidebar-store'; // FIXED: Imported sidebar store for mobile drawer toggle
 import { Loader2 } from 'lucide-react';
 
 export default function DashboardLayout({
@@ -20,6 +21,7 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   const { isAuthenticated, isLoading, checkSession } = useAuthStore();
+  const { mobileOpen, setMobileOpen } = useSidebarStore(); // FIXED: Read mobileOpen state
 
   // Check authentication status
   useEffect(() => {
@@ -32,6 +34,11 @@ export default function DashboardLayout({
       router.push(`/login?redirect=${encodeURIComponent(pathname)}`);
     }
   }, [isLoading, isAuthenticated, pathname, router]);
+
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname, setMobileOpen]);
 
   // Show loading state while checking auth
   if (isLoading) {
@@ -52,14 +59,14 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-bg-primary flex">
-      <aside className="hidden lg:flex flex-col h-screen bg-sidebar-bg border-l border-border transition-all duration-300"
+      <aside className="hidden lg:flex flex-col h-screen bg-sidebar-bg border-l border-border transition-all duration-300 shrink-0"
         style={{ width: '260px' }}
       >
         <Sidebar />
       </aside>
       <div className="flex-1 flex flex-col min-h-screen overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-auto pt-14">
           <div className="p-4 md:p-6">
             <AnnouncementBar />
             <AdBanner />
@@ -70,13 +77,17 @@ export default function DashboardLayout({
       </div>
       <AdPopup />
       
-      {/* Mobile drawer */}
-      <div className="lg:hidden fixed inset-0 z-50">
-        <div className="absolute inset-0 bg-black/50" onClick={() => {}} />
-        <div className="absolute right-0 top-0 bottom-0 w-64 bg-sidebar-bg border-l border-border">
-          <Sidebar />
+      {/* Mobile drawer — FIXED: rendered conditionally using mobileOpen state */}
+      {mobileOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
+          {/* Backdrop overlay */}
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+          {/* Drawer Panel */}
+          <div className="absolute right-0 top-0 bottom-0 w-64 bg-sidebar-bg border-l border-border z-10 animate-[slide-in-right_0.25s_ease-out]">
+            <Sidebar />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
