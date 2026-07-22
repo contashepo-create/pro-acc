@@ -45,9 +45,18 @@ CREATE INDEX IF NOT EXISTS idx_project_expenses_project ON project_expenses(proj
 CREATE INDEX IF NOT EXISTS idx_project_expenses_type ON project_expenses(expense_type);
 CREATE INDEX IF NOT EXISTS idx_project_expenses_date ON project_expenses(date DESC);
 
-CREATE TRIGGER IF NOT EXISTS update_project_expenses_updated_at
-  BEFORE UPDATE ON project_expenses
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+    WHERE tgname = 'update_project_expenses_updated_at'
+    AND tgrelid = 'project_expenses'::regclass
+  ) THEN
+    CREATE TRIGGER update_project_expenses_updated_at
+      BEFORE UPDATE ON project_expenses
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+  END IF;
+END $$;
 
 COMMENT ON TABLE project_expenses IS 'مصروفات المشاريع المباشرة';
 COMMENT ON COLUMN progress_billing.is_final IS 'تحديد ما إذا كانت الدفعة نهائية';
