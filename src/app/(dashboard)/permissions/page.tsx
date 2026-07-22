@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation'; // FIXED: Added missing useRouter import for page-level redirection
+import { useAuthStore } from '@/store/auth-store'; // FIXED: Added missing useAuthStore import
 import { Shield, ShieldCheck, ShieldOff, Users, Settings, ChevronDown, ChevronUp, Save, AlertCircle, Check, X, UserCog, Lock, Unlock, Send, SendOff, Plus, Trash2, Edit3, FolderPlus, Zap, Folder, GripVertical } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
