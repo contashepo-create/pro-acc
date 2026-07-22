@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
@@ -39,6 +40,8 @@ export default function QuotationsPage() {
     contact_id: '',
     valid_until: '',
     notes: '',
+    tax_rate: 0.15,
+    tax_enabled: true,
     items: [{ description: '', quantity: 1, unit_price: 0, total: 0 }],
   });
 
@@ -83,6 +86,8 @@ export default function QuotationsPage() {
           contact_id: '',
           valid_until: '',
           notes: '',
+          tax_rate: 0.15,
+          tax_enabled: true,
           items: [{ description: '', quantity: 1, unit_price: 0, total: 0 }],
         });
         fetchData();
@@ -216,6 +221,7 @@ export default function QuotationsPage() {
             <Select label="العميل" value={form.contact_id} onChange={(v) => setForm({...form, contact_id: v})} options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]} className="col-span-2" />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات عرض السعر" />
+          <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

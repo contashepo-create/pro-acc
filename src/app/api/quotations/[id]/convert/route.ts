@@ -95,7 +95,7 @@ export async function POST(
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
-    const vatAmount = parseFloat((quotation as any).vat_amount) || 0;
+    const vatAmount = parseFloat((quotation as any).tax_amount) || parseFloat((quotation as any).vat_amount) || 0;
     const subtotal = parseFloat((quotation as any).subtotal) || contractValue;
 
     let journalEntryId: string | null = null;
@@ -155,7 +155,7 @@ export async function POST(
       date: startDate,
       due_date: startDate,
       subtotal: subtotal,
-      vat_rate: parseFloat((quotation as any).vat_rate) || 0,
+      vat_rate: parseFloat((quotation as any).tax_rate) || parseFloat((quotation as any).vat_rate) || 0,
       vat_amount: vatAmount,
       total: contractValue,
       paid_amount: 0,

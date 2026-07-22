@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     const auth = await requireApiAuth(req);
     const s = sb();
     const data = await parseBody(req);
-    const { project_id, date, claim_number, description, gross_amount, retention_rate, retention_percentage, is_final, notes } = data;
+    const { project_id, date, claim_number, description, gross_amount, retention_rate, retention_percentage, is_final, notes, tax_rate, tax_enabled } = data;
     if (!project_id || !date || !gross_amount)
       return error('project_id, date, gross_amount are required');
 
@@ -50,16 +50,21 @@ export async function POST(req: NextRequest) {
     const netAmount = gross_amount - retentionAmount;
     const claimNumber = claim_number || `PB-${Date.now()}`;
 
+    // VAT calculation
+    const vRate = (tax_enabled !== false && tax_rate) ? tax_rate : 0;
+    const taxAmount = netAmount * vRate;
+
     const { data: claim, error: claimErr } = await s.from('progress_billing')
-      .insert({ company_id: auth.companyId, project_id, date, claim_number: claimNumber, description: description || notes || null, gross_amount, retention_rate: rate, retention_amount: retentionAmount, net_amount: netAmount, status: 'approved', is_final: is_final || false })
+      .insert({ company_id: auth.companyId, project_id, date, claim_number: claimNumber, description: description || notes || null, gross_amount, retention_rate: rate, retention_amount: retentionAmount, net_amount: netAmount, status: 'approved', is_final: is_final || false, tax_rate: vRate, tax_amount: taxAmount })
       .select('*').single();
     if (claimErr) throw claimErr;
 
-    // Only create journal entry if accounts exist
+    // Create journal entry with VAT
     try {
       const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_REVENUE).maybeSingle();
       const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).maybeSingle();
       const { data: retAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.RETENTIONS).maybeSingle();
+      const { data: vatAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.VAT_SALES).maybeSingle();
 
       if (arAcc && revAcc) {
         const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
@@ -67,16 +72,17 @@ export async function POST(req: NextRequest) {
           .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `فاتورة مرحلية: ${claimNumber}`, reference_type: 'progress_billing', reference_id: claim.id, created_by: auth.userId })
           .select('id').single();
 
+        const totalDebit = gross_amount + taxAmount;
         const jl: any[] = [
-          { journal_entry_id: je.id, account_id: arAcc.id, debit: gross_amount, credit: 0 },
+          { journal_entry_id: je.id, account_id: arAcc.id, debit: totalDebit, credit: 0 },
           { journal_entry_id: je.id, account_id: revAcc.id, debit: 0, credit: netAmount },
         ];
         if (retentionAmount > 0 && retAcc) jl.push({ journal_entry_id: je.id, account_id: retAcc.id, debit: 0, credit: retentionAmount });
+        if (taxAmount > 0 && vatAcc) jl.push({ journal_entry_id: je.id, account_id: vatAcc.id, debit: 0, credit: taxAmount });
         await s.from('journal_lines').insert(jl);
       }
     } catch (journalError) {
       console.warn('Failed to create journal entry for progress billing:', journalError);
-      // Don't fail the whole request if journal creation fails
     }
 
     return success(claim, 201);

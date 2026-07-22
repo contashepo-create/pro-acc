@@ -9,6 +9,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
@@ -31,6 +32,9 @@ export default function ProjectsPage() {
     start_date: new Date().toISOString().split('T')[0],
     end_date: '',
     budget: 0,
+    tax_enabled: false,
+    tax_rate: 0.15,
+    auto_invoice: false,
   });
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [closingProject, setClosingProject] = useState<any>(null);
@@ -68,6 +72,9 @@ export default function ProjectsPage() {
           start_date: new Date().toISOString().split('T')[0],
           end_date: '',
           budget: 0,
+          tax_enabled: false,
+          tax_rate: 0.15,
+          auto_invoice: false,
         });
         window.location.reload();
       } else {
@@ -260,6 +267,8 @@ export default function ProjectsPage() {
             <Input label="تاريخ البدء" type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} />
             <Input label="تاريخ الانتهاء" type="date" value={form.end_date} onChange={(e) => setForm({...form, end_date: e.target.value})} />
             <Input label="الميزانية" type="number" value={form.budget} onChange={(e) => setForm({...form, budget: parseFloat(e.target.value) || 0})} className="col-span-2" />
+            <Checkbox label="إنشاء فاتورة تلقائية" checked={form.auto_invoice} onChange={(checked: boolean) => setForm({...form, auto_invoice: checked})} className="col-span-2" />
+            <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} className="col-span-2" />
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

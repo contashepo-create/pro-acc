@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
 import { Badge } from '@/components/ui/Badge';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
@@ -43,6 +44,8 @@ export default function ProjectExpensesPage() {
     date: new Date().toISOString().split('T')[0],
     contact_id: '',
     notes: '',
+    tax_enabled: false,
+    tax_rate: 0.15,
   });
 
   const fetchData = async () => {
@@ -89,7 +92,7 @@ export default function ProjectExpensesPage() {
         setForm({
           project_id: '', expense_type: 'materials', description: '',
           amount: 0, date: new Date().toISOString().split('T')[0],
-          contact_id: '', notes: '',
+          contact_id: '', notes: '', tax_enabled: false, tax_rate: 0.15,
         });
         fetchData();
         toast.success(editingItem ? 'تم تحديث المصروف' : 'تم تسجيل المصروف');
@@ -241,6 +244,11 @@ export default function ProjectExpensesPage() {
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
             placeholder="ملاحظات إضافية"
+          />
+          <Checkbox
+            label="تطبيق ضريبة مدخلات (15%)"
+            checked={form.tax_enabled}
+            onChange={(checked: boolean) => setForm({ ...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0 })}
           />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

@@ -27,7 +27,7 @@ export default function ProgressBillingPage() {
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
     project_id: '', date: new Date().toISOString().split('T')[0],
-    gross_amount: 0, retention_percentage: 10, notes: '', is_final: false,
+    gross_amount: 0, retention_percentage: 10, notes: '', is_final: false, tax_enabled: false, tax_rate: 0.15,
   });
 
   const fetchData = async () => {
@@ -68,7 +68,7 @@ export default function ProgressBillingPage() {
         setEditingClaim(null);
         setForm({
           project_id: '', date: new Date().toISOString().split('T')[0],
-          gross_amount: 0, retention_percentage: 10, notes: '', is_final: false,
+          gross_amount: 0, retention_percentage: 10, notes: '', is_final: false, tax_enabled: false, tax_rate: 0.15,
         });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -164,6 +164,7 @@ export default function ProgressBillingPage() {
             <Input label="نسبة الاحتجاز (%)" type="number" value={form.retention_percentage} onChange={(e) => setForm({...form, retention_percentage: parseFloat(e.target.value) || 10})} />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات الفاتورة المرحلية" />
+          <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
           <Checkbox label="دفعة نهائية" checked={form.is_final} onChange={(checked: boolean) => setForm({...form, is_final: checked})} />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

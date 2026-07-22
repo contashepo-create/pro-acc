@@ -112,6 +112,11 @@ export const invoiceItemSchema = z.object({
   quantity: z.number().positive('الكمية يجب أن تكون أكبر من صفر'),
   unitPrice: z.number().min(0, 'السعر لا يمكن أن يكون سالباً'),
   total: z.number().optional(),
+  item_type: z.enum(['service', 'product', 'inventory']).optional().default('service'),
+  inventory_item_id: z.string().uuid().optional().nullable(),
+  unit: z.string().optional().default('وحدة'),
+  save_to_inventory: z.boolean().optional().default(false),
+  item_code: z.string().optional(),
 });
 
 export const invoiceSchema = z.object({
@@ -124,6 +129,7 @@ export const invoiceSchema = z.object({
   vatRate: z.number().min(0).max(1).default(0.15),
   vatAmount: z.number().min(0).optional(),
   total: z.number().min(0, 'المجموع الكلي غير صالح'),
+  vatEnabled: z.boolean().optional().default(true),
   notes: z.string().optional(),
 }).strict();
 

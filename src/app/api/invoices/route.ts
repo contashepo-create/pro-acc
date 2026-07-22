@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
     const parsed = invoiceSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes } = parsed.data;
+    const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes, vatEnabled } = parsed.data;
     const year = date.substring(0, 4);
 
     // Get next invoice number
@@ -121,7 +121,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const computedVat = vatAmount ?? subtotal * (vatRate || 0.15);
+    const effectiveVatRate = vatEnabled === false ? 0 : (vatRate ?? 0.15);
+    const computedVat = vatEnabled === false ? 0 : (vatAmount ?? subtotal * effectiveVatRate);
     const computedTotal = total ?? subtotal + computedVat;
 
     let invoiceId: string | null = null;
@@ -142,7 +143,7 @@ export async function POST(request: NextRequest) {
             date, 
             due_date: dueDate, 
             subtotal, 
-            vat_rate: vatRate || 0.15, 
+            vat_rate: effectiveVatRate,
             vat_amount: computedVat,
             total: computedTotal, 
             status: 'unpaid', 
@@ -166,7 +167,7 @@ export async function POST(request: NextRequest) {
             date, 
             due_date: dueDate, 
             subtotal, 
-            tax_rate: vatRate || 0.15, 
+            tax_rate: effectiveVatRate,
             tax_amount: computedVat,
             total: computedTotal, 
             status: 'unpaid', 
@@ -185,12 +186,65 @@ export async function POST(request: NextRequest) {
       // Insert invoice items
       for (const item of items) {
         const itemTotal = item.total ?? item.quantity * item.unitPrice;
+
+        let inventoryItemId: string | null = item.inventory_item_id || null;
+
+        // Create inventory item if requested
+        if (item.save_to_inventory && (item.item_type === 'product' || item.item_type === 'inventory')) {
+          // Get or create a default warehouse
+          let warehouseId: string | null = null;
+          const { data: warehouse } = await s.from('warehouses')
+            .select('id')
+            .eq('company_id', auth.companyId)
+            .order('created_at')
+            .limit(1)
+            .maybeSingle();
+
+          if (warehouse) {
+            warehouseId = (warehouse as any).id;
+          } else {
+            const whId = crypto.randomUUID();
+            await s.from('warehouses').insert({
+              id: whId,
+              company_id: auth.companyId,
+              name: 'المستودع الرئيسي',
+              is_active: true,
+            });
+            warehouseId = whId;
+          }
+
+          if (warehouseId) {
+            const itemCode = item.item_code || `PRD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+            const { data: newInvItem, error: invErr } = await s.from('inventory_items')
+              .insert({
+                company_id: auth.companyId,
+                code: itemCode,
+                name: item.description,
+                unit: item.unit || 'وحدة',
+                quantity: 0,
+                unit_price: item.unitPrice,
+                warehouse_id: warehouseId,
+                category: 'product',
+                is_active: true,
+              })
+              .select('id')
+              .single();
+
+            if (!invErr && newInvItem) {
+              inventoryItemId = (newInvItem as any).id;
+            }
+          }
+        }
+
         const { error: itemErr } = await s.from('invoice_items').insert({
-          invoice_id: invoiceId, 
-          description: item.description, 
+          invoice_id: invoiceId,
+          description: item.description,
           quantity: item.quantity,
-          unit_price: item.unitPrice, 
+          unit_price: item.unitPrice,
           total: itemTotal,
+          item_type: item.item_type || 'service',
+          inventory_item_id: inventoryItemId,
+          unit: item.unit || 'وحدة',
         });
         if (itemErr) throw itemErr;
       }

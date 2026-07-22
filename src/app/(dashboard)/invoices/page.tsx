@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
 import { Badge } from '@/components/ui/Badge';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
@@ -22,6 +23,10 @@ interface InvoiceItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  item_type?: 'service' | 'product' | 'inventory';
+  unit?: string;
+  save_to_inventory?: boolean;
+  item_code?: string;
 }
 
 export default function InvoicesPage() {
@@ -40,7 +45,8 @@ export default function InvoicesPage() {
     date: new Date().toISOString().split('T')[0],
     due_date: '',
     notes: '',
-    items: [{ description: '', quantity: 1, unitPrice: 0, total: 0 }] as InvoiceItem[],
+    vat_enabled: true,
+    items: [{ description: '', quantity: 1, unitPrice: 0, total: 0, item_type: 'service', unit: 'وحدة', save_to_inventory: false }] as InvoiceItem[],
   });
 
   const fetchData = async () => {
@@ -87,7 +93,7 @@ export default function InvoicesPage() {
     setSaveError('');
     try {
       const subtotal = form.items.reduce((sum: number, item: InvoiceItem) => sum + item.total, 0);
-      const vatRate = 0.15;
+      const vatRate = form.vat_enabled ? 0.15 : 0;
       const vatAmount = subtotal * vatRate;
       const total = subtotal + vatAmount;
 
@@ -107,10 +113,15 @@ export default function InvoicesPage() {
             quantity: i.quantity,
             unitPrice: i.unitPrice,
             total: i.total,
+            item_type: i.item_type || 'service',
+            unit: i.unit || 'وحدة',
+            save_to_inventory: i.save_to_inventory || false,
+            item_code: i.item_code || undefined,
           })),
           subtotal,
           vatRate,
           vatAmount,
+          vatEnabled: form.vat_enabled,
           total,
           notes: form.notes,
         }),
@@ -125,7 +136,8 @@ export default function InvoicesPage() {
           date: new Date().toISOString().split('T')[0],
           due_date: '',
           notes: '',
-          items: [{ description: '', quantity: 1, unitPrice: 0, total: 0 }],
+          vat_enabled: true,
+          items: [{ description: '', quantity: 1, unitPrice: 0, total: 0, item_type: 'service', unit: 'وحدة', save_to_inventory: false }],
         });
         toast.success(editingInvoice ? 'تم تحديث الفاتورة بنجاح' : 'تم إضافة الفاتورة بنجاح');
         fetchData();
@@ -186,7 +198,7 @@ export default function InvoicesPage() {
   const addItem = () => {
     setForm({
       ...form,
-      items: [...form.items, { description: '', quantity: 1, unitPrice: 0, total: 0 }],
+      items: [...form.items, { description: '', quantity: 1, unitPrice: 0, total: 0, item_type: 'service', unit: 'وحدة', save_to_inventory: false }],
     });
   };
 
@@ -207,8 +219,8 @@ export default function InvoicesPage() {
     setForm({ ...form, items: newItems });
   };
 
-  const subtotal = form.items.reduce((sum, item) => sum + item.total, 0);
-  const vatAmount = subtotal * 0.15;
+  const subtotal = form.items.reduce((sum: number, item: InvoiceItem) => sum + item.total, 0);
+  const vatAmount = form.vat_enabled ? subtotal * 0.15 : 0;
   const total = subtotal + vatAmount;
 
   const [statusTab, setStatusTab] = useState('all');
@@ -336,34 +348,65 @@ export default function InvoicesPage() {
           </div>
           
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات الفاتورة" />
-          
+
+          <div className="flex items-center gap-3 bg-bg-secondary rounded-lg p-3">
+            <Checkbox
+              label="تطبيق ضريبة القيمة المضافة (15%)"
+              checked={form.vat_enabled}
+              onChange={(checked: boolean) => setForm({...form, vat_enabled: checked})}
+            />
+          </div>
+
           <div className="border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-bg-secondary">
                 <tr>
+                  <th className="p-2 text-right">النوع</th>
                   <th className="p-2 text-right">البيان</th>
-                  <th className="p-2 text-right w-24">الكمية</th>
-                  <th className="p-2 text-right w-28">سعر الوحدة</th>
-                  <th className="p-2 text-right w-28">الإجمالي</th>
+                  <th className="p-2 text-right w-20">الكمية</th>
+                  <th className="p-2 text-right w-20">الوحدة</th>
+                  <th className="p-2 text-right w-24">سعر الوحدة</th>
+                  <th className="p-2 text-right w-24">الإجمالي</th>
+                  <th className="p-2 text-center w-20">للمستودع</th>
                   <th className="p-2 w-10"></th>
                 </tr>
               </thead>
               <tbody>
                 {form.items.map((item: InvoiceItem, i: number) => (
                   <tr key={i} className="border-t border-border">
-                    <td className="p-2">
+                    <td className="p-1">
+                      <Select
+                        value={item.item_type || 'service'}
+                        onChange={(v) => updateItem(i, 'item_type', v)}
+                        options={[
+                          { value: 'service', label: 'خدمة' },
+                          { value: 'product', label: 'منتج' },
+                          { value: 'inventory', label: 'مخزون' },
+                        ]}
+                      />
+                    </td>
+                    <td className="p-1">
                       <Input placeholder="وصف الصنف" value={item.description} onChange={(e) => updateItem(i, 'description', e.target.value)} />
                     </td>
-                    <td className="p-2">
+                    <td className="p-1">
                       <Input type="number" value={item.quantity} onChange={(e) => updateItem(i, 'quantity', parseFloat(e.target.value) || 0)} />
                     </td>
-                    <td className="p-2">
+                    <td className="p-1">
+                      <Input value={item.unit || 'وحدة'} onChange={(e) => updateItem(i, 'unit', e.target.value)} />
+                    </td>
+                    <td className="p-1">
                       <Input type="number" value={item.unitPrice} onChange={(e) => updateItem(i, 'unitPrice', parseFloat(e.target.value) || 0)} />
                     </td>
-                    <td className="p-2">
+                    <td className="p-1">
                       <Input type="number" value={item.total} disabled />
                     </td>
-                    <td className="p-2">
+                    <td className="p-1 text-center">
+                      <Checkbox
+                        checked={item.save_to_inventory || false}
+                        onChange={(checked: boolean) => updateItem(i, 'save_to_inventory', checked)}
+                      />
+                    </td>
+                    <td className="p-1">
                       {form.items.length > 1 && (
                         <Button variant="ghost" size="sm" onClick={() => removeItem(i)}>
                           <Trash2 size={14} className="text-danger" />
@@ -380,7 +423,7 @@ export default function InvoicesPage() {
             <Button variant="ghost" onClick={addItem} leftIcon={<Plus size={16} />}>إضافة صنف</Button>
             <div className="text-left space-y-1 text-sm">
               <div>المجموع الفرعي: <strong>{formatCurrency(subtotal)}</strong></div>
-              <div>ضريبة القيمة المضافة (15%): <strong>{formatCurrency(vatAmount)}</strong></div>
+              {form.vat_enabled && <div>ضريبة القيمة المضافة (15%): <strong>{formatCurrency(vatAmount)}</strong></div>}
               <div className="text-lg">الإجمالي: <strong className="text-accent">{formatCurrency(total)}</strong></div>
             </div>
           </div>

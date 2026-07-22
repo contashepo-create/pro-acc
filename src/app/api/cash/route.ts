@@ -81,6 +81,8 @@ export async function POST(request: NextRequest) {
       projectId,
       reason,
       description,
+      tax_rate,
+      tax_enabled,
     } = body;
 
     if (!date || !type || !amount || !reason) {
@@ -141,13 +143,22 @@ export async function POST(request: NextRequest) {
     const debitAccountId = bankSafeInfo?.account_id || accountId || null;
     const creditAccountId = (creditAcc as any)?.id || bankSafeInfo?.account_id || null;
 
+    // VAT calculation
+    const vRate = (tax_enabled && tax_rate) ? tax_rate : 0;
+    const baseAmount = parseFloat(amount);
+    const taxAmount = type === 'revenue' ? baseAmount * vRate / (1 + vRate) : 0;
+    // For revenue: amount includes VAT, so net = amount / (1+rate), VAT = amount - net
+    // For expense: amount is the expense, VAT is extra
+    const expenseTaxAmount = type === 'expense' ? baseAmount * vRate : 0;
+    const totalPayment = type === 'expense' ? baseAmount + expenseTaxAmount : baseAmount;
+
     // Insert cash transaction record
     const { data: transaction, error: insertErr } = await s.from('cash_transactions')
       .insert({
         company_id: auth.companyId,
         date,
         type,
-        amount: parseFloat(amount),
+        amount: baseAmount,
         account_id: debitAccountId || null,
         bank_safe_id: bankSafeId || null,
         contact_id: contactId || null,
@@ -155,36 +166,88 @@ export async function POST(request: NextRequest) {
         category_id: categoryId || null,
         reason,
         created_by: auth.userId,
+        tax_rate: vRate,
+        tax_amount: taxAmount || expenseTaxAmount,
       })
       .select()
       .single();
 
     if (insertErr) throw insertErr;
 
-    // Create journal entry via helper
+    // Create journal entry via helper with VAT support
     if (debitAccountId && creditAccountId) {
+      const journalLines: any[] = [];
+
+      if (type === 'revenue') {
+        // Revenue: debit cash (full), credit revenue (net), credit VAT_SALES (vat)
+        const netRevenue = baseAmount - taxAmount;
+        journalLines.push({
+          account_id: debitAccountId,
+          debit: baseAmount,
+          credit: 0,
+          description: description || reason,
+          project_id: projectId || null,
+          contact_id: contactId || null,
+        });
+        journalLines.push({
+          account_id: creditAccountId,
+          debit: 0,
+          credit: netRevenue,
+          description: description || reason,
+          project_id: projectId || null,
+          contact_id: contactId || null,
+        });
+        if (taxAmount > 0) {
+          const { data: vatSalesAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.VAT_SALES).eq('company_id', auth.companyId).maybeSingle();
+          if (vatSalesAcc) {
+            journalLines.push({
+              account_id: (vatSalesAcc as any).id,
+              debit: 0,
+              credit: taxAmount,
+              description: `ضريبة مخرجات: ${description || reason}`,
+              project_id: projectId || null,
+              contact_id: contactId || null,
+            });
+          }
+        }
+      } else {
+        // Expense: debit expense (net), debit VAT_PURCHASES (vat), credit cash (total)
+        journalLines.push({
+          account_id: creditAccountId,
+          debit: baseAmount,
+          credit: 0,
+          description: description || reason,
+          project_id: projectId || null,
+          contact_id: contactId || null,
+        });
+        journalLines.push({
+          account_id: debitAccountId,
+          debit: 0,
+          credit: totalPayment,
+          description: description || reason,
+          project_id: projectId || null,
+          contact_id: contactId || null,
+        });
+        if (expenseTaxAmount > 0) {
+          const { data: vatPurchAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.VAT_PURCHASES).eq('company_id', auth.companyId).maybeSingle();
+          if (vatPurchAcc) {
+            journalLines.push({
+              account_id: (vatPurchAcc as any).id,
+              debit: expenseTaxAmount,
+              credit: 0,
+              description: `ضريبة مدخلات: ${description || reason}`,
+              project_id: projectId || null,
+              contact_id: contactId || null,
+            });
+          }
+        }
+      }
+
       const je = await createJournalEntry(auth.companyId, {
         date,
         type: 'general',
         description: description || reason,
-        lines: [
-          {
-            account_id: debitAccountId,
-            debit: parseFloat(amount),
-            credit: 0,
-            description: description || reason,
-            project_id: projectId || null,
-            contact_id: contactId || null,
-          },
-          {
-            account_id: creditAccountId,
-            debit: 0,
-            credit: parseFloat(amount),
-            description: description || reason,
-            project_id: projectId || null,
-            contact_id: contactId || null,
-          },
-        ],
+        lines: journalLines,
         reference_type: 'cash_transaction',
         reference_id: (transaction as any).id,
         created_by: auth.userId,

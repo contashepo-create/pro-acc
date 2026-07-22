@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const s = sb();
     const body = await parseBody(req);
 
-    const { project_id, expense_type, description, amount, date, contact_id, bank_safe_id, notes } = body;
+    const { project_id, expense_type, description, amount, date, contact_id, bank_safe_id, notes, tax_rate, tax_enabled } = body;
 
     if (!project_id || !expense_type || !description || !amount || !date) {
       return error('project_id, expense_type, description, amount, date are required');
@@ -103,28 +103,55 @@ export async function POST(req: NextRequest) {
 
     if (!paymentAccountId) return error('لم يتم العثور على حساب النقدية أو البنك');
 
+    // VAT calculation (input VAT)
+    const vRate = (tax_enabled && tax_rate) ? tax_rate : 0;
+    const taxAmount = amount * vRate;
+    const totalPayment = amount + taxAmount;
+
+    // Build journal lines: debit expense (net) + debit VAT_PURCHASES + credit cash (total)
+    const journalLines: any[] = [
+      {
+        account_id: expenseAcc.id,
+        debit: amount,
+        credit: 0,
+        description: `${description} (${expense_type})`,
+        project_id: project_id,
+        contact_id: contact_id || null,
+      },
+      {
+        account_id: paymentAccountId,
+        debit: 0,
+        credit: totalPayment,
+        description: `دفع مصروف مشروع: ${description}`,
+        project_id: project_id,
+        contact_id: contact_id || null,
+      },
+    ];
+
+    // Add input VAT line if applicable
+    if (taxAmount > 0) {
+      const { data: vatPurchAcc } = await s.from('accounts')
+        .select('id')
+        .eq('code', ACCOUNT_CODES.VAT_PURCHASES)
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
+      if (vatPurchAcc) {
+        journalLines.push({
+          account_id: (vatPurchAcc as any).id,
+          debit: taxAmount,
+          credit: 0,
+          description: `ضريبة مدخلات: ${description}`,
+          project_id: project_id,
+          contact_id: contact_id || null,
+        });
+      }
+    }
+
     const je = await createJournalEntry(auth.companyId, {
       date,
       type: 'general',
       description: `مصروف مشروع: ${description} - ${(project as any).name}`,
-      lines: [
-        {
-          account_id: expenseAcc.id,
-          debit: amount,
-          credit: 0,
-          description: `${description} (${expense_type})`,
-          project_id: project_id,
-          contact_id: contact_id || null,
-        },
-        {
-          account_id: paymentAccountId,
-          debit: 0,
-          credit: amount,
-          description: `دفع مصروف مشروع: ${description}`,
-          project_id: project_id,
-          contact_id: contact_id || null,
-        },
-      ],
+      lines: journalLines,
       reference_type: 'project_expense',
       created_by: auth.userId,
     });
@@ -145,6 +172,8 @@ export async function POST(req: NextRequest) {
         account_code: accountCode,
         journal_entry_id: je.error ? null : je.journalId,
         notes: notes || null,
+        tax_rate: vRate,
+        tax_amount: taxAmount,
         created_by: auth.userId,
       })
       .select('*')

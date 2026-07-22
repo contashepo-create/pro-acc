@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
       name: string; client_id?: string | null; contract_value: number;
       start_date: string; end_date?: string | null; status?: string;
       description?: string; location?: string; auto_invoice?: boolean;
+      tax_enabled?: boolean; tax_rate?: number;
     }>(request);
 
     const parsed = projectSchema.safeParse(body);
@@ -80,6 +81,7 @@ export async function POST(request: NextRequest) {
       contract_value: body.contract_value, start_date: body.start_date, end_date: body.end_date || null,
       status: body.status || 'active', description: body.description || null,
       location: body.location || null, created_by: auth.userId,
+      tax_enabled: body.tax_enabled || false, tax_rate: body.tax_rate || 0,
     });
 
     let invoice = null;
@@ -87,9 +89,15 @@ export async function POST(request: NextRequest) {
     if (body.auto_invoice && effectiveClientId) {
       const invoiceId = generateId();
       const jeId = generateId();
-      // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
       const invSeq = await getNextJournalNumber(auth.companyId, body.start_date);
       const invoiceNumber = `INV-${projectId.substring(0, 8).toUpperCase()}`;
+
+      // VAT calculation
+      const taxEnabled = body.tax_enabled || false;
+      const taxRate = body.tax_rate || 0;
+      const subtotal = body.contract_value;
+      const vatAmount = taxEnabled ? subtotal * taxRate : 0;
+      const totalAmount = subtotal + vatAmount;
 
       await s.from('journal_entries').insert({
         id: jeId, company_id: auth.companyId, number: invSeq, date: body.start_date,
@@ -100,16 +108,23 @@ export async function POST(request: NextRequest) {
       if (!arContact?.account_id) throw new Error('العميل ليس لديه حساب ذمم مدينة');
 
       const { data: revAcc } = await s.from('accounts').select('id').eq('code', '4100').eq('company_id', auth.companyId).maybeSingle();
+      const { data: vatAcc } = await s.from('accounts').select('id').eq('code', '2120').eq('company_id', auth.companyId).maybeSingle();
 
-      await s.from('journal_lines').insert([
-        { id: generateId(), journal_entry_id: jeId, account_id: arContact.account_id, debit: body.contract_value, credit: 0, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
-        { id: generateId(), journal_entry_id: jeId, account_id: revAcc?.id, debit: 0, credit: body.contract_value, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
-      ]);
+      const journalLines: any[] = [
+        { id: generateId(), journal_entry_id: jeId, account_id: arContact.account_id, debit: totalAmount, credit: 0, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
+        { id: generateId(), journal_entry_id: jeId, account_id: revAcc?.id, debit: 0, credit: subtotal, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
+      ];
+
+      if (vatAmount > 0 && vatAcc) {
+        journalLines.push({ id: generateId(), journal_entry_id: jeId, account_id: vatAcc.id, debit: 0, credit: vatAmount, description: `ضريبة فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId });
+      }
+
+      await s.from('journal_lines').insert(journalLines);
 
       await s.from('invoices').insert({
         id: invoiceId, company_id: auth.companyId, number: invoiceNumber, contact_id: effectiveClientId,
-        project_id: projectId, date: body.start_date, due_date: body.start_date, subtotal: body.contract_value,
-        vat_rate: 0, vat_amount: 0, total: body.contract_value, paid_amount: 0, status: 'unpaid',
+        project_id: projectId, date: body.start_date, due_date: body.start_date, subtotal: subtotal,
+        vat_rate: taxRate, vat_amount: vatAmount, total: totalAmount, paid_amount: 0, status: 'unpaid',
         journal_entry_id: jeId, created_by: auth.userId,
       });
 
