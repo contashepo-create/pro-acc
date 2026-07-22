@@ -6,21 +6,27 @@ const sb = () => getSupabase();
 /**
  * POST /api/telegram/webhook
  * واجهة استقبال نداءات تليجرام التفاعلية الرسمية (Telegram Webhook API Receiver)
- * يدعم:
- * 1. الرسائل العادية (مثل /start) للترحيب بالمستخدم وإعطائه معرفه الرقمي (Chat ID)
- * 2. الاستدعاءات التفاعلية (Callback Query) المدمجة:
- *    أ. فحص الاتصال التفاعلي (Test Run) المفرز بنقطتين مثل "test:accept:UUID"
- *    ب. الاعتمادات والموافقات المالية الحقيقية المفرزة بشرطة سفلية مثل "approve_approve_TYPE_ID_USER"
+ * محمية تماماً بترميز التحقق السري (X-Telegram-Bot-Api-Secret-Token) لمنع الاختراق أو الحقن أو المحاكاة الخارجية
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    console.log('[Telegram Webhook Payload Received]:', JSON.stringify(body, null, 2));
-
     const s = sb();
     const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
       ? process.env.TELEGRAM_BOT_TOKEN 
       : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
+
+    // SECURITY CHECK: التحقق الصارم من أن الطلب مرسل فعلياً من خوادم تيليجرام الرسمية وليس من مخترق أو محاكي خارجي
+    const secretToken = request.headers.get('x-telegram-bot-api-secret-token');
+    const crypto = require('crypto');
+    const expectedSecretToken = crypto.createHash('sha256').update(botToken + 'pro-acc-secure-salt').digest('hex');
+
+    if (secretToken !== expectedSecretToken) {
+      console.warn('[Telegram Webhook Bypass Attack Blocked]: Missing or invalid secret token header.');
+      return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
+    }
+
+    const body = await request.json();
+    console.log('[Telegram Webhook Payload Received]:', JSON.stringify(body, null, 2));
 
     // 1. التعامل مع الرسائل العادية (مثل كتابة /start)
     if (body.message) {
@@ -28,11 +34,6 @@ export async function POST(request: NextRequest) {
       const text = (body.message.text || '').trim();
 
       if (chatId && (text.startsWith('/start') || text.toLowerCase() === 'start')) {
-        if (!botToken) {
-          console.warn('[Telegram Webhook] TELEGRAM_BOT_TOKEN is missing.');
-          return NextResponse.json({ success: false, message: 'Server missing bot token' }, { status: 200 });
-        }
-
         const welcomeMessage = `🤖 <b>مرحباً بك في بوت برو أكاونت الموحد للأنظمة المحاسبية!</b>
 
 🔐 معرّف الدردشة الرقمي الخاص بك (Chat ID) هو:
@@ -134,8 +135,8 @@ export async function POST(request: NextRequest) {
         // تحديث رسالة تليجرام لعرض الحالة النهائية المعتمدة
         if (botToken) {
           const finalStatusText = action === 'approve'
-            ? `🟢 <b>تم اعتماد المعاملة بنجاح!</b>\n\nالإجراء: <b>موافق ومعتمد ✅</b>\nبواسطة مشرف الدردشة رقم: <code>${chatId}</code>`
-            : `🔴 <b>تم رفض اعتماد المعاملة!</b>\n\nالإجراء: <b>مرفوض وملغى ❌</b>\nبواسطة مشرف الدردشة رقم: <code>${chatId}</code>`;
+            ? `🟢 <b>تم اعتماد المعاملة بنجاح!</b>\n\nالرد المالي: <b>موافق ومعتمد ✅</b>\nبواسطة مدير الشات رقم: <code>${chatId}</code>`
+            : `🔴 <b>تم رفض اعتماد المعاملة!</b>\n\nالرد المالي: <b>مرفوض وملغى ❌</b>\nبواسطة مدير الشات رقم: <code>${chatId}</code>`;
 
           await editTelegramMessage(botToken, chatId, messageId, finalStatusText);
         }

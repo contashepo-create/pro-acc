@@ -275,6 +275,17 @@ export async function handleApprovalResponse(
   const companyId = (approvalReq as any).company_id;
   const approvalId = (approvalReq as any).id;
   
+  // SECURITY FIX: التحقق الصارم من أن معرّف المحادثة للموافق يتطابق تماماً مع المعرّف المسجل والمعتمد للشركة!
+  // يمنع هذا أي مستخدم تيليجرام غريب يعرف البوت من محاولة تخمين أو النقر والموافقة على العمليات المالية للشركات
+  const { data: config } = await s.from('company_telegram_configs')
+    .select('chat_id, approvals_enabled')
+    .eq('company_id', companyId)
+    .maybeSingle();
+
+  if (!config || !config.approvals_enabled || config.chat_id !== String(approverChatId)) {
+    return { success: false, message: '❌ عذراً، هذا الحساب في تيليجرام غير مصرح له باعتماد هذه المعاملة مالياً' };
+  }
+  
   const newStatus = action === 'approve' ? 'approved' : 'rejected';
   const now = new Date().toISOString();
   
