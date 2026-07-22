@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Modal } from '@/components/ui/Modal';
+import { useRouter } from 'next/navigation'; // FIXED: Added missing import for page redirection
+import { useAuthStore } from '@/store/auth-store'; // FIXED: Added missing import for user role checks
 
 interface Plan {
   id: string; code: string; name: string; description: string; description_ar: string;
@@ -24,6 +26,16 @@ interface PaymentMethod {
 export default function SubscriptionPageEnhanced() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  
+  // FIXED: حماية الصفحة برمجياً على مستوى المكون لمنع أي مستخدم إضافي (غير المدير) من الدخول لصفحة الباقات أو طلبات الترقية المالية
+  const { user: loggedInUser, isLoading: authLoading } = useAuthStore();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!authLoading && loggedInUser && loggedInUser.role !== 'admin') {
+      router.push('/dashboard');
+    }
+  }, [loggedInUser, authLoading, router]);
   const [subscription, setSubscription] = useState<any>(null);
   const [upgradeRequests, setUpgradeRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

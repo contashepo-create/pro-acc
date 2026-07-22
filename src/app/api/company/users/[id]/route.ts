@@ -34,7 +34,7 @@ export async function GET(
 
 /**
  * PUT /api/company/users/[id] - Update user details
- * Admin only. Cannot demote yourself.
+ * STRICT SECURITY: Enforces single-admin constraint per company & self-change blocks
  */
 export async function PUT(
   request: NextRequest,
@@ -46,7 +46,6 @@ export async function PUT(
     const s = sb();
     const body = await request.json();
 
-    // Fetch target user
     const { data: targetUser } = await s
       .from('users')
       .select('id, role, email, name, is_active')
@@ -59,12 +58,10 @@ export async function PUT(
     const target = targetUser as { id: string; role: string; email: string; name: string; is_active: boolean };
     const updateData: Record<string, any> = {};
 
-    // Prevent admin from demoting themselves
     if (id === auth.userId && body.role && body.role !== 'admin') {
       return error('لا يمكنك تغيير دورك الخاص. يجب أن يبقى حساب واحد على الأقل بصلاحيات مدير');
     }
 
-    // Prevent admin from deactivating themselves
     if (id === auth.userId && body.is_active === false) {
       return error('لا يمكنك تعطيل حسابك الخاص');
     }
@@ -74,7 +71,6 @@ export async function PUT(
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
         return error('صيغة البريد الإلكتروني غير صحيحة');
       }
-      // SECURITY FIX: Check global email uniqueness (same rationale as POST)
       const newEmail = body.email.toLowerCase().trim();
       const { data: emailExists } = await s.from('users')
         .select('id')
@@ -88,13 +84,28 @@ export async function PUT(
       }
       updateData.email = newEmail;
     }
+    
     if (body.role !== undefined) {
       const validRoles = ['admin', 'accountant', 'manager', 'supervisor'];
       if (!validRoles.includes(body.role)) {
         return error('الدور غير صالح');
       }
+      
+      // STRICT SECURITY: منع ترقية أي مستخدم لدور مدير نظام (admin) إذا كان هناك مدير بالفعل
+      if (body.role === 'admin' && target.role !== 'admin') {
+        const { count: adminCount } = await s.from('users')
+          .select('*', { count: 'exact', head: true })
+          .eq('company_id', auth.companyId)
+          .eq('role', 'admin');
+
+        if (adminCount && adminCount > 0) {
+          return error('لا يمكن ترقية هذا الحساب لدور مدير نظام (admin). يُسمح بمدير نظام واحد فقط لكل شركة لمنع المستخدمين الإضافيين من تخطي الصلاحيات.', 403);
+        }
+      }
+
       updateData.role = body.role;
     }
+    
     if (body.is_active !== undefined) updateData.is_active = body.is_active;
     if (body.password) {
       if (body.password.length < 6) {
@@ -131,9 +142,7 @@ export async function PUT(
         old_values: { role: target.role, is_active: target.is_active },
         new_values: updateData,
       });
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     return success(updated);
   } catch (err) {
@@ -143,7 +152,6 @@ export async function PUT(
 
 /**
  * DELETE /api/company/users/[id] - Remove a user from the company
- * Admin only. Cannot delete yourself.
  */
 export async function DELETE(
   request: NextRequest,
@@ -167,7 +175,6 @@ export async function DELETE(
 
     if (!targetUser) return notFound();
 
-    // Check if this is the last admin
     const target = targetUser as { id: string; role: string };
     if (target.role === 'admin') {
       const { count: adminCount } = await s
@@ -200,9 +207,7 @@ export async function DELETE(
         entity_id: id,
         old_values: target,
       });
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     return success({ deleted: true });
   } catch (err) {

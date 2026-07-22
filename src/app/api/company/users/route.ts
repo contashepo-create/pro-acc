@@ -7,7 +7,6 @@ const sb = () => getSupabase();
 
 /**
  * GET /api/company/users - List all users in the current company
- * Shows user limit information based on subscription plan
  */
 export async function GET(request: NextRequest) {
   try {
@@ -22,13 +21,11 @@ export async function GET(request: NextRequest) {
 
     if (queryError) throw queryError;
 
-    // Get current user count
     const { count } = await s
       .from('users')
       .select('*', { count: 'exact', head: true })
       .eq('company_id', auth.companyId);
 
-    // Get max_users and subscription info
     let maxUsers: number | null = null;
     let planName: string | null = null;
     let planCode: string | null = null;
@@ -72,8 +69,8 @@ export async function GET(request: NextRequest) {
 }
 
 /**
- * POST /api/company/users - Add a new user to the company
- * Validates user limit, required fields, and uniqueness
+ * POST /api/company/users - Add a new user
+ * STRICT SECURITY: Enforces single-admin constraint per company & subscription limit
  */
 export async function POST(request: NextRequest) {
   try {
@@ -91,7 +88,6 @@ export async function POST(request: NextRequest) {
       city?: string;
     };
 
-    // ========== Validation ==========
     if (!email || !name || !password) {
       return error('البريد الإلكتروني والاسم وكلمة المرور مطلوبة');
     }
@@ -106,7 +102,18 @@ export async function POST(request: NextRequest) {
       return error(`الدور غير صالح. الأدوار المتاحة: ${validRoles.join('، ')}`);
     }
 
-    // ========== Check user limit based on subscription ==========
+    // STRICT SECURITY: فرض قيد وجود مدير نظام واحد فقط لكل شركة لمنع المستخدمين الإضافيين من تخطي الصلاحيات
+    if (role === 'admin') {
+      const { count: adminCount } = await s.from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', auth.companyId)
+        .eq('role', 'admin');
+
+      if (adminCount && adminCount > 0) {
+        return error('لا يمكن إنشاء أكثر من حساب مدير واحد للشركة. يرجى اختيار دور مدير (manager) أو محاسب للمستخدم الجديد لمنع تخطي الصلاحيات حماية للنظام ماليًا.', 403);
+      }
+    }
+
     const { count: currentCount } = await s
       .from('users')
       .select('*', { count: 'exact', head: true })
@@ -136,7 +143,7 @@ export async function POST(request: NextRequest) {
         }
       }
     } catch {
-      // ignore limit check failure
+      // ignore
     }
 
     if (maxUsers !== null && (currentCount || 0) >= maxUsers) {
@@ -146,7 +153,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ========== Check email uniqueness ==========
     const { data: existingGlobal } = await s.from('users')
       .select('id, company_id')
       .ilike('email', email.toLowerCase().trim())
@@ -161,16 +167,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ========== Validate phone if provided ==========
     if (phone && !/^[\d\s+\-()]{8,20}$/.test(phone)) {
       return error('رقم الجوال غير صحيح');
     }
 
-    // ========== Create user ==========
     const passwordHash = await hashPassword(password);
 
     const insertData: any = {
-      company_id: auth.companyId, // ✅ ربط المستخدم بشركته فقط
+      company_id: auth.companyId,
       email: email.toLowerCase().trim(),
       name: name.trim(),
       password_hash: passwordHash,
@@ -205,9 +209,7 @@ export async function POST(request: NextRequest) {
         entity_id: (newUser as { id: string }).id,
         new_values: { email, name, role, phone, city },
       });
-    } catch {
-      // ignore audit log failure
-    }
+    } catch {}
 
     return success(newUser, 201);
   } catch (err) {

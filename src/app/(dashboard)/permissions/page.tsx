@@ -143,6 +143,15 @@ export default function PermissionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
+  // FIXED: حماية الصفحة برمجياً على مستوى المكون لضمان ترحيل وإيقاف أي حساب إضافي يحاول فتح رابط الصلاحيات مباشرة من شريط العنوان بالمتصفح
+  const { user: loggedInUser, isLoading: authLoading } = useAuthStore();
+  
+  useEffect(() => {
+    if (!authLoading && loggedInUser && loggedInUser.role !== 'admin') {
+      router.push('/dashboard');
+    }
+  }, [loggedInUser, authLoading]);
+  
   // حالة النافذة المنبثقة للصلاحيات
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);

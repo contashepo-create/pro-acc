@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter, usePathname } from 'next/navigation'; // FIXED: Imported usePathname for perfect URL-based active state sync
+import { useRouter, usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
   Calculator,
@@ -15,6 +15,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useSidebarStore } from '@/store/sidebar-store';
+import { useAuthStore } from '@/store/auth-store'; // FIXED: Imported auth store to filter menu based on user role
 
 interface NavGroup {
   label: string;
@@ -116,10 +117,21 @@ const navGroups: NavGroup[] = [
 
 export function Sidebar() {
   const router = useRouter();
-  const pathname = usePathname(); // FIXED: Read current URL pathname to determine active states reactively
+  const pathname = usePathname();
   const { setActive } = useSidebarStore();
+  const { user } = useAuthStore(); // FIXED: Retrieve user role
   
-  // دالة ذكية للتحقق من نشاط المسار بناءً على الـ URL الحالي
+  const role = user?.role || 'supervisor';
+
+  // FIXED: تصفية وتجهيز القائمة الجانبية لإخفاء أقسام الإدارة الحساسة (الصلاحيات، الباقات، الإعدادات، السنوات المالية، المستخدمين) عن غير المدير
+  const filteredNavGroups = navGroups.map(group => {
+    let items = group.items;
+    if (role !== 'admin') {
+      items = items.filter(item => !['permissions', 'settings', 'subscription', 'fiscal', 'users'].includes(item.id));
+    }
+    return { ...group, items };
+  }).filter(group => group.items.length > 0);
+
   const isActive = (id: string) => {
     const cleanPath = pathname.startsWith('/') ? pathname.slice(1) : pathname;
     const cleanId = id.startsWith('/') ? id.slice(1) : id;
@@ -129,15 +141,14 @@ export function Sidebar() {
 
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
-    navGroups.forEach((g) => {
+    filteredNavGroups.forEach((g) => {
       initial[g.label] = g.items.some((i) => isActive(i.id));
     });
     return initial;
   });
 
-  // مزامنة حالة توسيع القوائم المنسدلة عند تغيير الرابط المباشر
   useEffect(() => {
-    navGroups.forEach((g) => {
+    filteredNavGroups.forEach((g) => {
       if (g.items.some((i) => isActive(i.id))) {
         setExpandedGroups((prev) => ({ ...prev, [g.label]: true }));
       }
@@ -168,7 +179,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
-        {navGroups.map((group) => {
+        {filteredNavGroups.map((group) => {
           const Icon = group.icon;
           const isExpanded = expandedGroups[group.label];
           const hasActiveChild = group.items.some((i) => isActive(i.id));
