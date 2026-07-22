@@ -4,7 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber } from '@/lib/numbering';
 import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
 import { ACCOUNT_CODES } from '@/lib/constants';
-import { canBypassTelegramConfirmation } from '@/lib/permissions'; // FIXED: Added missing import
+import { canBypassTelegramConfirmation } from '@/lib/permissions';
+import { checkTransactionBeforeSave } from '@/lib/approval-helpers'; // FIXED: Added missing import // FIXED: Added missing import
 
 const sb = () => getSupabase();
 
@@ -138,13 +139,42 @@ export async function POST(request: NextRequest) {
     // Check bypass permission
     const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
     if (!canBypass) {
-      const { data: config } = await s.from('company_telegram_configs')
-        .select('approvals_enabled, approval_threshold')
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
+      const tempTransactionId = crypto.randomUUID();
+      const approvalCheck = await checkTransactionBeforeSave(
+        auth.companyId,
+        auth.userId,
+        parseFloat(amount),
+        'voucher_receipt',
+        tempTransactionId,
+        reason
+      );
 
-      if (config && config.approvals_enabled && parseFloat(amount) > (config.approval_threshold || 0)) {
-        return error('هذه العملية تتطلب اعتماد تيليجرام تقديراً لإدارة النظام', 400);
+      if (approvalCheck.blocked) {
+        // FIXED: حفظ سند القبض مسبقاً في قاعدة البيانات بحالة 'pending' ودون ترحيل القيد ليكون متاحاً للاعتماد
+        const nextNumber = await getNextVoucherNumber('voucher_receipts', auth.companyId);
+        const receiptDate = new Date(date).toISOString().split('T')[0];
+        
+        await s.from('voucher_receipts').insert({
+          id: tempTransactionId,
+          company_id: auth.companyId,
+          number: nextNumber,
+          date: receiptDate,
+          receipt_type: receiptType,
+          contact_id: contactId || null,
+          amount: parseFloat(amount),
+          bank_safe_id: bankSafeId,
+          reason,
+          created_by: auth.userId,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+        });
+
+        return success({
+          requiresApproval: true,
+          blocked: true,
+          message: approvalCheck.message,
+          transactionId: tempTransactionId
+        });
       }
     }
 

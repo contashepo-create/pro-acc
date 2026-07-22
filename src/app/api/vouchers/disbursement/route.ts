@@ -109,7 +109,24 @@ export async function POST(request: NextRequest) {
       );
       
       if (approvalCheck.blocked) {
-        // المعاملة محظورة - نحفظها بحالة pending فقط ولا نكمل إنشاء القيد
+        // FIXED: حفظ السند مسبقاً في قاعدة البيانات بحالة 'pending' ودون ترحيل القيد ليكون متاحاً للاعتماد
+        const nextNumber = await getNextVoucherNumber('voucher_disbursement', auth.companyId);
+        await s.from('voucher_disbursements').insert({
+          id: tempTransactionId,
+          company_id: auth.companyId,
+          number: nextNumber,
+          date,
+          disbursement_type: disbursementType,
+          contact_id: contactId || null,
+          employee_id: employeeId || null,
+          amount: Number(amount),
+          bank_safe_id: bankSafeId,
+          reason,
+          created_by: auth.userId,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+        });
+
         return success({
           requiresApproval: true,
           blocked: true,

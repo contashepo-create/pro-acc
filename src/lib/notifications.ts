@@ -307,6 +307,16 @@ export async function handleApprovalResponse(
   const finalStatus = action === 'approve' ? 'approved' : 'rejected';
   await updateTransactionStatus(companyId, transactionType, transactionId, finalStatus, approvalId);
   
+  // FIXED: توليد الترحيل المالي والقيود تلقائياً فور اعتماد طلب تيليجرام
+  if (action === 'approve') {
+    try {
+      const { createJournalEntryForApprovedTransaction } = await import('@/lib/approval-helpers');
+      await createJournalEntryForApprovedTransaction(companyId, userId, transactionType, transactionId);
+    } catch (createErr) {
+      console.error('Failed to create journal entry on approval:', createErr);
+    }
+  }
+  
   // إرسال إشعار للمستخدم الطالب
   try {
     await s.from('notifications').insert({
