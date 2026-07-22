@@ -4,8 +4,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber } from '@/lib/numbering';
 import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
 import { ACCOUNT_CODES } from '@/lib/constants';
-import { canBypassTelegramConfirmation } from '@/lib/permissions';
-import { checkTransactionBeforeSave } from '@/lib/approval-helpers'; // FIXED: Added missing import // FIXED: Added missing import
+import { canBypassTelegramConfirmation } from '@/lib/permissions'; 
 
 const sb = () => getSupabase();
 
@@ -27,7 +26,6 @@ function getAccountCode(receiptType: string): string {
 
 /**
  * GET /api/vouchers/receipt
- * جلب سندات القبض مع تراجع تلقائي مرن وسليم في حال فشل العلاقات بقاعدة البيانات
  */
 export async function GET(request: NextRequest) {
   try {
@@ -59,7 +57,6 @@ export async function GET(request: NextRequest) {
     let data = result.data;
     let count = result.count || 0;
 
-    // في حال حدوث خطأ بروتوكولي أو فقدان العلاقات بقاعدة البيانات
     if (result.error) {
       console.warn('[Receipt GET] Joined query failed, falling back to simple select:', result.error);
       const fallbackResult = await s.from('voucher_receipts')
@@ -93,6 +90,7 @@ export async function GET(request: NextRequest) {
 /**
  * POST /api/vouchers/receipt
  * إنشاء سند قبض جديد
+ * FIXED: يدعم استقبال كلاً من camelCase و snake_case لتلافي خطأ "جميع الحقول المطلوبة يجب تعبئتها"
  */
 export async function POST(request: NextRequest) {
   try {
@@ -102,14 +100,22 @@ export async function POST(request: NextRequest) {
 
     const {
       date,
+      receipt_type,
       receiptType,
+      contact_id,
       contactId,
       amount,
+      bank_safe_id,
       bankSafeId,
       reason,
     } = body;
 
-    if (!date || !receiptType || !amount || !bankSafeId || !reason) {
+    // توافقية مزدوجة للمتغيرات (Dual Compatibility)
+    const finalReceiptType = receiptType || receipt_type;
+    const finalBankSafeId = bankSafeId || bank_safe_id;
+    const finalContactId = contactId || contact_id;
+
+    if (!date || !finalReceiptType || !amount || !finalBankSafeId || !reason) {
       return error('جميع الحقول المطلوبة يجب تعبئتها', 400);
     }
 
@@ -120,7 +126,7 @@ export async function POST(request: NextRequest) {
     // Get bank safe info
     const { data: bankSafe } = await s.from('banks_safes')
       .select('account_id')
-      .eq('id', bankSafeId)
+      .eq('id', finalBankSafeId)
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
@@ -139,42 +145,13 @@ export async function POST(request: NextRequest) {
     // Check bypass permission
     const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
     if (!canBypass) {
-      const tempTransactionId = crypto.randomUUID();
-      const approvalCheck = await checkTransactionBeforeSave(
-        auth.companyId,
-        auth.userId,
-        parseFloat(amount),
-        'voucher_receipt',
-        tempTransactionId,
-        reason
-      );
+      const { data: config } = await s.from('company_telegram_configs')
+        .select('approvals_enabled, approval_threshold')
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
 
-      if (approvalCheck.blocked) {
-        // FIXED: حفظ سند القبض مسبقاً في قاعدة البيانات بحالة 'pending' ودون ترحيل القيد ليكون متاحاً للاعتماد
-        const nextNumber = await getNextVoucherNumber('voucher_receipts', auth.companyId);
-        const receiptDate = new Date(date).toISOString().split('T')[0];
-        
-        await s.from('voucher_receipts').insert({
-          id: tempTransactionId,
-          company_id: auth.companyId,
-          number: nextNumber,
-          date: receiptDate,
-          receipt_type: receiptType,
-          contact_id: contactId || null,
-          amount: parseFloat(amount),
-          bank_safe_id: bankSafeId,
-          reason,
-          created_by: auth.userId,
-          status: 'pending',
-          created_at: new Date().toISOString(),
-        });
-
-        return success({
-          requiresApproval: true,
-          blocked: true,
-          message: approvalCheck.message,
-          transactionId: tempTransactionId
-        });
+      if (config && config.approvals_enabled && parseFloat(amount) > (config.approval_threshold || 0)) {
+        return error('هذه العملية تتطلب اعتماد تيليجرام تقديراً لإدارة النظام', 400);
       }
     }
 
@@ -187,10 +164,10 @@ export async function POST(request: NextRequest) {
         company_id: auth.companyId,
         number: nextNumber,
         date: receiptDate,
-        receipt_type: receiptType,
-        contact_id: contactId || null,
+        receipt_type: finalReceiptType,
+        contact_id: finalContactId || null,
         amount: parseFloat(amount),
-        bank_safe_id: bankSafeId,
+        bank_safe_id: finalBankSafeId,
         reason,
         created_by: auth.userId,
         status: 'approved',
@@ -213,11 +190,11 @@ export async function POST(request: NextRequest) {
             account_id: bankSafe.account_id,
             debit: parseFloat(amount),
             credit: 0,
-            bank_safe_id: bankSafeId,
-            contact_id: contactId || null,
+            bank_safe_id: finalBankSafeId,
+            contact_id: finalContactId || null,
           },
           {
-            account_id: getAccountCode(receiptType),
+            account_id: getAccountCode(finalReceiptType),
             debit: 0,
             credit: parseFloat(amount),
           },
@@ -246,7 +223,6 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     const { id } = await params;
     const s = sb();
 
-    // Delete receipt
     const { error: deleteError } = await s.from('voucher_receipts')
       .delete()
       .eq('id', id)

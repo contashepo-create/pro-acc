@@ -12,7 +12,6 @@ const sb = () => getSupabase();
 
 /**
  * GET /api/vouchers/disbursement
- * جلب سندات الصرف مع تراجع تلقائي مرن وسليم في حال فشل العلاقات بقاعدة البيانات
  */
 export async function GET(request: NextRequest) {
   try {
@@ -25,7 +24,6 @@ export async function GET(request: NextRequest) {
 
     const offset = (page - 1) * pageSize;
 
-    // محاولة جلب العلاقات أولاً
     const result = await s.from('voucher_disbursements')
       .select('*, contacts(name), employees(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
       .eq('company_id', auth.companyId)
@@ -39,7 +37,6 @@ export async function GET(request: NextRequest) {
     let data = result.data;
     let count = result.count || 0;
 
-    // في حال حدوث خطأ بروتوكولي أو فقدان العلاقات بقاعدة البيانات
     if (result.error) {
       console.warn('[Disbursement GET] Joined query failed, falling back to simple select:', result.error);
       const fallbackResult = await s.from('voucher_disbursements')
@@ -53,8 +50,12 @@ export async function GET(request: NextRequest) {
         .range(offset, offset + pageSize - 1);
 
       if (fallbackResult.error) throw fallbackResult.error;
+      
       data = fallbackResult.data;
       count = fallbackResult.count || 0;
+    } else {
+      data = joinedData || [];
+      count = joinedCount || 0;
     }
 
     return success({
@@ -72,6 +73,7 @@ export async function GET(request: NextRequest) {
 /**
  * POST /api/vouchers/disbursement
  * إنشاء سند صرف جديد
+ * FIXED: يدعم استقبال كلاً من camelCase و snake_case لتلافي خطأ "جميع الحقول المطلوبة يجب تعبئتها"
  */
 export async function POST(request: NextRequest) {
   try {
@@ -81,22 +83,31 @@ export async function POST(request: NextRequest) {
 
     const {
       date,
+      disbursement_type,
       disbursementType,
+      contact_id,
       contactId,
+      employee_id,
       employeeId,
       amount,
+      bank_safe_id,
       bankSafeId,
       reason,
     } = body;
 
-    if (!date || !disbursementType || !amount || !bankSafeId || !reason) {
+    // توافقية مزدوجة للمتغيرات (Dual Compatibility)
+    const finalDisbType = disbursementType || disbursement_type;
+    const finalBankSafeId = bankSafeId || bank_safe_id;
+    const finalContactId = contactId || contact_id;
+    const finalEmployeeId = employeeId || employee_id;
+
+    if (!date || !finalDisbType || !amount || !finalBankSafeId || !reason) {
       return error('جميع الحقول المطلوبة يجب تعبئتها');
     }
 
     // 1. التحقق من الموافقة المسبقة من التيليغرام
     const bypassApproval = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
     if (!bypassApproval) {
-      // إنشاء معرّف مؤقت للمعاملة للتحقق من الاعتماد
       const tempTransactionId = crypto.randomUUID();
       
       const approvalCheck = await checkTransactionBeforeSave(
@@ -109,18 +120,18 @@ export async function POST(request: NextRequest) {
       );
       
       if (approvalCheck.blocked) {
-        // FIXED: حفظ السند مسبقاً في قاعدة البيانات بحالة 'pending' ودون ترحيل القيد ليكون متاحاً للاعتماد
+        // حفظ السند مسبقاً في قاعدة البيانات بحالة 'pending' ودون ترحيل القيد ليكون متاحاً للاعتماد
         const nextNumber = await getNextVoucherNumber('voucher_disbursement', auth.companyId);
         await s.from('voucher_disbursements').insert({
           id: tempTransactionId,
           company_id: auth.companyId,
           number: nextNumber,
           date,
-          disbursement_type: disbursementType,
-          contact_id: contactId || null,
-          employee_id: employeeId || null,
+          disbursement_type: finalDisbType,
+          contact_id: finalContactId || null,
+          employee_id: finalEmployeeId || null,
           amount: Number(amount),
-          bank_safe_id: bankSafeId,
+          bank_safe_id: finalBankSafeId,
           reason,
           created_by: auth.userId,
           status: 'pending',
@@ -139,7 +150,7 @@ export async function POST(request: NextRequest) {
     // 2. التحقق من الرصيد
     const { data: bankSafe } = await s.from('banks_safes')
       .select('account_id')
-      .eq('id', bankSafeId)
+      .eq('id', finalBankSafeId)
       .eq('company_id', auth.companyId)
       .single();
 
@@ -163,14 +174,14 @@ export async function POST(request: NextRequest) {
         company_id: auth.companyId,
         number: nextNumber,
         date,
-        disbursement_type: disbursementType,
-        contact_id: contactId || null,
-        employee_id: employeeId || null,
+        disbursement_type: finalDisbType,
+        contact_id: finalContactId || null,
+        employee_id: finalEmployeeId || null,
         amount: Number(amount),
-        bank_safe_id: bankSafeId,
+        bank_safe_id: finalBankSafeId,
         reason,
         created_by: auth.userId,
-        status: 'approved', // الوضع الافتراضي إذا لم يكن محتاجاً لاعتماد
+        status: 'approved',
         created_at: new Date().toISOString(),
       })
       .select()
@@ -182,11 +193,11 @@ export async function POST(request: NextRequest) {
     const debitAccountId = bankSafe.account_id;
     let creditAccountId = ACCOUNT_CODES.CASH_ON_HAND;
 
-    if (disbursementType === 'supplier') {
+    if (finalDisbType === 'supplier') {
       creditAccountId = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
-    } else if (disbursementType === 'employee_advance') {
+    } else if (finalDisbType === 'employee_advance') {
       creditAccountId = ACCOUNT_CODES.EMPLOYEE_ADVANCES;
-    } else if (disbursementType === 'subcontractor') {
+    } else if (finalDisbType === 'subcontractor') {
       creditAccountId = ACCOUNT_CODES.SUBCONTRACTORS_PAYABLE;
     }
 
@@ -201,7 +212,7 @@ export async function POST(request: NextRequest) {
             account_id: debitAccountId,
             debit: Number(amount),
             credit: 0,
-            bank_safe_id: bankSafeId,
+            bank_safe_id: finalBankSafeId,
           },
           {
             account_id: creditAccountId,
