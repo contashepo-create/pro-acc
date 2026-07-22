@@ -49,8 +49,8 @@ export default function DisbursementPage() {
       const [disJson, bankJson, supJson, empJson] = await Promise.all([
         disRes.json(),
         bankRes.json(),
-        supJson.json(),
-        empJson.json(),
+        supRes.json(),
+        empRes.json(),
       ]);
       if (disJson.success) setDisbursements(disJson.data?.disbursements || []);
       else setError(disJson.message || 'فشل تحميل البيانات');
