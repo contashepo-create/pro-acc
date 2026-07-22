@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Lock } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { Textarea } from '@/components/ui/Textarea';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
@@ -31,6 +32,14 @@ export default function ProjectsPage() {
     end_date: '',
     budget: 0,
   });
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const [closingProject, setClosingProject] = useState<any>(null);
+  const [closeForm, setCloseForm] = useState<any>({
+    close_date: new Date().toISOString().split('T')[0],
+    notes: '',
+  });
+  const [closing, setClosing] = useState(false);
+  const [closeError, setCloseError] = useState('');
 
   const handleSave = async () => {
     if (!form.name) {
@@ -105,6 +114,32 @@ export default function ProjectsPage() {
     }
   };
 
+  const openCloseModal = (project: any) => {
+    setClosingProject(project);
+    setCloseForm({ close_date: new Date().toISOString().split('T')[0], notes: '' });
+    setCloseError('');
+    setShowCloseModal(true);
+  };
+
+  const handleClose = async () => {
+    if (!closingProject) return;
+    setClosing(true); setCloseError('');
+    try {
+      const res = await fetch(`/api/projects/${closingProject.id}/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(closeForm),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setShowCloseModal(false);
+        setClosingProject(null);
+        toast.success('تم إقفال المشروع بنجاح');
+        window.location.reload();
+      } else setCloseError(json.message || 'فشل الإقفال');
+    } catch (e: any) { setCloseError('خطأ في الاتصال'); } finally { setClosing(false); }
+  };
+
   const [statusTab, setStatusTab] = useState('all');
 
   useEffect(() => {
@@ -160,11 +195,14 @@ export default function ProjectsPage() {
       key: 'actions',
       label: 'إجراءات',
       render: (row: any) => (
-        <ActionButtons
-          item={row}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-        />
+        <div className="flex items-center gap-2">
+          {row.status === 'active' && (
+            <Button variant="ghost" size="sm" onClick={() => openCloseModal(row)} title="إقفال المشروع">
+              <Lock size={16} className="text-orange-600" />
+            </Button>
+          )}
+          <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} />
+        </div>
       ),
     },
   ];
@@ -224,6 +262,28 @@ export default function ProjectsPage() {
             <Input label="الميزانية" type="number" value={form.budget} onChange={(e) => setForm({...form, budget: parseFloat(e.target.value) || 0})} className="col-span-2" />
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showCloseModal}
+        onClose={() => { setShowCloseModal(false); setClosingProject(null); }}
+        title={`إقفال مشروع: ${closingProject?.name || ''}`}
+        size="md"
+        footer={
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => { setShowCloseModal(false); setClosingProject(null); }}>إلغاء</Button>
+            <Button variant="danger" onClick={handleClose} disabled={closing}>{closing ? 'جاري الإقفال...' : 'إقفال المشروع'}</Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="bg-warning/10 border border-warning/20 rounded-lg p-3 text-sm text-text-secondary">
+            سيتم إقفال المشروع محاسبياً بإنشاء قيد إقفال ينقل أرصدة الإيرادات والمصروفات إلى حساب الأرباح المرحلة.
+          </div>
+          <Input label="تاريخ الإقفال" type="date" value={closeForm.close_date} onChange={(e) => setCloseForm({ ...closeForm, close_date: e.target.value })} />
+          <Textarea label="ملاحظات الإقفال" value={closeForm.notes} onChange={(e) => setCloseForm({ ...closeForm, notes: e.target.value })} placeholder="ملاحظات إقفال المشروع" />
+          {closeError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{closeError}</div>}
         </div>
       </Modal>
     </div>

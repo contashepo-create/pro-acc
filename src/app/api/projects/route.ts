@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
     if (queryError) throw queryError;
 
     const rows = (data || []).map((p: any) => ({ ...p, client_name: p.contacts?.name || null }));
-    return success({ rows, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) });
+    return success({ projects: rows, rows, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) });
   } catch (err) {
     return handleApiError(err);
   }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, ArrowRightCircle } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
 export default function QuotationsPage() {
@@ -24,6 +25,15 @@ export default function QuotationsPage() {
   const [editingQuotation, setEditingQuotation] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [convertingQuotation, setConvertingQuotation] = useState<any>(null);
+  const [convertForm, setConvertForm] = useState<any>({
+    name: '',
+    start_date: new Date().toISOString().split('T')[0],
+    end_date: '',
+  });
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState('');
   const [form, setForm] = useState<any>({
     date: new Date().toISOString().split('T')[0],
     contact_id: '',
@@ -114,6 +124,40 @@ export default function QuotationsPage() {
     }
   };
 
+  const openConvertModal = (quotation: any) => {
+    setConvertingQuotation(quotation);
+    setConvertForm({
+      name: `مشروع - ${quotation.contact_name || 'عرض ' + quotation.number}`,
+      start_date: new Date().toISOString().split('T')[0],
+      end_date: '',
+    });
+    setConvertError('');
+    setShowConvertModal(true);
+  };
+
+  const handleConvert = async () => {
+    if (!convertingQuotation) return;
+    if (!convertForm.name || !convertForm.start_date) {
+      setConvertError('اسم المشروع وتاريخ البدء مطلوبان');
+      return;
+    }
+    setConverting(true); setConvertError('');
+    try {
+      const res = await fetch(`/api/quotations/${convertingQuotation.id}/convert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(convertForm),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setShowConvertModal(false);
+        setConvertingQuotation(null);
+        toast.success('تم تحويل العرض إلى مشروع بنجاح');
+        fetchData();
+      } else setConvertError(json.message || 'فشل التحويل');
+    } catch (e: any) { setConvertError('خطأ في الاتصال'); } finally { setConverting(false); }
+  };
+
   const statusBadge = (status: string) => {
     const map: Record<string, { variant: 'success' | 'warning' | 'info' | 'danger'; label: string }> = {
       draft: { variant: 'warning', label: 'مسودة' },
@@ -136,11 +180,23 @@ export default function QuotationsPage() {
       key: 'actions',
       label: 'إجراءات',
       render: (row: any) => (
-        <ActionButtons
-          item={row}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-        />
+        <div className="flex items-center gap-2">
+          {row.status === 'accepted' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openConvertModal(row)}
+              title="تحويل إلى مشروع"
+            >
+              <ArrowRightCircle size={16} className="text-green-600" />
+            </Button>
+          )}
+          <ActionButtons
+            item={row}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+          />
+        </div>
       ),
     },
   ];
@@ -161,6 +217,33 @@ export default function QuotationsPage() {
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات عرض السعر" />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showConvertModal}
+        onClose={() => { setShowConvertModal(false); setConvertingQuotation(null); }}
+        title="تحويل عرض سعر إلى مشروع"
+        size="md"
+        footer={
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => { setShowConvertModal(false); setConvertingQuotation(null); }}>إلغاء</Button>
+            <Button onClick={handleConvert} disabled={converting}>{converting ? 'جاري التحويل...' : 'تحويل إلى مشروع'}</Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="bg-info/10 border border-info/20 rounded-lg p-3 text-sm text-text-secondary">
+            سيتم إنشاء مشروع جديد ونسخ بنود العرض كبنود كمية (BOQ) وإنشاء فاتورة تلقائية مرتبطة بالمشروع.
+          </div>
+          <div className="grid grid-cols-1 gap-4">
+            <Input label="اسم المشروع" value={convertForm.name} onChange={(e) => setConvertForm({ ...convertForm, name: e.target.value })} />
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="تاريخ البدء" type="date" value={convertForm.start_date} onChange={(e) => setConvertForm({ ...convertForm, start_date: e.target.value })} />
+              <Input label="تاريخ الانتهاء (اختياري)" type="date" value={convertForm.end_date} onChange={(e) => setConvertForm({ ...convertForm, end_date: e.target.value })} />
+            </div>
+          </div>
+          {convertError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{convertError}</div>}
         </div>
       </Modal>
     </div>

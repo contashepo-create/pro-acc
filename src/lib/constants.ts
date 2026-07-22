@@ -32,10 +32,21 @@ export const ACCOUNT_CODES = {
   INTEREST_INCOME: '4300',
   DIRECT_COSTS: '5100',
   MATERIALS: '5110',
+  EQUIPMENT_RENTAL: '5120',
+  SUBCONTRACTOR_COSTS: '5130',
   SALARIES_EXPENSE: '5210',
+  EQUIPMENT_MAINTENANCE: '5220',
   DEPRECIATION: '5260',
   BAD_DEBT: '5330',
 } as const;
+
+export const PROJECT_EXPENSE_CODES: Record<string, string> = {
+  materials: '5110',
+  labor: '5210',
+  subcontractor: '5130',
+  equipment: '5120',
+  other: '5100',
+};
 
 export type AccountCode = (typeof ACCOUNT_CODES)[keyof typeof ACCOUNT_CODES];
 

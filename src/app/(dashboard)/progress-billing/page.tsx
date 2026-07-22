@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
 import { Badge } from '@/components/ui/Badge';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
@@ -26,7 +27,7 @@ export default function ProgressBillingPage() {
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
     project_id: '', date: new Date().toISOString().split('T')[0],
-    gross_amount: 0, retention_percentage: 10, notes: '',
+    gross_amount: 0, retention_percentage: 10, notes: '', is_final: false,
   });
 
   const fetchData = async () => {
@@ -67,7 +68,7 @@ export default function ProgressBillingPage() {
         setEditingClaim(null);
         setForm({
           project_id: '', date: new Date().toISOString().split('T')[0],
-          gross_amount: 0, retention_percentage: 10, notes: '',
+          gross_amount: 0, retention_percentage: 10, notes: '', is_final: false,
         });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -86,6 +87,7 @@ export default function ProgressBillingPage() {
           gross_amount: json.data.gross_amount,
           retention_percentage: json.data.retention_percentage,
           notes: json.data.notes || '',
+          is_final: json.data.is_final || false,
         });
         setShowModal(true);
       }
@@ -127,7 +129,12 @@ export default function ProgressBillingPage() {
     { key: 'gross_amount', label: 'الإجمالي', render: (row: any) => formatCurrency(row.gross_amount) },
     { key: 'retention_amount', label: 'الاحتجاز', render: (row: any) => formatCurrency(row.retention_amount) },
     { key: 'net_amount', label: 'الصافي', render: (row: any) => formatCurrency(row.net_amount) },
-    { key: 'status', label: 'الحالة', render: (row: any) => statusBadge(row.status) },
+    { key: 'status', label: 'الحالة', render: (row: any) => (
+      <div className="flex items-center gap-2">
+        {statusBadge(row.status)}
+        {row.is_final && <Badge variant="success">نهائية</Badge>}
+      </div>
+    ) },
     {
       key: 'actions',
       label: 'إجراءات',
@@ -157,6 +164,7 @@ export default function ProgressBillingPage() {
             <Input label="نسبة الاحتجاز (%)" type="number" value={form.retention_percentage} onChange={(e) => setForm({...form, retention_percentage: parseFloat(e.target.value) || 10})} />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات الفاتورة المرحلية" />
+          <Checkbox label="دفعة نهائية" checked={form.is_final} onChange={(checked: boolean) => setForm({...form, is_final: checked})} />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

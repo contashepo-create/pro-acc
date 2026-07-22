@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     }
 
     const boqItems = (data || []).map((b: any) => ({ ...b, project_name: b.projects?.name || null }));
-    return success({ boqItems, total: count || 0, page, pageSize });
+    return success({ items: boqItems, boqItems, total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
   }
@@ -38,12 +38,13 @@ export async function POST(req: NextRequest) {
     const auth = await requireApiAuth(req);
     const s = sb();
     const data = await parseBody(req);
-    const { project_id, item_code, description, unit, quantity, unit_price } = data;
-    if (!project_id || !item_code || !description || !unit || !quantity || unit_price == null)
+    const { project_id, item_code, code, description, unit, quantity, unit_price } = data;
+    const effectiveCode = item_code || code;
+    if (!project_id || !effectiveCode || !description || !unit || !quantity || unit_price == null)
       return error('project_id, item_code, description, unit, quantity, unit_price are required');
 
     const { data: result, error: insertError } = await s.from('boq_items')
-      .insert({ company_id: auth.companyId, project_id, item_code, description, unit, quantity, unit_price, total: quantity * unit_price })
+      .insert({ company_id: auth.companyId, project_id, item_code: effectiveCode, description, unit, quantity, unit_price, total: quantity * unit_price })
       .select('*').single();
     if (insertError) throw insertError;
     return success(result, 201);

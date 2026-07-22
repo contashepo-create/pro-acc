@@ -41,16 +41,17 @@ export async function POST(req: NextRequest) {
     const auth = await requireApiAuth(req);
     const s = sb();
     const data = await parseBody(req);
-    const { project_id, date, claim_number, description, gross_amount, retention_rate } = data;
-    if (!project_id || !date || !claim_number || !gross_amount)
-      return error('project_id, date, claim_number, gross_amount are required');
+    const { project_id, date, claim_number, description, gross_amount, retention_rate, retention_percentage, is_final, notes } = data;
+    if (!project_id || !date || !gross_amount)
+      return error('project_id, date, gross_amount are required');
 
-    const rate = retention_rate || 0;
+    const rate = retention_rate !== undefined ? retention_rate : (retention_percentage ? retention_percentage / 100 : 0);
     const retentionAmount = gross_amount * rate;
     const netAmount = gross_amount - retentionAmount;
+    const claimNumber = claim_number || `PB-${Date.now()}`;
 
     const { data: claim, error: claimErr } = await s.from('progress_billing')
-      .insert({ company_id: auth.companyId, project_id, date, claim_number, description: description || null, gross_amount, retention_rate: rate, retention_amount: retentionAmount, net_amount: netAmount, status: 'approved' })
+      .insert({ company_id: auth.companyId, project_id, date, claim_number: claimNumber, description: description || notes || null, gross_amount, retention_rate: rate, retention_amount: retentionAmount, net_amount: netAmount, status: 'approved', is_final: is_final || false })
       .select('*').single();
     if (claimErr) throw claimErr;
 
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
       if (arAcc && revAcc) {
         const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
         const { data: je } = await s.from('journal_entries')
-          .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `فاتورة مرحلية: ${claim_number}`, reference_type: 'progress_billing', reference_id: claim.id, created_by: auth.userId })
+          .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `فاتورة مرحلية: ${claimNumber}`, reference_type: 'progress_billing', reference_id: claim.id, created_by: auth.userId })
           .select('id').single();
 
         const jl: any[] = [
