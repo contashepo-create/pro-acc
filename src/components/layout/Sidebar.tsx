@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useRouter, usePathname } from 'next/navigation'; // FIXED: Imported usePathname for perfect URL-based active state sync
 import {
   LayoutDashboard,
   Calculator,
@@ -13,8 +13,6 @@ import {
   BarChart3,
   Settings,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
 } from 'lucide-react';
 import { useSidebarStore } from '@/store/sidebar-store';
 
@@ -118,14 +116,33 @@ const navGroups: NavGroup[] = [
 
 export function Sidebar() {
   const router = useRouter();
-  const { activeItem, setActive } = useSidebarStore();
+  const pathname = usePathname(); // FIXED: Read current URL pathname to determine active states reactively
+  const { setActive } = useSidebarStore();
+  
+  // دالة ذكية للتحقق من نشاط المسار بناءً على الـ URL الحالي
+  const isActive = (id: string) => {
+    const cleanPath = pathname.startsWith('/') ? pathname.slice(1) : pathname;
+    const cleanId = id.startsWith('/') ? id.slice(1) : id;
+    if (cleanId === '') return cleanPath === 'dashboard';
+    return cleanPath === cleanId || cleanPath.startsWith(cleanId + '/');
+  };
+
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
     navGroups.forEach((g) => {
-      initial[g.label] = g.items.some((i) => i.id === activeItem);
+      initial[g.label] = g.items.some((i) => isActive(i.id));
     });
     return initial;
   });
+
+  // مزامنة حالة توسيع القوائم المنسدلة عند تغيير الرابط المباشر
+  useEffect(() => {
+    navGroups.forEach((g) => {
+      if (g.items.some((i) => isActive(i.id))) {
+        setExpandedGroups((prev) => ({ ...prev, [g.label]: true }));
+      }
+    });
+  }, [pathname]);
 
   const toggleGroup = (label: string) => {
     setExpandedGroups((prev) => ({ ...prev, [label]: !prev[label] }));
@@ -133,15 +150,12 @@ export function Sidebar() {
 
   const handleNav = (id: string) => {
     setActive(id);
-    // FIXED: ضمان توجيه المسار بشكل مطلق (Absolute Path) بالبدء بـ "/" لتفادي خطأ 404 المسارات النسبية المتداخلة عند التنقل من صفحات السندات
     const targetPath = id === '' ? '/dashboard' : (id.startsWith('/') ? id : `/${id}`);
     router.push(targetPath);
   };
 
-  const isActive = (id: string) => activeItem === id;
-
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-sidebar-bg text-text-primary">
       <div className="flex items-center h-16 px-4 border-b border-border shrink-0">
         <div className="flex items-center gap-2.5 overflow-hidden">
           <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0">
@@ -194,7 +208,7 @@ export function Sidebar() {
                           onClick={() => handleNav(item.id)}
                           className={`sidebar-item w-full text-right px-3 py-1.5 text-sm rounded-lg transition-colors ${
                             isActive(item.id)
-                              ? 'active text-accent'
+                              ? 'active text-accent font-semibold'
                               : 'text-text-secondary hover:text-text-primary'
                           }`}
                         >
