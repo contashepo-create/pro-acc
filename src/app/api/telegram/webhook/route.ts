@@ -7,6 +7,7 @@ const sb = () => getSupabase();
  * POST /api/telegram/webhook
  * واجهة استقبال نداءات تليجرام التفاعلية الرسمية (Telegram Webhook API Receiver)
  * محمية تماماً بترميز التحقق السري (X-Telegram-Bot-Api-Secret-Token) لمنع الاختراق أو الحقن أو المحاكاة الخارجية
+ * يدعم معالجة الرسائل، الموافقات المحاسبية، جلسات فحص الاتصال، والتحقق الثنائي لتصفير البيانات (2FA Reset)
  */
 export async function POST(request: NextRequest) {
   try {
@@ -139,6 +140,75 @@ export async function POST(request: NextRequest) {
             : `🔴 <b>تم رفض اعتماد المعاملة!</b>\n\nالرد المالي: <b>مرفوض وملغى ❌</b>\nبواسطة مدير الشات رقم: <code>${chatId}</code>`;
 
           await editTelegramMessage(botToken, chatId, messageId, finalStatusText);
+        }
+      }
+    }
+    // معالجة جلسة تصفير البيانات المصحوبة بطلب 2FA الآمنة جداً للشركات
+    else if (callbackData.startsWith('reset:')) {
+      const parts = callbackData.split(':');
+      if (parts.length === 3) {
+        const action = parts[1]; // approve أو reject
+        const companyId = parts[2]; // UUID
+
+        if (action === 'approve') {
+          // التحقق من الهوية: هل المعرف يطابق شات الشركة المسجل للرقابة؟
+          const { data: config } = await s.from('company_telegram_configs')
+            .select('chat_id')
+            .eq('company_id', companyId)
+            .maybeSingle();
+
+          if (!config || config.chat_id !== String(chatId)) {
+            await answerCallback(callbackQueryId, '❌ غير مصرح لك باعتماد هذا الإجراء الحرج', true);
+            return NextResponse.json({ success: true }, { status: 200 });
+          }
+
+          // توليد كود سداسي عشوائي آمن (2FA Code)
+          const code = String(Math.floor(100000 + Math.random() * 900000));
+          const updatedSession = {
+            step: 'approved_and_code_sent',
+            code,
+            expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            approved_by_chat_id: String(chatId)
+          };
+
+          // حفظ الرمز في السوبابيز لجلسة الأمان
+          await s.from('company_telegram_configs')
+            .update({ reset_session_data: updatedSession })
+            .eq('company_id', companyId);
+
+          // إرسال كود الـ 2FA السري لمدير النظام على تليجرام
+          const codeMessage = `🔐 <b>رمز المصادقة الثنائية (2FA) لتصفير البيانات:</b>
+
+رمز التأكيد الخاص بشركتك هو:
+<code>${code}</code>
+
+⏳ صلاحية الرمز: <b>5 دقائق فقط</b>. قم بإدخاله في الموقع فوراً لإتمام تصفير البيانات والبدء من جديد.`;
+
+          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: codeMessage,
+              parse_mode: 'HTML'
+            })
+          });
+
+          await answerCallback(callbackQueryId, 'تم توليد وإرسال كود الـ 2FA بنجاح! 🔐');
+
+          const finalMsg = `🟢 <b>تم الموافقة الأمنية من تليجرام بنجاح!</b>\n\nتم توليد رمز المصادقة الثنائية (2FA) وإرساله للمدير بنجاح لتصفير الدفاتر ماليًا.`;
+          await editTelegramMessage(botToken, chatId, messageId, finalMsg);
+
+        } else if (action === 'reject') {
+          // رفض وإجهاض العملية بالكامل وحماية الجداول
+          await s.from('company_telegram_configs')
+            .update({ reset_session_data: null })
+            .eq('company_id', companyId);
+
+          await answerCallback(callbackQueryId, 'تم رفض وإلغاء الطلب بالكامل ❌');
+
+          const finalMsg = `🔴 <b>تم رفض وإلغاء طلب تصفير البيانات بالكامل!</b>\n\nتم حماية المنصة وإجهاض العملية بنجاح.`;
+          await editTelegramMessage(botToken, chatId, messageId, finalMsg);
         }
       }
     }

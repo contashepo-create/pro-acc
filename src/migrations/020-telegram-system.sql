@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS company_telegram_configs (
   approvals_enabled BOOLEAN NOT NULL DEFAULT false,
   approval_threshold NUMERIC(15,2) NOT NULL DEFAULT 5000.00, -- Apply approvals only if amount > threshold
   
+  -- Reset sessions
+  reset_session_data JSONB,
+  
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(company_id)
