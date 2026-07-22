@@ -2,6 +2,7 @@
 -- Migration 015: Project Management Integration
 -- Date: 2026-07-21
 -- Description: Complete project lifecycle - expenses, closure, final payments
+-- Note: This migration is resilient to missing tables from migration 013
 -- ============================================================
 
 -- 1. Add closure fields to projects table
@@ -9,15 +10,26 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP WITH TIME ZONE
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS closed_by UUID REFERENCES users(id);
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS closure_journal_entry_id UUID REFERENCES journal_entries(id) ON DELETE SET NULL;
 
--- 2. Add is_final flag to progress_billing
-ALTER TABLE progress_billing ADD COLUMN IF NOT EXISTS is_final BOOLEAN DEFAULT false;
-
--- Add 'converted' status to quotations
+-- 2. Add is_final flag to progress_billing (only if table exists)
 DO $$
 BEGIN
-  ALTER TABLE quotations DROP CONSTRAINT IF EXISTS quotations_status_check;
-  ALTER TABLE quotations ADD CONSTRAINT quotations_status_check
-    CHECK(status IN ('draft', 'sent', 'accepted', 'rejected', 'expired', 'converted'));
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'progress_billing') THEN
+    ALTER TABLE progress_billing ADD COLUMN IF NOT EXISTS is_final BOOLEAN DEFAULT false;
+  ELSE
+    RAISE NOTICE 'Table progress_billing does not exist - skipping is_final column (run migration 013 first)';
+  END IF;
+END $$;
+
+-- Add 'converted' status to quotations (only if table exists)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'quotations') THEN
+    ALTER TABLE quotations DROP CONSTRAINT IF EXISTS quotations_status_check;
+    ALTER TABLE quotations ADD CONSTRAINT quotations_status_check
+      CHECK(status IN ('draft', 'sent', 'accepted', 'rejected', 'expired', 'converted'));
+  ELSE
+    RAISE NOTICE 'Table quotations does not exist - skipping status constraint (run migration 013 first)';
+  END IF;
 EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE 'Could not alter quotations status constraint: %', SQLERRM;
 END $$;
@@ -59,6 +71,13 @@ BEGIN
 END $$;
 
 COMMENT ON TABLE project_expenses IS 'مصروفات المشاريع المباشرة';
-COMMENT ON COLUMN progress_billing.is_final IS 'تحديد ما إذا كانت الدفعة نهائية';
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'progress_billing') THEN
+    COMMENT ON COLUMN progress_billing.is_final IS 'تحديد ما إذا كانت الدفعة نهائية';
+  END IF;
+END $$;
+
 COMMENT ON COLUMN projects.closed_at IS 'تاريخ إقفال المشروع';
 COMMENT ON COLUMN projects.closure_journal_entry_id IS 'قيد إقفال المشروع';
