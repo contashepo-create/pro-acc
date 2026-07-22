@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, requireApiAuth, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
+import { createJournalEntry } from '@/lib/journal-utils';
+import { ACCOUNT_CODES } from '@/lib/constants';
 import { checkBankBalance } from '@/lib/notifications';
 
 const sb = () => getSupabase();
@@ -131,25 +131,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Create journal entry
-    const journalId = await getNextJournalNumber(auth.companyId);
-    const journalDate = new Date(date).toISOString().split('T')[0];
-    
-    const accountDebitId = accountId || bankSafeInfo?.account_id;
-    const initialCreditAccountId = bankSafeInfo?.account_id;
-
-    // Get credit account based on transaction type
-    let creditAccountId: string | null = initialCreditAccountId;
+    // Determine credit account based on transaction type
+    let creditAccountCode: string | null = null;
     if (type === 'revenue') {
-      creditAccountId = ACCOUNT_CODES.REVENUE;
+      creditAccountCode = ACCOUNT_CODES.CONTRACT_REVENUE;
     } else if (type === 'expense') {
-      creditAccountId = ACCOUNT_CODES.EXPENSE;
-    } else if (type === 'payment_in') {
-      creditAccountId = ACCOUNT_NAMES.PAYMENTS;
+      creditAccountCode = ACCOUNT_CODES.DIRECT_COSTS;
+    } else if (bankSafeInfo?.account_id) {
+      creditAccountCode = null; // use bank account itself
     }
 
-    const debitAccountId = bankSafeInfo?.account_id;
+    // Resolve account IDs
+    const { data: creditAcc } = creditAccountCode
+      ? await s.from('accounts').select('id').eq('code', creditAccountCode).eq('company_id', auth.companyId).maybeSingle()
+      : { data: null };
 
+    const debitAccountId = bankSafeInfo?.account_id || accountId || null;
+    const creditAccountId = (creditAcc as any)?.id || bankSafeInfo?.account_id || null;
+
+    // Insert cash transaction record
     const { data: transaction, error: insertErr } = await s.from('cash_transactions')
       .insert({
         company_id: auth.companyId,
@@ -177,51 +177,39 @@ export async function POST(request: NextRequest) {
 
     if (insertErr) throw insertErr;
 
-    // Create journal entry for the transaction
-    const { data: journal, error: journalErr } = await insertJournalLines(
-      auth.companyId,
-      {
-        date: journalDate,
-        type: type,
+    // Create journal entry via helper
+    if (debitAccountId && creditAccountId) {
+      const je = await createJournalEntry(auth.companyId, {
+        date,
+        type: 'general',
         description: description || reason,
         lines: [
           {
-            account_id: debitAccountId || null,
+            account_id: debitAccountId,
             debit: parseFloat(amount),
             credit: 0,
-            contact_id: contactId || null,
+            description: description || reason,
             project_id: projectId || null,
-            category_id: categoryId || null,
             contact_id: contactId || null,
-            project_id: projectId || null,
-            description: description || null,
-            reference_type: referenceType || null,
-            reference_id: referenceId || null,
-            created_by: auth.userId,
           },
           {
-            account_id: creditAccountId || null,
+            account_id: creditAccountId,
             debit: 0,
             credit: parseFloat(amount),
-            contact_id: contactId || null,
+            description: description || reason,
             project_id: projectId || null,
-            category_id: categoryId || null,
-            description: description || null,
             contact_id: contactId || null,
-            project_id: projectId || null,
-            description: description || null,
-            reference_type: referenceType || null,
-            reference_id: referenceId || null,
-            created_by: auth.userId,
           },
         ],
-        reference_type: referenceType || null,
-        reference_id: referenceId || null,
+        reference_type: referenceType || 'cash_transaction',
+        reference_id: referenceId || (transaction as any).id,
         created_by: auth.userId,
-      }
-    );
+      });
 
-    if (journalErr) throw journalErr;
+      if (je.error) {
+        console.warn('Failed to create journal entry for cash transaction:', je.error);
+      }
+    }
 
     return success(transaction, 201);
   } catch (err) {
