@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation'; // FIXED: Added missing useRouter import for page-level redirection
 import { Shield, ShieldCheck, ShieldOff, Users, Settings, ChevronDown, ChevronUp, Save, AlertCircle, Check, X, UserCog, Lock, Unlock, Send, SendOff, Plus, Trash2, Edit3, FolderPlus, Zap, Folder, GripVertical } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -139,6 +140,7 @@ interface CustomAction {
 }
 
 export default function PermissionsPage() {
+  const router = useRouter(); // FIXED: Declared router hook inside component
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -150,7 +152,7 @@ export default function PermissionsPage() {
     if (!authLoading && loggedInUser && loggedInUser.role !== 'admin') {
       router.push('/dashboard');
     }
-  }, [loggedInUser, authLoading]);
+  }, [loggedInUser, authLoading, router]);
   
   // حالة النافذة المنبثقة للصلاحيات
   const [selectedUser, setSelectedUser] = useState<any>(null);
