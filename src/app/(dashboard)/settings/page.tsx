@@ -1,251 +1,18 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { 
   Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone, 
-  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, Copy, ExternalLink,
-  Plus, Users as UsersIcon, Shield, Trash2, MapPin
+  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, Copy, ExternalLink, Trash2, Key 
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
-import { Badge } from '@/components/ui/Badge';
-import { Modal } from '@/components/ui/Modal';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
-
-// ==================== مكون إدارة المستخدمين داخل الإعدادات ====================
-function SettingsUsersSection() {
-  const router = useRouter();
-  const [users, setUsers] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [currentCount, setCurrentCount] = useState(0);
-  const [maxUsers, setMaxUsers] = useState<number | null>(null);
-  const [planName, setPlanName] = useState<string | null>(null);
-  const [form, setForm] = useState<any>({
-    name: '', email: '', password: '', role: 'accountant',
-    phone: '', birth_date: '', city: '',
-  });
-
-  const fetchUsers = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch('/api/company/users');
-      const json = await res.json();
-      if (json.success) {
-        setUsers(json.data?.users || []);
-        setCurrentCount(json.data?.currentCount || 0);
-        setMaxUsers(json.data?.maxUsers ?? null);
-        setPlanName(json.data?.planName || null);
-      }
-    } catch {} finally { setLoading(false); }
-  };
-
-  useEffect(() => { fetchUsers(); }, []);
-
-  const canAdd = maxUsers === null || currentCount < maxUsers;
-
-  const handleSave = async () => {
-    if (!form.name || !form.email || !form.password) {
-      setSaveError('الاسم والبريد وكلمة المرور مطلوبة');
-      return;
-    }
-    if (form.password.length < 6) {
-      setSaveError('كلمة المرور 6 أحرف على الأقل');
-      return;
-    }
-    setSaving(true); setSaveError('');
-    try {
-      const res = await fetch('/api/company/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: form.name, email: form.email, password: form.password, role: form.role,
-          phone: form.phone || undefined, birth_date: form.birth_date || undefined, city: form.city || undefined,
-        }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setShowModal(false);
-        setForm({ name: '', email: '', password: '', role: 'accountant', phone: '', birth_date: '', city: '' });
-        fetchUsers();
-      } else setSaveError(json.message || 'فشل');
-    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
-  };
-
-  const handleDelete = async (u: any) => {
-    if (!confirm(`حذف المستخدم "${u.name}"؟`)) return;
-    try {
-      const res = await fetch(`/api/company/users/${u.id}`, { method: 'DELETE' });
-      const json = await res.json();
-      if (json.success) fetchUsers();
-      else alert(json.message || 'فشل الحذف');
-    } catch { alert('خطأ في الاتصال'); }
-  };
-
-  const handleToggleActive = async (u: any) => {
-    try {
-      await fetch(`/api/company/users/${u.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_active: !u.is_active }),
-      });
-      fetchUsers();
-    } catch {}
-  };
-
-  return (
-    <div className="space-y-4">
-      {/* معلومات الحد */}
-      <Card className="p-4">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
-              <UsersIcon size={20} className="text-blue-600" />
-            </div>
-            <div>
-              <h3 className="font-semibold">المستخدمين في شركتك</h3>
-              <p className="text-sm text-gray-500">
-                {currentCount} مستخدم {maxUsers ? `/ ${maxUsers} (باقة ${planName || 'الحالية'})` : '(بدون حد)'}
-              </p>
-            </div>
-          </div>
-          <Button 
-            onClick={() => {
-              if (!canAdd) {
-                alert(`تم الوصول للحد الأقصى (${maxUsers}) في باقة "${planName}". يرجى الترقية.`);
-                return;
-              }
-              setShowModal(true);
-            }}
-            leftIcon={<Plus size={16} />}
-          >
-            إضافة مستخدم
-          </Button>
-        </div>
-        {maxUsers && currentCount >= maxUsers && (
-          <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-2 text-red-700 text-sm flex items-center gap-2">
-            <AlertCircle size={16} />
-            تم الوصول للحد الأقصى. <button onClick={() => router.push('/subscription')} className="underline font-medium">ترقية الباقة</button>
-          </div>
-        )}
-      </Card>
-
-      {/* قائمة المستخدمين */}
-      <Card padding="none">
-        {loading ? (
-          <div className="p-8 text-center text-gray-500">جاري التحميل...</div>
-        ) : users.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">
-            <UsersIcon size={40} className="mx-auto mb-2 text-gray-300" />
-            <p>لا يوجد مستخدمون. أضف أول مستخدم لفريقك.</p>
-          </div>
-        ) : (
-          <div className="divide-y">
-            {users.map((u) => (
-              <div key={u.id} className="p-4 flex items-center justify-between hover:bg-gray-50">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-sm font-bold">
-                    {u.name?.charAt(0) || '?'}
-                  </div>
-                  <div>
-                    <div className="font-medium text-sm">{u.name}</div>
-                    <div className="text-xs text-gray-500">{u.email}</div>
-                    <div className="flex gap-2 mt-1">
-                      <Badge className={u.role === 'admin' ? 'bg-red-100 text-red-700 text-xs border-red-200 border' : u.role === 'manager' ? 'bg-blue-100 text-blue-700 text-xs border-blue-200 border' : 'bg-green-100 text-green-700 text-xs border-green-200 border'}>
-                        {u.role === 'admin' ? 'مدير' : u.role === 'manager' ? 'مدير' : u.role === 'accountant' ? 'محاسب' : 'مشرف'}
-                      </Badge>
-                      <Badge variant={u.is_active ? 'success' : 'danger'} className="text-xs">
-                        {u.is_active ? 'نشط' : 'معطل'}
-                      </Badge>
-                      {u.city && (
-                        <span className="text-xs text-gray-400 flex items-center gap-0.5">
-                          <MapPin size={10} /> {u.city}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex gap-1">
-                  <button onClick={() => handleToggleActive(u)} className="p-1.5 rounded hover:bg-gray-100 text-gray-500" title={u.is_active ? 'تعطيل' : 'تفعيل'}>
-                    <Shield size={16} />
-                  </button>
-                  <button onClick={() => handleDelete(u)} className="p-1.5 rounded hover:bg-red-50 text-red-500" title="حذف">
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* رابط لصفحة الصلاحيات الكاملة */}
-      <Card className="p-4 bg-purple-50 border-purple-200">
-        <div className="flex items-center justify-between">
-          <div>
-            <h4 className="font-medium text-purple-800">إدارة الصلاحيات المتقدمة</h4>
-            <p className="text-sm text-purple-600">التحكم في صلاحيات كل مستخدم والوحدات المتاحة له</p>
-          </div>
-          <Button variant="outline" onClick={() => router.push('/permissions')}>
-            إدارة الصلاحيات
-          </Button>
-        </div>
-      </Card>
-
-      {/* نافذة الإضافة */}
-      <Modal 
-        isOpen={showModal} 
-        onClose={() => { setShowModal(false); setSaveError(''); }} 
-        title="إضافة مستخدم جديد" 
-        size="lg"
-        footer={
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
-            <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الإضافة...' : 'إضافة'}</Button>
-          </div>
-        }
-      >
-        <div className="space-y-4">
-          <div className="bg-blue-50 border border-blue-200 rounded p-2 text-sm text-blue-700 flex items-center gap-2">
-            <Shield size={14} />
-            المستخدم سيكون مرتبطاً بشركتك فقط
-          </div>
-          {saveError && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded p-2">{saveError}</div>}
-          
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="الاسم *" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
-            <Input label="البريد *" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} dir="ltr" />
-            <Input label="كلمة المرور *" type="password" value={form.password} onChange={(e) => setForm({...form, password: e.target.value})} dir="ltr" />
-            <Select label="الدور *" value={form.role} onChange={(v) => setForm({...form, role: v})} options={[
-              { value: 'admin', label: 'مدير النظام' },
-              { value: 'manager', label: 'مدير' },
-              { value: 'accountant', label: 'محاسب' },
-              { value: 'supervisor', label: 'مشرف' },
-            ]} />
-          </div>
-          
-          <div className="border-t pt-3">
-            <p className="text-xs text-gray-500 mb-2">معلومات إضافية (اختياري)</p>
-            <div className="grid grid-cols-3 gap-3">
-              <Input label="الجوال" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} dir="ltr" />
-              <Input label="المدينة" value={form.city} onChange={(e) => setForm({...form, city: e.target.value})} />
-              <Input label="تاريخ الميلاد" type="date" value={form.birth_date} onChange={(e) => setForm({...form, birth_date: e.target.value})} />
-            </div>
-          </div>
-        </div>
-      </Modal>
-    </div>
-  );
-}
 
 export default function SettingsPage() {
   const [tab, setTab] = useState('general');
@@ -292,6 +59,12 @@ export default function SettingsPage() {
   const [testRunId, setTestRunId] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<string>(''); // '', 'pending', 'accepted', 'rejected', 'expired'
   const [testLoading, setTestLoading] = useState(false);
+
+  // 🛑 تصفير قاعدة بيانات الشركة - المصادقة الثنائية 🛑
+  const [resetStep, setResetStep] = useState<string>(''); // '', 'pending_approval', 'reset_success'
+  const [resetCode, setResetCode] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState('');
 
   // تليجرام الموحد للمنصة - يتم تعديله من خلال متغيرات المطور
   const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'Proaccwebcontroller_bot';
@@ -547,15 +320,78 @@ export default function SettingsPage() {
     }
   };
 
+  // 🛑 إرسال طلب تصفير البيانات لتيليجرام 🛑
+  const handleRequestReset = async () => {
+    if (!confirm('⚠️ تنبيه حرج للغاية: هل أنت متأكد تماماً من رغبتك في تصفير وإعادة تهيئة كامل القيود والفواتير للشركة؟ لا يمكن التراجع عن هذا الإجراء!')) return;
+    setResetLoading(true);
+    setResetError('');
+    setResetStep('');
+    try {
+      // أولاً حفظ الإعدادات لضمان الربط
+      await fetch('/api/settings/telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(telegramConfig),
+      });
+
+      const res = await fetch('/api/company/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'request' })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setResetStep('pending_approval');
+        showToast('تم إرسال طلب تصفير البيانات لتيليجرام المدير');
+      } else {
+        setResetError(data.message || 'فشل تقديم طلب تصفير البيانات');
+      }
+    } catch {
+      setResetError('خطأ في الاتصال بالخادم');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  // 🛑 تأكيد كود المصادقة وتصفير قاعدة البيانات 🛑
+  const handleConfirmReset = async () => {
+    if (!resetCode || !/^\d{6}$/.test(resetCode)) {
+      setResetError('يرجى إدخال رمز مصادقة ثنائية صحيح مكون من 6 أرقام');
+      return;
+    }
+    setResetLoading(true);
+    setResetError('');
+    try {
+      const res = await fetch('/api/company/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'confirm', code: resetCode })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setResetStep('reset_success');
+        showToast('تم تصفير البيانات ماليًا وإعادة التهيئة بنجاح! 🎉');
+        setTimeout(() => {
+          window.location.reload();
+        }, 4000);
+      } else {
+        setResetError(data.message || 'فشل التصفير. الرمز قد يكون خاطئاً أو منتهي الصلاحية.');
+      }
+    } catch {
+      setResetError('خطأ في الاتصال بالخادم أثناء التطهير المالي');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   const currentTheme = themes.find((t) => t.id === themeId) || themes[0];
 
   return (
     <div className="space-y-6">
-      <PageHeader title="الإعدادات" description="إعدادات الشركة والنظام والربط التقني" />
+      <PageHeader title="الإعدادات" description="إعدادات الشركة والنظام والربط التقني والتطهير" />
 
       <Tabs items={[
         { id: 'general', label: 'عام' },
-        { id: 'users', label: 'المستخدمين 👥' },
         { id: 'accounting', label: 'محاسبة' },
         { id: 'tax', label: 'ضرائب' },
         { id: 'subscription', label: 'الاشتراك' },
@@ -580,11 +416,6 @@ export default function SettingsPage() {
             <Button onClick={handleSaveCompany} leftIcon={<Save size={16} />}>حفظ الإعدادات</Button>
           </div>
         </Card>
-      )}
-
-      {/* Users Management */}
-      {tab === 'users' && (
-        <SettingsUsersSection />
       )}
 
       {/* Accounting */}
@@ -816,7 +647,7 @@ export default function SettingsPage() {
             </label>
           </div>
           <div className="mt-4">
-            <Button onClick={handleSaveNotifications} leftIcon={<Save size={16} />}>حفظ الإشعارات</Button>
+            <Button onClick={handleSaveNotifications} leftIcon={<Save size={16} />}>حفظ الإشعار</Button>
           </div>
         </Card>
       )}
@@ -1025,6 +856,82 @@ export default function SettingsPage() {
                       </div>
                     )}
                   </div>
+                </div>
+              </Card>
+
+              {/* 🛑 Critical Danger Zone: Hard Reset Data via Telegram 2FA 🛑 */}
+              <Card title="⚠️ منطقة الخطر الأمني الحرج - تصفير الدفاتر المحاسبية">
+                <div className="space-y-4">
+                  <div className="p-4 rounded-xl bg-red-50 border border-red-200 flex items-start gap-3 text-red-800 text-sm">
+                    <AlertCircle size={22} className="shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <h4 className="font-bold">تنبيه حرج للغاية ولا يمكن التراجع عنه!</h4>
+                      <p className="text-xs leading-relaxed">
+                        هذا الإجراء سيقوم بمسح وتطهير وتصفير كامل البيانات والعمليات المحاسبية والحركات لشركتك نهائياً (بما يشمل الفواتير والقيود اليومية وسندات الصرف والقبض والحركات النقدية)، ويعيد بدء تسلسلات الأرقام من الرقم 1 مجدداً. 
+                        <br />
+                        <b>البيانات التي ستبقى آمنة:</b> شجرة الحسابات التأسيسية، إعدادات الشركة، والمسؤولين النشطين.
+                      </p>
+                    </div>
+                  </div>
+
+                  {resetError && (
+                    <div className="bg-red-100 border border-red-300 text-red-700 text-xs rounded-lg p-3">
+                      ⚠️ {resetError}
+                    </div>
+                  )}
+
+                  {/* الخطوة 1: طلب الموافقة ورمز 2FA */}
+                  {resetStep === '' && (
+                    <div className="pt-2">
+                      <Button 
+                        onClick={handleRequestReset} 
+                        disabled={resetLoading} 
+                        className="bg-red-600 hover:bg-red-700 text-white flex items-center gap-2"
+                        leftIcon={<Trash2 size={16} />}
+                      >
+                        {resetLoading ? 'جاري معالجة الطلب المالي...' : 'طلب تصفير كامل الدفاتر والقيود عبر تليجرام 🚨'}
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* الخطوة 2: انتظار إدخال الرمز السري ثنائي المصادقة */}
+                  {resetStep === 'pending_approval' && (
+                    <div className="space-y-3 p-4 rounded-lg bg-amber-50/50 border border-amber-200 animate-pulse">
+                      <div className="flex items-center gap-2 text-amber-800 text-sm font-semibold">
+                        <Key size={16} />
+                        <span>انتظار كود المصادقة ثنائي الأبعاد (2FA) من تليجرام...</span>
+                      </div>
+                      <p className="text-xs text-amber-700">
+                        الرجاء فتح تليجرام المدير والموافقة على الطلب التفاعلي، ثم نسخ الرمز السري المكون من 6 أرقام المستلم وكتابته هنا:
+                      </p>
+                      
+                      <div className="flex flex-col sm:flex-row items-end gap-3 max-w-md pt-2">
+                        <Input 
+                          label="رمز المصادقة السداسي (2FA Code)" 
+                          placeholder="مثال: 123456" 
+                          value={resetCode} 
+                          onChange={(e: any) => setResetCode(e.target.value)} 
+                          dir="ltr"
+                          className="font-mono font-bold text-center"
+                        />
+                        <Button 
+                          onClick={handleConfirmReset} 
+                          disabled={resetLoading}
+                          className="bg-red-600 hover:bg-red-700 text-white h-10"
+                        >
+                          {resetLoading ? 'جاري المسح والتطهير...' : 'تأكيد تصفير البيانات والمسح النهائي 💀'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* الخطوة 3: نجاح التصفير */}
+                  {resetStep === 'reset_success' && (
+                    <div className="p-4 rounded-lg bg-success/10 border border-success/30 text-success text-sm font-bold text-center space-y-2">
+                      <p>🎉 تم تصفير قاعدة بيانات شركتك بالكامل والبدء من الصفر بنجاح!</p>
+                      <p className="text-xs text-text-muted font-normal">جاري إعادة تحميل لوحة التحكم المحاسبية خلال 3 ثوانٍ...</p>
+                    </div>
+                  )}
                 </div>
               </Card>
             </>
