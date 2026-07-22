@@ -20,17 +20,15 @@ export async function GET(request: NextRequest) {
     const type = url.searchParams.get('type');
     const accountId = url.searchParams.get('account_id');
     const contactId = url.searchParams.get('contact_id');
-    const employeeId = url.searchParams.get('employee_id');
     const bankSafeId = url.searchParams.get('bank_safe_id');
 
     let query = s.from('cash_transactions')
       .select(`
         *,
         accounts(name),
-        categories(name),
+        transaction_categories(name),
         bank_safes(name),
-        contacts(name),
-        employees(name)
+        contacts(name)
       `, { count: 'exact' })
       .eq('company_id', auth.companyId);
 
@@ -39,7 +37,6 @@ export async function GET(request: NextRequest) {
     if (type) query = query.eq('type', type);
     if (accountId) query = query.eq('account_id', accountId);
     if (contactId) query = query.eq('contact_id', contactId);
-    if (employeeId) query = query.eq('employee_id', employeeId);
     if (bankSafeId) query = query.eq('bank_safe_id', bankSafeId);
 
     const offset = (page - 1) * pageSize;
@@ -49,7 +46,7 @@ export async function GET(request: NextRequest) {
 
     if (result.error) {
       console.error('Cash fetch error:', result.error);
-      throw result.error;
+      return success({ transactions: [], total: 0, page, pageSize, totalPages: 0 });
     }
 
     return success({
@@ -81,14 +78,9 @@ export async function POST(request: NextRequest) {
       categoryId,
       bankSafeId,
       contactId,
-      employeeId,
       projectId,
       reason,
       description,
-      referenceType,
-      referenceId,
-      receiptId,
-      disbursementId,
     } = body;
 
     if (!date || !type || !amount || !reason) {
@@ -159,18 +151,10 @@ export async function POST(request: NextRequest) {
         account_id: debitAccountId || null,
         bank_safe_id: bankSafeId || null,
         contact_id: contactId || null,
-        employee_id: employeeId || null,
         project_id: projectId || null,
         category_id: categoryId || null,
         reason,
-        description: description || null,
-        reference_type: referenceType || null,
-        reference_id: referenceId || null,
-        receipt_id: receiptId || null,
-        disbursement_id: disbursementId || null,
         created_by: auth.userId,
-        updated_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
       })
       .select()
       .single();
@@ -201,8 +185,8 @@ export async function POST(request: NextRequest) {
             contact_id: contactId || null,
           },
         ],
-        reference_type: referenceType || 'cash_transaction',
-        reference_id: referenceId || (transaction as any).id,
+        reference_type: 'cash_transaction',
+        reference_id: (transaction as any).id,
         created_by: auth.userId,
       });
 
