@@ -133,7 +133,9 @@ export function Sidebar() {
 
   const handleNav = (id: string) => {
     setActive(id);
-    router.push(id || '/dashboard');
+    // FIXED: ضمان توجيه المسار بشكل مطلق (Absolute Path) بالبدء بـ "/" لتفادي خطأ 404 المسارات النسبية المتداخلة عند التنقل من صفحات السندات
+    const targetPath = id === '' ? '/dashboard' : (id.startsWith('/') ? id : `/${id}`);
+    router.push(targetPath);
   };
 
   const isActive = (id: string) => activeItem === id;
