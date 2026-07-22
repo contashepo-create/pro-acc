@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
-import { useSidebarStore } from '@/store/sidebar-store'; // FIXED: Imported sidebar store for mobile toggle
+import { useSidebarStore } from '@/store/sidebar-store';
 import { toast } from '@/components/ui/Toast';
 
 interface HeaderProps {
@@ -26,7 +26,7 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
   const router = useRouter();
   const { theme, toggleTheme } = useThemeStore();
   const { user, logout } = useAuthStore();
-  const { setMobileOpen } = useSidebarStore(); // FIXED: Read setMobileOpen action
+  const { setMobileOpen } = useSidebarStore();
 
   // Fetch notification count
   useEffect(() => {
@@ -43,7 +43,6 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
     };
 
     fetchNotificationCount();
-    // Refresh notification count every 60 seconds
     const interval = setInterval(fetchNotificationCount, 60000);
     return () => clearInterval(interval);
   }, []);
@@ -82,7 +81,7 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
   return (
     <header className="fixed top-0 left-0 right-0 z-40 bg-bg-card/95 backdrop-blur-md border-b border-border">
       <div className="h-14 px-4 lg:px-6 flex items-center justify-between">
-        {/* Mobile: Hamburger + Title — FIXED: Added onClick to open sidebar drawer */}
+        {/* Mobile: Hamburger + Title */}
         <div className="lg:hidden flex items-center gap-3">
           <button 
             className="btn btn-ghost btn-icon" 
@@ -189,6 +188,20 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
                   <p className="text-xs text-text-muted">{user?.email || ''}</p>
                 </div>
                 <div className="p-1">
+                  {/* FIXED: ربط لوحة تحكم المطور الـ Zerocold السري للمسؤول الأعلى للتنقل التلقائي المباشر من الحساب */}
+                  {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
+                    <button
+                      onClick={() => {
+                        router.push('/zerocold');
+                        setUserMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-amber-500 hover:bg-amber-500/10 rounded-lg transition-colors text-right font-bold border-b border-border/40"
+                    >
+                      <span>🛠️</span>
+                      لوحة المطور (Zerocold)
+                    </button>
+                  )}
+                  
                   <button
                     onClick={() => {
                       router.push('/profile');
