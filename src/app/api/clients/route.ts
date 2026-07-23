@@ -32,11 +32,11 @@ export async function GET(req: NextRequest) {
       ...c,
       account_code: c.accounts?.code || null,
       account_name: c.accounts?.name || null,
-      balance: 0, // will be filled below
+      balance: 0,
     }));
 
     // Calculate real balances from journal_lines
-    const accountIds = clients.filter(c => c.account_id).map(c => c.account_id);
+    const accountIds = clients.filter((c: any) => c.account_id).map((c: any) => c.account_id);
     if (accountIds.length > 0) {
       const { data: lines } = await s.from('journal_lines')
         .select('account_id, debit, credit')
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
         if (!balanceMap[accId]) balanceMap[accId] = 0;
         balanceMap[accId] += (parseFloat(l.debit) || 0) - (parseFloat(l.credit) || 0);
       });
-      clients.forEach(c => {
+      clients.forEach((c: any) => {
         if (c.account_id && balanceMap[c.account_id] !== undefined) {
           c.balance = balanceMap[c.account_id];
         }
@@ -65,23 +65,40 @@ export async function POST(req: NextRequest) {
     const auth = await requireModulePermission(req, 'clients', 'create');
     const s = sb();
     const data = await parseBody(req);
-    const { name, phone, email, address, tax_number, commercial_registration, credit_limit } = data;
 
-    if (!name) return error('name is required');
+    if (!data.name) return error('اسم العميل مطلوب');
+
+    const insertData: any = {
+      company_id: auth.companyId,
+      name: data.name,
+      type: data.type || 'client',
+      phone: data.phone || null,
+      email: data.email || null,
+      address: data.address || null,
+      tax_number: data.tax_number || null,
+      commercial_registration: data.commercial_registration || null,
+      credit_limit: data.credit_limit || 0,
+      is_active: true,
+      created_by: auth.userId,
+    };
+
+    // Extended fields (safe — will be ignored if columns don't exist yet)
+    const extendedFields = [
+      'contact_person', 'contact_person_phone', 'contact_person_email',
+      'city', 'region', 'country', 'postal_code', 'website',
+      'iban', 'bank_name', 'swift_code',
+      'opening_balance', 'opening_balance_type', 'payment_terms',
+      'notes', 'date_of_birth', 'gender', 'national_id', 'category',
+    ];
+
+    extendedFields.forEach(field => {
+      if (data[field] !== undefined) {
+        insertData[field] = data[field];
+      }
+    });
 
     const { data: result, error: insertError } = await s.from('contacts')
-      .insert({
-        company_id: auth.companyId,
-        name,
-        type: 'client',
-        phone: phone || null,
-        email: email || null,
-        address: address || null,
-        tax_number: tax_number || null,
-        commercial_registration: commercial_registration || null,
-        credit_limit: credit_limit || 0,
-        is_active: true,
-      })
+      .insert(insertData)
       .select('*')
       .single();
 
