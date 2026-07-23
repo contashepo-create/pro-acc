@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Package, Plus, Loader2, ChevronLeft, RefreshCw, Settings, Users, DollarSign } from 'lucide-react';
+import { Package, Plus, Loader2, ChevronLeft, RefreshCw, Settings, Users, DollarSign, Trash2, X } from 'lucide-react';
 import Link from 'next/link';
 
 interface Plan {
@@ -68,6 +68,10 @@ export default function PlansPageEnhanced() {
     is_active: true, sort_order: 0
   });
   const [saving, setSaving] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletePlan, setDeletePlan] = useState<Plan | null>(null);
+  const [migrateTo, setMigrateTo] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   const fetchPlans = async () => {
     setLoading(true);
@@ -151,6 +155,31 @@ export default function PlansPageEnhanced() {
     }));
   };
 
+  const openDelete = (plan: Plan) => {
+    setDeletePlan(plan);
+    setMigrateTo('');
+    setShowDeleteModal(true);
+  };
+
+  const doDelete = async () => {
+    if (!deletePlan) return;
+    setDeleting(true);
+    try {
+      const url = `/api/admin/subscription-plans/${deletePlan.id}${migrateTo ? `?migrate_to=${migrateTo}` : ''}`;
+      const res = await fetch(url, { method: 'DELETE' });
+      const body = await res.json();
+      if (body.success) {
+        setShowDeleteModal(false);
+        setDeletePlan(null);
+        fetchPlans();
+        alert(body.migrated > 0 ? `تم حذف الباقة وترحيل ${body.migrated} مشترك` : 'تم حذف الباقة');
+      } else {
+        alert(body.message || 'فشل الحذف');
+      }
+    } catch { alert('خطأ في الاتصال'); }
+    finally { setDeleting(false); }
+  };
+
   if (loading) {
     return <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center"><Loader2 size={32} className="text-amber-500 animate-spin" /></div>;
   }
@@ -177,13 +206,18 @@ export default function PlansPageEnhanced() {
 
         <div className="grid gap-4">
           {plans.map((plan) => (
-            <div key={plan.id} className="bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-5 hover:border-amber-800/50 transition-colors cursor-pointer" onClick={() => openEdit(plan)}>
-              <div className="flex justify-between">
-                <div>
+            <div key={plan.id} className="bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-5 hover:border-amber-800/50 transition-colors">
+              <div className="flex justify-between items-start">
+                <div className="cursor-pointer flex-1" onClick={() => openEdit(plan)}>
                   <h3 className="font-bold text-lg flex items-center gap-2">{plan.name} <code className="text-xs bg-amber-950/30 px-2 py-0.5 rounded text-amber-600">{plan.code}</code></h3>
                   <p className="text-amber-400/50 text-sm mt-1">{plan.description_ar || plan.description}</p>
                 </div>
-                <div className={`w-3 h-3 rounded-full ${plan.is_active ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                <div className="flex items-center gap-2">
+                  <div className={`w-3 h-3 rounded-full ${plan.is_active ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                  <button onClick={(e) => { e.stopPropagation(); openDelete(plan); }} className="p-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40" title="حذف الباقة">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-xs">
                 <div className="bg-[#1a1625] rounded-lg p-2"><span className="text-amber-400/50">شهري: </span><strong>{plan.price_monthly} ر.س</strong></div>
@@ -253,6 +287,33 @@ export default function PlansPageEnhanced() {
               <div className="flex gap-3 mt-8">
                 <button onClick={() => setShowForm(false)} className="flex-1 py-3 bg-[#1a1625] border border-[#2a1f0a] text-amber-300 rounded-xl text-sm">إلغاء</button>
                 <button onClick={savePlan} disabled={saving || !form.name} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm flex items-center justify-center gap-2">{saving && <Loader2 size={16} className="animate-spin" />}حفظ الباقة المرنة</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete Modal */}
+        {showDeleteModal && deletePlan && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowDeleteModal(false)}>
+            <div className="bg-[#12101a] border border-red-900/40 rounded-2xl p-6 max-w-md w-full" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-red-400">حذف الباقة: {deletePlan.name}</h2>
+                <button onClick={() => setShowDeleteModal(false)} className="text-amber-500/50"><X size={18} /></button>
+              </div>
+              <p className="text-amber-400/70 text-sm mb-4">سيتم حذف الباقة نهائياً. إذا كان هناك مشتركون على هذه الباقة، يجب اختيار باقة بديلة لترحيلهم إليها.</p>
+              <div className="space-y-3">
+                <select className="w-full bg-[#0a0a0f] border border-[#2a1f0a] rounded-lg px-3 py-2.5 text-sm text-amber-50 focus:outline-none focus:border-red-600" value={migrateTo} onChange={e => setMigrateTo(e.target.value)}>
+                  <option value="">— بدون ترحيل (يُرفض الحذف إذا يوجد مشتركون) —</option>
+                  {plans.filter(p => p.id !== deletePlan.id).map(p => (
+                    <option key={p.id} value={p.id}>ترحيل إلى: {p.name}</option>
+                  ))}
+                </select>
+                <div className="flex gap-3">
+                  <button onClick={() => setShowDeleteModal(false)} className="flex-1 py-2.5 bg-[#1a1625] border border-[#2a1f0a] text-amber-300 rounded-xl text-sm">إلغاء</button>
+                  <button onClick={doDelete} disabled={deleting} className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-sm flex items-center justify-center gap-2">
+                    {deleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />} حذف الباقة
+                  </button>
+                </div>
               </div>
             </div>
           </div>

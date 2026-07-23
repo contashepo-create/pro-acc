@@ -96,6 +96,17 @@ export async function POST(request: NextRequest) {
     const parsed = invoiceSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
+    // Check plan limits
+    try {
+      const { checkPlanLimit } = await import('@/lib/plan-limits');
+      const limitCheck = await checkPlanLimit(auth.companyId, 'invoices');
+      if (!limitCheck.allowed) {
+        return error(limitCheck.message || 'تم الوصول للحد الأقصى من الفواتير الشهرية', 403);
+      }
+    } catch (e) {
+      console.warn('Plan limit check failed:', e);
+    }
+
     const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes, vatEnabled } = parsed.data;
     const year = date.substring(0, 4);
 

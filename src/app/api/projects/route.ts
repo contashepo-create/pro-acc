@@ -52,6 +52,17 @@ export async function POST(request: NextRequest) {
       return validationError(parsed.error.flatten().fieldErrors as Record<string, string[]>);
     }
 
+    // Check plan limits
+    try {
+      const { checkPlanLimit } = await import('@/lib/plan-limits');
+      const limitCheck = await checkPlanLimit(auth.companyId, 'projects');
+      if (!limitCheck.allowed) {
+        return error(limitCheck.message || 'تم الوصول للحد الأقصى من المشاريع', 403);
+      }
+    } catch (e) {
+      console.warn('Plan limit check failed:', e);
+    }
+
     const projectId = generateId();
     let effectiveClientId = body.client_id || null;
 
