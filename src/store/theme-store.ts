@@ -34,7 +34,7 @@ function applyClasses(themeId: string, isDark: boolean) {
 
 export const useThemeStore = create<ThemeState>((set, get) => ({
   themeId: getStored(THEME_ID_KEY, DEFAULT_THEME_ID),
-  isDark: getStored(THEME_DARK_KEY, true),
+  isDark: getStored(THEME_DARK_KEY, false),
   sectionAccent: '#D4893B',
 
   setTheme: (id) => {
@@ -71,6 +71,6 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
 export function initTheme() {
   if (typeof window === 'undefined') return;
   const themeId = getStored(THEME_ID_KEY, DEFAULT_THEME_ID);
-  const isDark = getStored(THEME_DARK_KEY, true);
+  const isDark = getStored(THEME_DARK_KEY, false);
   applyClasses(themeId, isDark);
 }
