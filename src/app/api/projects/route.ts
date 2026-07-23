@@ -111,12 +111,12 @@ export async function POST(request: NextRequest) {
       const { data: vatAcc } = await s.from('accounts').select('id').eq('code', '2120').eq('company_id', auth.companyId).maybeSingle();
 
       const journalLines: any[] = [
-        { id: generateId(), journal_entry_id: jeId, account_id: arContact.account_id, debit: totalAmount, credit: 0, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
-        { id: generateId(), journal_entry_id: jeId, account_id: revAcc?.id, debit: 0, credit: subtotal, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
+        { id: generateId(), company_id: auth.companyId, journal_entry_id: jeId, account_id: arContact.account_id, account_code: '1130', debit: totalAmount, credit: 0, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
+        { id: generateId(), company_id: auth.companyId, journal_entry_id: jeId, account_id: revAcc?.id, account_code: '4100', debit: 0, credit: subtotal, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
       ];
 
       if (vatAmount > 0 && vatAcc) {
-        journalLines.push({ id: generateId(), journal_entry_id: jeId, account_id: vatAcc.id, debit: 0, credit: vatAmount, description: `ضريبة فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId });
+        journalLines.push({ id: generateId(), company_id: auth.companyId, journal_entry_id: jeId, account_id: vatAcc.id, account_code: '2120', debit: 0, credit: vatAmount, description: `ضريبة فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId });
       }
 
       await s.from('journal_lines').insert(journalLines);
@@ -124,7 +124,7 @@ export async function POST(request: NextRequest) {
       await s.from('invoices').insert({
         id: invoiceId, company_id: auth.companyId, number: invoiceNumber, contact_id: effectiveClientId,
         project_id: projectId, date: body.start_date, due_date: body.start_date, subtotal: subtotal,
-        vat_rate: taxRate, vat_amount: vatAmount, total: totalAmount, paid_amount: 0, status: 'unpaid',
+        tax_rate: taxRate, tax_amount: vatAmount, total: totalAmount, paid_amount: 0, status: 'unpaid',
         journal_entry_id: jeId, created_by: auth.userId,
       });
 

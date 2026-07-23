@@ -74,11 +74,11 @@ export async function POST(req: NextRequest) {
 
         const totalDebit = gross_amount + taxAmount;
         const jl: any[] = [
-          { journal_entry_id: je.id, account_id: arAcc.id, debit: totalDebit, credit: 0 },
-          { journal_entry_id: je.id, account_id: revAcc.id, debit: 0, credit: netAmount },
+          { company_id: auth.companyId, journal_entry_id: je.id, account_id: arAcc.id, account_code: ACCOUNT_CODES.ACCRUED_REVENUE, debit: totalDebit, credit: 0 },
+          { company_id: auth.companyId, journal_entry_id: je.id, account_id: revAcc.id, account_code: ACCOUNT_CODES.CONTRACT_REVENUE, debit: 0, credit: netAmount },
         ];
-        if (retentionAmount > 0 && retAcc) jl.push({ journal_entry_id: je.id, account_id: retAcc.id, debit: 0, credit: retentionAmount });
-        if (taxAmount > 0 && vatAcc) jl.push({ journal_entry_id: je.id, account_id: vatAcc.id, debit: 0, credit: taxAmount });
+        if (retentionAmount > 0 && retAcc) jl.push({ company_id: auth.companyId, journal_entry_id: je.id, account_id: retAcc.id, account_code: ACCOUNT_CODES.RETENTIONS, debit: 0, credit: retentionAmount });
+        if (taxAmount > 0 && vatAcc) jl.push({ company_id: auth.companyId, journal_entry_id: je.id, account_id: vatAcc.id, account_code: ACCOUNT_CODES.VAT_SALES, debit: 0, credit: taxAmount });
         await s.from('journal_lines').insert(jl);
       }
     } catch (journalError) {

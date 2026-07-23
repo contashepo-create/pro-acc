@@ -437,7 +437,6 @@ export default function SettingsPage() {
                   setCountryCode(v);
                   const config = getCountriesList().find(c => c.value === v);
                   if (config) {
-                    const { getCountryConfig } = require('@/lib/countries');
                     const cc = getCountryConfig(v);
                     setCurrencySymbol(cc.currencySymbol);
                     setCurrencyCode(cc.currencyCode);

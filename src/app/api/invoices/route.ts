@@ -237,6 +237,7 @@ export async function POST(request: NextRequest) {
         }
 
         const { error: itemErr } = await s.from('invoice_items').insert({
+          company_id: auth.companyId,
           invoice_id: invoiceId,
           description: item.description,
           quantity: item.quantity,
@@ -299,6 +300,7 @@ export async function POST(request: NextRequest) {
       // Create journal lines
       const journalLines: any[] = [
         { 
+          company_id: auth.companyId,
           journal_entry_id: journalEntryId, 
           account_id: arAccount.id, 
           account_code: '1130', 
@@ -307,6 +309,7 @@ export async function POST(request: NextRequest) {
           description: `فاتورة مبيعات رقم ${number}` 
         },
         { 
+          company_id: auth.companyId,
           journal_entry_id: journalEntryId, 
           account_id: revenueAccount.id, 
           account_code: '4100', 
@@ -318,6 +321,7 @@ export async function POST(request: NextRequest) {
       
       if (computedVat > 0 && vatAccount) {
         journalLines.push({ 
+          company_id: auth.companyId,
           journal_entry_id: journalEntryId, 
           account_id: vatAccount.id, 
           account_code: '2120', 

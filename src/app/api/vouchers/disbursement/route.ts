@@ -53,9 +53,6 @@ export async function GET(request: NextRequest) {
       
       data = fallbackResult.data;
       count = fallbackResult.count || 0;
-    } else {
-      data = joinedData || [];
-      count = joinedCount || 0;
     }
 
     return success({
@@ -191,7 +188,7 @@ export async function POST(request: NextRequest) {
 
     // 4. إنشاء القيد المحاسبي
     const debitAccountId = bankSafe.account_id;
-    let creditAccountId = ACCOUNT_CODES.CASH_ON_HAND;
+    let creditAccountId = ACCOUNT_CODES.CASH;
 
     if (finalDisbType === 'supplier') {
       creditAccountId = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
