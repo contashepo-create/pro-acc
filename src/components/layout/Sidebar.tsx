@@ -38,6 +38,7 @@ const navGroups: NavGroup[] = [
       { id: 'invoices', label: 'الفواتير' },
       { id: 'vouchers/receipt', label: 'سندات قبض' },
       { id: 'vouchers/disbursement', label: 'سندات صرف' },
+      { id: 'credit-notes', label: 'إشعارات دائنة' },
       { id: 'cash', label: 'النقدية' },
       { id: 'bank-reconciliation', label: 'تسوية البنوك' },
     ],

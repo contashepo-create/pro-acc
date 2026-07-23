@@ -92,9 +92,22 @@ export async function GET(request: NextRequest) {
       const { data: invoices } = await invoiceQuery;
       const invoiceRevenue = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
 
-      // If no journal revenue, use invoices
-      if (revenue === 0 && invoiceRevenue > 0) {
-        revenue = invoiceRevenue;
+      // Subtract credit notes from revenue
+      let creditNoteTotal = 0;
+      try {
+        const { data: creditNotes } = await s.from('credit_notes')
+          .select('total')
+          .eq('company_id', auth.companyId)
+          .eq('project_id', projectId)
+          .neq('status', 'cancelled');
+        creditNoteTotal = (creditNotes || []).reduce((sum: number, cn: any) => sum + (parseFloat(cn.total) || 0), 0);
+      } catch {}
+
+      const netInvoiceRevenue = invoiceRevenue - creditNoteTotal;
+
+      // If no journal revenue, use net invoices
+      if (revenue === 0 && netInvoiceRevenue > 0) {
+        revenue = netInvoiceRevenue;
       }
 
       const profit = revenue - costs.total;
@@ -114,7 +127,8 @@ export async function GET(request: NextRequest) {
         },
         financials: {
           revenue,
-          invoice_revenue: invoiceRevenue,
+          invoice_revenue: netInvoiceRevenue,
+          credit_notes: creditNoteTotal,
           costs,
           profit,
           profit_margin: profitMargin,

@@ -95,64 +95,15 @@ export async function POST(request: NextRequest) {
       tax_enabled: body.tax_enabled || false, tax_rate: body.tax_rate || 0,
     });
 
-    let invoice = null;
-
-    if (body.auto_invoice && effectiveClientId) {
-      const invoiceId = generateId();
-      const jeId = generateId();
-      const invSeq = await getNextJournalNumber(auth.companyId, body.start_date);
-      const invoiceNumber = `INV-${projectId.substring(0, 8).toUpperCase()}`;
-
-      // VAT calculation
-      const taxEnabled = body.tax_enabled || false;
-      const taxRate = body.tax_rate || 0;
-      const subtotal = body.contract_value;
-      const vatAmount = taxEnabled ? subtotal * taxRate : 0;
-      const totalAmount = subtotal + vatAmount;
-
-      await s.from('journal_entries').insert({
-        id: jeId, company_id: auth.companyId, number: invSeq, date: body.start_date,
-        type: 'invoice', description: `فاتورة مشروع: ${body.name}`, project_id: projectId, created_by: auth.userId,
-      });
-
-      const { data: arContact } = await s.from('contacts').select('account_id').eq('id', effectiveClientId).maybeSingle();
-      if (!arContact?.account_id) throw new Error('العميل ليس لديه حساب ذمم مدينة');
-
-      const { data: revAcc } = await s.from('accounts').select('id').eq('code', '4100').eq('company_id', auth.companyId).maybeSingle();
-      const { data: vatAcc } = await s.from('accounts').select('id').eq('code', '2120').eq('company_id', auth.companyId).maybeSingle();
-
-      const journalLines: any[] = [
-        { id: generateId(), company_id: auth.companyId, journal_entry_id: jeId, account_id: arContact.account_id, account_code: '1130', debit: totalAmount, credit: 0, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
-        { id: generateId(), company_id: auth.companyId, journal_entry_id: jeId, account_id: revAcc?.id, account_code: '4100', debit: 0, credit: subtotal, description: `فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId },
-      ];
-
-      if (vatAmount > 0 && vatAcc) {
-        journalLines.push({ id: generateId(), company_id: auth.companyId, journal_entry_id: jeId, account_id: vatAcc.id, account_code: '2120', debit: 0, credit: vatAmount, description: `ضريبة فاتورة مشروع: ${body.name}`, project_id: projectId, contact_id: effectiveClientId });
-      }
-
-      await s.from('journal_lines').insert(journalLines);
-
-      await s.from('invoices').insert({
-        id: invoiceId, company_id: auth.companyId, number: invoiceNumber, contact_id: effectiveClientId,
-        project_id: projectId, date: body.start_date, due_date: body.start_date, subtotal: subtotal,
-        tax_rate: taxRate, tax_amount: vatAmount, total: totalAmount, paid_amount: 0, status: 'unpaid',
-        journal_entry_id: jeId, created_by: auth.userId,
-      });
-
-      await s.from('invoice_items').insert({
-        id: generateId(), invoice_id: invoiceId, description: `أعمال مشروع: ${body.name}`,
-        quantity: 1, unit_price: body.contract_value, total: body.contract_value,
-      });
-
-      invoice = { id: invoiceId, number: invoiceNumber };
-    }
+    // لا يتم إنشاء فاتورة تلقائية — الفواتير تُصدر يدوياً من صفحة الفواتير
+    // المشروع يسجل قيمة العقد كتقدير فقط بدون قيد محاسبي
 
     const { data: projectRes, error: fetchErr } = await s.from('projects')
       .select('*, contacts(name)').eq('id', projectId).single();
     if (fetchErr) throw fetchErr;
 
     const result = projectRes as Record<string, any>;
-    return success({ ...result, client_name: result.contacts?.name || null, invoice }, 201);
+    return success({ ...result, client_name: result.contacts?.name || null }, 201);
   } catch (err) {
     return handleApiError(err);
   }
