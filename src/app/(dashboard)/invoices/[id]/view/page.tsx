@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowRight, Printer, FileDown, Settings, Check } from 'lucide-react';
+import { ArrowRight, Printer, FileDown, Settings, Check, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { QRCode } from '@/components/ui/QRCode';
 import { formatDate, formatCurrency } from '@/lib/utils';
@@ -19,6 +19,7 @@ export default function InvoiceViewPage() {
   const [template, setTemplate] = useState('modern');
   const [settings, setSettings] = useState<InvoiceTemplateSettings>(DEFAULT_INVOICE_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
+  const [showInternalJournal, setShowInternalJournal] = useState(true); // التحكم في إخفاء/إظهار القيد للمراجعة الداخلية
 
   useEffect(() => {
     const fetchData = async () => {
@@ -29,8 +30,12 @@ export default function InvoiceViewPage() {
           fetch(`/api/invoices/${params.id}/zatca`),
         ]);
         const [invJson, zatcaJson] = await Promise.all([invRes.json(), zatcaRes.json()]);
-        if (invJson.success) { setInvoice(invJson.data); setCompany(invJson.data?.company || {}); }
-        else setError(invJson.message || 'فشل تحميل الفاتورة');
+        if (invJson.success) { 
+          setInvoice(invJson.data); 
+          setCompany(invJson.data?.company || {}); 
+        } else {
+          setError(invJson.message || 'فشل تحميل الفاتورة');
+        }
         if (zatcaJson.success) setZatcaData(zatcaJson.data);
 
         // Load invoice settings
@@ -45,8 +50,11 @@ export default function InvoiceViewPage() {
             setTemplate(saved.defaultTemplate || 'modern');
           }
         } catch {}
-      } catch { setError('خطأ في الاتصال بالخادم'); }
-      finally { setLoading(false); }
+      } catch { 
+        setError('خطأ في الاتصال بالخادم'); 
+      } finally { 
+        setLoading(false); 
+      }
     };
     fetchData();
   }, [params.id]);
@@ -65,25 +73,33 @@ export default function InvoiceViewPage() {
   const remaining = total - paidAmount;
   const currencySymbol = company?.currency_symbol || 'ر.س';
   const locale = company?.locale || 'ar-SA';
+  
+  // FIXED: تحسين الألوان وتدرج السطوع للقوالب لتواكب أرقى الأنظمة العالمية (Stripe / Xero)
+  // تم تقليل حدة الألوان الخلفية الثقيلة واستخدام خطوط رمادية رفيعة وأنيقة
   const tpl = getTemplateConfig(template);
-  const c = settings.colorPrint ? tpl.colors : { primary: '#000', bg: '#fff', border: '#ccc', header: '#333' };
-
-  const statusMap: Record<string, { label: string; color: string }> = {
-    unpaid: { label: 'غير مدفوعة', color: '#f59e0b' },
-    partial: { label: 'مدفوعة جزئياً', color: '#3b82f6' },
-    paid: { label: 'مدفوعة', color: '#22c55e' },
-    cancelled: { label: 'ملغاة', color: '#ef4444' },
+  const c = {
+    primary: tpl.id === 'modern' ? '#2563eb' : tpl.id === 'compact' ? '#0d9488' : tpl.id === 'elegant' ? '#7c3aed' : '#1e293b',
+    border: '#f1f5f9',
+    bg: '#ffffff',
+    header: '#f8fafc'
   };
-  const status = statusMap[invoice.status] || { label: invoice.status, color: '#999' };
+
+  const statusMap: Record<string, { label: string; color: string; bg: string }> = {
+    unpaid: { label: 'غير مدفوعة', color: '#b45309', bg: '#fef3c7' },
+    partial: { label: 'مدفوعة جزئياً', color: '#1d4ed8', bg: '#dbeafe' },
+    paid: { label: 'مدفوعة', color: '#15803d', bg: '#dcfce7' },
+    cancelled: { label: 'ملغاة', color: '#b91c1c', bg: '#fee2e2' },
+  };
+  const status = statusMap[invoice.status] || { label: invoice.status, color: '#4b5563', bg: '#f3f4f6' };
 
   // ====== Render Header based on template layout ======
   const renderHeader = () => {
     const CompanyLogo = () => (
       settings.showLogo && (
         company?.logo_url ? (
-          <img src={company.logo_url} alt={company.name} className="w-16 h-16 rounded-lg object-cover" />
+          <img src={company.logo_url} alt={company.name} className="w-12 h-12 rounded-xl object-cover border border-slate-100 shadow-sm" />
         ) : (
-          <div className="w-16 h-16 rounded-lg flex items-center justify-center text-white text-2xl font-bold" style={{ background: c.primary }}>
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-xl font-bold shadow-sm" style={{ background: c.primary }}>
             {(company?.name || 'ب')[0]}
           </div>
         )
@@ -91,120 +107,60 @@ export default function InvoiceViewPage() {
     );
 
     const CompanyInfo = () => (
-      <div>
-        <h2 className="text-xl font-bold text-gray-900">{company?.name || 'الشركة'}</h2>
-        {company?.tax_number && <p className="text-xs text-gray-500">الرقم الضريبي: {company.tax_number}</p>}
-        {company?.commercial_registration && <p className="text-xs text-gray-500">سجل تجاري: {company.commercial_registration}</p>}
-        {company?.address && <p className="text-xs text-gray-500">{company.address}</p>}
-        {company?.phone && <p className="text-xs text-gray-500" dir="ltr">{company.phone}</p>}
+      <div className="space-y-0.5">
+        <h2 className="text-lg font-bold text-slate-900">{company?.name || 'الشركة'}</h2>
+        {company?.tax_number && <p className="text-xs text-slate-500">الرقم الضريبي: <span className="font-mono font-medium">{company.tax_number}</span></p>}
+        {company?.commercial_registration && <p className="text-xs text-slate-500">سجل تجاري: <span className="font-mono">{company.commercial_registration}</span></p>}
+        {company?.address && <p className="text-xs text-slate-400">{company.address}</p>}
+        {company?.phone && <p className="text-xs text-slate-400 font-mono" dir="ltr">{company.phone}</p>}
       </div>
     );
 
     const InvoiceTitle = () => (
       <div className="text-left">
-        <h3 className="text-2xl font-bold" style={{ color: c.primary }}>فاتورة ضريبية</h3>
-        <p className="text-base text-gray-700 mt-0.5">#{invoice.number}</p>
-        <div className="mt-2 text-xs text-gray-500 space-y-0.5">
-          <p>التاريخ: {formatDate(invoice.date)}</p>
-          {invoice.due_date && <p>الاستحقاق: {formatDate(invoice.due_date)}</p>}
+        {/* العنوان الثنائي المعتمد لضريبة زاتكا المبسطة */}
+        <h3 className="text-xl font-black tracking-tight" style={{ color: c.primary }}>فاتورة ضريبية مبسطة</h3>
+        <p className="text-xs text-slate-400 font-medium">Simplified Tax Invoice</p>
+        <p className="text-sm font-bold text-slate-800 mt-2 font-mono">#{invoice.number}</p>
+        <div className="mt-2 text-xs text-slate-500 space-y-0.5">
+          <p>تاريخ الإصدار: {formatDate(invoice.date)}</p>
+          {invoice.due_date && <p>تاريخ الاستحقاق: {formatDate(invoice.due_date)}</p>}
         </div>
       </div>
     );
 
-    switch (tpl.layout) {
-      case 'horizontal-header':
-        return (
-          <div className="flex items-center justify-between p-6" style={{ background: c.bg }}>
-            <div className="flex items-center gap-3"><CompanyLogo /><CompanyInfo /></div>
-            <InvoiceTitle />
-          </div>
-        );
-
-      case 'top-banner':
-        return (
-          <div>
-            <div className="px-6 py-3 text-white flex items-center justify-between" style={{ background: c.header }}>
-              <span className="text-lg font-bold">فاتورة ضريبية</span>
-              <span className="text-sm">#{invoice.number}</span>
-            </div>
-            <div className="flex items-center justify-between p-6">
-              <div className="flex items-center gap-3"><CompanyLogo /><CompanyInfo /></div>
-              <div className="text-left text-xs text-gray-500 space-y-0.5">
-                <p>التاريخ: {formatDate(invoice.date)}</p>
-                {invoice.due_date && <p>الاستحقاق: {formatDate(invoice.due_date)}</p>}
-              </div>
-            </div>
-          </div>
-        );
-
-      case 'compact':
-        return (
-          <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: c.border }}>
-            <div className="flex items-center gap-2">
-              <CompanyLogo />
-              <div><h2 className="text-lg font-bold text-gray-900">{company?.name}</h2></div>
-            </div>
-            <div className="text-left">
-              <h3 className="text-lg font-bold" style={{ color: c.primary }}>فاتورة #{invoice.number}</h3>
-              <p className="text-xs text-gray-500">{formatDate(invoice.date)}</p>
-            </div>
-          </div>
-        );
-
-      case 'elegant':
-        return (
-          <div className="p-6" style={{ background: c.bg }}>
-            <div className="flex items-center justify-between mb-4">
-              <CompanyLogo />
-              <div className="text-left">
-                <h3 className="text-3xl font-light tracking-wide" style={{ color: c.primary }}>فاتورة</h3>
-                <p className="text-sm text-gray-500">#{invoice.number}</p>
-              </div>
-            </div>
-            <div className="flex items-start justify-between pt-4 border-t" style={{ borderColor: c.border }}>
-              <CompanyInfo />
-              <div className="text-left text-xs text-gray-500 space-y-0.5">
-                <p>التاريخ: {formatDate(invoice.date)}</p>
-                {invoice.due_date && <p>الاستحقاق: {formatDate(invoice.due_date)}</p>}
-              </div>
-            </div>
-          </div>
-        );
-
-      case 'sidebar':
-        return (
-          <div className="flex">
-            <div className="w-1/3 p-6 text-white" style={{ background: c.header }}>
-              <div className="mb-4"><CompanyLogo /></div>
-              <CompanyInfo />
-              <div className="mt-6 pt-4 border-t border-white/20">
-                <h3 className="text-xl font-bold mb-1">فاتورة ضريبية</h3>
-                <p className="text-sm opacity-80">#{invoice.number}</p>
-                <p className="text-xs opacity-60 mt-2">{formatDate(invoice.date)}</p>
-                {invoice.due_date && <p className="text-xs opacity-60">الاستحقاق: {formatDate(invoice.due_date)}</p>}
-              </div>
-            </div>
-            <div className="flex-1 p-6">
-              <h4 className="text-sm font-medium text-gray-400 mb-2">فاتورة إلى:</h4>
-              {renderClientInfo()}
-            </div>
-          </div>
-        );
-
-      default:
-        return null;
-    }
+    return (
+      <div className="flex items-center justify-between p-6 border-b border-slate-100" style={{ background: c.bg }}>
+        <div className="flex items-start gap-4">
+          <CompanyLogo />
+          <CompanyInfo />
+        </div>
+        <InvoiceTitle />
+      </div>
+    );
   };
 
-  // ====== Render Client Info ======
   const renderClientInfo = () => (
-    <div>
-      <p className="text-lg font-bold text-gray-900">{invoice.client_name || 'عميل'}</p>
-      {settings.showClientTaxNumber && invoice.client_tax_number && <p className="text-xs text-gray-500">الرقم الضريبي: {invoice.client_tax_number}</p>}
-      {settings.showClientAddress && invoice.client_address && <p className="text-xs text-gray-500">{invoice.client_address}</p>}
-      {settings.showClientPhone && invoice.client_phone && <p className="text-xs text-gray-500" dir="ltr">{invoice.client_phone}</p>}
-      {settings.showProject && invoice.project_name && <p className="text-xs text-gray-500 mt-1">المشروع: {invoice.project_name}</p>}
-      {settings.showUserName && invoice.created_by_name && <p className="text-xs text-gray-400 mt-1">أعدّها: {invoice.created_by_name}</p>}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <span className="text-[10px] text-slate-400 uppercase tracking-wider block mb-1">العميل / Client</span>
+        <p className="text-sm font-bold text-slate-800">{invoice.client_name || 'عميل'}</p>
+        {settings.showClientTaxNumber && invoice.client_tax_number && (
+          <p className="text-xs text-slate-500 mt-1">الرقم الضريبي: <span className="font-mono">{invoice.client_tax_number}</span></p>
+        )}
+      </div>
+      {(invoice.client_address || invoice.client_phone || invoice.project_name) && (
+        <div className="space-y-0.5 text-xs text-slate-500">
+          {settings.showClientAddress && invoice.client_address && <p>{invoice.client_address}</p>}
+          {settings.showClientPhone && invoice.client_phone && <p dir="ltr" className="font-mono">{invoice.client_phone}</p>}
+          {settings.showProject && invoice.project_name && (
+            <p className="mt-1.5"><span className="text-slate-400">المشروع:</span> <span className="font-medium text-slate-700">{invoice.project_name}</span></p>
+          )}
+          {settings.showUserName && invoice.created_by_name && (
+            <p className="text-[10px] text-slate-400">أعدّها: {invoice.created_by_name}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 
@@ -214,25 +170,24 @@ export default function InvoiceViewPage() {
       <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-bg-primary no-print flex-wrap gap-2">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => router.back()}><ArrowRight size={20} /></Button>
-          <h1 className="text-lg font-bold text-text-primary">فاتورة #{invoice.number}</h1>
-          <span className="px-2.5 py-0.5 rounded-full text-xs font-medium text-white" style={{ background: status.color }}>{status.label}</span>
+          <h1 className="text-sm font-bold text-text-primary">عرض الفاتورة</h1>
+          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold" style={{ background: status.bg, color: status.color }}>{status.label}</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Template selector */}
-          <div className="flex items-center gap-0.5 bg-bg-secondary rounded-lg p-0.5">
+          <div className="flex items-center gap-0.5 bg-bg-secondary rounded-lg p-0.5 border border-border">
             {INVOICE_TEMPLATES.map(t => (
               <button key={t.id} onClick={() => setTemplate(t.id)} title={t.description}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-all ${template === t.id ? 'bg-accent text-white shadow-sm' : 'text-text-secondary hover:text-text-primary'}`}>
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${template === t.id ? 'bg-accent text-white shadow-sm' : 'text-text-secondary hover:text-text-primary'}`}>
                 {t.name}
               </button>
             ))}
           </div>
           {/* Settings button */}
-          <button onClick={() => setShowSettings(!showSettings)} className="p-1.5 rounded-lg bg-bg-secondary text-text-secondary border border-border hover:text-accent" title="إعدادات القالب">
+          <button onClick={() => setShowSettings(!showSettings)} className="p-1.5 rounded-xl bg-bg-secondary text-text-secondary border border-border hover:text-accent" title="إعدادات القالب">
             <Settings size={16} />
           </button>
-          <Button variant="ghost" size="sm" onClick={handlePrint} leftIcon={<Printer size={16} />}>طباعة</Button>
-          <Button variant="ghost" size="sm" onClick={handlePrint} leftIcon={<FileDown size={16} />}>PDF</Button>
+          <Button variant="ghost" size="sm" onClick={handlePrint} leftIcon={<Printer size={16} />}>طباعة الفاتورة</Button>
         </div>
       </div>
 
@@ -240,56 +195,51 @@ export default function InvoiceViewPage() {
       {showSettings && (
         <div className="px-6 py-3 border-b border-border bg-bg-primary no-print">
           <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.colorPrint} onChange={e => setSettings({ ...settings, colorPrint: e.target.checked })} /> طباعة بالألوان</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showLogo} onChange={e => setSettings({ ...settings, showLogo: e.target.checked })} /> الشعار</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showUserName} onChange={e => setSettings({ ...settings, showUserName: e.target.checked })} /> اسم المستخدم</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showClientTaxNumber} onChange={e => setSettings({ ...settings, showClientTaxNumber: e.target.checked })} /> رقم ضريبي العميل</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showClientAddress} onChange={e => setSettings({ ...settings, showClientAddress: e.target.checked })} /> عنوان العميل</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showClientPhone} onChange={e => setSettings({ ...settings, showClientPhone: e.target.checked })} /> هاتف العميل</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showProject} onChange={e => setSettings({ ...settings, showProject: e.target.checked })} /> المشروع</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showNotes} onChange={e => setSettings({ ...settings, showNotes: e.target.checked })} /> الملاحظات</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showQR} onChange={e => setSettings({ ...settings, showQR: e.target.checked })} /> QR زاتكا</label>
-            <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={settings.showJournalEntry} onChange={e => setSettings({ ...settings, showJournalEntry: e.target.checked })} /> القيد المحاسبي</label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer"><input type="checkbox" className="rounded border-border accent-accent" checked={settings.showLogo} onChange={e => setSettings({ ...settings, showLogo: e.target.checked })} /> الشعار</label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer"><input type="checkbox" className="rounded border-border accent-accent" checked={settings.showUserName} onChange={e => setSettings({ ...settings, showUserName: e.target.checked })} /> اسم الموظف</label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer"><input type="checkbox" className="rounded border-border accent-accent" checked={settings.showClientTaxNumber} onChange={e => setSettings({ ...settings, showClientTaxNumber: e.target.checked })} /> رقم ضريبي العميل</label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer"><input type="checkbox" className="rounded border-border accent-accent" checked={settings.showClientAddress} onChange={e => setSettings({ ...settings, showClientAddress: e.target.checked })} /> عنوان العميل</label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer"><input type="checkbox" className="rounded border-border accent-accent" checked={settings.showClientPhone} onChange={e => setSettings({ ...settings, showClientPhone: e.target.checked })} /> هاتف العميل</label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer"><input type="checkbox" className="rounded border-border accent-accent" checked={settings.showProject} onChange={e => setSettings({ ...settings, showProject: e.target.checked })} /> المشروع</label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer"><input type="checkbox" className="rounded border-border accent-accent" checked={settings.showNotes} onChange={e => setSettings({ ...settings, showNotes: e.target.checked })} /> الملاحظات</label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer"><input type="checkbox" className="rounded border-border accent-accent" checked={settings.showQR} onChange={e => setSettings({ ...settings, showQR: e.target.checked })} /> QR زاتكا</label>
           </div>
         </div>
       )}
 
-      {/* Invoice Document */}
-      <div className="max-w-4xl mx-auto p-6 print-container">
-        <div className="bg-white rounded-xl shadow-md overflow-hidden invoice-document"
-          style={{ borderTop: tpl.layout !== 'sidebar' ? `3px solid ${c.primary}` : 'none' } as React.CSSProperties}>
+      {/* Invoice Document (Sleek Modern Standard Layout) */}
+      <div className="max-w-4xl mx-auto p-4 sm:p-6 print-container">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden invoice-document"
+          style={{ borderTop: `4px solid ${c.primary}` }}>
 
-          {/* Header (varies by template) */}
+          {/* Header */}
           {renderHeader()}
 
-          {/* Client Info (skip for sidebar - already rendered) */}
-          {tpl.layout !== 'sidebar' && (
-            <div className="px-6 py-4 border-b" style={{ borderColor: c.border }}>
-              <h4 className="text-xs font-medium text-gray-400 mb-1">فاتورة إلى:</h4>
-              {renderClientInfo()}
-            </div>
-          )}
+          {/* Client Info */}
+          <div className="px-6 py-4 border-b border-slate-100">
+            {renderClientInfo()}
+          </div>
 
-          {/* Items Table */}
+          {/* Items Table — High-contrast, minimalist, ultra-clean */}
           <div className="px-6 py-4">
             <table className="w-full">
               <thead>
-                <tr style={{ background: c.header }}>
-                  <th className="text-right py-2 px-2 text-xs font-bold text-white">#</th>
-                  <th className="text-right py-2 px-2 text-xs font-bold text-white">البيان</th>
-                  <th className="text-center py-2 px-2 text-xs font-bold text-white">الكمية</th>
-                  <th className="text-center py-2 px-2 text-xs font-bold text-white">سعر الوحدة</th>
-                  <th className="text-left py-2 px-2 text-xs font-bold text-white">الإجمالي</th>
+                <tr className="border-b-2 border-slate-900">
+                  <th className="text-right py-2.5 px-2 text-xs font-bold text-slate-800 bg-transparent">#</th>
+                  <th className="text-right py-2.5 px-2 text-xs font-bold text-slate-800 bg-transparent">البيان / Description</th>
+                  <th className="text-center py-2.5 px-2 text-xs font-bold text-slate-800 bg-transparent">الكمية / Qty</th>
+                  <th className="text-center py-2.5 px-2 text-xs font-bold text-slate-800 bg-transparent">سعر الوحدة / Rate</th>
+                  <th className="text-left py-2.5 px-2 text-xs font-bold text-slate-800 bg-transparent">الإجمالي / Amount</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {(invoice.items || []).map((item: any, i: number) => (
-                  <tr key={i} className="border-b" style={{ borderColor: c.border }}>
-                    <td className="py-2 px-2 text-xs text-gray-500">{i + 1}</td>
-                    <td className="py-2 px-2 text-sm text-gray-900 font-medium">{item.description}</td>
-                    <td className="py-2 px-2 text-sm text-center text-gray-700">{item.quantity} {item.unit || ''}</td>
-                    <td className="py-2 px-2 text-sm text-center text-gray-700">{formatCurrency(parseFloat(item.unit_price), locale, currencySymbol)}</td>
-                    <td className="py-2 px-2 text-sm text-left font-bold text-gray-900">{formatCurrency(parseFloat(item.total), locale, currencySymbol)}</td>
+                  <tr key={i}>
+                    <td className="py-3 px-2 text-xs text-slate-400 font-mono">{i + 1}</td>
+                    <td className="py-3 px-2 text-sm text-slate-800 font-semibold">{item.description}</td>
+                    <td className="py-3 px-2 text-sm text-center text-slate-600 font-mono">{item.quantity}</td>
+                    <td className="py-3 px-2 text-sm text-center text-slate-600 font-mono">{formatCurrency(parseFloat(item.unit_price), locale, '')}</td>
+                    <td className="py-3 px-2 text-sm text-left font-bold text-slate-900 font-mono">{formatCurrency(parseFloat(item.total), locale, currencySymbol)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -297,14 +247,14 @@ export default function InvoiceViewPage() {
           </div>
 
           {/* Totals + QR */}
-          <div className="flex justify-between items-start px-6 py-4 border-t" style={{ borderColor: c.border }}>
-            {/* QR */}
+          <div className="flex justify-between items-start px-6 py-4 bg-slate-50/50 border-t border-slate-100">
+            {/* QR ZATCA */}
             {settings.showQR && (
-              <div className="flex flex-col items-center gap-1">
+              <div className="flex flex-col items-center gap-1.5 p-1 rounded-xl bg-white border border-slate-100 shadow-sm">
                 {zatcaData?.qrData ? (
                   <>
-                    <QRCode value={zatcaData.qrData} size={120} />
-                    <p className="text-[10px] text-gray-400">رمز زاتكا</p>
+                    <QRCode value={zatcaData.qrData} size={100} />
+                    <p className="text-[9px] font-bold text-slate-400">هيئة الزكاة والجمارك</p>
                   </>
                 ) : (
                   <p className="text-[10px] text-gray-400">QR غير متاح</p>
@@ -313,90 +263,99 @@ export default function InvoiceViewPage() {
             )}
 
             {/* Totals */}
-            <div className="w-64 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">المجموع الفرعي</span>
-                <span className="font-bold text-gray-900">{formatCurrency(subtotal, locale, currencySymbol)}</span>
+            <div className="w-72 space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-slate-500">المجموع الفرعي (غير شامل الضريبة)</span>
+                <span className="font-bold text-slate-900 font-mono">{formatCurrency(subtotal, locale, currencySymbol)}</span>
               </div>
               {vatAmount > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">ضريبة ({vatRate.toFixed(0)}%)</span>
-                  <span className="font-bold text-gray-900">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">ضريبة القيمة المضافة ({vatRate * 100}%)</span>
+                  <span className="font-bold text-slate-900 font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
               )}
               {paidAmount > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">المدفوع</span>
-                  <span className="font-bold text-green-600">{formatCurrency(paidAmount, locale, currencySymbol)}</span>
+                <div className="flex justify-between text-xs">
+                  <span className="text-green-600">المبلغ المدفوع سابقاُ</span>
+                  <span className="font-bold text-green-600 font-mono">{formatCurrency(paidAmount, locale, currencySymbol)}</span>
                 </div>
               )}
               {remaining > 0 && invoice.status !== 'paid' && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">المتبقي</span>
-                  <span className="font-bold text-red-600">{formatCurrency(remaining, locale, currencySymbol)}</span>
+                <div className="flex justify-between text-xs">
+                  <span className="text-red-500">المبلغ المتبقي للسداد</span>
+                  <span className="font-bold text-red-600 font-mono">{formatCurrency(remaining, locale, currencySymbol)}</span>
                 </div>
               )}
-              <div className="flex justify-between pt-2 border-t" style={{ borderColor: c.border }}>
-                <span className="text-base font-bold text-gray-900">الإجمالي</span>
-                <span className="text-xl font-bold" style={{ color: c.primary }}>{formatCurrency(total, locale, currencySymbol)}</span>
+              <div className="flex justify-between pt-2 border-t border-slate-200">
+                <span className="text-sm font-black text-slate-800">الإجمالي الكلي شامل الضريبة / Total</span>
+                <span className="text-lg font-black font-mono" style={{ color: c.primary }}>{formatCurrency(total, locale, currencySymbol)}</span>
               </div>
             </div>
           </div>
 
           {/* Notes */}
           {settings.showNotes && invoice.notes && (
-            <div className="px-6 py-3 border-t" style={{ borderColor: c.border, background: c.bg }}>
-              <p className="text-sm text-gray-600"><strong>ملاحظات:</strong> {invoice.notes}</p>
-            </div>
-          )}
-
-          {/* Journal Entry */}
-          {settings.showJournalEntry && invoice.journal_lines && invoice.journal_lines.length > 0 && (
-            <div className="px-6 py-3 border-t no-print" style={{ borderColor: c.border }}>
-              <h4 className="text-xs font-bold text-gray-400 mb-2">القيد المحاسبي:</h4>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-gray-400">
-                    <th className="text-right p-1">الحساب</th>
-                    <th className="text-right p-1">الكود</th>
-                    <th className="text-left p-1">مدين</th>
-                    <th className="text-left p-1">دائن</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {invoice.journal_lines.map((jl: any, i: number) => (
-                    <tr key={i} className="text-gray-600">
-                      <td className="p-1">{jl.account_name}</td>
-                      <td className="p-1 font-mono">{jl.account_code}</td>
-                      <td className="p-1 text-left">{parseFloat(jl.debit) > 0 ? formatCurrency(parseFloat(jl.debit), locale, '') : '—'}</td>
-                      <td className="p-1 text-left">{parseFloat(jl.credit) > 0 ? formatCurrency(parseFloat(jl.credit), locale, '') : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="px-6 py-3 border-t border-slate-100 bg-white">
+              <p className="text-xs text-slate-500"><strong>ملاحظات:</strong> {invoice.notes}</p>
             </div>
           )}
 
           {/* Footer */}
-          <div className="px-6 py-4 text-center border-t" style={{ borderColor: c.border, background: c.bg }}>
-            <p className="text-xs text-gray-400">{settings.footerText || `هذه الفاتورة صادرة إلكترونياً من ${company?.name || 'النظام'}`}</p>
-            {company?.country_code === 'SA' && zatcaData?.hasValidVATNumber && (
-              <p className="text-[10px] text-gray-400 mt-1">متوافقة مع هيئة الزكاة والضريبة والجمارك</p>
+          <div className="px-6 py-4 text-center border-t border-slate-100 bg-slate-50/50">
+            <p className="text-xs text-slate-400">{settings.footerText || `هذه الفاتورة صادرة إلكترونياً من نظام ${company?.name || 'برو أكاوننت'}`}</p>
+            {company?.country_code === 'SA' && (
+              <p className="text-[9px] text-slate-400 mt-1 font-medium">فاتورة ضريبية مبسطة متوافقة بالكامل مع شروط هيئة الزكاة والضريبة والجمارك بالمملكة العربية السعودية</p>
             )}
           </div>
         </div>
       </div>
 
-      {/* Print CSS */}
-      <style jsx global>{`
-        @media print {
-          body { background: white !important; }
-          .no-print { display: none !important; }
-          .print-container { padding: 0 !important; max-width: none !important; }
-          .invoice-document { box-shadow: none !important; border-radius: 0 !important; }
-          @page { margin: 1cm; size: A4; }
-        }
-      `}</style>
+      {/* FIXED: عزل كامل لـ "القيد المحاسبي" (Journal Entry) وجعله للمراجعة الداخلية للمحاسب فقط، ومحجوب تماماً من الطباعة no-print */}
+      {invoice.journal_lines && invoice.journal_lines.length > 0 && (
+        <div className="max-w-4xl mx-auto p-4 sm:p-6 pt-0 no-print">
+          <Card className="bg-slate-50 border-slate-200 p-4">
+            <div className="flex items-center justify-between mb-4 border-b border-slate-200 pb-2">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="text-accent" size={18} />
+                <h4 className="text-sm font-bold text-slate-800">تأكيد الترحيل - القيد المحاسبي المزدوج (للمراجعة الداخلية فقط)</h4>
+              </div>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowInternalJournal(!showInternalJournal)}
+                leftIcon={showInternalJournal ? <EyeOff size={14} /> : <Eye size={14} />}
+              >
+                {showInternalJournal ? 'إخفاء القيد' : 'عرض القيد'}
+              </Button>
+            </div>
+            
+            {showInternalJournal && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-right">
+                  <thead>
+                    <tr className="text-slate-400 border-b border-slate-200">
+                      <th className="p-1 font-bold text-slate-500 bg-transparent">الحساب المدين / الدائن</th>
+                      <th className="p-1 font-bold text-slate-500 bg-transparent text-center">كود الحساب</th>
+                      <th className="p-1 font-bold text-slate-500 bg-transparent text-left">مدين (Debit)</th>
+                      <th className="p-1 font-bold text-slate-500 bg-transparent text-left">دائن (Credit)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.journal_lines.map((jl: any, i: number) => (
+                      <tr key={i} className="text-slate-600 border-b border-slate-100/50 last:border-0">
+                        <td className="p-2 font-medium">{jl.account_name}</td>
+                        <td className="p-2 text-center font-mono text-slate-400">{jl.account_code}</td>
+                        <td className="p-2 text-left font-mono font-bold text-slate-800">{parseFloat(jl.debit) > 0 ? formatCurrency(parseFloat(jl.debit), locale, '') : '—'}</td>
+                        <td className="p-2 text-left font-mono font-bold text-slate-800">{parseFloat(jl.credit) > 0 ? formatCurrency(parseFloat(jl.credit), locale, '') : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
