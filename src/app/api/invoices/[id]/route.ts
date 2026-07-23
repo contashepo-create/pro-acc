@@ -13,21 +13,68 @@ export async function GET(
     const { id } = await paramsPromise;
     const s = sb();
 
+    // Fetch invoice with full client data
     const { data: invRes, error: invErr } = await s.from('invoices')
-      .select('id, number, contact_id, project_id, date, due_date, subtotal, tax_rate, tax_amount, total, paid_amount, status, notes, journal_entry_id, created_by, created_at, contacts(name)')
+      .select(`
+        id, number, contact_id, project_id, date, due_date, subtotal, 
+        tax_rate, tax_amount, total, paid_amount, status, notes, 
+        journal_entry_id, created_by, created_at,
+        contacts(id, name, tax_number, address, phone, email, commercial_registration)
+      `)
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (invErr || !invRes) return notFound();
 
     const { data: itemsRes } = await s.from('invoice_items')
-      .select('id, description, quantity, unit_price, total, barcode').eq('invoice_id', id).order('id');
+      .select('id, description, quantity, unit_price, total, barcode')
+      .eq('invoice_id', id).order('id');
 
-    // Also fetch company info
+    // Fetch company info with all relevant fields
     const { data: company } = await s.from('companies')
-      .select('name, tax_number, address, phone, email, currency_symbol, currency_code, locale, country_code, logo_url')
+      .select('name, tax_number, commercial_registration, address, phone, email, currency_symbol, currency_code, locale, country_code, logo_url, vat_rate')
       .eq('id', auth.companyId).maybeSingle();
 
+    // Fetch project name if linked
+    let projectName: string | null = null;
     const inv = invRes as Record<string, any>;
-    return success({ ...inv, client_name: inv.contacts?.name || '', items: itemsRes || [], company: company || {} });
+    if (inv.project_id) {
+      const { data: proj } = await s.from('projects')
+        .select('name').eq('id', inv.project_id).maybeSingle();
+      projectName = (proj as any)?.name || null;
+    }
+
+    // Fetch the user who created the invoice
+    let createdBy: string | null = null;
+    if (inv.created_by) {
+      const { data: user } = await s.from('users')
+        .select('name').eq('id', inv.created_by).maybeSingle();
+      createdBy = (user as any)?.name || null;
+    }
+
+    // Fetch journal entry lines for this invoice (for display)
+    let journalLines: any[] = [];
+    if (inv.journal_entry_id) {
+      const { data: jl } = await s.from('journal_lines')
+        .select('id, account_id, account_code, account_name, debit, credit, description')
+        .eq('journal_entry_id', inv.journal_entry_id);
+      journalLines = jl || [];
+    }
+
+    const contact = inv.contacts as Record<string, any> | null;
+
+    return success({
+      ...inv,
+      client_name: contact?.name || '',
+      client_tax_number: contact?.tax_number || null,
+      client_address: contact?.address || null,
+      client_phone: contact?.phone || null,
+      client_email: contact?.email || null,
+      client_commercial_registration: contact?.commercial_registration || null,
+      project_name: projectName,
+      created_by_name: createdBy,
+      items: itemsRes || [],
+      company: company || {},
+      journal_lines: journalLines,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -88,17 +135,24 @@ export async function PATCH(
           .insert({
             company_id: auth.companyId, number: reversalNumber, date: new Date().toISOString().split('T')[0],
             type: 'general', description: `قيد عكسي لفاتورة رقم ${invoice.number}`,
-            reference: `REV-${invoice.number}`, created_by: auth.userId,
+            reference_type: 'invoice_reversal', reference_id: id, created_by: auth.userId,
           }).select('id').single();
         if (revErr) throw revErr;
         const reversalEntryId = reversalRes.id;
 
         const { data: origLines } = await s.from('journal_lines')
-          .select('account_id, account_code, debit, credit, description').eq('journal_entry_id', invoice.journal_entry_id);
+          .select('account_id, account_code, account_name, debit, credit, description')
+          .eq('journal_entry_id', invoice.journal_entry_id);
 
         const reversedLines = (origLines || []).map((l: any) => ({
-          journal_entry_id: reversalEntryId, account_id: l.account_id, account_code: l.account_code,
-          debit: l.credit, credit: l.debit, description: `عكس: ${l.description || ''}`,
+          company_id: auth.companyId,
+          journal_entry_id: reversalEntryId,
+          account_id: l.account_id,
+          account_code: l.account_code,
+          account_name: l.account_name,
+          debit: l.credit,
+          credit: l.debit,
+          description: `عكس: ${l.description || ''}`,
         }));
         if (reversedLines.length > 0) {
           await s.from('journal_lines').insert(reversedLines);
