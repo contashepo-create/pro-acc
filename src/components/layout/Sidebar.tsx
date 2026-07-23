@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import Link from 'next/link'; // FIXED: Imported Next.js Link component for automatic background pre-fetching (instantaneous 0ms page transitions!)
+import Link from 'next/link';
 import {
   LayoutDashboard,
   Calculator,
@@ -26,6 +26,7 @@ interface NavGroup {
   items: { id: string; label: string }[];
 }
 
+// مصفوفة تبويبات النظام (تحديث محاسبي وتنظيمي شامل)
 const navGroups: NavGroup[] = [
   {
     label: 'الرئيسية',
@@ -83,7 +84,6 @@ const navGroups: NavGroup[] = [
     items: [
       { id: 'employees', label: 'الموظفين' },
       { id: 'payroll', label: 'الرواتب' },
-      { id: 'users', label: 'المستخدمين' },
       { id: 'salary-sheets', label: 'كشوف المرتبات' },
       { id: 'daily-workers', label: 'العمال اليوميون' },
       { id: 'custodies', label: 'العهد' },
@@ -108,6 +108,7 @@ const navGroups: NavGroup[] = [
     icon: Settings,
     items: [
       { id: 'settings', label: 'الإعدادات' },
+      { id: 'users', label: 'المستخدمين' }, // FIXED: تم نقل "المستخدمين" وإحصائيات الباقة من قسم الموارد البشرية إلى قسم النظام/الإعدادات لربطها بالصلاحيات أمنياً ومحاسبياً
       { id: 'permissions', label: 'الصلاحيات' },
       { id: 'subscription', label: 'الباقات والاشتراك' },
       { id: 'messages', label: 'الرسائل' },
@@ -162,7 +163,6 @@ export function Sidebar() {
     setExpandedGroups((prev) => ({ ...prev, [label]: !prev[label] }));
   };
 
-  // دالة مساعدة لتوليد المسار المطلق السليم للتوجيه والـ prefetching
   const getNavPath = (id: string) => {
     return id === '' ? '/dashboard' : (id.startsWith('/') ? id : `/${id}`);
   };
@@ -183,7 +183,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Navigation list — FIXED: Convert buttons to Link components for instant page loading */}
+      {/* Navigation list */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
         {filteredNavGroups.map((group) => {
           const Icon = group.icon;
@@ -236,13 +236,14 @@ export function Sidebar() {
                     )}
                   </button>
                   {isExpanded && !isCollapsed && (
-                    <div className="mr-8 mt-0.5 space-y-0.5">
+                    /* FIXED: Adding block display to child links to make them render vertically under each other as a beautiful, clean, hierarchical tree list */
+                    <div className="mr-8 mt-0.5 space-y-0.5 flex flex-col items-start w-full">
                       {group.items.map((item) => (
                         <Link
                           key={item.id}
                           href={getNavPath(item.id)}
                           onClick={() => setActive(item.id)}
-                          className={`sidebar-item w-full text-right px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                          className={`sidebar-item block w-full text-right px-3 py-1.5 text-sm rounded-lg transition-colors ${
                             isActive(item.id)
                               ? 'active text-accent font-semibold'
                               : 'text-text-secondary hover:text-text-primary'
