@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2, UserPlus, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/auth-store';
+import { getCountriesList } from '@/lib/countries';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -13,6 +14,7 @@ export default function RegisterPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [country, setCountry] = useState('SA');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -44,7 +46,7 @@ export default function RegisterPage() {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyName, name, email, phone, password, captchaId: captcha.id, captchaAnswer }),
+        body: JSON.stringify({ companyName, name, email, phone, country, password, captchaId: captcha.id, captchaAnswer }),
       });
       const data = await res.json();
       if (data.success) {
@@ -122,6 +124,19 @@ export default function RegisterPage() {
             className="input-base"
             dir="ltr"
           />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">الدولة</label>
+          <select
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            className="input-base"
+          >
+            {getCountriesList().map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
         </div>
 
         <div>

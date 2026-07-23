@@ -1,12 +1,13 @@
-export function formatCurrency(amount: number): string {
+export function formatCurrency(amount: number, locale?: string, symbol?: string): string {
   if (!Number.isFinite(amount)) return '0.00';
   const isNegative = amount < 0;
   const abs = Math.abs(amount);
-  const formatted = abs.toLocaleString('ar-SA', {
+  const formatted = abs.toLocaleString(locale || 'ar-SA', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-  return isNegative ? `-${formatted}` : formatted;
+  const withSymbol = symbol ? `${formatted} ${symbol}` : formatted;
+  return isNegative ? `-${withSymbol}` : withSymbol;
 }
 
 export function formatDate(date: string | Date | null | undefined): string {

@@ -8,11 +8,13 @@ import {
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
+import { getCountriesList, getCountryConfig } from '@/lib/countries';
 
 export default function SettingsPage() {
   const [tab, setTab] = useState('general');
@@ -33,6 +35,9 @@ export default function SettingsPage() {
   const [fiscalStart, setFiscalStart] = useState('');
   const [decimalPlaces, setDecimalPlaces] = useState('2');
   const [vatRate, setVatRate] = useState('15');
+  const [countryCode, setCountryCode] = useState('SA');
+  const [currencySymbol, setCurrencySymbol] = useState('ر.س');
+  const [currencyCode, setCurrencyCode] = useState('SAR');
   
   // Notifications
   const [notifInvoice, setNotifInvoice] = useState(true);
@@ -87,7 +92,11 @@ export default function SettingsPage() {
           const s = d.data?.settings || {};
           if (s.fiscal_start) setFiscalStart(s.fiscal_start);
           if (s.decimal_places) setDecimalPlaces(s.decimal_places);
-          if (s.vat_rate) setVatRate(s.vat_rate);
+          if (s.vat_rate) setVatRate(String(parseFloat(s.vat_rate) * 100));
+          if (c?.country_code) setCountryCode(c.country_code);
+          if (c?.currency_symbol) setCurrencySymbol(c.currency_symbol);
+          if (c?.currency_code) setCurrencyCode(c.currency_code);
+          if (c?.vat_rate) setVatRate(String(parseFloat(c.vat_rate) * 100));
           if (s.notif_invoice !== undefined) setNotifInvoice(s.notif_invoice === 'true');
           if (s.notif_due !== undefined) setNotifDue(s.notif_due === 'true');
           if (s.notif_stock !== undefined) setNotifStock(s.notif_stock === 'true');
@@ -175,12 +184,16 @@ export default function SettingsPage() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          company_name: companyName,
-          commercial_registration: registration,
-          tax_number: taxNumber,
-          phone: phone,
-          email: email,
-          address: address,
+          company: {
+            name: companyName,
+            commercial_registration: registration,
+            tax_number: taxNumber,
+            phone: phone,
+            email: email,
+            address: address,
+            country_code: countryCode,
+            vat_rate: parseFloat(vatRate) / 100,
+          },
         }),
       });
       const data = await res.json();
@@ -412,6 +425,33 @@ export default function SettingsPage() {
             <Input label="البريد الإلكتروني" type="email" value={email} onChange={(e: any) => setEmail(e.target.value)} />
             <Input label="العنوان" value={address} onChange={(e: any) => setAddress(e.target.value)} className="col-span-2" />
           </div>
+
+          {/* Country & Currency Section */}
+          <div className="mt-6 pt-6 border-t border-border">
+            <h4 className="text-sm font-bold text-text-primary mb-3">البلد والعملة</h4>
+            <div className="grid grid-cols-2 gap-4">
+              <Select
+                label="الدولة"
+                value={countryCode}
+                onChange={(v) => {
+                  setCountryCode(v);
+                  const config = getCountriesList().find(c => c.value === v);
+                  if (config) {
+                    const { getCountryConfig } = require('@/lib/countries');
+                    const cc = getCountryConfig(v);
+                    setCurrencySymbol(cc.currencySymbol);
+                    setCurrencyCode(cc.currencyCode);
+                    setVatRate(String(cc.vatRate * 100));
+                  }
+                }}
+                options={getCountriesList()}
+              />
+              <Input label="رمز العملة" value={currencyCode} disabled />
+              <Input label="رمز العملة (العرض)" value={currencySymbol} onChange={(e: any) => setCurrencySymbol(e.target.value)} />
+              <Input label="نسبة الضريبة (%)" type="number" value={vatRate} onChange={(e: any) => setVatRate(e.target.value)} />
+            </div>
+          </div>
+
           <div className="mt-4">
             <Button onClick={handleSaveCompany} leftIcon={<Save size={16} />}>حفظ الإعدادات</Button>
           </div>

@@ -14,15 +14,20 @@ export async function GET(
     const s = sb();
 
     const { data: invRes, error: invErr } = await s.from('invoices')
-      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, created_by, created_at, contacts(name)')
+      .select('id, number, contact_id, project_id, date, due_date, subtotal, tax_rate, tax_amount, total, paid_amount, status, notes, journal_entry_id, created_by, created_at, contacts(name)')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (invErr || !invRes) return notFound();
 
     const { data: itemsRes } = await s.from('invoice_items')
-      .select('id, description, quantity, unit_price, total').eq('invoice_id', id).order('id');
+      .select('id, description, quantity, unit_price, total, barcode').eq('invoice_id', id).order('id');
+
+    // Also fetch company info
+    const { data: company } = await s.from('companies')
+      .select('name, tax_number, address, phone, email, currency_symbol, currency_code, locale, country_code, logo_url')
+      .eq('id', auth.companyId).maybeSingle();
 
     const inv = invRes as Record<string, any>;
-    return success({ ...inv, client_name: inv.contacts?.name || '', items: itemsRes || [] });
+    return success({ ...inv, client_name: inv.contacts?.name || '', items: itemsRes || [], company: company || {} });
   } catch (err) {
     return handleApiError(err);
   }

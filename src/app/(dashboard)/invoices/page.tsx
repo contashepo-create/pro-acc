@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, ArrowRight, FileText, Save, X, Search } from 'lucide-react';
+import { Plus, Trash2, ArrowRight, FileText, Save, X, Search, Eye } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -220,7 +220,14 @@ export default function InvoicesPage() {
     { key: 'status', label: 'الحالة', sortable: true, render: (row: any) => statusBadge(row.status) },
     { key: 'paid_amount', label: 'المدفوع', render: (row: any) => formatCurrency(row.paid_amount) },
     { key: 'actions', label: '', render: (row: any) => (
-      <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} />
+      <div className="flex items-center gap-1">
+        <a href={`/invoices/${row.id}/view`} target="_blank" rel="noopener noreferrer">
+          <Button variant="ghost" size="sm" title="عرض/طباعة">
+            <Eye size={16} />
+          </Button>
+        </a>
+        <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} />
+      </div>
     )},
   ];
 

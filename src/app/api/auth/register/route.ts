@@ -168,8 +168,24 @@ export async function POST(request: NextRequest) {
     const passwordHash = await hashPassword(password);
     const verificationToken = randomBytes(32).toString('hex');
 
+    // Get country config
+    const { getCountryConfig } = await import('@/lib/countries');
+    const countryCode = body.country || 'SA';
+    const countryConfig = getCountryConfig(countryCode);
+
     const { data: company, error: companyErr } = await s.from('companies')
-      .insert({ name: companyName, email: email.toLowerCase(), phone: phone || null, is_active: true })
+      .insert({
+        name: companyName,
+        email: email.toLowerCase(),
+        phone: phone || null,
+        is_active: true,
+        country: countryConfig.name,
+        country_code: countryConfig.code,
+        currency_code: countryConfig.currencyCode,
+        currency_symbol: countryConfig.currencySymbol,
+        locale: countryConfig.locale,
+        vat_rate: countryConfig.vatRate,
+      })
       .select('id').single();
     if (companyErr || !company) return error('فشل إنشاء الشركة', 500);
     const co = company as Record<string, any>;

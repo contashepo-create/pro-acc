@@ -20,7 +20,7 @@ export async function GET(
 
     // Fetch the invoice
     const { data: invoice } = await s.from('invoices')
-      .select('id, number, date, due_date, subtotal, vat_rate, vat_amount, total, notes, contact_id, zatca_qr')
+      .select('id, number, date, due_date, subtotal, tax_rate, tax_amount, total, notes, contact_id, zatca_qr')
       .eq('id', id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
@@ -28,7 +28,7 @@ export async function GET(
     if (!invoice) return error('الفاتورة غير موجودة');
     const inv = invoice as {
       id: string; number: number; date: string; due_date: string;
-      subtotal: number; vat_rate: number; vat_amount: number; total: number;
+      subtotal: number; tax_rate: number; tax_amount: number; total: number;
       notes: string; contact_id: string; zatca_qr: string | null;
     };
 
@@ -39,10 +39,10 @@ export async function GET(
 
     // Fetch company info (seller)
     const { data: company } = await s.from('companies')
-      .select('name, tax_number, address, phone, email')
+      .select('name, tax_number, address, phone, email, currency_symbol, country_code')
       .eq('id', auth.companyId)
       .maybeSingle();
-    const seller = company as { name?: string; tax_number?: string; address?: string } | null;
+    const seller = company as { name?: string; tax_number?: string; address?: string; currency_symbol?: string; country_code?: string } | null;
 
     // Fetch client info (buyer)
     const { data: contact } = await s.from('contacts')
@@ -62,7 +62,7 @@ export async function GET(
           vatNumber: seller.tax_number,
           timestamp: new Date(inv.date).toISOString(),
           invoiceTotal: parseFloat(String(inv.total)),
-          vatTotal: parseFloat(String(inv.vat_amount)),
+          vatTotal: parseFloat(String(inv.tax_amount)),
         });
         // Store for future use
         await s.from('invoices').update({ zatca_qr: qrData }).eq('id', id);
@@ -96,16 +96,16 @@ export async function GET(
           description: item.description,
           quantity: parseFloat(String(item.quantity)),
           unitPrice: parseFloat(String(item.unit_price)),
-          vatRate: parseFloat(String(inv.vat_rate)),
+          vatRate: parseFloat(String(inv.tax_rate)),
           total: parseFloat(String(item.total)),
         })),
         amounts: {
           lineExtensionAmount: parseFloat(String(inv.subtotal)),
           taxExclusiveAmount: parseFloat(String(inv.subtotal)),
           taxInclusiveAmount: parseFloat(String(inv.total)),
-          taxAmount: parseFloat(String(inv.vat_amount)),
+          taxAmount: parseFloat(String(inv.tax_amount)),
         },
-        vatRate: parseFloat(String(inv.vat_rate)),
+        vatRate: parseFloat(String(inv.tax_rate)),
         paymentMeansCode: '10', // Cash
         notes: inv.notes ? [inv.notes] : undefined,
       });
