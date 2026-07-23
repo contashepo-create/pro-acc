@@ -10,7 +10,7 @@ import { AdBanner } from '@/components/AdBanner';
 import { AdPopup } from '@/components/AdPopup';
 import { SubscriptionBanner } from '@/components/SubscriptionBanner';
 import { useAuthStore } from '@/store/auth-store';
-import { useSidebarStore } from '@/store/sidebar-store'; // FIXED: Imported sidebar store for mobile drawer toggle
+import { useSidebarStore } from '@/store/sidebar-store';
 import { Loader2 } from 'lucide-react';
 
 export default function DashboardLayout({
@@ -21,7 +21,7 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   const { isAuthenticated, isLoading, checkSession } = useAuthStore();
-  const { mobileOpen, setMobileOpen } = useSidebarStore(); // FIXED: Read mobileOpen state
+  const { isCollapsed, mobileOpen, setMobileOpen } = useSidebarStore(); // FIXED: Read isCollapsed
 
   // Check authentication status
   useEffect(() => {
@@ -59,14 +59,15 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-bg-primary flex">
+      {/* Sidebar — FIXED: Width is determined dynamically by isCollapsed */}
       <aside className="hidden lg:flex flex-col h-screen bg-sidebar-bg border-l border-border transition-all duration-300 shrink-0"
-        style={{ width: '260px' }}
+        style={{ width: isCollapsed ? '70px' : '260px' }}
       >
         <Sidebar />
       </aside>
       <div className="flex-1 flex flex-col min-h-screen overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-auto pt-14">
+        <main className="flex-1 overflow-auto pt-14 bg-bg-primary">
           <div className="p-4 md:p-6">
             <AnnouncementBar />
             <AdBanner />
@@ -77,7 +78,7 @@ export default function DashboardLayout({
       </div>
       <AdPopup />
       
-      {/* Mobile drawer — FIXED: rendered conditionally using mobileOpen state */}
+      {/* Mobile drawer */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           {/* Backdrop overlay */}

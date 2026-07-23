@@ -25,11 +25,9 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
   const pathname = usePathname();
   const router = useRouter();
   
-  // FIXED: تصحيح أسماء المتغيرات المستخرجة من مخزن الثيمات (useThemeStore) لتطابق الأكواد الفعلية وتفعيل زر تغيير الوضع الفاتح/الداكن فوراً
   const { isDark, toggleMode } = useThemeStore();
-  
-  const { user, logout } = useAuthStore();
-  const { setMobileOpen } = useSidebarStore();
+  const { user, company, logout } = useAuthStore(); // FIXED: Read company from auth store
+  const { isCollapsed, setMobileOpen } = useSidebarStore(); // FIXED: Read isCollapsed
 
   // Fetch notification count
   useEffect(() => {
@@ -82,8 +80,11 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-40 bg-bg-card/95 backdrop-blur-md border-b border-border">
-      <div className="h-14 px-4 lg:px-6 flex items-center justify-between">
+    /* FIXED: The header's right position is linked dynamically to the sidebar width using CSS classes */
+    <header 
+      className={`fixed top-0 left-0 z-40 bg-bg-card/95 backdrop-blur-md border-b border-border h-14 flex items-center justify-between transition-all duration-300 ${isCollapsed ? 'lg:right-[70px]' : 'lg:right-[260px]'} right-0`}
+    >
+      <div className="w-full px-4 lg:px-6 flex items-center justify-between h-full">
         {/* Mobile: Hamburger + Title */}
         <div className="lg:hidden flex items-center gap-3">
           <button 
@@ -93,20 +94,36 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
           >
             <Menu size={20} />
           </button>
-          <h1 className="text-base font-bold text-text-primary truncate max-w-[200px]">
-            {title || pathname.split('/').pop()}
-          </h1>
         </div>
 
-        {/* Desktop: Clock + Date */}
-        <div className="hidden lg:flex items-center gap-4 text-sm text-text-muted">
-          <span dir="ltr">{time}</span>
-          <span className="text-xs border-l border-r border-border px-2">{date}</span>
+        {/* Desktop: Company name + Brand Logo (rendered beautifully inside header on the far right) */}
+        <div className="hidden lg:flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            {company?.logo_url ? (
+              <img src={company.logo_url} alt={company.name} className="w-8 h-8 rounded-lg object-cover" />
+            ) : (
+              <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center text-white text-base font-bold shrink-0 shadow-sm">
+                {(company?.name || 'ب')[0]}
+              </div>
+            )}
+            <span className="text-sm font-bold text-text-primary whitespace-nowrap hidden sm:inline">
+              {company?.name || 'برو أكاوننت'}
+            </span>
+          </div>
+          
+          <div className="h-4 w-px bg-border/60 mx-1" />
+
+          {/* Clock + Date */}
+          <div className="flex items-center gap-3 text-xs text-text-muted">
+            <span dir="ltr" className="font-semibold">{time}</span>
+            <span className="opacity-50">|</span>
+            <span>{date}</span>
+          </div>
         </div>
 
-        {/* Desktop: Page title */}
+        {/* Desktop: Page title & Breadcrumbs */}
         <div className="hidden lg:flex items-center gap-2">
-          <h2 className="text-base font-bold text-text-primary">{title}</h2>
+          <h2 className="text-sm font-bold text-text-primary">{title}</h2>
           {breadcrumbs && breadcrumbs.length > 0 && (
             <div className="flex items-center gap-1.5 text-xs text-text-muted mr-2 pr-2 border-r border-border">
               {breadcrumbs.map((crumb, i) => (
@@ -124,7 +141,7 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
         </div>
 
         {/* Actions + User */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 h-full">
           <form onSubmit={handleSearch} className="relative">
             <button
               type="button"
@@ -161,7 +178,6 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
             )}
           </button>
 
-          {/* Theme Toggle Button — FIXED: mapped isDark and toggleMode correctly */}
           <button
             onClick={toggleMode}
             className="btn btn-ghost btn-icon animate-all duration-300"
@@ -174,7 +190,7 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
           <div className="relative">
             <button
               onClick={() => setUserMenuOpen(!userMenuOpen)}
-              className="btn btn-ghost flex items-center gap-2 px-3"
+              className="btn btn-ghost flex items-center gap-2 px-3 h-10"
             >
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-sm font-bold">
                 {user?.name?.charAt(0) || 'U'}

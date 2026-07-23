@@ -13,9 +13,11 @@ import {
   BarChart3,
   Settings,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { useSidebarStore } from '@/store/sidebar-store';
-import { useAuthStore } from '@/store/auth-store'; // FIXED: Imported auth store to filter menu based on user role
+import { useAuthStore } from '@/store/auth-store';
 
 interface NavGroup {
   label: string;
@@ -38,7 +40,6 @@ const navGroups: NavGroup[] = [
       { id: 'invoices', label: 'الفواتير' },
       { id: 'vouchers/receipt', label: 'سندات قبض' },
       { id: 'vouchers/disbursement', label: 'سندات صرف' },
-      { id: 'credit-notes', label: 'إشعارات دائنة' },
       { id: 'cash', label: 'النقدية' },
       { id: 'bank-reconciliation', label: 'تسوية البنوك' },
     ],
@@ -48,7 +49,6 @@ const navGroups: NavGroup[] = [
     icon: HardHat,
     items: [
       { id: 'projects', label: 'المشاريع' },
-      { id: 'project-expenses', label: 'مصروفات المشاريع' },
       { id: 'boq', label: 'بنود الكميات' },
       { id: 'progress-billing', label: 'الفواتير المرحلية' },
       { id: 'quotations', label: 'عروض الأسعار' },
@@ -120,12 +120,11 @@ const navGroups: NavGroup[] = [
 export function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
-  const { setActive } = useSidebarStore();
-  const { user } = useAuthStore(); // FIXED: Retrieve user role
+  const { isCollapsed, toggle, setActive } = useSidebarStore(); // FIXED: Read isCollapsed and toggle action
+  const { user } = useAuthStore();
   
   const role = user?.role || 'supervisor';
 
-  // FIXED: تصفية وتجهيز القائمة الجانبية لإخفاء أقسام الإدارة الحساسة (الصلاحيات، الباقات، الإعدادات، السنوات المالية، المستخدمين) عن غير المدير
   const filteredNavGroups = navGroups.map(group => {
     let items = group.items;
     if (role !== 'admin') {
@@ -158,6 +157,7 @@ export function Sidebar() {
   }, [pathname]);
 
   const toggleGroup = (label: string) => {
+    if (isCollapsed) return; // Prevent expansion when collapsed
     setExpandedGroups((prev) => ({ ...prev, [label]: !prev[label] }));
   };
 
@@ -168,52 +168,73 @@ export function Sidebar() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-sidebar-bg text-text-primary">
-      <div className="flex items-center h-16 px-4 border-b border-border shrink-0">
-        <div className="flex items-center gap-2.5 overflow-hidden">
+    <div className="flex flex-col h-full bg-sidebar-bg text-text-primary transition-all duration-300">
+      {/* Brand logo — FIXED: hides text cleanly when collapsed */}
+      <div className="flex items-center h-14 px-4 border-b border-border shrink-0 overflow-hidden">
+        <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0">
             <span className="text-text-inverse font-bold text-sm">ب</span>
           </div>
-          <span className="text-lg font-bold text-text-primary whitespace-nowrap">
-            برو <span className="text-accent">أكاوننت</span>
-          </span>
+          {!isCollapsed && (
+            <span className="text-base font-bold text-text-primary whitespace-nowrap animate-[fade-in_0.2s_ease-out]">
+              برو <span className="text-accent">أكاوننت</span>
+            </span>
+          )}
         </div>
       </div>
 
+      {/* Navigation list */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
         {filteredNavGroups.map((group) => {
           const Icon = group.icon;
-          const isExpanded = expandedGroups[group.label];
+          const isExpanded = expandedGroups[group.label] && !isCollapsed;
           const hasActiveChild = group.items.some((i) => isActive(i.id));
 
           return (
-            <div key={group.label}>
+            <div key={group.label} className="overflow-hidden">
               {group.items.length === 1 ? (
                 <button
                   onClick={() => handleNav(group.items[0].id)}
                   className={`sidebar-item w-full flex items-center gap-3 px-3 h-10 rounded-lg transition-colors ${
                     hasActiveChild ? 'active text-accent' : 'text-text-secondary hover:text-text-primary'
                   }`}
+                  title={isCollapsed ? group.label : undefined}
                 >
                   <Icon size={20} className="shrink-0" />
-                  <span className="flex-1 text-right text-sm font-medium">{group.label}</span>
+                  {!isCollapsed && (
+                    <span className="flex-1 text-right text-sm font-medium animate-[fade-in_0.2s_ease-out]">
+                      {group.label}
+                    </span>
+                  )}
                 </button>
               ) : (
                 <>
                   <button
-                    onClick={() => toggleGroup(group.label)}
+                    onClick={() => {
+                      if (isCollapsed) {
+                        // When collapsed, clicking group directly navigates to its first item
+                        handleNav(group.items[0].id);
+                      } else {
+                        toggleGroup(group.label);
+                      }
+                    }}
                     className={`sidebar-item w-full flex items-center gap-3 px-3 h-10 rounded-lg transition-colors ${
                       hasActiveChild ? 'active text-accent' : 'text-text-secondary hover:text-text-primary'
                     }`}
+                    title={isCollapsed ? group.label : undefined}
                   >
                     <Icon size={20} className="shrink-0" />
-                    <span className="flex-1 text-right text-sm font-medium">{group.label}</span>
-                    <ChevronDown
-                      size={16}
-                      className={`transition-transform duration-200 ${isExpanded ? 'rotate-0' : '-rotate-90'}`}
-                    />
+                    {!isCollapsed && (
+                      <>
+                        <span className="flex-1 text-right text-sm font-medium animate-[fade-in_0.2s_ease-out]">{group.label}</span>
+                        <ChevronDown
+                          size={16}
+                          className={`transition-transform duration-200 ${isExpanded ? 'rotate-0' : '-rotate-90'}`}
+                        />
+                      </>
+                    )}
                   </button>
-                  {isExpanded && (
+                  {isExpanded && !isCollapsed && (
                     <div className="mr-8 mt-0.5 space-y-0.5">
                       {group.items.map((item) => (
                         <button
@@ -236,6 +257,17 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      {/* Collapse Toggle Button (Desktop Only) — FIXED: Toggle sidebar expand/collapse dynamically */}
+      <div className="hidden lg:flex items-center justify-center h-12 border-t border-border shrink-0 bg-sidebar-bg">
+        <button 
+          onClick={toggle}
+          className="btn btn-ghost btn-icon hover:bg-bg-hover text-text-secondary hover:text-text-primary h-9 w-9 rounded-xl transition-all"
+          title={isCollapsed ? 'توسيع القائمة' : 'طي القائمة'}
+        >
+          {isCollapsed ? <ChevronLeft size={18} className="text-accent animate-pulse" /> : <ChevronRight size={18} />}
+        </button>
+      </div>
     </div>
   );
 }
