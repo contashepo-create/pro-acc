@@ -6,38 +6,28 @@ const sb = () => getSupabase();
 
 /**
  * GET /api/settings
- * Get company settings with key validation
+ * Get company settings + company info
  */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
     const s = sb();
 
-    // Only fetch whitelisted keys
-    const { data: allowedKeys } = await s.from('allowed_settings_keys')
-      .select('key_name')
-      .eq('is_sensitive', false);
-
-    const validKeys = (allowedKeys || []).map((k: any) => k.key_name);
+    // Fetch all settings for this company (no whitelist filtering)
+    const { data: settings } = await s.from('settings')
+      .select('key, value')
+      .eq('company_id', auth.companyId);
 
     const settingsMap: Record<string, any> = {};
+    (settings || []).forEach((item: any) => {
+      try {
+        settingsMap[item.key] = JSON.parse(item.value);
+      } catch {
+        settingsMap[item.key] = item.value;
+      }
+    });
 
-    if (validKeys.length > 0) {
-      const { data: settings } = await s.from('settings')
-        .select('key, value')
-        .eq('company_id', auth.companyId)
-        .in('key', validKeys);
-
-      (settings || []).forEach((item: any) => {
-        try {
-          settingsMap[item.key] = JSON.parse(item.value);
-        } catch {
-          settingsMap[item.key] = item.value;
-        }
-      });
-    }
-
-    // Always fetch company info (country, currency, vat_rate)
+    // Always fetch company info
     const { data: company } = await s.from('companies')
       .select('name, commercial_registration, tax_number, phone, email, address, country, country_code, currency_code, currency_symbol, locale, vat_rate')
       .eq('id', auth.companyId)
@@ -52,7 +42,8 @@ export async function GET(request: NextRequest) {
 
 /**
  * PUT /api/settings
- * Update company settings with validation
+ * Update company settings and/or company info
+ * Body: { settings: {key: value}, company: {field: value} }
  */
 export async function PUT(request: NextRequest) {
   try {
@@ -60,27 +51,23 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const s = sb();
 
-    // Validate that we're only updating whitelisted keys
-    const { data: allowedKeys } = await s.from('allowed_setting_keys')
-      .select('key_name');
+    // Save settings key-value pairs (no whitelist — save everything)
+    if (body.settings && typeof body.settings === 'object') {
+      const updates = Object.entries(body.settings).map(([key, value]) => ({
+        company_id: auth.companyId,
+        key,
+        value: typeof value === 'object' ? JSON.stringify(value) : String(value),
+        updated_at: new Date().toISOString(),
+      }));
 
-    const validKeys = new Set((allowedKeys || []).map((k: any) => k.key_name));
-
-    // Filter to only valid keys, silently skip unknown ones
-    const settingsToUpdate = Object.entries(body.settings || {}).filter(
-      ([key]) => validKeys.has(key)
-    );
-
-    // Update each setting
-    const updates = settingsToUpdate.map(([key, value]) => ({
-      company_id: auth.companyId,
-      key,
-      value: typeof value === 'object' ? JSON.stringify(value) : String(value),
-      updated_at: new Date().toISOString(),
-    }));
+      if (updates.length > 0) {
+        await s.from('settings')
+          .upsert(updates, { onConflict: 'company_id,key' });
+      }
+    }
 
     // Update company fields if provided
-    if (body.company) {
+    if (body.company && typeof body.company === 'object') {
       const { getCountryConfig } = await import('@/lib/countries');
       const companyUpdate: any = {};
 
@@ -109,11 +96,6 @@ export async function PUT(request: NextRequest) {
         companyUpdate.updated_at = new Date().toISOString();
         await s.from('companies').update(companyUpdate).eq('id', auth.companyId);
       }
-    }
-
-    if (updates.length > 0) {
-      await s.from('settings')
-        .upsert(updates, { onConflict: 'company_id,key' });
     }
 
     return success({ updated: true });

@@ -82,6 +82,7 @@ export default function SettingsPage() {
       .then((d) => {
         if (d.success) {
           const c = d.data?.company;
+          const s = d.data || {}; // settings are at top level, not nested under .settings
           if (c) {
             setCompanyName(c.name || '');
             setRegistration(c.commercial_registration || c.registrationNumber || '');
@@ -90,18 +91,17 @@ export default function SettingsPage() {
             setEmail(c.email || '');
             setAddress(c.address || '');
           }
-          const s = d.data?.settings || {};
           if (s.fiscal_start) setFiscalStart(s.fiscal_start);
           if (s.decimal_places) setDecimalPlaces(s.decimal_places);
-          if (s.vat_rate) setVatRate(String(parseFloat(s.vat_rate) * 100));
           if (c?.country_code) setCountryCode(c.country_code);
           if (c?.currency_symbol) setCurrencySymbol(c.currency_symbol);
           if (c?.currency_code) setCurrencyCode(c.currency_code);
           if (c?.vat_rate) setVatRate(String(parseFloat(c.vat_rate) * 100));
-          if (s.notif_invoice !== undefined) setNotifInvoice(s.notif_invoice === 'true');
-          if (s.notif_due !== undefined) setNotifDue(s.notif_due === 'true');
-          if (s.notif_stock !== undefined) setNotifStock(s.notif_stock === 'true');
-          if (s.notif_voucher !== undefined) setNotifVoucher(s.notif_voucher === 'true');
+          else if (s.vat_rate) setVatRate(String(parseFloat(s.vat_rate) * 100));
+          if (s.notif_invoice !== undefined) setNotifInvoice(s.notif_invoice === 'true' || s.notif_invoice === true);
+          if (s.notif_due !== undefined) setNotifDue(s.notif_due === 'true' || s.notif_due === true);
+          if (s.notif_stock !== undefined) setNotifStock(s.notif_stock === 'true' || s.notif_stock === true);
+          if (s.notif_voucher !== undefined) setNotifVoucher(s.notif_voucher === 'true' || s.notif_voucher === true);
         }
       })
       .catch(() => {})
