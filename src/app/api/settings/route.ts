@@ -62,25 +62,18 @@ export async function PUT(request: NextRequest) {
     const s = sb();
 
     // Validate that we're only updating whitelisted keys
-    const { data: allowedKeys } = await s.from('allowed_settings_keys')
+    const { data: allowedKeys } = await s.from('allowed_setting_keys')
       .select('key_name');
 
     const validKeys = new Set((allowedKeys || []).map((k: any) => k.key_name));
 
-    // Check for invalid keys
-    const invalidKeys = Object.keys(body.settings || {}).filter(
-      key => !validKeys.has(key)
+    // Filter to only valid keys, silently skip unknown ones
+    const settingsToUpdate = Object.entries(body.settings || {}).filter(
+      ([key]) => validKeys.has(key)
     );
 
-    if (invalidKeys.length > 0) {
-      return error(
-        `مفاتيح إعدادات غير صالحة: ${invalidKeys.join(', ')}`,
-        400
-      );
-    }
-
     // Update each setting
-    const updates = Object.entries(body.settings || {}).map(([key, value]) => ({
+    const updates = settingsToUpdate.map(([key, value]) => ({
       company_id: auth.companyId,
       key,
       value: typeof value === 'object' ? JSON.stringify(value) : String(value),
