@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
-@theme inline {
-  /* Default: Amber Noir dark — actual values, no circular var() references */
+:root {
+  /* Default: Amber Noir dark — base variables */
   --color-bg-primary: #0C0816;
   --color-bg-secondary: #161025;
   --color-bg-tertiary: #1F1730;
@@ -37,6 +37,45 @@
   --color-sidebar-active: rgba(212, 137, 59, 0.12);
 
   --color-header-bg: rgba(12, 8, 22, 0.85);
+}
+
+@theme inline {
+  /* Link Tailwind classes dynamically to CSS custom variables */
+  --color-bg-primary: var(--color-bg-primary);
+  --color-bg-secondary: var(--color-bg-secondary);
+  --color-bg-tertiary: var(--color-bg-tertiary);
+  --color-bg-card: var(--color-bg-card);
+  --color-bg-hover: var(--color-bg-hover);
+  --color-bg-elevated: var(--color-bg-elevated);
+
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-inverse: var(--color-text-inverse);
+
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-light: var(--color-accent-light);
+  --color-accent-glow: var(--color-accent-glow);
+
+  --color-border: var(--color-border);
+  --color-border-light: var(--color-border-light);
+  --color-border-focus: var(--color-border-focus);
+
+  --color-success: var(--color-success);
+  --color-success-light: var(--color-success-light);
+  --color-warning: var(--color-warning);
+  --color-warning-light: var(--color-warning-light);
+  --color-danger: var(--color-danger);
+  --color-danger-light: var(--color-danger-light);
+  --color-info: var(--color-info);
+  --color-info-light: var(--color-info-light);
+
+  --color-sidebar-bg: var(--color-sidebar-bg);
+  --color-sidebar-hover: var(--color-sidebar-hover);
+  --color-sidebar-active: var(--color-sidebar-active);
+
+  --color-header-bg: var(--color-header-bg);
 
   --font-sans: 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
@@ -62,8 +101,8 @@
   --color-bg-hover: #251C3A;
   --color-bg-elevated: #201836;
   --color-text-primary: #F0EDEE;
-  --color-text-secondary: #AA9FB3;
-  --color-text-muted: #7A6E7E;
+  --color-text-secondary: #C5BDDB; /* FIXED: Increased text secondary contrast */
+  --color-text-muted: #9A8EAF; /* FIXED: Increased text muted contrast */
   --color-text-inverse: #0C0816;
   --color-accent: #D4893B;
   --color-accent-hover: #E0984E;
@@ -118,8 +157,8 @@
   --color-bg-hover: #1C2E2C;
   --color-bg-elevated: #182826;
   --color-text-primary: #ECF1F0;
-  --color-text-secondary: #A3B5B2;
-  --color-text-muted: #6D7D7A;
+  --color-text-secondary: #BFD0CD; /* FIXED: Increased text secondary contrast */
+  --color-text-muted: #8B9E9B; /* FIXED: Increased text muted contrast */
   --color-text-inverse: #0B1413;
   --color-accent: #2A9D8F;
   --color-accent-hover: #35B0A1;
