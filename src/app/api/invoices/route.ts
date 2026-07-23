@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     let data, queryError, count;
     try {
       let query = s.from('invoices')
-        .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at, contacts(name)', { count: 'exact' })
+        .select('id, number, contact_id, project_id, date, due_date, subtotal, tax_rate, tax_amount, total, status, notes, journal_entry_id, created_at, contacts(name)', { count: 'exact' })
         .eq('company_id', auth.companyId);
       
       if (status) query = query.eq('status', status);
@@ -143,14 +143,14 @@ export async function POST(request: NextRequest) {
             date, 
             due_date: dueDate, 
             subtotal, 
-            vat_rate: effectiveVatRate,
-            vat_amount: computedVat,
+            tax_rate: effectiveVatRate,
+            tax_amount: computedVat,
             total: computedTotal, 
             status: 'unpaid', 
             notes: notes || null, 
             created_by: auth.userId,
           })
-          .select('id, number, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes')
+          .select('id, number, date, due_date, subtotal, tax_rate, tax_amount, total, status, notes')
           .single();
         
         invoiceRes = result.data;
@@ -242,9 +242,6 @@ export async function POST(request: NextRequest) {
           quantity: item.quantity,
           unit_price: item.unitPrice,
           total: itemTotal,
-          item_type: item.item_type || 'service',
-          inventory_item_id: inventoryItemId,
-          unit: item.unit || 'وحدة',
         });
         if (itemErr) throw itemErr;
       }
