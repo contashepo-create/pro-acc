@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, getPaginationParams } from '@/lib/api-helpers';
+import { success, error, serverError, getPaginationParams, handleApiError } from '@/lib/api-helpers';
 import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
@@ -23,13 +23,14 @@ export async function GET(request: NextRequest) {
     const to = from + pageSize - 1;
 
     const { data: companies, error: err } = await s.from('companies')
-      .select('id, name, commercial_registration, tax_number, address, phone, email, is_active, created_at')
+      .select('id, name, commercial_registration, tax_number, address, phone, email, is_active, created_at, country, country_code, currency_code, vat_rate')
       .order('created_at', { ascending: false })
       .range(from, to);
     if (err) throw err;
 
-    // Get user counts per company
     const companyIds = (companies || []).map((c: any) => c.id);
+
+    // Get user counts per company
     const userCountMap: Record<string, number> = {};
     if (companyIds.length > 0) {
       const { data: users } = await s.from('users')
@@ -40,9 +41,35 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    // Get subscription info per company
+    const subMap: Record<string, any> = {};
+    if (companyIds.length > 0) {
+      const { data: subs } = await s.from('subscriptions')
+        .select('id, company_id, subscriber_number, plan_id, plan_code, status, start_date, end_date, trial_end_date, auto_renew, subscription_plans(name, max_users, max_projects)')
+        .in('company_id', companyIds)
+        .order('created_at', { ascending: false });
+      (subs || []).forEach((sub: any) => {
+        if (!subMap[sub.company_id]) {
+          const sp = sub.subscription_plans;
+          subMap[sub.company_id] = {
+            subscriber_number: sub.subscriber_number,
+            plan_code: sub.plan_code,
+            plan_name: sp?.name || sub.plan_code || '—',
+            status: sub.status,
+            start_date: sub.start_date,
+            end_date: sub.end_date,
+            auto_renew: sub.auto_renew,
+            max_users: sp?.max_users,
+            max_projects: sp?.max_projects,
+          };
+        }
+      });
+    }
+
     const result = (companies || []).map((c: any) => ({
       ...c,
       user_count: userCountMap[c.id] || 0,
+      subscription: subMap[c.id] || null,
     }));
 
     return success({

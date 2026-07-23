@@ -114,6 +114,34 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     requireAdmin(req);
     const { id } = await params;
     const s = sb();
+    const url = new URL(req.url);
+    const migrateTo = url.searchParams.get('migrate_to');
+
+    // Check for existing subscribers
+    const { count: subscriberCount } = await s.from('subscriptions')
+      .select('*', { count: 'exact', head: true })
+      .eq('plan_id', id);
+
+    if (subscriberCount && subscriberCount > 0) {
+      if (!migrateTo) {
+        return error(`لا يمكن حذف الباقة — يوجد ${subscriberCount} مشترك. حدد باقة بديلة عبر migrate_to`, 400);
+      }
+
+      // Verify migration target exists
+      const { data: targetPlan } = await s.from('subscription_plans')
+        .select('id, name')
+        .eq('id', migrateTo)
+        .maybeSingle();
+
+      if (!targetPlan) return error('الباقة البديلة غير موجودة', 404);
+
+      // Migrate all subscribers
+      const { error: migrateErr } = await s.from('subscriptions')
+        .update({ plan_id: migrateTo, plan_code: (targetPlan as any).code || null })
+        .eq('plan_id', id);
+
+      if (migrateErr) return error('فشل ترحيل المشتركين: ' + migrateErr.message, 500);
+    }
 
     const { data, error: delErr } = await s.from('subscription_plans')
       .delete()
@@ -121,12 +149,10 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       .select('id')
       .maybeSingle();
 
-    if (delErr) {
-      return error('فشل حذف الباقة: ' + delErr.message, 500);
-    }
+    if (delErr) return error('فشل حذف الباقة: ' + delErr.message, 500);
     if (!data) return error('الباقة غير موجودة', 404);
 
-    return success({ deleted: true });
+    return success({ deleted: true, migrated: subscriberCount || 0 });
   } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     return serverError(e);
