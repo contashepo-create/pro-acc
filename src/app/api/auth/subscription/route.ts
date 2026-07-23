@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
       .order('price', { ascending: true });
 
     const { data: subscription } = await s.from('subscriptions')
-      .select('id, plan_id, plan_code, status, start_date, end_date, trial_end_date, auto_renew, subscription_plans(name, price, duration_days)')
+      .select('id, subscriber_number, plan_id, plan_code, status, start_date, end_date, trial_end_date, auto_renew, subscription_plans(name, price, duration_days)')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -42,6 +42,7 @@ export async function GET(request: NextRequest) {
 
       subData = {
         id: sub.id,
+        subscriber_number: sub.subscriber_number || null,
         plan_id: sub.plan_id,
         plan_code: sub.plan_code,
         plan_name: sub.subscription_plans?.name || null,

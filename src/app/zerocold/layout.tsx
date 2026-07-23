@@ -5,13 +5,14 @@ import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   ShieldAlert, LayoutDashboard, Building2, Users, Database, Activity, LogOut, Loader2,
-  MessageSquare, MessageSquareWarning, Megaphone,
+  MessageSquare, MessageSquareWarning, Megaphone, Settings,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { href: '/zerocold', label: 'لوحة التحكم', icon: LayoutDashboard },
   { href: '/zerocold/companies', label: 'الشركات', icon: Building2 },
   { href: '/zerocold/users', label: 'المستخدمين', icon: Users },
+  { href: '/zerocold/app-settings', label: 'إعدادات التطبيق', icon: Settings },
   { href: '/zerocold/messages', label: 'الرسائل', icon: MessageSquare },
   { href: '/zerocold/complaints', label: 'الشكاوي', icon: MessageSquareWarning },
   { href: '/zerocold/advertisements', label: 'الإعلانات', icon: Megaphone },

@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
-  Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone, 
-  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, Copy, ExternalLink, Trash2, Key 
+import {
+  Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone,
+  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, Copy, ExternalLink, Trash2, Key, Globe, MessageSquare
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -47,6 +47,7 @@ export default function SettingsPage() {
 
   // Subscription state
   const [subscription, setSubscription] = useState<any>(null);
+  const [appSettings, setAppSettings] = useState<any>({});
   const [subLoading, setSubLoading] = useState(true);
 
   // Telegram Settings State
@@ -114,6 +115,14 @@ export default function SettingsPage() {
       })
       .catch(() => {})
       .finally(() => setSubLoading(false));
+
+    // Load app settings
+    fetch('/api/app-settings')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setAppSettings(d.data || {});
+      })
+      .catch(() => {});
   }, []);
 
   // Load Telegram Configurations on tab click
@@ -484,44 +493,84 @@ export default function SettingsPage() {
 
       {/* Subscription */}
       {tab === 'subscription' && (
-        <div className="space-y-4">
+        <div className="space-y-4 max-w-2xl">
           {subLoading ? (
             <Card><div className="text-center py-8 text-text-muted">جاري التحميل...</div></Card>
           ) : subscription ? (
             <>
-              <Card title="حالة الاشتراك">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-bg-secondary">
-                    <span className="text-sm text-text-muted">الباقة الحالية</span>
+              {/* Subscriber Number Card - Prominent */}
+              <div className="bg-gradient-to-br from-accent/10 to-transparent border border-accent/20 rounded-2xl p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-text-muted mb-1">رقم المشترك</p>
+                    <p className="text-3xl font-bold text-accent font-mono" dir="ltr">
+                      #{subscription.subscriber_number || subscription.id?.substring(0, 8) || '—'}
+                    </p>
+                  </div>
+                  <div className="w-14 h-14 rounded-2xl bg-accent/20 flex items-center justify-center">
+                    <CreditCard size={28} className="text-accent" />
+                  </div>
+                </div>
+                <p className="text-xs text-text-muted mt-3">رقم فريد دائم لا يتغير — استخدمه عند التواصل مع الدعم</p>
+              </div>
+
+              {/* Subscription Details */}
+              <div className="bg-bg-primary border border-border rounded-2xl overflow-hidden">
+                <div className="px-6 py-4 border-b border-border">
+                  <h4 className="font-bold text-text-primary">تفاصيل الاشتراك</h4>
+                </div>
+                <div className="divide-y divide-border">
+                  <div className="flex items-center justify-between px-6 py-3">
+                    <div className="flex items-center gap-3">
+                      <Building2 size={18} className="text-text-muted" />
+                      <span className="text-sm text-text-muted">اسم المشترك</span>
+                    </div>
+                    <span className="font-bold text-text-primary">{company?.name || '—'}</span>
+                  </div>
+                  <div className="flex items-center justify-between px-6 py-3">
+                    <div className="flex items-center gap-3">
+                      <CreditCard size={18} className="text-text-muted" />
+                      <span className="text-sm text-text-muted">الباقة</span>
+                    </div>
                     <span className="font-bold text-accent">{subscription.plan_name || 'تجريبي'}</span>
                   </div>
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-bg-secondary">
-                    <span className="text-sm text-text-muted">الحالة</span>
+                  <div className="flex items-center justify-between px-6 py-3">
+                    <div className="flex items-center gap-3">
+                      <Check size={18} className="text-text-muted" />
+                      <span className="text-sm text-text-muted">الحالة</span>
+                    </div>
                     <span className={`font-bold ${subscription.is_expired ? 'text-danger' : 'text-success'}`}>
                       {subscription.is_expired ? 'منتهي' : 'نشط'}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-bg-secondary">
-                    <span className="text-sm text-text-muted">تاريخ الانتهاء</span>
+                  <div className="flex items-center justify-between px-6 py-3">
+                    <div className="flex items-center gap-3">
+                      <Calendar size={18} className="text-text-muted" />
+                      <span className="text-sm text-text-muted">تاريخ الانتهاء</span>
+                    </div>
                     <span className="font-medium text-text-primary" dir="ltr">{subscription.end_date}</span>
                   </div>
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-bg-secondary">
-                    <span className="text-sm text-text-muted">الأيام المتبقية</span>
+                  <div className="flex items-center justify-between px-6 py-3">
+                    <div className="flex items-center gap-3">
+                      <AlertCircle size={18} className="text-text-muted" />
+                      <span className="text-sm text-text-muted">الأيام المتبقية</span>
+                    </div>
                     <span className={`font-bold ${subscription.days_remaining <= 7 ? 'text-warning' : 'text-success'}`}>
                       {subscription.days_remaining} يوم
                     </span>
                   </div>
-                  {subscription.is_expiring_soon && !subscription.is_expired && (
-                    <div className="flex items-center gap-2 p-3 rounded-lg bg-warning/10 border border-warning/30 text-warning text-sm">
-                      <AlertCircle size={16} />
-                      اشتراكك ينتهي قريباً — يرجى التجديد
-                    </div>
-                  )}
-                  <Button onClick={() => window.location.href = '/subscription'} leftIcon={<CreditCard size={16} />}>
-                    ترقية / تجديد الاشتراك
-                  </Button>
                 </div>
-              </Card>
+              </div>
+
+              {subscription.is_expiring_soon && !subscription.is_expired && (
+                <div className="flex items-center gap-2 p-4 rounded-xl bg-warning/10 border border-warning/30 text-warning text-sm">
+                  <AlertCircle size={18} />
+                  اشتراكك ينتهي قريباً — يرجى التجديد
+                </div>
+              )}
+              <Button onClick={() => window.location.href = '/subscription'} leftIcon={<CreditCard size={16} />}>
+                ترقية / تجديد الاشتراك
+              </Button>
             </>
           ) : (
             <Card><div className="text-center py-8 text-text-muted">لا يوجد اشتراك. <a href="/subscription" className="text-accent">اشترك الآن</a></div></Card>
@@ -531,65 +580,132 @@ export default function SettingsPage() {
 
       {/* About */}
       {tab === 'about' && (
-        <Card title="حول البرنامج">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 p-4 rounded-xl bg-accent/5">
-              <div className="w-12 h-12 rounded-xl bg-accent flex items-center justify-center">
-                <Building2 size={24} className="text-white" />
+        <div className="space-y-6 max-w-2xl">
+          {/* App Identity Card */}
+          <div className="bg-gradient-to-br from-accent/10 to-transparent border border-accent/20 rounded-2xl p-6">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-accent flex items-center justify-center shrink-0">
+                <Building2 size={32} className="text-white" />
               </div>
               <div>
-                <h3 className="font-bold text-text-primary">برو أكاوننت — AccWeb</h3>
-                <p className="text-xs text-text-muted">نظام محاسبة متكامل — الإصدار 1.0</p>
+                <h3 className="text-xl font-bold text-text-primary">{appSettings.app_name || 'برو أكاونت'}</h3>
+                <p className="text-sm text-text-muted">{appSettings.app_name_en || 'ProAccount'} — الإصدار {appSettings.app_version || '1.0'}</p>
+                <p className="text-xs text-text-muted mt-1">مطور بواسطة {appSettings.developer_name || 'ContaShepo'}</p>
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <h4 className="text-sm font-bold text-text-secondary mb-2">بيانات حسابك</h4>
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
-                <Mail size={16} className="text-text-muted" />
-                <span className="text-sm text-text-muted">البريد:</span>
-                <span className="text-sm font-medium text-text-primary" dir="ltr">{user?.email || '—'}</span>
-              </div>
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
-                <Info size={16} className="text-text-muted" />
-                <span className="text-sm text-text-muted">الاسم:</span>
-                <span className="text-sm font-medium text-text-primary">{user?.name || '—'}</span>
-              </div>
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
-                <Building2 size={16} className="text-text-muted" />
-                <span className="text-sm text-text-muted">الشركة:</span>
-                <span className="text-sm font-medium text-text-primary">{company?.name || '—'}</span>
-              </div>
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
-                <CreditCard size={16} className="text-text-muted" />
-                <span className="text-sm text-text-muted">رقم الاشتراك:</span>
-                <span className="text-sm font-medium text-text-primary font-mono" dir="ltr">
-                  {subscription ? subscription.id?.substring(0, 8) : '—'}
-                </span>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-4 border-t border-border">
-              <h4 className="text-sm font-bold text-text-secondary mb-2">للتواصل والدعم</h4>
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
-                <Mail size={16} className="text-accent" />
-                <span className="text-sm text-text-muted">البريد:</span>
-                <a href="mailto:conta.moha@gmail.com" className="text-sm text-accent hover:underline" dir="ltr">conta.moha@gmail.com</a>
-              </div>
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-bg-secondary">
-                <Phone size={16} className="text-accent" />
-                <span className="text-sm text-text-muted">تيليجرام:</span>
-                <a href="https://t.me/contashepo" className="text-sm text-accent hover:underline" dir="ltr">@contashepo</a>
-              </div>
-            </div>
-
-            <div className="p-4 rounded-xl bg-bg-secondary text-center">
-              <p className="text-xs text-text-muted">
-                عند التواصل مع الدعم، يرجى إرسال رقم اشتراكك وبريدك الإلكتروني لتسهيل المساعدة
-              </p>
             </div>
           </div>
-        </Card>
+
+          {/* Account Info */}
+          <div className="bg-bg-primary border border-border rounded-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-border">
+              <h4 className="font-bold text-text-primary">بيانات حسابك</h4>
+            </div>
+            <div className="divide-y divide-border">
+              <div className="flex items-center gap-3 px-6 py-3">
+                <Mail size={18} className="text-text-muted shrink-0" />
+                <span className="text-sm text-text-muted w-24">البريد</span>
+                <span className="text-sm font-medium text-text-primary" dir="ltr">{user?.email || '—'}</span>
+              </div>
+              <div className="flex items-center gap-3 px-6 py-3">
+                <Info size={18} className="text-text-muted shrink-0" />
+                <span className="text-sm text-text-muted w-24">الاسم</span>
+                <span className="text-sm font-medium text-text-primary">{user?.name || '—'}</span>
+              </div>
+              <div className="flex items-center gap-3 px-6 py-3">
+                <Building2 size={18} className="text-text-muted shrink-0" />
+                <span className="text-sm text-text-muted w-24">الشركة</span>
+                <span className="text-sm font-medium text-text-primary">{company?.name || '—'}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Contact & Support */}
+          <div className="bg-bg-primary border border-border rounded-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-border">
+              <h4 className="font-bold text-text-primary">التواصل والدعم</h4>
+            </div>
+            <div className="divide-y divide-border">
+              {appSettings.support_email && (
+                <div className="flex items-center gap-3 px-6 py-3">
+                  <Mail size={18} className="text-accent shrink-0" />
+                  <span className="text-sm text-text-muted w-24">البريد</span>
+                  <a href={`mailto:${appSettings.support_email}`} className="text-sm text-accent hover:underline" dir="ltr">{appSettings.support_email}</a>
+                </div>
+              )}
+              {appSettings.support_phone && (
+                <div className="flex items-center gap-3 px-6 py-3">
+                  <Phone size={18} className="text-accent shrink-0" />
+                  <span className="text-sm text-text-muted w-24">الهاتف</span>
+                  <a href={`tel:${appSettings.support_phone}`} className="text-sm text-accent hover:underline" dir="ltr">{appSettings.support_phone}</a>
+                </div>
+              )}
+              {appSettings.support_whatsapp && (
+                <div className="flex items-center gap-3 px-6 py-3">
+                  <MessageSquare size={18} className="text-accent shrink-0" />
+                  <span className="text-sm text-text-muted w-24">واتساب</span>
+                  <a href={`https://wa.me/${appSettings.support_whatsapp.replace(/[^0-9]/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-sm text-accent hover:underline" dir="ltr">{appSettings.support_whatsapp}</a>
+                </div>
+              )}
+              {appSettings.support_telegram && (
+                <div className="flex items-center gap-3 px-6 py-3">
+                  <Send size={18} className="text-accent shrink-0" />
+                  <span className="text-sm text-text-muted w-24">تيليجرام</span>
+                  <a href={`https://t.me/${appSettings.support_telegram}`} target="_blank" rel="noopener noreferrer" className="text-sm text-accent hover:underline" dir="ltr">@{appSettings.support_telegram}</a>
+                </div>
+              )}
+              {appSettings.support_website && (
+                <div className="flex items-center gap-3 px-6 py-3">
+                  <Globe size={18} className="text-accent shrink-0" />
+                  <span className="text-sm text-text-muted w-24">الموقع</span>
+                  <a href={appSettings.support_website} target="_blank" rel="noopener noreferrer" className="text-sm text-accent hover:underline" dir="ltr">{appSettings.support_website}</a>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Payment Info */}
+          {appSettings.payment_info && (
+            <div className="bg-bg-primary border border-border rounded-2xl overflow-hidden">
+              <div className="px-6 py-4 border-b border-border">
+                <h4 className="font-bold text-text-primary">معلومات الدفع</h4>
+              </div>
+              <div className="px-6 py-4 space-y-2">
+                <p className="text-sm text-text-secondary">{appSettings.payment_info}</p>
+                {appSettings.payment_bank_name && (
+                  <div className="flex items-center gap-3 py-2">
+                    <CreditCard size={18} className="text-text-muted shrink-0" />
+                    <span className="text-sm text-text-muted">البنك:</span>
+                    <span className="text-sm font-medium text-text-primary">{appSettings.payment_bank_name}</span>
+                  </div>
+                )}
+                {appSettings.payment_iban && (
+                  <div className="flex items-center gap-3 py-2">
+                    <CreditCard size={18} className="text-text-muted shrink-0" />
+                    <span className="text-sm text-text-muted">IBAN:</span>
+                    <span className="text-sm font-mono text-text-primary" dir="ltr">{appSettings.payment_iban}</span>
+                  </div>
+                )}
+                {appSettings.payment_stc_pay && (
+                  <div className="flex items-center gap-3 py-2">
+                    <CreditCard size={18} className="text-text-muted shrink-0" />
+                    <span className="text-sm text-text-muted">STC Pay:</span>
+                    <span className="text-sm font-mono text-text-primary" dir="ltr">{appSettings.payment_stc_pay}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Footer */}
+          <div className="text-center py-4">
+            <p className="text-xs text-text-muted">
+              {appSettings.footer_text || '© 2026 برو أكاونت - جميع الحقوق محفوظة'}
+            </p>
+            <p className="text-xs text-text-muted mt-1">
+              عند التواصل مع الدعم، يرجى إرسال رقم اشتراكك
+            </p>
+          </div>
+        </div>
       )}
 
       {/* Appearance */}
