@@ -295,6 +295,7 @@ export async function POST(request: NextRequest) {
             date, 
             type: 'general',
             description: `فاتورة مبيعات رقم ${number}`,
+            created_by: auth.userId,
           })
           .select('id')
           .single();
@@ -313,6 +314,7 @@ export async function POST(request: NextRequest) {
           journal_entry_id: journalEntryId, 
           account_id: arAccount.id, 
           account_code: '1130', 
+          account_name: 'العملاء',
           debit: computedTotal, 
           credit: 0, 
           description: `فاتورة مبيعات رقم ${number}` 
@@ -322,6 +324,7 @@ export async function POST(request: NextRequest) {
           journal_entry_id: journalEntryId, 
           account_id: revenueAccount.id, 
           account_code: '4100', 
+          account_name: 'إيرادات المبيعات',
           debit: 0, 
           credit: subtotal, 
           description: `إيراد فاتورة رقم ${number}` 
@@ -334,6 +337,7 @@ export async function POST(request: NextRequest) {
           journal_entry_id: journalEntryId, 
           account_id: vatAccount.id, 
           account_code: '2120', 
+          account_name: 'ضريبة القيمة المضافة',
           debit: 0, 
           credit: computedVat, 
           description: `ضريبة فاتورة رقم ${number}` 
