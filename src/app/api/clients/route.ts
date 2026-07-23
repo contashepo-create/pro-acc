@@ -32,8 +32,27 @@ export async function GET(req: NextRequest) {
       ...c,
       account_code: c.accounts?.code || null,
       account_name: c.accounts?.name || null,
-      balance: 0,
+      balance: 0, // will be filled below
     }));
+
+    // Calculate real balances from journal_lines
+    const accountIds = clients.filter(c => c.account_id).map(c => c.account_id);
+    if (accountIds.length > 0) {
+      const { data: lines } = await s.from('journal_lines')
+        .select('account_id, debit, credit')
+        .in('account_id', accountIds);
+      const balanceMap: Record<string, number> = {};
+      (lines || []).forEach((l: any) => {
+        const accId = l.account_id;
+        if (!balanceMap[accId]) balanceMap[accId] = 0;
+        balanceMap[accId] += (parseFloat(l.debit) || 0) - (parseFloat(l.credit) || 0);
+      });
+      clients.forEach(c => {
+        if (c.account_id && balanceMap[c.account_id] !== undefined) {
+          c.balance = balanceMap[c.account_id];
+        }
+      });
+    }
 
     return success({ clients, total: count || 0, page, pageSize });
   } catch (err) {

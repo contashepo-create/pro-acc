@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, FileText } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
+import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
@@ -129,18 +130,33 @@ export default function ClientsPage() {
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
     { key: 'phone', label: 'الجوال' },
-    { key: 'email', label: 'البريد الإلكتروني' },
     { key: 'tax_number', label: 'الرقم الضريبي' },
+    { key: 'balance', label: 'الرصيد', render: (row: any) => {
+      const bal = parseFloat(row.balance) || 0;
+      return (
+        <div className="flex items-center gap-2">
+          <span className={`font-bold ${bal > 0 ? 'text-green-600' : bal < 0 ? 'text-red-600' : 'text-text-muted'}`}>
+            {formatCurrency(Math.abs(bal))}
+          </span>
+          {bal !== 0 && (
+            <Badge variant={bal > 0 ? 'success' : 'danger'}>{bal > 0 ? 'مدين' : 'دائن'}</Badge>
+          )}
+        </div>
+      );
+    }, sortable: true },
     { key: 'credit_limit', label: 'الحد الائتماني', render: (row: any) => formatCurrency(row.credit_limit) },
     {
       key: 'actions',
       label: 'إجراءات',
       render: (row: any) => (
-        <ActionButtons
-          item={row}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-        />
+        <div className="flex items-center gap-2">
+          <a href={`/clients/${row.id}/statement`} target="_blank" rel="noopener noreferrer">
+            <Button variant="ghost" size="sm" title="كشف حساب">
+              <FileText size={16} className="text-blue-600" />
+            </Button>
+          </a>
+          <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} />
+        </div>
       ),
     },
   ];
