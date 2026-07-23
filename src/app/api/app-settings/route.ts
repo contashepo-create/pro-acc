@@ -7,7 +7,7 @@ const sb = () => getSupabase();
 /**
  * GET /api/app-settings
  * Public app settings (read-only, visible to all authenticated users)
- * Returns full metadata for dynamic rendering
+ * Returns flat key-value map
  */
 export async function GET(request: NextRequest) {
   try {
@@ -15,27 +15,18 @@ export async function GET(request: NextRequest) {
     const s = sb();
 
     const { data, error: queryErr } = await s.from('app_settings')
-      .select('key, value, label, icon, field_type, category, sort_order')
-      .eq('is_public', true)
-      .order('category, sort_order, key');
+      .select('key, value')
+      .eq('is_public', true);
 
     if (queryErr) throw queryErr;
 
-    // Group by category as arrays
-    const grouped: Record<string, any[]> = {};
+    // Return flat key-value map
+    const settings: Record<string, string> = {};
     (data || []).forEach((item: any) => {
-      if (!grouped[item.category]) grouped[item.category] = [];
-      grouped[item.category].push({
-        key: item.key,
-        label: item.label || item.key,
-        value: item.value || '',
-        icon: item.icon || 'Info',
-        field_type: item.field_type || 'text',
-        sort_order: item.sort_order || 0,
-      });
+      settings[item.key] = item.value || '';
     });
 
-    return success(grouped);
+    return success(settings);
   } catch (err) {
     return handleApiError(err);
   }
