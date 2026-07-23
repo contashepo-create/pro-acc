@@ -20,29 +20,28 @@ export async function GET(request: NextRequest) {
 
     const validKeys = (allowedKeys || []).map((k: any) => k.key_name);
 
-    if (validKeys.length === 0) {
-      return success({});
+    const settingsMap: Record<string, any> = {};
+
+    if (validKeys.length > 0) {
+      const { data: settings } = await s.from('settings')
+        .select('key, value')
+        .eq('company_id', auth.companyId)
+        .in('key', validKeys);
+
+      (settings || []).forEach((item: any) => {
+        try {
+          settingsMap[item.key] = JSON.parse(item.value);
+        } catch {
+          settingsMap[item.key] = item.value;
+        }
+      });
     }
 
-    const { data: settings } = await s.from('settings')
-      .select('key, value')
-      .eq('company_id', auth.companyId)
-      .in('key', validKeys);
-
-    // Also fetch company info (country, currency, vat_rate)
+    // Always fetch company info (country, currency, vat_rate)
     const { data: company } = await s.from('companies')
       .select('name, commercial_registration, tax_number, phone, email, address, country, country_code, currency_code, currency_symbol, locale, vat_rate')
       .eq('id', auth.companyId)
       .maybeSingle();
-
-    const settingsMap: Record<string, any> = {};
-    (settings || []).forEach((item: any) => {
-      try {
-        settingsMap[item.key] = JSON.parse(item.value);
-      } catch {
-        settingsMap[item.key] = item.value;
-      }
-    });
 
     return success({ ...settingsMap, company: company || {} });
   } catch (err) {
