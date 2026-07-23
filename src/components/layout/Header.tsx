@@ -24,7 +24,10 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
-  const { theme, toggleTheme } = useThemeStore();
+  
+  // FIXED: تصحيح أسماء المتغيرات المستخرجة من مخزن الثيمات (useThemeStore) لتطابق الأكواد الفعلية وتفعيل زر تغيير الوضع الفاتح/الداكن فوراً
+  const { isDark, toggleMode } = useThemeStore();
+  
   const { user, logout } = useAuthStore();
   const { setMobileOpen } = useSidebarStore();
 
@@ -158,12 +161,13 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
             )}
           </button>
 
+          {/* Theme Toggle Button — FIXED: mapped isDark and toggleMode correctly */}
           <button
-            onClick={toggleTheme}
-            className="btn btn-ghost btn-icon"
-            title={theme === 'dark' ? 'الوضع الفاتح' : 'الوضع الداكن'}
+            onClick={toggleMode}
+            className="btn btn-ghost btn-icon animate-all duration-300"
+            title={isDark ? 'الوضع الفاتح' : 'الوضع الداكن'}
           >
-            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            {isDark ? <Sun size={17} className="text-amber-500 hover:scale-110" /> : <Moon size={17} className="text-slate-400 hover:scale-110" />}
           </button>
 
           {/* User Menu */}
@@ -188,7 +192,6 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
                   <p className="text-xs text-text-muted">{user?.email || ''}</p>
                 </div>
                 <div className="p-1">
-                  {/* FIXED: ربط لوحة تحكم المطور الـ Zerocold السري للمسؤول الأعلى للتنقل التلقائي المباشر من الحساب */}
                   {user?.email?.toLowerCase() === 'conta.moha@gmail.com' && (
                     <button
                       onClick={() => {
