@@ -154,12 +154,11 @@ export async function POST(request: NextRequest) {
             date, 
             due_date: dueDate, 
             subtotal, 
-            tax_rate: effectiveVatRate,
+            tax_rate: effectiveVatRate * 100,
             tax_amount: computedVat,
             total: computedTotal, 
             status: 'unpaid', 
             notes: notes || null, 
-            created_by: auth.userId,
           })
           .select('id, number, date, due_date, subtotal, tax_rate, tax_amount, total, status, notes')
           .single();
@@ -178,13 +177,12 @@ export async function POST(request: NextRequest) {
             date, 
             due_date: dueDate, 
             subtotal, 
-            tax_rate: effectiveVatRate,
             tax_amount: computedVat,
             total: computedTotal, 
             status: 'unpaid', 
             notes: notes || null,
           })
-          .select('id, number, date, due_date, subtotal, tax_rate, tax_amount, total, status, notes')
+          .select('id, number, date, due_date, subtotal, tax_amount, total, status, notes')
           .single();
         
         invoiceRes = result.data;
