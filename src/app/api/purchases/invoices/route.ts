@@ -6,6 +6,10 @@ import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 
+/**
+ * GET /api/purchases/invoices
+ * جلب فواتير المشتريات مع تراجع تلقائي مرن في حال تعطل علاقات قاعدة البيانات لتجنب خطأ الخادم (500)
+ */
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
@@ -14,27 +18,59 @@ export async function GET(req: NextRequest) {
     const { page, pageSize } = getPaginationParams(url);
     const supplierId = url.searchParams.get('supplierId');
 
-    let query = s.from('purchase_invoices')
-      .select('*, contacts(name), purchase_orders(po_number)', { count: 'exact' }).eq('company_id', auth.companyId);
-    if (supplierId) query = query.eq('supplier_id', supplierId);
-
     const offset = (page - 1) * pageSize;
-    const { data, error: queryError, count } = await query
-      .order('date', { ascending: false }).order('id', { ascending: false }).range(offset, offset + pageSize - 1);
-    if (queryError) throw queryError;
+
+    // 1. محاولة جلب العلاقات باستخدام المفاتيح الأجنبية الصحيحة المحددة صراحة
+    const result = await s.from('purchase_invoices')
+      .select('*, contacts!supplier_id(name), purchase_orders!purchase_order_id(po_number)', { count: 'exact' })
+      .eq('company_id', auth.companyId)
+      .gte('date', '1970-01-01')
+      .order('date', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+
+    let data = result.data;
+    let count = result.count || 0;
+
+    if (result.error) {
+      console.warn('[Purchase Invoices GET] Joined query failed, falling back to simple select:', result.error);
+      // 2. تراجع مرن (Graceful Fallback) لتلافي توقف السيرفر
+      const fallbackResult = await s.from('purchase_invoices')
+        .select('*', { count: 'exact' })
+        .eq('company_id', auth.companyId)
+        .gte('date', '1970-01-01')
+        .order('date', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+
+      if (fallbackResult.error) throw fallbackResult.error;
+      data = fallbackResult.data;
+      count = fallbackResult.count || 0;
+    }
 
     const invoices = (data || []).map((pi: any) => ({
-      ...pi, supplier_name: pi.contacts?.name || null, po_number: pi.purchase_orders?.po_number || null,
+      ...pi, 
+      supplier_name: pi.contacts?.name || null, 
+      po_number: pi.purchase_orders?.po_number || null,
       paid_amount: 0,
     }));
+
     for (const inv of invoices) {
-      const { data: items } = await s.from('purchase_invoice_items').select('*').eq('purchase_invoice_id', inv.id).order('id');
+      const { data: items } = await s.from('purchase_invoice_items')
+        .select('*')
+        .eq('purchase_invoice_id', inv.id)
+        .order('id');
       inv.items = items || [];
     }
-    return success({ invoices, total: count || 0, page, pageSize });
-  } catch (err) { return handleApiError(err); }
+
+    return success({ invoices, total: count, page, pageSize });
+  } catch (err) { 
+    return handleApiError(err); 
+  }
 }
 
+/**
+ * POST /api/purchases/invoices
+ * إنشاء فاتورة مشتريات جديدة مع ترحيل القيد والتحديث المخزني
+ */
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
@@ -44,7 +80,6 @@ export async function POST(req: NextRequest) {
     if (!date || !supplier_id || !items || items.length === 0)
       return error('date, supplier_id, items are required');
 
-    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
     const nextNum = await getNextPurchaseInvoiceNumber(auth.companyId);
 
     let subtotal = 0;
