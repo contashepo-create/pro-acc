@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import Link from 'next/link'; // FIXED: Imported Next.js Link component for automatic background pre-fetching (instantaneous 0ms page transitions!)
 import {
   LayoutDashboard,
   Calculator,
@@ -120,7 +121,7 @@ const navGroups: NavGroup[] = [
 export function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
-  const { isCollapsed, toggle, setActive } = useSidebarStore(); // FIXED: Read isCollapsed and toggle action
+  const { isCollapsed, toggle, setActive } = useSidebarStore();
   const { user } = useAuthStore();
   
   const role = user?.role || 'supervisor';
@@ -157,19 +158,18 @@ export function Sidebar() {
   }, [pathname]);
 
   const toggleGroup = (label: string) => {
-    if (isCollapsed) return; // Prevent expansion when collapsed
+    if (isCollapsed) return; 
     setExpandedGroups((prev) => ({ ...prev, [label]: !prev[label] }));
   };
 
-  const handleNav = (id: string) => {
-    setActive(id);
-    const targetPath = id === '' ? '/dashboard' : (id.startsWith('/') ? id : `/${id}`);
-    router.push(targetPath);
+  // دالة مساعدة لتوليد المسار المطلق السليم للتوجيه والـ prefetching
+  const getNavPath = (id: string) => {
+    return id === '' ? '/dashboard' : (id.startsWith('/') ? id : `/${id}`);
   };
 
   return (
     <div className="flex flex-col h-full bg-sidebar-bg text-text-primary transition-all duration-300">
-      {/* Brand logo — FIXED: hides text cleanly when collapsed */}
+      {/* Brand logo */}
       <div className="flex items-center h-14 px-4 border-b border-border shrink-0 overflow-hidden">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0">
@@ -183,7 +183,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      {/* Navigation list */}
+      {/* Navigation list — FIXED: Convert buttons to Link components for instant page loading */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
         {filteredNavGroups.map((group) => {
           const Icon = group.icon;
@@ -193,8 +193,9 @@ export function Sidebar() {
           return (
             <div key={group.label} className="overflow-hidden">
               {group.items.length === 1 ? (
-                <button
-                  onClick={() => handleNav(group.items[0].id)}
+                <Link
+                  href={getNavPath(group.items[0].id)}
+                  onClick={() => setActive(group.items[0].id)}
                   className={`sidebar-item w-full flex items-center gap-3 px-3 h-10 rounded-lg transition-colors ${
                     hasActiveChild ? 'active text-accent' : 'text-text-secondary hover:text-text-primary'
                   }`}
@@ -206,14 +207,14 @@ export function Sidebar() {
                       {group.label}
                     </span>
                   )}
-                </button>
+                </Link>
               ) : (
                 <>
                   <button
                     onClick={() => {
                       if (isCollapsed) {
-                        // When collapsed, clicking group directly navigates to its first item
-                        handleNav(group.items[0].id);
+                        router.push(getNavPath(group.items[0].id));
+                        setActive(group.items[0].id);
                       } else {
                         toggleGroup(group.label);
                       }
@@ -237,9 +238,10 @@ export function Sidebar() {
                   {isExpanded && !isCollapsed && (
                     <div className="mr-8 mt-0.5 space-y-0.5">
                       {group.items.map((item) => (
-                        <button
+                        <Link
                           key={item.id}
-                          onClick={() => handleNav(item.id)}
+                          href={getNavPath(item.id)}
+                          onClick={() => setActive(item.id)}
                           className={`sidebar-item w-full text-right px-3 py-1.5 text-sm rounded-lg transition-colors ${
                             isActive(item.id)
                               ? 'active text-accent font-semibold'
@@ -247,7 +249,7 @@ export function Sidebar() {
                           }`}
                         >
                           {item.label}
-                        </button>
+                        </Link>
                       ))}
                     </div>
                   )}
@@ -258,7 +260,7 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Collapse Toggle Button (Desktop Only) — FIXED: Toggle sidebar expand/collapse dynamically */}
+      {/* Collapse Toggle Button (Desktop Only) */}
       <div className="hidden lg:flex items-center justify-center h-12 border-t border-border shrink-0 bg-sidebar-bg">
         <button 
           onClick={toggle}
