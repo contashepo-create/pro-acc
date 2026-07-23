@@ -37,6 +37,17 @@ export async function POST(req: NextRequest) {
       return error('name and hire_date are required');
     }
 
+    // Check plan limits
+    try {
+      const { checkPlanLimit } = await import('@/lib/plan-limits');
+      const limitCheck = await checkPlanLimit(auth.companyId, 'employees');
+      if (!limitCheck.allowed) {
+        return error(limitCheck.message || 'تم الوصول للحد الأقصى من الموظفين', 403);
+      }
+    } catch (e) {
+      console.warn('Plan limit check failed:', e);
+    }
+
     const { data: result, error: insertError } = await s.from('employees')
       .insert({
         company_id: auth.companyId,

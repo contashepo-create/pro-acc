@@ -48,6 +48,19 @@ export async function POST(req: NextRequest) {
 
     if (!name || !type) return error('name and type are required');
 
+    // Check plan limits based on contact type
+    if (type === 'client' || type === 'supplier') {
+      try {
+        const { checkPlanLimit } = await import('@/lib/plan-limits');
+        const limitCheck = await checkPlanLimit(auth.companyId, type === 'client' ? 'clients' : 'suppliers');
+        if (!limitCheck.allowed) {
+          return error(limitCheck.message || `تم الوصول للحد الأقصى من ${type === 'client' ? 'العملاء' : 'الموردين'}`, 403);
+        }
+      } catch (e) {
+        console.warn('Plan limit check failed:', e);
+      }
+    }
+
     const { data: result, error: insertError } = await s.from('contacts')
       .insert({
         company_id: auth.companyId,
