@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { ArrowRight, Printer, FileDown, Settings, Check, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { QRCode } from '@/components/ui/QRCode';
+import { useAuthStore } from '@/store/auth-store'; // FIXED: Added missing import for useAuthStore to prevent ReferenceError crash on render
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { INVOICE_TEMPLATES, getTemplateConfig, DEFAULT_INVOICE_SETTINGS, type InvoiceTemplateSettings } from '@/lib/invoice-templates';
 
