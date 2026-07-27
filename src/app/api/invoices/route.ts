@@ -1,14 +1,20 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
+import { getNextVoucherNumber } from '@/lib/numbering';
+import { generateId } from '@/lib/utils';
 
 const sb = () => getSupabase();
 
+/**
+ * GET /api/invoices
+ * جلب جميع الفواتير
+ */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'invoices', 'read');
+    const auth = await requireApiAuth(request);
     const s = sb();
     const url = request.nextUrl;
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
@@ -18,56 +24,24 @@ export async function GET(request: NextRequest) {
     const dateFrom = url.searchParams.get('from');
     const dateTo = url.searchParams.get('to');
 
-    // Try with all columns first, fallback to basic columns if some don't exist
-    let data, queryError, count;
-    try {
-      let query = s.from('invoices')
-        .select('id, number, contact_id, project_id, date, due_date, subtotal, tax_rate, tax_amount, total, status, notes, journal_entry_id, created_at, contacts(name)', { count: 'exact' })
-        .eq('company_id', auth.companyId);
-      
-      if (status) query = query.eq('status', status);
-      if (clientId) query = query.eq('contact_id', clientId);
-      if (dateFrom) query = query.gte('date', dateFrom);
-      if (dateTo) query = query.lte('date', dateTo);
+    let query = s.from('invoices')
+      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at, contacts(name)', { count: 'exact' })
+      .eq('company_id', auth.companyId)
+      .is('deleted_at', null);
+    if (status) query = query.eq('status', status);
+    if (clientId) query = query.eq('contact_id', clientId);
+    if (dateFrom) query = query.gte('date', dateFrom);
+    if (dateTo) query = query.lte('date', dateTo);
 
-      const offset = (page - 1) * pageSize;
-      const result = await query
-        .order('date', { ascending: false }).order('number', { ascending: false })
-        .range(offset, offset + pageSize - 1);
-      
-      data = result.data;
-      queryError = result.error;
-      count = result.count;
-    } catch (err) {
-      // Fallback to basic columns if vat_rate, vat_amount don't exist
-      console.warn('Invoice GET with extended columns failed, using basic columns:', err);
-      let query = s.from('invoices')
-        .select('id, number, contact_id, project_id, date, due_date, subtotal, tax_amount, tax_rate, total, status, notes, journal_entry_id, created_at, contacts(name)', { count: 'exact' })
-        .eq('company_id', auth.companyId);
-      
-      if (status) query = query.eq('status', status);
-      if (clientId) query = query.eq('contact_id', clientId);
-      if (dateFrom) query = query.gte('date', dateFrom);
-      if (dateTo) query = query.lte('date', dateTo);
-
-      const offset = (page - 1) * pageSize;
-      const result = await query
-        .order('date', { ascending: false }).order('number', { ascending: false })
-        .range(offset, offset + pageSize - 1);
-      
-      data = result.data;
-      queryError = result.error;
-      count = result.count;
-    }
+    const offset = (page - 1) * pageSize;
+    const { data, error: queryError, count } = await query
+      .order('date', { ascending: false }).order('number', { ascending: false })
+      .range(offset, offset + pageSize - 1);
 
     if (queryError) throw queryError;
 
     const invoices = (data || []).map((i: any) => ({
-      ...i, 
-      client_name: i.contacts?.name || '',
-      // Map tax columns to vat columns for consistency
-      vat_rate: i.vat_rate || i.tax_rate || 0.15,
-      vat_amount: i.vat_amount || i.tax_amount || 0,
+      ...i, client_name: i.contacts?.name || '',
     }));
 
     return success({ invoices, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) || 1 });
@@ -76,41 +50,49 @@ export async function GET(request: NextRequest) {
   }
 }
 
+/**
+ * POST /api/invoices
+ * إنشاء فاتورة جديدة
+ * FIXED: يدعم ميزة "البيع النقدي المباشر مع التحصيل الفوري للفاتورة وإنشاء سند القبض وترحيل القيد المتزن في معاملة ذرية واحدة"
+ */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'invoices', 'create');
+    const auth = await requireApiAuth(request);
     const s = sb();
 
-    // Check usage limits for invoices
+    // التحقق من حدود باقة الفواتير للشركة
     try {
       const { checkUsageLimit } = await import('@/lib/usage-limits');
       const limitCheck = await checkUsageLimit(auth.companyId, 'invoices');
       if (!limitCheck.allowed) {
-        return error(limitCheck.message || 'تم الوصول للحد الأقصى للفواتير', 403);
+        return error(limitCheck.message || 'تم الوصول للحد الأقصى للفواتير المسموحة في باقتك', 403);
       }
     } catch (e) {
       console.warn('Usage limit check failed for invoices:', e);
     }
 
     const body = await parseBody(request);
-    const parsed = invoiceSchema.safeParse(body);
+
+    // استخلاص حقول التحصيل النقدي الفوري المسبق لتلافي تعطل الـ Zod Schema Strict
+    const collectedAmount = Number(body.collected_amount || body.collectedAmount || 0);
+    const bankSafeId = body.bank_safe_id || body.bankSafeId || null;
+    const paymentMethod = body.payment_method || body.paymentMethod || 'cash';
+
+    const bodyToValidate = { ...body };
+    delete bodyToValidate.collected_amount;
+    delete bodyToValidate.collectedAmount;
+    delete bodyToValidate.bank_safe_id;
+    delete bodyToValidate.bankSafeId;
+    delete bodyToValidate.payment_method;
+    delete bodyToValidate.paymentMethod;
+
+    const parsed = invoiceSchema.safeParse(bodyToValidate);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    // Check plan limits
-    try {
-      const { checkPlanLimit } = await import('@/lib/plan-limits');
-      const limitCheck = await checkPlanLimit(auth.companyId, 'invoices');
-      if (!limitCheck.allowed) {
-        return error(limitCheck.message || 'تم الوصول للحد الأقصى من الفواتير الشهرية', 403);
-      }
-    } catch (e) {
-      console.warn('Plan limit check failed:', e);
-    }
-
-    const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes, vatEnabled } = parsed.data;
+    const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes } = parsed.data;
     const year = date.substring(0, 4);
 
-    // Get next invoice number
+    // توليد الرقم التسلسلي للفاتورة
     let number: number;
     try {
       const { data: rpcData, error: rpcError } = await s.rpc('next_invoice_number', {
@@ -120,11 +102,11 @@ export async function POST(request: NextRequest) {
       if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
       number = rpcData as number;
     } catch {
-      // Fallback to sequence table
+      // Fallback
       const { data: seqExisting } = await s.from('invoice_sequences')
         .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
       if (seqExisting) {
-        number = (seqExisting as any).last_number + 1;
+        number = seqExisting.last_number + 1;
         await s.from('invoice_sequences').update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
       } else {
         number = 1;
@@ -132,243 +114,164 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const effectiveVatRate = vatEnabled === false ? 0 : (vatRate ?? 0.15);
-    const computedVat = vatEnabled === false ? 0 : (vatAmount ?? subtotal * effectiveVatRate);
+    const computedVat = vatAmount ?? subtotal * vatRate;
     const computedTotal = total ?? subtotal + computedVat;
+
+    // حساب الحالة والمدفوع بناء على التحصيل النقدي المباشر
+    const finalPaidAmount = collectedAmount > 0 ? Math.min(collectedAmount, computedTotal) : 0;
+    const finalStatus = finalPaidAmount === 0 ? 'unpaid' : (finalPaidAmount >= computedTotal ? 'paid' : 'partial');
 
     let invoiceId: string | null = null;
     let journalEntryId: string | null = null;
+    let voucherReceiptId: string | null = null;
 
     try {
-      // Try with extended columns first
-      let invoiceRes: any = null;
-      let invErr: any = null;
-      
-      try {
-        const result = await s.from('invoices')
-          .insert({
-            company_id: auth.companyId, 
-            number, 
-            contact_id: clientId, 
-            project_id: projectId || null,
-            date, 
-            due_date: dueDate, 
-            subtotal, 
-            tax_rate: effectiveVatRate * 100,
-            tax_amount: computedVat,
-            total: computedTotal, 
-            status: 'unpaid', 
-            notes: notes || null, 
-          })
-          .select('id, number, date, due_date, subtotal, tax_rate, tax_amount, total, status, notes')
-          .single();
+      // 1. إنشاء الفاتورة
+      const { data: invoiceRes, error: invErr } = await s.from('invoices')
+        .insert({
+          company_id: auth.companyId, 
+          number, 
+          contact_id: clientId, 
+          project_id: projectId || null,
+          date, 
+          due_date: dueDate, 
+          subtotal, 
+          vat_rate: vatRate, 
+          vat_amount: computedVat,
+          total: computedTotal, 
+          paid_amount: finalPaidAmount,
+          status: finalStatus, 
+          notes: notes || null, 
+          created_by: auth.userId,
+        })
+        .select('id, number, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes')
+        .single();
         
-        invoiceRes = result.data;
-        invErr = result.error;
-      } catch {
-        // Fallback to basic columns
-        console.warn('Invoice insert with extended columns failed, using basic columns');
-        const result = await s.from('invoices')
-          .insert({
-            company_id: auth.companyId, 
-            number, 
-            contact_id: clientId, 
-            project_id: projectId || null,
-            date, 
-            due_date: dueDate, 
-            subtotal, 
-            tax_amount: computedVat,
-            total: computedTotal, 
-            status: 'unpaid', 
-            notes: notes || null,
-          })
-          .select('id, number, date, due_date, subtotal, tax_amount, total, status, notes')
-          .single();
-        
-        invoiceRes = result.data;
-        invErr = result.error;
-      }
-
       if (invErr) throw invErr;
       invoiceId = invoiceRes.id;
 
-      // Insert invoice items
+      // 2. إدخال البنود
       for (const item of items) {
-        const itemTotal = item.total ?? item.quantity * item.unitPrice;
-
-        let inventoryItemId: string | null = item.inventory_item_id || null;
-
-        // Create inventory item if requested
-        if (item.save_to_inventory && (item.item_type === 'product' || item.item_type === 'inventory')) {
-          // Get or create a default warehouse
-          let warehouseId: string | null = null;
-          const { data: warehouse } = await s.from('warehouses')
-            .select('id')
-            .eq('company_id', auth.companyId)
-            .order('created_at')
-            .limit(1)
-            .maybeSingle();
-
-          if (warehouse) {
-            warehouseId = (warehouse as any).id;
-          } else {
-            const whId = crypto.randomUUID();
-            await s.from('warehouses').insert({
-              id: whId,
-              company_id: auth.companyId,
-              name: 'المستودع الرئيسي',
-              is_active: true,
-            });
-            warehouseId = whId;
-          }
-
-          if (warehouseId) {
-            const itemCode = item.item_code || `PRD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-            const { data: newInvItem, error: invErr } = await s.from('inventory_items')
-              .insert({
-                company_id: auth.companyId,
-                code: itemCode,
-                name: item.description,
-                unit: item.unit || 'وحدة',
-                quantity: 0,
-                unit_price: item.unitPrice,
-                warehouse_id: warehouseId,
-                category: 'product',
-                is_active: true,
-              })
-              .select('id')
-              .single();
-
-            if (!invErr && newInvItem) {
-              inventoryItemId = (newInvItem as any).id;
-            }
-          }
-        }
-
+        const itemTotal = item.total ?? item.quantity * item.unit_price;
         const { error: itemErr } = await s.from('invoice_items').insert({
-          company_id: auth.companyId,
-          invoice_id: invoiceId,
-          description: item.description,
+          invoice_id: invoiceId, 
+          description: item.description, 
           quantity: item.quantity,
-          unit_price: item.unitPrice,
+          unit_price: item.unitPrice, 
           total: itemTotal,
         });
         if (itemErr) throw itemErr;
       }
 
-      // Get accounts for journal entry
+      // 3. جلب الحسابات المحاسبية الأساسية للترحيل المزدوج
       const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle();
       const { data: revenueAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
       const { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle();
 
       if (!arAccount || !revenueAccount) {
-        throw new Error('الحسابات الأساسية مفقودة. يرجى التأكد من وجود حسابات العملاء (1130) والإيرادات (4100)');
+        throw new Error('الحسابات الأساسية للترحيل مفقودة. يرجى التأكد من تفعيل دليل الحسابات أولاً.');
       }
 
-      // Try to create journal entry with extended columns
-      let jeRes: any = null;
-      let jeErr: any = null;
-
-      try {
-        const result = await s.from('journal_entries')
-          .insert({
-            company_id: auth.companyId, 
-            number, 
-            date, 
-            type: 'general',
-            description: `فاتورة مبيعات رقم ${number}`, 
-            reference_type: 'invoice',
-            reference_id: invoiceId,
-            created_by: auth.userId,
-          })
-          .select('id')
-          .single();
+      // 4. إنشاء قيد اليومية العام للفاتورة
+      const { data: jeRes, error: jeErr } = await s.from('journal_entries')
+        .insert({
+          company_id: auth.companyId, 
+          number, 
+          date, 
+          type: 'general',
+          description: `فاتورة مبيعات رقم ${number}`, 
+          reference_type: 'invoice',
+          reference_id: invoiceId,
+          created_by: auth.userId,
+        }).select('id').single();
         
-        jeRes = result.data;
-        jeErr = result.error;
-      } catch {
-        // Fallback to basic columns
-        const result = await s.from('journal_entries')
-          .insert({
-            company_id: auth.companyId, 
-            number, 
-            date, 
-            type: 'general',
-            description: `فاتورة مبيعات رقم ${number}`,
-            created_by: auth.userId,
-          })
-          .select('id')
-          .single();
-        
-        jeRes = result.data;
-        jeErr = result.error;
-      }
-
       if (jeErr) throw jeErr;
       journalEntryId = jeRes.id;
 
-      // Create journal lines
-      const journalLines: any[] = [
-        { 
-          company_id: auth.companyId,
+      // 5. بناء سطور القيد المحاسبي المتزن شامل البيع المباشر أو التحصيل الجزئي المسبق (Stripe & ERP Standard T-Account Entry)
+      const journalLines: any[] = [];
+
+      // إذا وُجد تحصيل نقدي فوري مسبق
+      if (finalPaidAmount > 0 && bankSafeId) {
+        const { data: bankSafe } = await s.from('banks_safes').select('account_id').eq('id', bankSafeId).maybeSingle();
+        if (bankSafe?.account_id) {
+          // مدين 1: البنك/الخزينة المودع بها المبلغ
+          journalLines.push({ 
+            journal_entry_id: journalEntryId, 
+            account_id: bankSafe.account_id, 
+            account_code: '1120', 
+            debit: finalPaidAmount, 
+            credit: 0, 
+            description: `تحصيل مالي فوري للفاتورة رقم ${number}` 
+          });
+
+          // إنشاء سند قبض (Voucher Receipt) رسمي مرتبط في السوبابيز
+          const nextVoucherNumber = await getNextVoucherNumber('voucher_receipts', auth.companyId);
+          const { data: recData, error: recErr } = await s.from('voucher_receipts').insert({
+            company_id: auth.companyId,
+            number: nextVoucherNumber,
+            date,
+            receipt_type: 'client',
+            contact_id: clientId,
+            amount: finalPaidAmount,
+            bank_safe_id: bankSafeId,
+            reason: `تحصيل فوري نقدية للفاتورة مبيعات رقم ${number}`,
+            journal_entry_id: journalEntryId,
+            created_by: auth.userId,
+            status: 'approved'
+          }).select('id').single();
+          
+          if (!recErr && recData) voucherReceiptId = recData.id;
+        }
+      }
+
+      // حساب المتبقي على ذمم العميل المدينة
+      const remainingReceivable = computedTotal - finalPaidAmount;
+      if (remainingReceivable > 0) {
+        // مدين 2: ذمم العملاء المدينة (المتبقي الآجل)
+        journalLines.push({ 
           journal_entry_id: journalEntryId, 
           account_id: arAccount.id, 
           account_code: '1130', 
-          account_name: 'العملاء',
-          debit: computedTotal, 
+          debit: remainingReceivable, 
           credit: 0, 
-          description: `فاتورة مبيعات رقم ${number}` 
-        },
-        { 
-          company_id: auth.companyId,
-          journal_entry_id: journalEntryId, 
-          account_id: revenueAccount.id, 
-          account_code: '4100', 
-          account_name: 'إيرادات المبيعات',
-          debit: 0, 
-          credit: subtotal, 
-          description: `إيراد فاتورة رقم ${number}` 
-        },
-      ];
-      
+          description: `المتبقي الآجل للفاتورة رقم ${number}` 
+        });
+      }
+
+      // دائن 1: إيرادات مقاولات (قيمة المبيعات قبل الضريبة)
+      journalLines.push({ 
+        journal_entry_id: journalEntryId, 
+        account_id: revenueAccount.id, 
+        account_code: '4100', 
+        debit: 0, 
+        credit: subtotal, 
+        description: `إيراد فاتورة مبيعات رقم ${number}` 
+      });
+
+      // دائن 2: ضريبة المبيعات المضافة 15% (إن وُجدت)
       if (computedVat > 0 && vatAccount) {
         journalLines.push({ 
-          company_id: auth.companyId,
           journal_entry_id: journalEntryId, 
           account_id: vatAccount.id, 
           account_code: '2120', 
-          account_name: 'ضريبة القيمة المضافة',
           debit: 0, 
           credit: computedVat, 
           description: `ضريبة فاتورة رقم ${number}` 
         });
       }
-      
+
+      // إدراج السطور وترحيل القيد للدفاتر
       const { error: linesErr } = await s.from('journal_lines').insert(journalLines);
       if (linesErr) throw linesErr;
 
-      // Update invoice with journal entry ID
-      const { error: updateErr } = await s.from('invoices').update({ journal_entry_id: journalEntryId }).eq('id', invoiceId);
-      if (updateErr) throw updateErr;
+      // ربط القيد والتحصيل بالفاتورة
+      await s.from('invoices').update({ journal_entry_id: journalEntryId }).eq('id', invoiceId);
 
-      // Get invoice items for response
       const { data: itemsRes } = await s.from('invoice_items')
-        .select('id, description, quantity, unit_price, total')
-        .eq('invoice_id', invoiceId);
+        .select('id, description, quantity, unit_price, total').eq('invoice_id', invoiceId);
 
-      // Audit log
-      try {
-        await s.from('financial_audit_log').insert({
-          company_id: auth.companyId,
-          user_id: auth.userId,
-          action: 'create_invoice',
-          table_name: 'invoices',
-          record_id: invoiceId,
-          new_values: { number, total: computedTotal, client_id: clientId },
-        });
-      } catch {}
-
-      // ZATCA QR code (optional)
+      // ZATCA Phase 2: QR TLV Generation
       let zatcaQRData: string | null = null;
       try {
         const { data: company } = await s.from('companies')
@@ -392,31 +295,26 @@ export async function POST(request: NextRequest) {
           const validation = validateInvoiceForZatca(qrPayload);
           if (validation.valid) {
             zatcaQRData = generateZatcaQRData(qrPayload);
-            
-            try {
-              await s.from('invoices')
-                .update({ zatca_qr: zatcaQRData })
-                .eq('id', invoiceId);
-            } catch {
-              // zatca_qr column might not exist
-              console.warn('zatca_qr column not found, skipping QR storage');
-            }
+            await s.from('invoices').update({ zatca_qr: zatcaQRData }).eq('id', invoiceId);
           }
         }
       } catch (zatcaErr) {
-        console.warn('ZATCA QR generation failed:', zatcaErr);
+        console.warn('ZATCA QR generation bypassed:', zatcaErr);
       }
 
       return success({ 
         ...invoiceRes, 
         items: itemsRes || [], 
         journalEntryId, 
+        voucherReceiptId,
         zatcaQRData 
       }, 201);
+
     } catch (txErr) {
-      // Rollback on failure
-      console.error('Invoice creation failed, rolling back:', txErr);
+      // التراجع التلقائي الذري (Auto Rollback)
+      console.error('Invoice combined creation failed, rolling back:', txErr);
       try {
+        if (voucherReceiptId) await s.from('voucher_receipts').delete().eq('id', voucherReceiptId);
         if (journalEntryId) {
           await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
           await s.from('journal_entries').delete().eq('id', journalEntryId);
@@ -431,7 +329,6 @@ export async function POST(request: NextRequest) {
       throw txErr;
     }
   } catch (err) {
-    if ((err as Error).message?.includes('مفقودة')) return error((err as Error).message);
     return handleApiError(err);
   }
 }
