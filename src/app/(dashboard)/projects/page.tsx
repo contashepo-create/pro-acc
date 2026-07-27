@@ -38,7 +38,7 @@ export default function ProjectsPage() {
   
   // بنود جدول الكميات (BOQ) الخاصة بالمشروع الجديد
   const [boqItems, setBoqItems] = useState<any[]>([
-    { description: 'أعمال الحفر والردم وتجهيز الموقع', unit: 'متر مكعب', quantity: 1, unit_price: 10000, total: 10000 }
+    { description: '', unit: 'متر', quantity: 1, unit_price: 0, total: 0 }
   ]);
 
   const [form, setForm] = useState<any>({
@@ -46,7 +46,7 @@ export default function ProjectsPage() {
     client_id: '',
     start_date: new Date().toISOString().split('T')[0],
     end_date: '',
-    contract_value: 10000,
+    contract_value: 0,
     description: '',
     location: '',
     auto_invoice: false, // التوليد التلقائي للفاتورة
@@ -110,14 +110,14 @@ export default function ProjectsPage() {
   const handleOpenAdd = () => {
     setEditingProject(null);
     setBoqItems([
-      { description: 'أعمال الحفر والردم وتجهيز الموقع', unit: 'متر مكعب', quantity: 1, unit_price: 10000, total: 10000 }
+      { description: '', unit: 'متر', quantity: 1, unit_price: 0, total: 0 }
     ]);
     setForm({
       name: '',
       client_id: '',
       start_date: new Date().toISOString().split('T')[0],
       end_date: '',
-      contract_value: 10000,
+      contract_value: 0,
       description: '',
       location: '',
       auto_invoice: false,
