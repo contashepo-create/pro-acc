@@ -143,6 +143,21 @@ export async function createJournalEntry(
   const s = sb();
 
   try {
+    // ACCOUNTING INTEGRITY: فرض قيد مزدوج متوازن (المدين يجب أن يساوي الدائن)
+    const totalDebit = lines.reduce((sum, l) => sum + (Number(l.debit) || 0), 0);
+    const totalCredit = lines.reduce((sum, l) => sum + (Number(l.credit) || 0), 0);
+    if (lines.length === 0) {
+      return { journalId: '', error: new Error('لا يمكن إنشاء قيد محاسبي بدون سطور') };
+    }
+    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+      return {
+        journalId: '',
+        error: new Error(
+          `خطأ في الموازنة: مجموع المدين (${totalDebit}) لا يساوي مجموع الدائن (${totalCredit})`
+        ),
+      };
+    }
+
     // إنشاء القيد المحاسبي
     const journalNumber = await getNextJournalNumber(companyId, date);
     const { data: journal, error: journalError } = await s.from('journal_entries')
@@ -162,14 +177,18 @@ export async function createJournalEntry(
     if (journalError) throw journalError;
 
     // إنشاء السطور
-    const { error: linesError } = await insertJournalLines(companyId, 
+    const { error: linesError } = await insertJournalLines(companyId,
       lines.map(line => ({
         journal_entry_id: journal.id,
         ...line
       }))
     );
 
-    if (linesError) throw linesError;
+    if (linesError) {
+      // تنظيف القيد اليتيم: احذف القيد إن فشل إدراج سطوره
+      await s.from('journal_entries').delete().eq('id', journal.id).eq('company_id', companyId);
+      throw linesError;
+    }
 
     return { journalId: journal.id, error: null };
   } catch (error) {
