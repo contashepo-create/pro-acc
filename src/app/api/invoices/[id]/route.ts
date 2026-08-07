@@ -99,7 +99,7 @@ export async function PATCH(
       if (invoice.status === 'paid') return error('الفاتورة مدفوعة مسبقاً');
       if (invoice.status === 'cancelled') return error('لا يمكن دفع فاتورة ملغية');
       const { error: updErr } = await s.from('invoices')
-        .update({ status: 'paid', updated_at: new Date().toISOString() }).eq('id', id);
+        .update({ status: 'paid', updated_at: new Date().toISOString() }).eq('id', id).eq('company_id', auth.companyId);
       if (updErr) throw updErr;
       return success({ message: 'تم تسجيل الفاتورة كمدفوعة' });
     }
@@ -108,7 +108,7 @@ export async function PATCH(
       if (invoice.status === 'cancelled') return error('الفاتورة ملغية مسبقاً');
 
       await s.from('invoices')
-        .update({ status: 'cancelled', notes: body.notes || null, updated_at: new Date().toISOString() }).eq('id', id);
+        .update({ status: 'cancelled', notes: body.notes || null, updated_at: new Date().toISOString() }).eq('id', id).eq('company_id', auth.companyId);
 
       if (invoice.journal_entry_id) {
         const year = new Date().getFullYear().toString();
