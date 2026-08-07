@@ -160,7 +160,7 @@ export async function requireModulePermission(
 }
 
 export async function requireAdminAuth(request: Request): Promise<{ userId: string; email: string }> {
-  const req = request ;
+  const req = request as any;
   const adminToken = req.cookies?.get
     ? req.cookies.get('admin_token')?.value
     : null;

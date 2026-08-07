@@ -88,8 +88,8 @@ export async function GET(request: NextRequest) {
       ? projectsResult.value.data
       : [];
     
-    const overdueInvoices = overdueInvoicesResult.status === 'fulfilled' && overdueInvoicesResult.data
-      ? overdueInvoices.value.data
+    const overdueInvoices = overdueInvoicesResult.status === 'fulfilled' && overdueInvoicesResult.value
+      ? overdueInvoicesResult.value.data
       : [];
     
     const cashBalance = cashResult.status === 'fulfilled' && cashResult.value.data

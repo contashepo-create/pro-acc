@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
 
     const clientMap: Record<string, { name: string; revenue: number; count: number }> = {};
     for (const inv of (topInvoices || [])) {
-      const i = inv as { contact_id: string; total: number; contacts: { name: string } | null };
+      const i = inv as unknown as { contact_id: string; total: number; contacts: { name: string } | null };
       if (!i.contact_id || !i.contacts) continue;
       if (!clientMap[i.contact_id]) {
         clientMap[i.contact_id] = { name: i.contacts.name, revenue: 0, count: 0 };

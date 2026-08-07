@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create receipt
-    const nextNumber = await getNextVoucherNumber('voucher_receipts', auth.companyId);
+    const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_receipts');
     const receiptDate = new Date(date).toISOString().split('T')[0];
 
     const { data: receipt, error: receiptError } = await s.from('voucher_receipts')

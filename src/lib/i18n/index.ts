@@ -334,9 +334,9 @@ export const translations = {
 /**
  * Get translation for a key
  */
-export function t(key: keyof TranslationKeys['ar'] | string, locale: Locale = 'ar'): string {
-  const dict = translations[locale] || translations.ar;
-  return (dict as Record<string, string>)[key] || (translations.ar as Record<string, string>)[key] || key;
+export function t(key: string, locale: Locale = 'ar'): string {
+  const dict = (translations as any)[locale] || (translations as any).ar;
+  return (dict as Record<string, string>)[key] || key;
 }
 
 /**

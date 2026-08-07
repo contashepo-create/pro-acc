@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
       
       if (approvalCheck.blocked) {
         // حفظ السند مسبقاً في قاعدة البيانات بحالة 'pending' ودون ترحيل القيد ليكون متاحاً للاعتماد
-        const nextNumber = await getNextVoucherNumber('voucher_disbursement', auth.companyId);
+        const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_disbursements');
         await s.from('voucher_disbursements').insert({
           id: tempTransactionId,
           company_id: auth.companyId,
@@ -163,7 +163,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. إنشاء سند الصرف
-    const nextNumber = await getNextVoucherNumber('voucher_disbursement', auth.companyId);
+    const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_disbursements');
     const transactionId = crypto.randomUUID();
 
     const { data: voucher, error: voucherError } = await s.from('voucher_disbursements')
@@ -188,14 +188,14 @@ export async function POST(request: NextRequest) {
 
     // 4. إنشاء القيد المحاسبي
     const debitAccountId = bankSafe.account_id;
-    let creditAccountId = ACCOUNT_CODES.CASH;
+    let creditAccountId: string = ACCOUNT_CODES.CASH;
 
     if (finalDisbType === 'supplier') {
       creditAccountId = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
     } else if (finalDisbType === 'employee_advance') {
       creditAccountId = ACCOUNT_CODES.EMPLOYEE_ADVANCES;
     } else if (finalDisbType === 'subcontractor') {
-      creditAccountId = ACCOUNT_CODES.SUBCONTRACTORS_PAYABLE;
+      creditAccountId = ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES;
     }
 
     const { error: journalError } = await createJournalEntry(

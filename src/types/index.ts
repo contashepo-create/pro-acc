@@ -6,6 +6,7 @@ export interface Company {
   phone?: string;
   email?: string;
   address?: string;
+  logo_url?: string;
   currency_symbol: string;
   created_at: string;
   is_active: boolean;

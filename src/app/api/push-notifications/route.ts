@@ -171,7 +171,7 @@ export async function PUT(request: NextRequest) {
           message,
           entity_type: 'push_notification',
           created_at: new Date().toISOString(),
-        }).catch(() => {});
+        }).then(() => {}, () => {});
       }
     }
 

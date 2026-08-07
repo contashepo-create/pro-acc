@@ -92,13 +92,16 @@ export async function deleteJournalEntry(
  * الرصيد = إجمالي المدين - إجمالي الدائن
  */
 export async function getAccountBalanceFromJournal(
-  accountId: string
+  accountId: string,
+  companyId?: string
 ): Promise<number> {
   const s = sb();
 
-  const { data: lines } = await s.from('journal_lines')
+  let query = s.from('journal_lines')
     .select('debit, credit')
     .eq('account_id', accountId);
+  if (companyId) query = query.eq('company_id', companyId);
+  const { data: lines } = await query;
 
   if (!lines || lines.length === 0) return 0;
 

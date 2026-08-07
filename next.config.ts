@@ -11,9 +11,6 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1", "192.168.56.1", "localhost"],
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   async headers() {
     return [
       {

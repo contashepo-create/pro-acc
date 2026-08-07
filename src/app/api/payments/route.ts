@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
       .maybeSingle();
 
     if (!invoice) return error('الفاتورة غير موجودة');
-    const inv = invoice as { id: string; number: number; total: number; status: string; contact_id: string; contacts: { name: string; email: string } | null };
+    const inv = invoice as unknown as { id: string; number: number; total: number; status: string; contact_id: string; contacts: { name: string; email: string } | null };
 
     if (inv.status === 'paid') return error('الفاتورة مدفوعة بالفعل');
 

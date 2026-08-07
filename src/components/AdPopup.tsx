@@ -113,7 +113,7 @@ export function AdPopup() {
   const Icon = typeInfo.icon;
 
   const handleClose = () => {
-    dismissPopup(ad.id, ad.show_until);
+    dismissPopup(ad.id, (ad as any).show_until);
     setDismissed((prev) => new Set([...prev, ad.id]));
     setShowPopup(false);
   };

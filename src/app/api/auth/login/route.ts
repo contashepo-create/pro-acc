@@ -110,9 +110,9 @@ export async function POST(request: NextRequest) {
       user: safeUser,
       company: {
         id: c.id, name: c.name,
-        registrationNumber: c.commercial_registration,
-        taxNumber: c.tax_number, vatNumber: c.vat_number || c.tax_number,
-        address: c.address, phone: c.phone, email: c.email, logo: null,
+        registrationNumber: (c as any).commercial_registration,
+        taxNumber: (c as any).tax_number, vatNumber: (c as any).vat_number || (c as any).tax_number,
+        address: (c as any).address, phone: (c as any).phone, email: (c as any).email, logo: null,
       },
       token,
     });

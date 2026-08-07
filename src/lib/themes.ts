@@ -39,7 +39,6 @@ export const themes: Theme[] = [
       '--color-bg-primary': '#09080d',
       '--color-bg-secondary': '#120f1d',
       '--color-bg-tertiary': '#1b1429',
-      '--color-bg-card:': '#0f0c19',
       '--color-bg-card': '#0e0b18',
       '--color-bg-hover': '#1a142c',
       '--color-bg-elevated': '#161025',
@@ -123,7 +122,6 @@ export const themes: Theme[] = [
       '--color-border-focus': '#0d9488',
       '--color-sidebar-bg': '#ffffff', // Clean white sidebar
       '--color-sidebar-hover': 'rgba(0, 0, 0, 0.04)',
-      '--color-sidebar-active:': 'rgba(13, 148, 136, 0.08)',
       '--color-sidebar-active': 'rgba(13, 148, 136, 0.08)',
       '--color-header-bg': 'rgba(242, 246, 245, 0.85)',
     },

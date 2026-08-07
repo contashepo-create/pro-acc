@@ -252,7 +252,7 @@ export async function sendOverdueReminders(companyId: string): Promise<{
   let failed = 0;
 
   for (const inv of (overdue || [])) {
-    const i = inv as {
+    const i = inv as unknown as {
       id: string; number: number; total: number; due_date: string;
       contacts: { name: string; phone?: string; email?: string } | null;
     };

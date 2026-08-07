@@ -58,9 +58,9 @@ export async function GET(request: NextRequest) {
         const { data: oldData } = await s.from('subscription_plans')
           .select('id, name, price, is_active')
           .order('price');
-        data = oldData ;
+        data = oldData as any;
       }
-      plans = data || [];
+      plans = (data || []) as any;
     } catch (e) { console.warn('dashboard plans failed', e); }
 
     try {
@@ -81,10 +81,10 @@ export async function GET(request: NextRequest) {
           .select('action, details, timestamp')
           .order('timestamp', { ascending: false })
           .limit(10);
-        data = oldData ;
+        data = oldData as any;
       }
       // Normalize to timestamp field for frontend
-      activity = (data || []).map((a: any) => ({
+      activity = ((data || []) as any).map((a: any) => ({
         action: a.action,
         details: a.details,
         timestamp: a.timestamp || a.created_at,

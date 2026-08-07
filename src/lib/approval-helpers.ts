@@ -100,13 +100,13 @@ export async function createJournalEntryForApprovedTransaction(
       if (!bankSafe || !bankSafe.account_id) return;
 
       // تحديد الحساب المدين (المصروف أو الالتزام)
-      let debitAccountId = ACCOUNT_CODES.CASH_ON_HAND;
+      let debitAccountId: string = ACCOUNT_CODES.DIRECT_COSTS;
       if (transactionData.disbursement_type === 'supplier') {
         debitAccountId = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
       } else if (transactionData.disbursement_type === 'employee_advance') {
         debitAccountId = ACCOUNT_CODES.EMPLOYEE_ADVANCES;
       } else if (transactionData.disbursement_type === 'subcontractor') {
-        debitAccountId = ACCOUNT_CODES.SUBCONTRACTORS_PAYABLE;
+        debitAccountId = ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES;
       }
 
       // إنشاء القيد المحاسبي المتزن (المدين: المصروف/الالتزام، الدائن: البنك/الخزينة)
@@ -148,7 +148,7 @@ export async function createJournalEntryForApprovedTransaction(
       if (!bankSafe || !bankSafe.account_id) return;
 
       // تحديد الحساب الدائن
-      let creditAccountId = ACCOUNT_CODES.CASH;
+      let creditAccountId: string = ACCOUNT_CODES.CASH;
       if (transactionData.receipt_type === 'client') {
         creditAccountId = ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
       } else if (transactionData.receipt_type === 'supplier_refund') {

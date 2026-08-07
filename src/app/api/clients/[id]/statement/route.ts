@@ -102,7 +102,7 @@ export async function GET(
         .select('id, name').in('id', creatorIds);
       (users || []).forEach((u: any) => { creatorMap[u.id] = u.name; });
     }
-    entries.forEach(e => { e.created_by_name = creatorMap[e.created_by] || null; });
+    entries.forEach((e: any) => { e.created_by_name = creatorMap[e.created_by] || null; });
 
     return success({
       client: {

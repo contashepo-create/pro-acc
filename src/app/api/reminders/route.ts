@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
       .limit(20);
 
     const overdueWithDays = (overdue || []).map((inv) => {
-      const i = inv as { id: string; number: number; total: number; due_date: string; contacts: { name: string; phone?: string; email?: string } | null };
+      const i = inv as unknown as { id: string; number: number; total: number; due_date: string; contacts: { name: string; phone?: string; email?: string } | null };
       const days = Math.floor((Date.now() - new Date(i.due_date).getTime()) / 86400000);
       return { ...i, days_overdue: days, has_phone: !!i.contacts?.phone, has_email: !!i.contacts?.email };
     });
@@ -111,7 +111,7 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
 
       if (!invoice) return error('الفاتورة غير موجودة');
-      const inv = invoice as { id: string; number: number; total: number; due_date: string; contacts: { name: string; phone?: string; email?: string } | null };
+      const inv = invoice as unknown as { id: string; number: number; total: number; due_date: string; contacts: { name: string; phone?: string; email?: string } | null };
       if (!inv.contacts) return error('لا توجد بيانات تواصل للعميل');
 
       const { data: company } = await s.from('companies')
@@ -162,7 +162,7 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
 
       if (!invoice) return error('الفاتورة غير موجودة');
-      const inv = invoice as { number: number; total: number; due_date: string; contacts: { name: string; phone?: string; email?: string } | null };
+      const inv = invoice as unknown as { number: number; total: number; due_date: string; contacts: { name: string; phone?: string; email?: string } | null };
 
       const { data: company } = await s.from('companies')
         .select('name').eq('id', auth.companyId).maybeSingle();

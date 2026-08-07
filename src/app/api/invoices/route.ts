@@ -152,7 +152,7 @@ export async function POST(request: NextRequest) {
 
       // 2. إدخال البنود
       for (const item of items) {
-        const itemTotal = item.total ?? item.quantity * item.unit_price;
+        const itemTotal = item.total ?? item.quantity * (item as any).unit_price;
         const { error: itemErr } = await s.from('invoice_items').insert({
           invoice_id: invoiceId, 
           description: item.description, 
@@ -206,7 +206,7 @@ export async function POST(request: NextRequest) {
           });
 
           // إنشاء سند قبض (Voucher Receipt) رسمي مرتبط في السوبابيز
-          const nextVoucherNumber = await getNextVoucherNumber('voucher_receipts', auth.companyId);
+          const nextVoucherNumber = await getNextVoucherNumber(auth.companyId, 'voucher_receipts');
           const { data: recData, error: recErr } = await s.from('voucher_receipts').insert({
             company_id: auth.companyId,
             number: nextVoucherNumber,

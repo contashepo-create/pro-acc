@@ -79,6 +79,25 @@ export async function sendAdminNotification(text: string): Promise<boolean> {
   }
 }
 
+export async function sendTelegramMessage(chatId: string, message: string): Promise<boolean> {
+  const token = getBotToken();
+  if (!token || !chatId) {
+    console.warn('Telegram not configured: missing BOT_TOKEN or chatId');
+    return false;
+  }
+  try {
+    const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' }),
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn('Telegram message error:', err);
+    return false;
+  }
+}
+
 function escapeTelegram(text: string): string {
   return text
     .replace(/&/g, '&amp;')

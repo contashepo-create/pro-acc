@@ -4,7 +4,7 @@ import React, { useRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { Spinner } from './Spinner';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'success';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'success' | 'outline';
   size?: 'sm' | 'md' | 'lg';
   loading?: boolean;
   leftIcon?: ReactNode;
@@ -37,13 +37,14 @@ export function Button({
     onClick?.(e);
   };
 
-  const variantClass = {
-    primary: 'btn-primary',
-    secondary: 'btn-secondary',
-    ghost: 'btn-ghost',
-    danger: 'btn-danger',
-    success: 'btn-success',
-  }[variant];
+    const variantClass = {
+      primary: 'btn-primary',
+      secondary: 'btn-secondary',
+      ghost: 'btn-ghost',
+      danger: 'btn-danger',
+      success: 'btn-success',
+      outline: 'btn-outline',
+    }[variant];
 
   const sizeClass = {
     sm: 'btn-sm',

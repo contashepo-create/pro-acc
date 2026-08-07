@@ -40,20 +40,22 @@ function getPool(): Pool {
         ca: process.env.DATABASE_CA_CERT,
       };
     } else {
-      // WARNING: This disables certificate verification, making the connection
-      // theoretically vulnerable to MITM attacks. Set DATABASE_CA_CERT for production.
-      sslConfig = { rejectUnauthorized: false };
-      
-      // SECURITY: Log a prominent warning in production when CA cert is missing
+      // SECURITY: In production, TLS verification MUST be enforced. Refuse to start
+      // without DATABASE_CA_CERT to avoid MITM-vulnerable connections.
       if (process.env.NODE_ENV === 'production') {
-        console.warn(
-          '⚠️ SECURITY WARNING: DATABASE_CA_CERT is not set in production. ' +
-          'Database connection TLS verification is DISABLED (rejectUnauthorized: false). ' +
-          'This makes the connection vulnerable to MITM attacks. ' +
-          'Set DATABASE_CA_CERT environment variable with the Supabase CA certificate. ' +
+        throw new Error(
+          'DATABASE_CA_CERT must be set in production to enforce TLS certificate ' +
+          'verification for the database connection (rejectUnauthorized). ' +
+          'Set DATABASE_CA_CERT with the Supabase CA certificate. ' +
           'See: https://supabase.com/docs/guides/database/connecting-to-postgres#verifying-the-ssl-certificate'
         );
       }
+      // Development: allow unverified connections with a clear warning.
+      sslConfig = { rejectUnauthorized: false };
+      console.warn(
+        '⚠️ SECURITY WARNING: DATABASE_CA_CERT is not set; TLS verification DISABLED ' +
+        '(rejectUnauthorized: false). This is acceptable only for local development.'
+      );
     }
   }
 
