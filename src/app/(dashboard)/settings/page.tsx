@@ -491,13 +491,14 @@ export default function SettingsPage() {
         </Card>
       )}
 
+      {/* Chart of Accounts */}
+      <Card title="شجرة الحسابات">
+        <p className="text-sm text-text-muted mb-3">إذا كانت الحسابات لا تظهر عند تسجيل القيود، أو ظهرت أخطاء عند ترحيل الفواتير، فهذا يعني أن شجرة الحسابات غير مولّدة لهذه الشركة. اضغط الزر لتوليد الحسابات الافتراضية.</p>
+        <Button onClick={handleSeedChart} disabled={seedLoading}>{seedLoading ? 'جاري التوليد...' : 'توليد شجرة الحسابات'}</Button>
+      </Card>
+
       {/* Tax */}
       {tab === 'tax' && (
-        <Card title="شجرة الحسابات">
-          <p className="text-sm text-text-muted mb-3">إذا كانت الحسابات لا تظهر عند تسجيل القيود، أو ظهرت أخطاء عند ترحيل الفواتير، فهذا يعني أن شجرة الحسابات غير مولّدة لهذه الشركة. اضغط الزر لتوليد الحسابات الافتراضية.</p>
-          <Button onClick={handleSeedChart} disabled={seedLoading}>{seedLoading ? 'جاري التوليد...' : 'توليد شجرة الحسابات'}</Button>
-        </Card>
-
         <Card title="إعدادات الضرائب">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="نسبة ضريبة القيمة المضافة (%)" type="number" value={vatRate} onChange={(e:any)=>setVatRate(e.target.value)} />
