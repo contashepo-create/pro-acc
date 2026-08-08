@@ -22,3 +22,7 @@
 - اعتبر `src/migrations/` المصدر الوحيد للهجرات. أضف أي تغيير هيكلي جديد في ملفّ جديد
   بترقيم تصاعدي داخل `src/migrations/`.
 - لا تخلط بين نظامَي هجرات (Supabase CLI + `run.ts`) لتفادي تباعد المخطّط بين البيئات.
+
+## 021-add-daily-worker.sql
+Allows `daily_worker` as a `contacts.type` value so the "عمال يومية" (Daily Workers) section is usable.
+Run via: `npx tsx src/migrations/run.ts` (idempotent) or apply directly in the DB.

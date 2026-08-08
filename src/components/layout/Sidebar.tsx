@@ -75,7 +75,7 @@ const navGroups: NavGroup[] = [
     icon: Users,
     items: [
       { id: 'clients', label: 'العملاء' },
-      { id: 'contacts', label: 'جهات الاتصال' },
+      { id: 'suppliers', label: 'الموردون' },
     ],
   },
   {

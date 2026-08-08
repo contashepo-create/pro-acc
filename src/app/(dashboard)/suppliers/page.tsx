@@ -13,7 +13,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 
-export default function DailyWorkersPage() {
+export default function SuppliersPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -26,7 +26,7 @@ export default function DailyWorkersPage() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/contacts?type=daily_worker');
+      const res = await fetch('/api/contacts?type=supplier');
       const json = await res.json();
       if (json.success) setRows(json.data?.contacts || []);
       else { setError(json.message || 'فشل'); toast.error(json.message || 'فشل تحميل البيانات'); }
@@ -37,7 +37,7 @@ export default function DailyWorkersPage() {
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
-    if (!form.name) { setSaveError('اسم العامل مطلوب'); return; }
+    if (!form.name) { setSaveError('اسم المورد مطلوب'); return; }
     setSaving(true); setSaveError('');
     try {
       const url = editing ? `/api/contacts/${editing.id}` : '/api/contacts';
@@ -45,13 +45,13 @@ export default function DailyWorkersPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, type: 'daily_worker' }),
+        body: JSON.stringify({ ...form, type: 'supplier' }),
       });
       const json = await res.json();
       if (json.success) {
         setShowModal(false); setEditing(null);
         setForm({ name: '', phone: '', email: '', tax_number: '', notes: '' });
-        toast.success(editing ? 'تم تحديث العامل' : 'تم إضافة عامل يومي');
+        toast.success(editing ? 'تم تحديث المورد' : 'تم إضافة المورد');
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
     } catch { setSaveError('خطأ في الاتصال'); }
@@ -68,13 +68,13 @@ export default function DailyWorkersPage() {
     try {
       const res = await fetch(`/api/contacts/${row.id}`, { method: 'DELETE' });
       const json = await res.json();
-      if (json.success) { toast.success('تم حذف العامل'); fetchData(); }
+      if (json.success) { toast.success('تم حذف المورد'); fetchData(); }
       else toast.error(json.message || 'فشل الحذف');
     } catch { toast.error('خطأ في الاتصال'); }
   };
 
   const columns = [
-    { key: 'name', label: 'اسم العامل', sortable: true },
+    { key: 'name', label: 'اسم المورد', sortable: true },
     { key: 'phone', label: 'الجوال', render: (r: any) => <span dir="ltr">{r.phone || '—'}</span> },
     { key: 'email', label: 'البريد', render: (r: any) => <span dir="ltr">{r.email || '—'}</span> },
     { key: 'tax_number', label: 'الرقم الضريبي' },
@@ -88,19 +88,19 @@ export default function DailyWorkersPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="العمال اليوميون"
-        description="إدارة العمال اليومية بشكل منفصل"
-        actions={<Button onClick={() => { setEditing(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة عامل يومي</Button>}
+        title="الموردون"
+        description="إدارة الموردين بشكل منفصل عن العملاء"
+        actions={<Button onClick={() => { setEditing(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة مورد</Button>}
       />
       {rows.length === 0 ? (
-        <EmptyState title="لا يوجد عمال يوميون" actionLabel="إضافة عامل" onAction={() => setShowModal(true)} />
+        <EmptyState title="لا يوجد موردون" actionLabel="إضافة مورد" onAction={() => setShowModal(true)} />
       ) : (
         <DataTable columns={columns} data={rows} searchable searchKeys={['name', 'phone', 'tax_number']} />
       )}
       <Modal
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditing(null); }}
-        title={editing ? `تعديل: ${editing.name}` : 'إضافة عامل يومي جديد'}
+        title={editing ? `تعديل: ${editing.name}` : 'إضافة مورد جديد'}
         size="lg"
         footer={<div className="flex gap-2">
           <Button variant="ghost" onClick={() => { setShowModal(false); setEditing(null); }}>إلغاء</Button>
@@ -108,7 +108,7 @@ export default function DailyWorkersPage() {
         </div>}
       >
         <div className="space-y-4">
-          <Input label="اسم العامل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="col-span-2" />
+          <Input label="اسم المورد *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="col-span-2" />
           <div className="grid grid-cols-2 gap-4">
             <Input label="رقم الهاتف" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} dir="ltr" />
             <Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} dir="ltr" />
