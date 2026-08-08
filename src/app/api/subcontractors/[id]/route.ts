@@ -4,10 +4,11 @@ import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'subcontractors', 'update');
     const s = sb();
+    const { id } = await params;
     const body = await parseBody(request);
     const { name, contact_person, specialty, phone, email, tax_number, notes } = body as any;
 
@@ -26,7 +27,7 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
         tax_number: tax_number || null,
         notes: notesText || null,
       })
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('company_id', auth.companyId)
       .select()
       .single();
@@ -37,14 +38,15 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'subcontractors', 'delete');
     const s = sb();
+    const { id } = await params;
     const { error: dErr } = await s
       .from('contacts')
       .delete()
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('company_id', auth.companyId);
     if (dErr) throw dErr;
     return success({ message: 'تم الحذف' });
