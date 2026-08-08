@@ -71,19 +71,19 @@ export default function ZerocoldDashboardPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
-        <Loader2 size={32} className="text-amber-500 animate-spin" />
+      <div className="min-h-screen bg-bg-primary flex items-center justify-center">
+        <Loader2 size={32} className="text-text-secondary animate-spin" />
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
+      <div className="min-h-screen bg-bg-primary flex items-center justify-center">
         <div className="text-center">
           <ShieldAlert className="w-12 h-12 text-red-500 mx-auto mb-3" />
           <p className="text-red-400 text-sm">{error}</p>
-          <button onClick={fetchDashboard} className="mt-4 text-amber-500 hover:text-amber-400 text-sm underline">
+          <button onClick={fetchDashboard} className="mt-4 text-text-secondary hover:text-amber-400 text-sm underline">
             إعادة المحاولة
           </button>
         </div>
@@ -125,7 +125,7 @@ export default function ZerocoldDashboardPage() {
   const planData = (data?.planDistribution || []).map((p) => ({ name: p.name, value: p.price || 0 }));
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f]">
+    <div className="min-h-screen bg-bg-primary">
       <div className="max-w-6xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
@@ -133,21 +133,21 @@ export default function ZerocoldDashboardPage() {
               <ShieldAlert className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-amber-50">لوحة المطور</h1>
-              <p className="text-[0.7rem] text-amber-400/50">نظرة عامة على النظام</p>
+              <h1 className="text-lg font-bold text-text-primary">لوحة المطور</h1>
+              <p className="text-[0.7rem] text-text-muted">نظرة عامة على النظام</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={fetchDashboard}
-              className="p-2 rounded-xl bg-[#12101a] border border-[#2a1f0a] text-amber-500/70 hover:text-amber-400 hover:border-amber-700/50 transition-all"
+              className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-amber-400 hover:border-amber-700/50 transition-all"
               title="تحديث"
             >
               <RefreshCw size={16} />
             </button>
             <button
               onClick={handleLogout}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#12101a] border border-[#2a1f0a] text-red-400/70 hover:text-red-400 hover:border-red-800/50 transition-all text-xs"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-bg-card border border-border text-red-400/70 hover:text-red-400 hover:border-red-800/50 transition-all text-xs"
             >
               <LogOut size={14} />
               تسجيل الخروج
@@ -157,43 +157,43 @@ export default function ZerocoldDashboardPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
           {stats.map((stat) => (
-            <div key={stat.label} className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-4 hover:border-[#3a2f1a] transition-all">
+            <div key={stat.label} className="bg-bg-card border border-border rounded-xl p-4 hover:border-[#3a2f1a] transition-all">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-[0.7rem] text-amber-400/60 font-medium">{stat.label}</span>
                 <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${stat.color} flex items-center justify-center`}>
                   <stat.icon size={14} className="text-white" />
                 </div>
               </div>
-              <p className="text-xl font-bold text-amber-50 font-mono">{stat.value}</p>
+              <p className="text-xl font-bold text-text-primary font-mono">{stat.value}</p>
             </div>
           ))}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-5">
+          <div className="bg-bg-card border border-border rounded-xl p-5">
             <h2 className="text-sm font-bold text-amber-300/80 mb-3">الوصول السريع</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {quickActions.map((action) => (
                 <Link
                   key={action.label}
                   href={action.href}
-                  className={`flex items-center gap-3 p-3 rounded-xl bg-[#1a1625] border ${action.color} transition-all group`}
+                  className={`flex items-center gap-3 p-3 rounded-xl bg-bg-secondary border ${action.color} transition-all group`}
                 >
-                  <div className="w-9 h-9 rounded-lg bg-[#12101a] border border-[#2a1f0a] flex items-center justify-center group-hover:border-amber-700/50 transition-all">
-                    <action.icon size={16} className="text-amber-500/70 group-hover:text-amber-400 transition-all" />
+                  <div className="w-9 h-9 rounded-lg bg-bg-card border border-border flex items-center justify-center group-hover:border-amber-700/50 transition-all">
+                    <action.icon size={16} className="text-text-secondary group-hover:text-amber-400 transition-all" />
                   </div>
                   <span className="text-xs text-amber-300/70 group-hover:text-amber-200 transition-all">{action.label}</span>
-                  <ChevronLeft size={14} className="mr-auto text-amber-600/30 group-hover:text-amber-500/50 transition-all" />
+                  <ChevronLeft size={14} className="mr-auto text-amber-600/30 group-hover:text-text-secondary/50 transition-all" />
                 </Link>
               ))}
             </div>
           </div>
 
-          <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-5">
+          <div className="bg-bg-card border border-border rounded-xl p-5">
             <h2 className="text-sm font-bold text-amber-300/80 mb-3">حالة النظام</h2>
             <div className="space-y-3">
               {healthItems.length > 0 ? healthItems.map((item) => (
-                <div key={item.label} className="flex items-center justify-between p-2.5 rounded-lg bg-[#1a1625] border border-[#2a1f0a]">
+                <div key={item.label} className="flex items-center justify-between p-2.5 rounded-lg bg-bg-secondary border border-border">
                   <div className="flex items-center gap-2">
                     <Server size={14} className="text-amber-600/50" />
                     <span className="text-xs text-amber-400/60">{item.label}</span>
@@ -212,7 +212,7 @@ export default function ZerocoldDashboardPage() {
 
         {planData.length > 0 && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-5">
+            <div className="bg-bg-card border border-border rounded-xl p-5">
               <h2 className="text-sm font-bold text-amber-300/80 mb-3">توزيع الخطط</h2>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={planData}>
@@ -227,12 +227,12 @@ export default function ZerocoldDashboardPage() {
               </ResponsiveContainer>
             </div>
 
-            <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-5">
+            <div className="bg-bg-card border border-border rounded-xl p-5">
               <h2 className="text-sm font-bold text-amber-300/80 mb-3">آخر الشركات</h2>
               {data?.recentCompanies && data.recentCompanies.length > 0 ? (
                 <div className="space-y-1">
                   {data.recentCompanies.map((company) => (
-                    <div key={company.id} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[#1a1625] transition-all">
+                    <div key={company.id} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-bg-secondary transition-all">
                       <div className="flex items-center gap-2">
                         {company.is_active ? (
                           <CheckCircle size={14} className="text-emerald-400" />
@@ -255,12 +255,12 @@ export default function ZerocoldDashboardPage() {
           </div>
         )}
 
-        <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl p-5">
+        <div className="bg-bg-card border border-border rounded-xl p-5">
           <h2 className="text-sm font-bold text-amber-300/80 mb-3">آخر النشاطات</h2>
           {data?.recentActivity && data.recentActivity.length > 0 ? (
             <div className="space-y-1">
               {data.recentActivity.map((activity, i) => (
-                <div key={i} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-[#1a1625] transition-all">
+                <div key={i} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-bg-secondary transition-all">
                   <div className="flex items-center gap-2.5 min-w-0">
                     <div className="w-1.5 h-1.5 rounded-full bg-amber-600/50 flex-shrink-0" />
                     <div className="min-w-0">

@@ -284,10 +284,10 @@ export default function SubscriptionPageEnhanced() {
               </div>
 
               <div className="mt-3 flex flex-wrap gap-1">
-                {Object.entries(plan.features_modules || {}).filter(([_,v])=>v).slice(0,5).map(([k])=>(
+                {Object.entries(plan.features_modules || {}).filter(([k,v])=>v && isNaN(Number(k))).slice(0,5).map(([k])=>(
                   <span key={k} className="text-[10px] bg-bg-secondary px-2 py-1 rounded-full">{k}</span>
                 ))}
-                {Object.keys(plan.features_modules || {}).length > 5 && <span className="text-[10px] text-text-muted">+{Object.keys(plan.features_modules).length - 5} أكثر</span>}
+                {Object.entries(plan.features_modules || {}).filter(([k,v])=>v && isNaN(Number(k))).length > 5 && <span className="text-[10px] text-text-muted">+{Object.entries(plan.features_modules || {}).filter(([k,v])=>v && isNaN(Number(k))).length - 5} أكثر</span>}
               </div>
 
               <Button disabled={isCurrent} onClick={() => openUpgrade(plan)} className="w-full mt-5">

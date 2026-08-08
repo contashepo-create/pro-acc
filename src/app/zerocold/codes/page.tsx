@@ -64,33 +64,33 @@ export default function CodesPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
-        <Loader2 size={32} className="text-amber-500 animate-spin" />
+      <div className="min-h-screen bg-bg-primary flex items-center justify-center">
+        <Loader2 size={32} className="text-text-secondary animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f]">
+    <div className="min-h-screen bg-bg-primary">
       <div className="max-w-5xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <Link href="/zerocold/" className="p-2 rounded-lg hover:bg-[#12101a] transition-all">
-              <ChevronLeft size={18} className="text-amber-500/70" />
+            <Link href="/zerocold/" className="p-2 rounded-lg hover:bg-bg-card transition-all">
+              <ChevronLeft size={18} className="text-text-secondary" />
             </Link>
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-600 to-emerald-700 flex items-center justify-center">
               <Key className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-amber-50">أكواد التفعيل</h1>
-              <p className="text-[0.7rem] text-amber-400/50">{codes.length} كود</p>
+              <h1 className="text-lg font-bold text-text-primary">أكواد التفعيل</h1>
+              <p className="text-[0.7rem] text-text-muted">{codes.length} كود</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => { setShowForm(true); setGeneratedCode(''); }} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm flex items-center gap-2 transition-colors">
               <Plus size={16} />توليد كود
             </button>
-            <button onClick={fetchCodes} className="p-2 rounded-xl bg-[#12101a] border border-[#2a1f0a] text-amber-500/70 hover:text-amber-400 transition-all" title="تحديث">
+            <button onClick={fetchCodes} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-amber-400 transition-all" title="تحديث">
               <RefreshCw size={16} />
             </button>
           </div>
@@ -103,12 +103,12 @@ export default function CodesPage() {
         )}
 
         {showForm && (
-          <div className="bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-5 mb-6">
-            <h3 className="text-amber-50 font-bold mb-4">توليد كود تفعيل جديد</h3>
+          <div className="bg-bg-card border border-border rounded-2xl p-5 mb-6">
+            <h3 className="text-text-primary font-bold mb-4">توليد كود تفعيل جديد</h3>
             <div className="flex gap-3 items-end flex-wrap">
               <div className="flex-1 min-w-40">
                 <label className="block text-xs text-amber-400/60 mb-1">الخطة</label>
-                <select value={planCode} onChange={(e) => setPlanCode(e.target.value)} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm">
+                <select value={planCode} onChange={(e) => setPlanCode(e.target.value)} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm">
                   <option value="trial">تجريبي</option>
                   <option value="monthly">شهري</option>
                   <option value="yearly">سنوي</option>
@@ -119,7 +119,7 @@ export default function CodesPage() {
               </div>
               <div className="w-32">
                 <label className="block text-xs text-amber-400/60 mb-1">المدة (أشهر)</label>
-                <input type="number" value={duration} onChange={(e) => setDuration(Number(e.target.value))} min={1} max={120} className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 text-sm" />
+                <input type="number" value={duration} onChange={(e) => setDuration(Number(e.target.value))} min={1} max={120} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm" />
               </div>
               <button onClick={generateCode} disabled={saving} className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-800 text-white rounded-xl text-sm flex items-center gap-2">{saving && <Loader2 size={16} className="animate-spin" />}توليد</button>
             </div>
@@ -134,7 +134,7 @@ export default function CodesPage() {
           </div>
         )}
 
-        <div className="bg-[#12101a] border border-[#2a1f0a] rounded-xl overflow-hidden">
+        <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
           {codes.length === 0 ? (
             <div className="p-8 text-center">
               <Key size={32} className="text-amber-600/30 mx-auto mb-2" />
@@ -143,7 +143,7 @@ export default function CodesPage() {
           ) : (
             <div className="divide-y divide-[#1f1725]">
               {codes.map((c) => (
-                <div key={c.id} className="flex items-center gap-3 p-3 hover:bg-[#1a1625] transition-all">
+                <div key={c.id} className="flex items-center gap-3 p-3 hover:bg-bg-secondary transition-all">
                   <Key size={16} className="text-amber-600 shrink-0" />
                   <code className="flex-1 text-amber-300/80 text-sm font-mono">{c.code}</code>
                   <span className="text-xs text-amber-400/60">{c.plan_code}</span>

@@ -71,8 +71,8 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
 
   if (checking) {
     return (
-      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
-        <Loader2 size={32} className="text-amber-500 animate-spin" />
+      <div className="min-h-screen bg-bg-primary flex items-center justify-center">
+        <Loader2 size={32} className="text-text-secondary animate-spin" />
       </div>
     );
   }
@@ -82,14 +82,14 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f] flex flex-col">
-      <header className="sticky top-0 z-40 bg-[#0a0a0f]/90 backdrop-blur-md border-b border-[#1f1725]">
+    <div className="min-h-screen bg-bg-primary flex flex-col">
+      <header className="sticky top-0 z-40 bg-bg-primary/90 backdrop-blur-md border-b border-[#1f1725]">
         <div className="max-w-6xl mx-auto px-4 h-12 flex items-center justify-between">
           <Link href="/zerocold" className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center">
               <ShieldAlert className="w-3.5 h-3.5 text-white" />
             </div>
-            <span className="text-sm font-bold text-amber-50">لوحة المطور</span>
+            <span className="text-sm font-bold text-text-primary">لوحة المطور</span>
           </Link>
 
           <nav className="hidden md:flex items-center gap-1">
@@ -104,7 +104,7 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     isActive
                       ? 'bg-amber-600/15 text-amber-400 border border-amber-700/30'
-                      : 'text-amber-400/50 hover:text-amber-300 hover:bg-[#12101a]'
+                      : 'text-text-muted hover:text-amber-300 hover:bg-bg-card'
                   }`}
                 >
                   <item.icon size={14} />
@@ -135,7 +135,7 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
                 className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[0.65rem] font-medium transition-all ${
                   isActive
                     ? 'bg-amber-600/15 text-amber-400 border border-amber-700/30'
-                    : 'text-amber-400/50 hover:text-amber-300 hover:bg-[#12101a]'
+                    : 'text-text-muted hover:text-amber-300 hover:bg-bg-card'
                 }`}
               >
                 <item.icon size={12} />

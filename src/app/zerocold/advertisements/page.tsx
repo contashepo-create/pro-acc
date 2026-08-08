@@ -52,7 +52,7 @@ const AD_TYPES: Record<string, { label: string; icon: any; iconClass: string; bg
   upgrade: {
     label: 'ترقية',
     icon: Crown,
-    iconClass: 'text-amber-500',
+    iconClass: 'text-text-secondary',
     bgClass: 'bg-amber-50 border-amber-200',
     badgeClass: 'bg-amber-100 text-amber-700 border-amber-200',
     description: 'رسالة ترقية الباقة',

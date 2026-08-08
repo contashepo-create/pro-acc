@@ -73,11 +73,11 @@ export default function ZerocoldLoginPage() {
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-amber-900/30">
             <ShieldAlert className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-amber-50">لوحة المطور</h1>
-          <p className="text-amber-400/70 text-sm mt-1">لوحة تحكم المطور الخاصة بالنظام</p>
+          <h1 className="text-2xl font-bold text-text-primary">لوحة المطور</h1>
+          <p className="text-text-secondary text-sm mt-1">لوحة تحكم المطور الخاصة بالنظام</p>
         </div>
 
-        <div className="bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-6 shadow-2xl">
+        <div className="bg-bg-card border border-border rounded-2xl p-6 shadow-2xl">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-amber-300/80 mb-1.5">البريد الإلكتروني</label>
@@ -86,7 +86,7 @@ export default function ZerocoldLoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="admin@example.com"
-                className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 placeholder-amber-700/50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm"
+                className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary placeholder-amber-700/50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm"
                 dir="ltr"
                 autoFocus
               />
@@ -100,7 +100,7 @@ export default function ZerocoldLoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full px-4 py-2.5 bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 placeholder-amber-700/50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm pl-10"
+                  className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary placeholder-amber-700/50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm pl-10"
                   dir="ltr"
                 />
                 <button

@@ -87,7 +87,7 @@ export default function AdminUsersPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 size={40} className="animate-spin text-amber-500 mx-auto mb-4" />
+        <Loader2 size={40} className="animate-spin text-text-secondary mx-auto mb-4" />
         <p className="text-gray-400">جاري تحميل المستخدمين...</p>
       </div>
     );
@@ -109,7 +109,7 @@ export default function AdminUsersPage() {
       </div>
 
       {/* Filters */}
-      <div className="bg-[#15101b] border border-[#1f1725] rounded-xl p-4">
+      <div className="bg-bg-secondary border border-[#1f1725] rounded-xl p-4">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="flex-1">
             <div className="relative">
@@ -119,7 +119,7 @@ export default function AdminUsersPage() {
                 placeholder="بحث بالاسم، البريد، أو الشركة..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-[#0a0a0f] border border-[#1f1725] rounded-lg pr-10 pl-4 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-amber-500/50"
+                className="w-full bg-bg-primary border border-[#1f1725] rounded-lg pr-10 pl-4 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-amber-500/50"
               />
             </div>
           </div>
@@ -127,7 +127,7 @@ export default function AdminUsersPage() {
             {(['all', 'active', 'inactive'] as const).map(s => (
               <button key={s} onClick={() => setFilterStatus(s)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  filterStatus === s ? 'bg-amber-600 text-white' : 'bg-[#0a0a0f] text-gray-400 hover:bg-[#1f1725]'
+                  filterStatus === s ? 'bg-amber-600 text-white' : 'bg-bg-primary text-gray-400 hover:bg-bg-secondary'
                 }`}>
                 {s === 'all' ? 'الكل' : s === 'active' ? 'نشط' : 'غير نشط'}
               </button>
@@ -150,11 +150,11 @@ export default function AdminUsersPage() {
             const additionalUsers = group.users.filter(u => u.id !== adminUser.id);
 
             return (
-              <div key={group.companyId} className="bg-[#15101b] border border-[#1f1725] rounded-xl overflow-hidden">
+              <div key={group.companyId} className="bg-bg-secondary border border-[#1f1725] rounded-xl overflow-hidden">
                 {/* Company Header */}
                 <button
                   onClick={() => toggleCompany(group.companyId)}
-                  className="w-full flex items-center justify-between p-4 hover:bg-[#1a1520] transition-colors"
+                  className="w-full flex items-center justify-between p-4 hover:bg-bg-secondary transition-colors"
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center">
@@ -168,7 +168,7 @@ export default function AdminUsersPage() {
                           <span className="text-xs text-gray-500">• المدير: {adminUser.name}</span>
                         )}
                         {additionalUsers.length > 0 && (
-                          <span className="text-xs text-amber-500/70">• {additionalUsers.length} إضافي</span>
+                          <span className="text-xs text-text-secondary">• {additionalUsers.length} إضافي</span>
                         )}
                       </div>
                     </div>
@@ -185,7 +185,7 @@ export default function AdminUsersPage() {
                     {group.users.map((user, idx) => (
                       <div
                         key={user.id}
-                        className="flex items-center gap-3 p-3 hover:bg-[#1a1520] transition-colors cursor-pointer"
+                        className="flex items-center gap-3 p-3 hover:bg-bg-secondary transition-colors cursor-pointer"
                         onClick={() => window.location.href = `/zerocold/users/${user.id}`}
                       >
                         {/* Avatar */}
@@ -209,7 +209,7 @@ export default function AdminUsersPage() {
 
                         {/* Badges */}
                         <div className="flex items-center gap-1.5 shrink-0">
-                          <span className="text-xs px-1.5 py-0.5 bg-[#0a0a0f] text-gray-400 rounded">
+                          <span className="text-xs px-1.5 py-0.5 bg-bg-primary text-gray-400 rounded">
                             {roleLabels[user.role] || user.role}
                           </span>
                           {statusBadge(user.is_active)}

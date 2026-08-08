@@ -62,50 +62,50 @@ export default function UpgradeRequestsPage() {
     } finally { setProcessing(null); }
   };
 
-  if (loading) return <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center"><Loader2 className="animate-spin text-amber-500" size={32} /></div>;
+  if (loading) return <div className="min-h-screen bg-bg-primary flex items-center justify-center"><Loader2 className="animate-spin text-text-secondary" size={32} /></div>;
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f] text-amber-50">
+    <div className="min-h-screen bg-bg-primary text-text-primary">
       <div className="max-w-6xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <Link href="/zerocold/"><ChevronLeft size={18} className="text-amber-500/70" /></Link>
+            <Link href="/zerocold/"><ChevronLeft size={18} className="text-text-secondary" /></Link>
             <h1 className="text-lg font-bold">طلبات الترقية والدفع</h1>
             <span className="text-xs bg-amber-950/50 px-2 py-1 rounded-full">{requests.length}</span>
           </div>
           <div className="flex gap-2">
-            <select value={filter} onChange={(e) => setFilter(e.target.value)} className="px-3 py-2 bg-[#12101a] border border-[#2a1f0a] rounded-xl text-sm">
+            <select value={filter} onChange={(e) => setFilter(e.target.value)} className="px-3 py-2 bg-bg-card border border-border rounded-xl text-sm">
               <option value="pending">معلق</option>
               <option value="approved">مقبول</option>
               <option value="rejected">مرفوض</option>
               <option value="all">الكل</option>
             </select>
-            <button onClick={fetchRequests} className="p-2 bg-[#12101a] border border-[#2a1f0a] rounded-xl"><RefreshCw size={16} /></button>
+            <button onClick={fetchRequests} className="p-2 bg-bg-card border border-border rounded-xl"><RefreshCw size={16} /></button>
           </div>
         </div>
 
         <div className="space-y-4">
           {requests.length === 0 ? (
-            <div className="bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-12 text-center text-amber-600/50">لا توجد طلبات {filter === 'pending' ? 'معلقة' : ''}</div>
+            <div className="bg-bg-card border border-border rounded-2xl p-12 text-center text-amber-600/50">لا توجد طلبات {filter === 'pending' ? 'معلقة' : ''}</div>
           ) : requests.map((req) => (
-            <div key={req.id} className="bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-5">
+            <div key={req.id} className="bg-bg-card border border-border rounded-2xl p-5">
               <div className="flex justify-between items-start">
                 <div>
                   <h3 className="font-bold">{req.companies?.name || 'شركة'} - {req.subscription_plans?.name || req.requested_plan_id}</h3>
                   <p className="text-xs text-amber-400/60">{req.users?.name} ({req.users?.email}) - {req.companies?.phone}</p>
                   <div className="flex gap-2 mt-2 text-xs">
-                    <span className="bg-[#1a1625] px-2 py-1 rounded">المدة: {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</span>
-                    <span className="bg-[#1a1625] px-2 py-1 rounded">الدفع: {req.payment_method_code}</span>
+                    <span className="bg-bg-secondary px-2 py-1 rounded">المدة: {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</span>
+                    <span className="bg-bg-secondary px-2 py-1 rounded">الدفع: {req.payment_method_code}</span>
                     <span className={`px-2 py-1 rounded ${req.status === 'pending' ? 'bg-yellow-900/30 text-yellow-400' : req.status === 'approved' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{req.status}</span>
                   </div>
                 </div>
-                <div className="text-left text-xs text-amber-400/50">
+                <div className="text-left text-xs text-text-muted">
                   <div className="flex items-center gap-1"><Calendar size={12} /> {new Date(req.created_at).toLocaleDateString('ar-EG')}</div>
                   <div className="flex items-center gap-1 mt-1"><DollarSign size={12} /> {req.payment_amount} ر.س</div>
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-3 text-sm bg-[#0a0a0f] rounded-xl p-3">
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm bg-bg-primary rounded-xl p-3">
                 <div>تاريخ التحويل: {req.payment_date} {req.payment_time}</div>
                 <div>المبلغ: {req.payment_amount}</div>
                 <div className="col-span-2">ملاحظات: {req.notes || 'لا يوجد'}</div>

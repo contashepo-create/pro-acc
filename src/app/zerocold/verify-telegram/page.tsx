@@ -145,13 +145,13 @@ function VerifyTelegramPage() {
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-600 to-blue-700 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-sky-900/30">
             <MessageCircle className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-amber-50">التحقق عبر التليجرام</h1>
+          <h1 className="text-2xl font-bold text-text-primary">التحقق عبر التليجرام</h1>
           <p className="text-amber-400/60 text-sm mt-2 leading-relaxed max-w-xs mx-auto">
             تم إرسال رمز تحقق مكون من 6 أرقام إلى بوت التليجرام الخاص بك
           </p>
         </div>
 
-        <div className="bg-[#12101a] border border-[#2a1f0a] rounded-2xl p-6 shadow-2xl">
+        <div className="bg-bg-card border border-border rounded-2xl p-6 shadow-2xl">
           <div className="flex items-center justify-center gap-1.5 sm:gap-2.5 mb-6" dir="ltr">
             {code.map((digit, index) => (
               <input
@@ -166,7 +166,7 @@ function VerifyTelegramPage() {
                 onChange={(e) => handleChange(index, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(index, e)}
                 onPaste={index === 0 ? handlePaste : undefined}
-                className="w-10 h-12 sm:w-11 sm:h-14 text-center text-lg font-bold bg-[#1a1625] border border-[#2a1f0a] rounded-xl text-amber-50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all"
+                className="w-10 h-12 sm:w-11 sm:h-14 text-center text-lg font-bold bg-bg-secondary border border-border rounded-xl text-text-primary focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all"
               />
             ))}
           </div>
@@ -190,7 +190,7 @@ function VerifyTelegramPage() {
             {canResend ? (
               <button
                 onClick={handleResend}
-                className="text-amber-500 hover:text-amber-400 text-sm transition-colors"
+                className="text-text-secondary hover:text-amber-400 text-sm transition-colors"
               >
                 إعادة إرسال الرمز
               </button>
