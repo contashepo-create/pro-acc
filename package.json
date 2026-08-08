@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "jest --verbose",
     "test:watch": "jest --watch",
-    "migrate": "npx tsx src/migrations/run.ts"
+    "migrate": "npx tsx src/migrations/run.ts",
+    "seed": "npx tsx scripts/seed.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
