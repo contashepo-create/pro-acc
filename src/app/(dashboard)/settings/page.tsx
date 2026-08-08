@@ -38,6 +38,18 @@ export default function SettingsPage() {
   const [countryCode, setCountryCode] = useState('SA');
   const [currencySymbol, setCurrencySymbol] = useState('ر.س');
   const [currencyCode, setCurrencyCode] = useState('SAR');
+  const [seedLoading, setSeedLoading] = useState(false);
+
+  const handleSeedChart = async () => {
+    if (typeof window !== 'undefined' && !window.confirm('هل تريد توليد شجرة الحسابات الافتراضية لهذه الشركة؟')) return;
+    setSeedLoading(true);
+    try {
+      const res = await fetch('/api/settings/seed-chart', { method: 'POST' });
+      const json = await res.json();
+      setToast(json.success ? 'تم توليد شجرة الحسابات بنجاح' : (json.message || 'فشل التوليد'));
+    } catch { setToast('خطأ في الاتصال'); }
+    finally { setSeedLoading(false); }
+  };
   
   // Notifications
   const [notifInvoice, setNotifInvoice] = useState(true);
@@ -481,6 +493,11 @@ export default function SettingsPage() {
 
       {/* Tax */}
       {tab === 'tax' && (
+        <Card title="شجرة الحسابات">
+          <p className="text-sm text-text-muted mb-3">إذا كانت الحسابات لا تظهر عند تسجيل القيود، أو ظهرت أخطاء عند ترحيل الفواتير، فهذا يعني أن شجرة الحسابات غير مولّدة لهذه الشركة. اضغط الزر لتوليد الحسابات الافتراضية.</p>
+          <Button onClick={handleSeedChart} disabled={seedLoading}>{seedLoading ? 'جاري التوليد...' : 'توليد شجرة الحسابات'}</Button>
+        </Card>
+
         <Card title="إعدادات الضرائب">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="نسبة ضريبة القيمة المضافة (%)" type="number" value={vatRate} onChange={(e:any)=>setVatRate(e.target.value)} />
