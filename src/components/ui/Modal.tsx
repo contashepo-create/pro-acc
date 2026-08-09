@@ -14,12 +14,13 @@ interface ModalProps {
   showClose?: boolean;
 }
 
+// 'full' now renders a true full-screen, scrollable surface (behaves like a page).
 const sizeClasses: Record<string, string> = {
   sm: 'max-w-sm',
   md: 'max-w-lg',
   lg: 'max-w-2xl',
   xl: 'max-w-4xl',
-  full: 'max-w-[95vw] max-h-[95vh]',
+  full: 'w-screen h-screen max-w-none max-h-none rounded-none',
 };
 
 export function Modal({
@@ -32,6 +33,7 @@ export function Modal({
   className = '',
   showClose = true,
 }: ModalProps) {
+  const isFull = size === 'full';
   const handleEscape = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -57,9 +59,12 @@ export function Modal({
   };
 
   return (
-    <div className="modal-backdrop flex items-center justify-center p-4" onClick={handleBackdropClick}>
+    <div
+      className={`modal-backdrop flex items-center justify-center ${isFull ? 'p-0' : 'p-4'}`}
+      onClick={handleBackdropClick}
+    >
       <div
-        className={`modal-content bg-bg-card border border-border rounded-xl shadow-modal w-full ${sizeClasses[size]} ${className}`}
+        className={`modal-content bg-bg-card border border-border shadow-modal w-full ${sizeClasses[size]} ${isFull ? 'flex flex-col' : ''} ${className}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -78,7 +83,7 @@ export function Modal({
             )}
           </div>
         )}
-        <div className="px-6 py-4 overflow-y-auto max-h-[70vh]">{children}</div>
+        <div className={`px-6 py-4 overflow-y-auto ${isFull ? 'flex-1' : 'max-h-[70vh]'}`}>{children}</div>
         {footer && (
           <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
             {footer}

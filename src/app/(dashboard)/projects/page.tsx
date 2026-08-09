@@ -453,7 +453,7 @@ export default function ProjectsPage() {
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditingProject(null); }}
         title={editingProject ? `تعديل مشروع: ${editingProject.name}` : '🏗️ إضافة مشروع جديد مدمج بجدول كميات (BOQ)'}
-        size="xl"
+        size="full"
         footer={
           <div className="flex gap-2 w-full justify-between items-center">
             <div className="text-xs text-text-muted font-bold">
@@ -553,7 +553,7 @@ export default function ProjectsPage() {
         isOpen={showInvoiceModal}
         onClose={() => { setShowInvoiceModal(false); setInvoiceProject(null); }}
         title={`📥 إصدار فاتورة مبيعات وتحصيل فوري مدمج للمشروع: ${invoiceProject?.name || ''}`}
-        size="lg"
+        size="full"
         footer={
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => { setShowInvoiceModal(false); setInvoiceProject(null); }}>إلغاء</Button>

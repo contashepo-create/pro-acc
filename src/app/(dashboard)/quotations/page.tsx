@@ -213,7 +213,7 @@ export default function QuotationsPage() {
     <div className="space-y-6">
       <PageHeader title="عروض الأسعار" description="إدارة عروض الأسعار" actions={<Button onClick={() => { setEditingQuotation(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة عرض</Button>} />
       {quotations.length === 0 ? <EmptyState title="لا توجد عروض" actionLabel="إضافة عرض" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={quotations} searchable searchKeys={['contact_name', 'number']} />}
-      <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingQuotation(null); }} title={editingQuotation ? 'تعديل عرض سعر' : 'إضافة عرض سعر'} size="xl" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingQuotation(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
+      <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingQuotation(null); }} title={editingQuotation ? 'تعديل عرض سعر' : 'إضافة عرض سعر'} size="full" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingQuotation(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
