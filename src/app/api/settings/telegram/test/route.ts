@@ -80,9 +80,9 @@ export async function POST(request: NextRequest) {
     const testRunId = testRun.id;
 
     // 4. إرسال الرسالة التفاعلية وبها أزرار تليجرام المدمجة (Inline Buttons)
-    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
-      ? process.env.TELEGRAM_BOT_TOKEN 
-      : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
+    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
+      ? process.env.TELEGRAM_BOT_TOKEN
+      : '';
 
     const message = `🧪 <b>طلب فحص الربط التفاعلي</b> 🚀\n\nلقد أرسل موقعك الإلكتروني المحاسبي طلباً تفاعلياً للتأكد من جاهزية البوت لاستقبال الموافقات والتنبيهات المباشرة.\n\nالرجاء الضغط على أحد الأزرار أدناه لتأكيد حالة الربط:`;
 

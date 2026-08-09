@@ -221,10 +221,10 @@ async function sendApprovalNotification(
     ]
   };
   
-  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
-    ? process.env.TELEGRAM_BOT_TOKEN 
-    : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
-  
+  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
+    ? process.env.TELEGRAM_BOT_TOKEN
+    : '';
+
   if (!botToken || !config.chat_id) {
     console.warn('Telegram bot not configured or chat_id missing');
     return;
@@ -349,9 +349,9 @@ export async function sendTelegramNotification(
   if (!config || !config.is_enabled || !config.chat_id) {
     return { success: false, error: 'إعدادات التيليجرام غير مفعلة' };
   }
-  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
-    ? process.env.TELEGRAM_BOT_TOKEN 
-    : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
+  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
+    ? process.env.TELEGRAM_BOT_TOKEN
+    : '';
   if (!botToken) return { success: false, error: 'TELEGRAM_BOT_TOKEN غير محدد' };
   
   try {

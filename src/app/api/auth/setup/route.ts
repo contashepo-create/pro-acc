@@ -76,7 +76,11 @@ export async function POST(request: NextRequest) {
     }
 
     const setupToken = setup_token || request.nextUrl.searchParams.get('setup_token');
-    if (process.env.NEXT_PUBLIC_SETUP_TOKEN && setupToken !== process.env.NEXT_PUBLIC_SETUP_TOKEN) {
+    // SETUP_TOKEN stays server-side. The public name is accepted temporarily for
+    // existing deployments, but should be replaced because it exposes the value
+    // to client bundles.
+    const expectedSetupToken = process.env.SETUP_TOKEN || process.env.NEXT_PUBLIC_SETUP_TOKEN;
+    if (expectedSetupToken && setupToken !== expectedSetupToken) {
       return error('رمز الإعداد غير صحيح', 403);
     }
 
@@ -163,7 +167,7 @@ export async function POST(request: NextRequest) {
       companyId,
       user,
       token,
-      setupProtected: !!process.env.NEXT_PUBLIC_SETUP_TOKEN,
+      setupProtected: !!expectedSetupToken,
     }, 201);
 
     setAuthCookie(response, 'token', token, 86400 * 7);
