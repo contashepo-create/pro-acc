@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword, createToken } from '@/lib/auth';
+import { isCommonPassword } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
@@ -64,8 +65,8 @@ export async function POST(request: NextRequest) {
       return error('بيانات المستخدم غير مكتملة (الاسم، البريد الإلكتروني، كلمة المرور)');
     }
 
-    if (userData.password.length < 6) {
-      return error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
+    if (userData.password.length < 8 || userData.password.length > 128 || isCommonPassword(userData.password)) {
+      return error('كلمة المرور يجب أن تكون 8 أحرف على الأقل وغير شائعة');
     }
 
     const s = sb();

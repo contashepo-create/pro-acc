@@ -38,7 +38,7 @@ export default function RegisterPage() {
     if (!companyName.trim()) { setError('يرجى إدخال اسم الشركة'); return; }
     if (!name.trim()) { setError('يرجى إدخال الاسم'); return; }
     if (!email.trim()) { setError('يرجى إدخال البريد الإلكتروني'); return; }
-    if (!password || password.length < 6) { setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+    if (!password || password.length < 8) { setError('كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return; }
     if (!captcha || !captchaAnswer) { setError('يرجى إكمال التحقق الأمني'); return; }
 
     setLoading(true);

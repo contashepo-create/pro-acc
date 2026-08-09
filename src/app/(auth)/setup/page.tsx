@@ -58,7 +58,7 @@ export default function SetupPage() {
     if (!admin.name.trim()) { setError('يرجى إدخال اسم المدير'); return; }
     if (!admin.email.trim()) { setError('يرجى إدخال البريد الإلكتروني'); return; }
     if (!admin.password) { setError('يرجى إدخال كلمة المرور'); return; }
-    if (admin.password.length < 6) { setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+    if (admin.password.length < 8) { setError('كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return; }
     if (admin.password !== admin.confirm_password) { setError('كلمة المرور غير متطابقة'); return; }
 
     setLoading(true);

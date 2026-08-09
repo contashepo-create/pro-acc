@@ -39,6 +39,19 @@ function sanitizeIpAddress(ip: string): string {
   return 'unknown';
 }
 
+/**
+ * Sanitize an email address before interpolating it into a PostgREST `.or()`
+ * filter string. Characters that PostgREST treats as filter syntax
+ * (commas, parentheses, quotes, colons, operators) are stripped, which
+ * neutralizes filter-injection / rate-limit-bypass attempts via crafted
+ * emails (e.g. `a@b.com,or(id.neq.null)`).
+ */
+export function sanitizeEmailForFilter(email: string): string {
+  const cleaned = (email || '').toLowerCase().trim().replace(/[^a-z0-9._%+\-@]/g, '');
+  // If nothing resembling an email survives, use a sentinel that matches no row.
+  return cleaned.length > 0 ? cleaned.slice(0, 254) : 'invalid-email@example.invalid';
+}
+
 export async function checkRateLimit(
   email: string,
   ipAddress: string
@@ -48,10 +61,13 @@ export async function checkRateLimit(
 
   // SECURITY FIX: Sanitize IP address to prevent PostgREST filter injection
   const safeIp = sanitizeIpAddress(ipAddress);
+  // SECURITY FIX: Sanitize email too — it is user-controlled and previously
+  // interpolated raw into the `.or()` filter (PostgREST injection vector).
+  const safeEmail = sanitizeEmailForFilter(email);
 
   const { data: attempts, error } = await s.from('login_attempts')
     .select('attempted_at')
-    .or(`email.eq.${email},ip_address.eq.${safeIp}`)
+    .or(`email.eq.${safeEmail},ip_address.eq.${safeIp}`)
     .eq('success', false)
     .gte('attempted_at', fifteenMinutesAgo)
     .order('attempted_at');
