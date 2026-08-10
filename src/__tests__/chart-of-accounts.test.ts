@@ -1,0 +1,370 @@
+/**
+ * Section 2 tests — Initial setup & Chart of Accounts
+ *
+ * Covers:
+ * 1. Integrity of the default Saudi chart of accounts (single source of truth)
+ * 2. createDefaultChartOfAccounts behaviour (idempotency, tenant scoping,
+ *    parent linking) with a chainable Supabase mock
+ * 3. Account API routes: POST create (validation, cross-tenant parent,
+ *    duplicate code), PUT update (schema-only fields, no type/parent
+ *    tampering), DELETE (journal/bank/fixed-asset protection, tenant
+ *    isolation)
+ */
+
+process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
+
+import { DEFAULT_CHART_OF_ACCOUNTS, createDefaultChartOfAccounts } from '@/lib/default-accounts';
+import { createToken } from '@/lib/auth';
+
+// ---------------------------------------------------------------------------
+// Chainable Supabase mock
+// ---------------------------------------------------------------------------
+
+type Row = Record<string, any>;
+type Op = { op: string; col?: string; val?: any };
+
+function makeDb(db: Record<string, Row[]>) {
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  let insertCounter = 0;
+
+  const from = (table: string) => {
+    const ops: Op[] = [];
+    const mut: { kind?: string; payload?: any } = {};
+    const call: any = { table, ops, mut };
+    calls.push(call);
+
+    const rows = () => (db[table] || []);
+    const applyFilters = () =>
+      rows().filter((r) =>
+        ops.every((o) => {
+          if (o.op === 'eq') return r[o.col!] === o.val;
+          if (o.op === 'neq') return r[o.col!] !== o.val;
+          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          return true;
+        })
+      );
+
+    const api: any = {
+      select: () => api,
+      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      or: () => api,
+      gte: () => api,
+      order: () => api,
+      limit: () => api,
+      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      delete: () => { mut.kind = 'delete'; return api; },
+      maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
+      single: async () => {
+        if (mut.kind === 'insert') {
+          mut.payload.id = mut.payload.id ?? `id-${++insertCounter}`;
+          (db[table] = db[table] || []).push(mut.payload);
+          return { data: mut.payload, error: null };
+        }
+        const row = applyFilters()[0] ?? null;
+        return { data: row, error: row ? null : { message: 'not found' } };
+      },
+      then: (onF: any, onR: any) =>
+        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
+    };
+    return api;
+  };
+
+  return { from, calls };
+}
+
+let mockDb: ReturnType<typeof makeDb>;
+
+jest.mock('@/lib/supabase-client', () => ({
+  getSupabase: () => mockDb,
+}));
+
+import { POST as accountsPOST } from '@/app/api/accounts/route';
+import { PUT as accountPUT, DELETE as accountDELETE } from '@/app/api/accounts/[id]/route';
+
+const C1 = 'company-1';
+
+function baseDb() {
+  return {
+    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
+    companies: [{ id: C1, is_active: true }],
+    accounts: [] as Row[],
+    journal_lines: [] as Row[],
+    banks_safes: [] as Row[],
+    fixed_assets: [] as Row[],
+  };
+}
+
+function authedRequest(body?: any) {
+  const token = createToken('u1', 'admin');
+  return {
+    headers: {
+      get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null),
+    },
+    cookies: { get: () => undefined },
+    json: async () => body,
+  } as any;
+}
+
+const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
+
+// ---------------------------------------------------------------------------
+// 1. Default chart integrity
+// ---------------------------------------------------------------------------
+
+describe('Default chart of accounts — structural & accounting integrity', () => {
+  test('codes are unique 4-digit numbers', () => {
+    const codes = DEFAULT_CHART_OF_ACCOUNTS.map((a) => a.code);
+    expect(new Set(codes).size).toBe(codes.length);
+    for (const code of codes) expect(code).toMatch(/^\d{4}$/);
+  });
+
+  test('every parentCode exists and depth stays within 3 levels', () => {
+    const byCode = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((a) => [a.code, a]));
+    for (const acc of DEFAULT_CHART_OF_ACCOUNTS) {
+      if (acc.parentCode) expect(byCode.has(acc.parentCode)).toBe(true);
+      let depth = 1;
+      let cur = acc;
+      while (cur.parentCode) {
+        depth++;
+        cur = byCode.get(cur.parentCode)!;
+      }
+      expect(depth).toBeLessThanOrEqual(3);
+    }
+  });
+
+  test('accounting code bands match types (1xxx asset … 5xxx expense)', () => {
+    const band: Record<string, string> = {
+      '1': 'asset', '2': 'liability', '3': 'equity', '4': 'revenue', '5': 'expense',
+    };
+    for (const acc of DEFAULT_CHART_OF_ACCOUNTS) {
+      expect(band[acc.code[0]]).toBe(acc.type);
+    }
+  });
+
+  test('children keep the same type as their parent', () => {
+    const byCode = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((a) => [a.code, a]));
+    for (const acc of DEFAULT_CHART_OF_ACCOUNTS) {
+      if (acc.parentCode) {
+        expect(byCode.get(acc.parentCode)!.type).toBe(acc.type);
+      }
+    }
+  });
+
+  test('critical accounts that other modules hard-depend on exist', () => {
+    const byCode = new Map(DEFAULT_CHART_OF_ACCOUNTS.map((a) => [a.code, a]));
+    // auto-account.ts opening balances post against 3100 (capital)
+    expect(byCode.get('3100')).toMatchObject({ type: 'equity', parentCode: '3000' });
+    // cash / banks / AR / AP / VAT / retained earnings / depreciation
+    for (const code of ['1110', '1120', '1130', '2110', '1180', '2120', '3200', '5260', '1290']) {
+      expect(byCode.has(code)).toBe(true);
+    }
+  });
+
+  test('arabic and english names are non-empty', () => {
+    for (const acc of DEFAULT_CHART_OF_ACCOUNTS) {
+      expect(acc.name.trim().length).toBeGreaterThan(0);
+      expect(acc.nameEn.trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2. createDefaultChartOfAccounts behaviour
+// ---------------------------------------------------------------------------
+
+describe('createDefaultChartOfAccounts', () => {
+  test('creates every account scoped to the company and links parents', async () => {
+    const db = baseDb();
+    mockDb = makeDb(db);
+
+    const created = await createDefaultChartOfAccounts(mockDb as any, C1);
+
+    expect(created).toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
+    const inserts = mockDb.calls.filter((c) => c.mut.kind === 'insert');
+    expect(inserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length);
+    for (const c of inserts) expect(c.mut.payload.company_id).toBe(C1);
+
+    // Parent linking: 1110's update must point at the id that 1100 got
+    const insertId = (code: string) =>
+      inserts.find((c) => c.mut.payload.code === code)!.mut.payload.id;
+    const updates = mockDb.calls.filter((c) => c.mut.kind === 'update');
+    const childUpdate = updates.find((c) =>
+      c.ops.some((o) => o.col === 'id' && o.val === insertId('1110'))
+    );
+    expect(childUpdate).toBeDefined();
+    expect(childUpdate!.mut.payload.parent_id).toBe(insertId('1100'));
+    // updates are tenant-scoped
+    for (const u of updates) {
+      expect(u.ops.some((o) => o.op === 'eq' && o.col === 'company_id' && o.val === C1)).toBe(true);
+    }
+  });
+
+  test('is idempotent — existing codes are re-linked, not duplicated', async () => {
+    const db = baseDb();
+    db.accounts.push({ id: 'pre-1000', company_id: C1, code: '1000' });
+    mockDb = makeDb(db);
+
+    const created = await createDefaultChartOfAccounts(mockDb as any, C1);
+
+    const inserts = mockDb.calls.filter((c) => c.mut.kind === 'insert');
+    expect(inserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length - 1);
+    expect(inserts.find((c) => c.mut.payload.code === '1000')).toBeUndefined();
+    expect(created).toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. Account API routes
+// ---------------------------------------------------------------------------
+
+describe('POST /api/accounts', () => {
+  test('rejects invalid code format', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await accountsPOST(authedRequest({
+      code: '12ab', name: 'حساب', type: 'asset',
+    }));
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects a parent from another company (cross-tenant)', async () => {
+    const db = baseDb();
+    db.accounts.push({ id: '00000000-0000-4000-8000-0000000000ff', company_id: 'company-2', code: '1000' });
+    mockDb = makeDb(db);
+
+    const res = await accountsPOST(authedRequest({
+      code: '5999', name: 'حساب', type: 'expense', parentId: '00000000-0000-4000-8000-0000000000ff',
+    }));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.message).toContain('الأب');
+  });
+
+  test('rejects duplicate code within the same company', async () => {
+    const db = baseDb();
+    db.accounts.push({ id: '00000000-0000-4000-8000-000000000001', company_id: C1, code: '5999' });
+    mockDb = makeDb(db);
+
+    const res = await accountsPOST(authedRequest({
+      code: '5999', name: 'مكرر', type: 'expense',
+    }));
+    expect(res.status).toBe(400);
+  });
+
+  test('creates an account scoped to the company', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await accountsPOST(authedRequest({
+      code: '5999', name: 'مصروف مخصص', type: 'expense',
+    }));
+    expect(res.status).toBe(201);
+    const insert = mockDb.calls.find((c) => c.mut.kind === 'insert' && c.table === 'accounts');
+    expect(insert!.mut.payload.company_id).toBe(C1);
+    expect(insert!.mut.payload.code).toBe('5999');
+  });
+});
+
+describe('PUT /api/accounts/[id]', () => {
+  test('rejects empty name', async () => {
+    const db = baseDb();
+    db.accounts.push({ id: '00000000-0000-4000-8000-000000000001', company_id: C1, code: '5999', name: 'قديم' });
+    mockDb = makeDb(db);
+    const res = await accountPUT(authedRequest({ name: '' }), paramsOf('00000000-0000-4000-8000-000000000001'));
+    expect(res.status).toBe(400);
+  });
+
+  test('strips type/parentId — they can never be massaged via update', async () => {
+    const db = baseDb();
+    db.accounts.push({ id: '00000000-0000-4000-8000-000000000001', company_id: C1, code: '5999', name: 'قديم', type: 'expense' });
+    mockDb = makeDb(db);
+
+    const res = await accountPUT(authedRequest({
+      name: 'اسم جديد',
+      type: 'revenue',        // must NOT be applied
+      parentId: '00000000-0000-4000-8000-0000000000ff' // must NOT be applied
+    }), paramsOf('00000000-0000-4000-8000-000000000001'));
+
+    expect(res.status).toBe(200);
+    const upd = mockDb.calls.find((c) => c.mut.kind === 'update' && c.table === 'accounts');
+    expect(upd!.mut.payload.name).toBe('اسم جديد');
+    expect(upd!.mut.payload).not.toHaveProperty('type');
+    expect(upd!.mut.payload).not.toHaveProperty('parentId');
+    expect(upd!.mut.payload).not.toHaveProperty('parent_id');
+  });
+
+  test('rejects duplicate code on rename and cross-tenant access', async () => {
+    const db = baseDb();
+    db.accounts.push(
+      { id: '00000000-0000-4000-8000-000000000001', company_id: C1, code: '5999', name: 'أ' },
+      { id: '00000000-0000-4000-8000-000000000002', company_id: C1, code: '5001', name: 'ب' },
+      { id: '00000000-0000-4000-8000-000000000009', company_id: 'company-2', code: '5999', name: 'خارجي' },
+    );
+    mockDb = makeDb(db);
+
+    const dup = await accountPUT(authedRequest({ code: '5001' }), paramsOf('00000000-0000-4000-8000-000000000001'));
+    expect(dup.status).toBe(400);
+
+    const foreign = await accountPUT(authedRequest({ name: 'x' }), paramsOf('00000000-0000-4000-8000-000000000009'));
+    expect(foreign.status).toBe(404);
+  });
+});
+
+describe('DELETE /api/accounts/[id]', () => {
+  function seedAccount() {
+    const db = baseDb();
+    db.accounts.push({ id: '00000000-0000-4000-8000-000000000001', company_id: C1, code: '5999', name: 'حساب' });
+    return db;
+  }
+
+  test('cross-tenant delete returns 404 (isolation)', async () => {
+    const db = seedAccount();
+    db.accounts.push({ id: '00000000-0000-4000-8000-000000000009', company_id: 'company-2', code: '5998', name: 'أجنبي' });
+    mockDb = makeDb(db);
+    const res = await accountDELETE(authedRequest(), paramsOf('00000000-0000-4000-8000-000000000009'));
+    expect(res.status).toBe(404);
+    expect(mockDb.calls.find((c) => c.mut.kind === 'delete')).toBeUndefined();
+  });
+
+  test('blocks delete when journal lines reference the account code', async () => {
+    const db = seedAccount();
+    db.journal_lines.push({ id: 'l1', company_id: C1, account_code: '5999' });
+    mockDb = makeDb(db);
+    const res = await accountDELETE(authedRequest(), paramsOf('00000000-0000-4000-8000-000000000001'));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.message).toContain('قيود');
+    expect(mockDb.calls.find((c) => c.mut.kind === 'delete')).toBeUndefined();
+  });
+
+  test('blocks delete when a bank/safe is linked to the account', async () => {
+    const db = seedAccount();
+    db.banks_safes.push({ id: 'bs1', company_id: C1, account_id: '00000000-0000-4000-8000-000000000001' });
+    mockDb = makeDb(db);
+    const res = await accountDELETE(authedRequest(), paramsOf('00000000-0000-4000-8000-000000000001'));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.message).toContain('خزينة');
+  });
+
+  test('blocks delete when a fixed asset is linked to the account', async () => {
+    const db = seedAccount();
+    db.fixed_assets.push({ id: 'fa1', company_id: C1, asset_account_id: '00000000-0000-4000-8000-000000000001' });
+    mockDb = makeDb(db);
+    const res = await accountDELETE(authedRequest(), paramsOf('00000000-0000-4000-8000-000000000001'));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.message).toContain('أصل');
+  });
+
+  test('deletes a clean account, company-scoped', async () => {
+    const db = seedAccount();
+    mockDb = makeDb(db);
+    const res = await accountDELETE(authedRequest(), paramsOf('00000000-0000-4000-8000-000000000001'));
+    expect(res.status).toBe(200);
+    const del = mockDb.calls.find((c) => c.mut.kind === 'delete' && c.table === 'accounts');
+    expect(del).toBeDefined();
+    expect(del!.ops.some((o) => o.col === 'company_id' && o.val === C1)).toBe(true);
+    expect(del!.ops.some((o) => o.col === 'id' && o.val === '00000000-0000-4000-8000-000000000001')).toBe(true);
+  });
+});

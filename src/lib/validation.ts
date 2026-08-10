@@ -99,6 +99,20 @@ export const accountSchema = z.object({
   currency: z.string().optional(),
 }).strict();
 
+/**
+ * PUT /api/accounts/[id] — partial update.
+ * Unknown legacy keys from the edit form (type, parentId, ...) are stripped,
+ * never applied: the account type must never change after creation, and
+ * parent reassignment goes through a dedicated flow to avoid cycles.
+ */
+export const accountUpdateSchema = z.object({
+  code: z.string().regex(/^\d{4}$/, 'رمز الحساب يجب أن يكون 4 أرقام').optional(),
+  name: z.string().min(1, 'اسم الحساب مطلوب').max(200).optional(),
+  nameEn: z.string().max(200).nullable().optional(),
+  is_active: z.boolean().optional(),
+  isActive: z.boolean().optional(),
+});
+
 // --------------- Journal Entry ---------------
 
 export const journalEntryLineSchema = z.object({
