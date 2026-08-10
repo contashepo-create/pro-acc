@@ -9,19 +9,19 @@ export async function GET(
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'invoices', 'read');
     const { id } = await paramsPromise;
     const s = sb();
 
     // Fetch invoice with full client data
     const { data: invRes, error: invErr } = await s.from('invoices')
       .select(`
-        id, number, contact_id, project_id, date, due_date, subtotal, 
-        tax_rate, tax_amount, total, paid_amount, status, notes, 
+        id, number, contact_id, project_id, date, due_date, subtotal,
+        tax_rate, tax_amount, total, paid_amount, status, notes,
         journal_entry_id, created_by, created_at,
         contacts(id, name, tax_number, address, phone, email, commercial_registration)
       `)
-      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      .eq('id', id).eq('company_id', auth.companyId).is('deleted_at', null).maybeSingle();
     if (invErr || !invRes) return notFound();
 
     const { data: itemsRes } = await s.from('invoice_items')
@@ -98,8 +98,11 @@ export async function PATCH(
     if (body.status === 'paid') {
       if (invoice.status === 'paid') return error('الفاتورة مدفوعة مسبقاً');
       if (invoice.status === 'cancelled') return error('لا يمكن دفع فاتورة ملغية');
+      // Keep the trio consistent: a paid invoice must show full paid_amount
+      // (previously only the flag changed, leaving paid_amount=0 rows).
       const { error: updErr } = await s.from('invoices')
-        .update({ status: 'paid', updated_at: new Date().toISOString() }).eq('id', id).eq('company_id', auth.companyId);
+        .update({ status: 'paid', paid_amount: invoice.total, updated_at: new Date().toISOString() })
+        .eq('id', id).eq('company_id', auth.companyId);
       if (updErr) throw updErr;
       return success({ message: 'تم تسجيل الفاتورة كمدفوعة' });
     }
@@ -114,10 +117,11 @@ export async function PATCH(
         const year = new Date().getFullYear().toString();
         let reversalNumber: number;
         try {
-          const { data: rpcData } = await s.rpc('next_journal_number', {
+          const { data: rpcData, error: rpcError } = await s.rpc('next_journal_number', {
             p_company_id: auth.companyId,
             p_year: parseInt(year),
           });
+          if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
           reversalNumber = rpcData as number;
         } catch {
           const { data: seqExisting } = await s.from('journal_sequences')

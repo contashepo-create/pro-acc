@@ -154,6 +154,7 @@ export const invoiceItemSchema = z.object({
   description: z.string().min(1, 'البيان مطلوب'),
   quantity: z.number().positive('الكمية يجب أن تكون أكبر من صفر'),
   unitPrice: z.number().min(0, 'السعر لا يمكن أن يكون سالباً'),
+  discount: z.number().min(0, 'الخصم لا يمكن أن يكون سالباً').optional().default(0),
   total: z.number().optional(),
   item_type: z.enum(['service', 'product', 'inventory']).optional().default('service'),
   inventory_item_id: z.string().uuid().optional().nullable(),

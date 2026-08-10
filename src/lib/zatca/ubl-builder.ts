@@ -71,8 +71,8 @@ interface UBLInvoiceData {
   notes?: string[];
 }
 
-function escapeXml(str: string): string {
-  return str
+function escapeXml(str: string | null | undefined): string {
+  return String(str ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -85,9 +85,16 @@ function escapeXml(str: string): string {
  */
 export function generateUBLInvoice(data: UBLInvoiceData): string {
   const {
-    uuid, number, issueDate, issueTime, invoiceTypeCode, currencyCode,
-    seller, buyer, items, amounts, vatRate, paymentMeansCode, notes,
+    uuid, number, seller, buyer, items, amounts, vatRate, notes,
   } = data;
+
+  // Escape every scalar interpolated raw into an XML element/attribute position
+  const issueDate = escapeXml(data.issueDate);
+  const issueTime = escapeXml(data.issueTime);
+  const invoiceTypeCode = escapeXml(data.invoiceTypeCode);
+  const currencyCode = escapeXml(data.currencyCode);
+  const paymentMeansCode =
+    data.paymentMeansCode != null ? escapeXml(data.paymentMeansCode) : undefined;
 
   let xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
