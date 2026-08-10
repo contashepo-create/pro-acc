@@ -177,6 +177,56 @@ export const invoiceSchema = z.object({
   notes: z.string().optional(),
 }).strict();
 
+// --------------- Purchases ---------------
+// NOTE: purchase APIs use snake_case fields (supplier_id, unit_price, ...)
+// matching the DB columns — unlike the sales invoice API which is camelCase.
+
+export const purchaseInvoiceItemSchema = z.object({
+  description: z.string().min(1, 'البيان مطلوب'),
+  quantity: z.number().positive('الكمية يجب أن تكون أكبر من صفر'),
+  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً'),
+  // UI hint only — the server always recomputes line totals.
+  total: z.number().optional(),
+});
+
+export const purchaseInvoiceSchema = z.object({
+  date: z.string().refine(isValidDateString, { message: 'تاريخ الفاتورة غير صالح' }),
+  supplier_id: z.string().uuid('رقم المورد غير صالح'),
+  purchase_order_id: z.string().uuid('رقم أمر الشراء غير صالح').optional().nullable(),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل'),
+  // Fraction (0.15 = 15%). Unbounded previously — negative/huge rates were accepted.
+  tax_rate: z.number().min(0, 'نسبة الضريبة لا يمكن أن تكون سالبة').max(1, 'نسبة الضريبة غير صالحة').optional().default(0),
+  notes: z.string().optional(),
+}).strict();
+
+export const purchaseInvoiceUpdateSchema = z.object({
+  status: z.enum(['unpaid', 'partial', 'paid', 'cancelled'] as const, {
+    message: 'حالة الفاتورة غير صالحة',
+  }).optional(),
+  notes: z.string().optional(),
+}).strict();
+
+export const purchaseOrderSchema = z.object({
+  date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }),
+  supplier_id: z.string().uuid('رقم المورد غير صالح'),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل'),
+  notes: z.string().optional(),
+}).strict();
+
+export const purchaseOrderUpdateSchema = z.object({
+  date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
+  supplier_id: z.string().uuid('رقم المورد غير صالح').optional(),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').optional(),
+  notes: z.string().optional(),
+}).strict();
+
+// Goods receipt against a PO: explicit per-item quantities must be POSITIVE —
+// a negative value previously reduced received_quantity AND deducted stock.
+export const purchaseReceiveSchema = z.object({
+  quantities: z.record(z.string(), z.number().positive('كمية الاستلام يجب أن تكون أكبر من صفر')).optional(),
+  date: z.string().refine(isValidDateString, { message: 'تاريخ الاستلام غير صالح' }).optional(),
+}).strict();
+
 // --------------- Voucher Receipt ---------------
 
 export const voucherReceiptSchema = z.object({
