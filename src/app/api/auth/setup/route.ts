@@ -2,44 +2,10 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword, createToken } from '@/lib/auth';
+import { isCommonPassword } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
-const DEFAULT_ACCOUNTS = [
-  { code: '1000', name: 'الأصول', type: 'asset' },
-  { code: '1110', name: 'النقدية', type: 'asset', parentCode: '1000' },
-  { code: '1120', name: 'البنوك', type: 'asset', parentCode: '1000' },
-  { code: '1130', name: 'عملاء', type: 'asset', parentCode: '1000' },
-  { code: '1140', name: 'مصروفات مدفوعة مقدماً', type: 'asset', parentCode: '1000' },
-  { code: '1150', name: 'عهد الموظفين', type: 'asset', parentCode: '1000' },
-  { code: '1160', name: 'سلف الموظفين', type: 'asset', parentCode: '1000' },
-  { code: '1170', name: 'المخزون', type: 'asset', parentCode: '1000' },
-  { code: '1180', name: 'ضريبة المشتريات', type: 'asset', parentCode: '1000' },
-  { code: '1190', name: 'سلف الموردين', type: 'asset', parentCode: '1000' },
-  { code: '1200', name: 'الأصول الثابتة', type: 'asset', parentCode: '1000' },
-  { code: '1230', name: 'مجمع الإهلاك', type: 'asset', parentCode: '1000' },
-  { code: '2000', name: 'الخصوم', type: 'liability' },
-  { code: '2110', name: 'الموردون', type: 'liability', parentCode: '2000' },
-  { code: '2120', name: 'ضريبة المبيعات', type: 'liability', parentCode: '2000' },
-  { code: '2130', name: 'القروض', type: 'liability', parentCode: '2000' },
-  { code: '2140', name: 'الرواتب المستحقة', type: 'liability', parentCode: '2000' },
-  { code: '2150', name: 'مقاولو الباطن', type: 'liability', parentCode: '2000' },
-  { code: '2160', name: 'الاحتجازات', type: 'liability', parentCode: '2000' },
-  { code: '2170', name: 'عمال اليومية', type: 'liability', parentCode: '2000' },
-  { code: '2180', name: 'سلف العملاء', type: 'liability', parentCode: '2000' },
-  { code: '3000', name: 'حقوق الملكية', type: 'equity' },
-  { code: '3100', name: 'رأس المال', type: 'equity', parentCode: '3000' },
-  { code: '3200', name: 'الأرباح المحتجزة', type: 'equity', parentCode: '3000' },
-  { code: '4000', name: 'الإيرادات', type: 'revenue' },
-  { code: '4100', name: 'إيرادات العقود', type: 'revenue', parentCode: '4000' },
-  { code: '4200', name: 'إيرادات أخرى', type: 'revenue', parentCode: '4000' },
-  { code: '5000', name: 'المصروفات', type: 'expense' },
-  { code: '5100', name: 'التكاليف المباشرة', type: 'expense', parentCode: '5000' },
-  { code: '5110', name: 'المواد', type: 'expense', parentCode: '5000' },
-  { code: '5210', name: 'الرواتب', type: 'expense', parentCode: '5000' },
-  { code: '5260', name: 'الإهلاك', type: 'expense', parentCode: '5000' },
-  { code: '5330', name: 'الديون المعدومة', type: 'expense', parentCode: '5000' },
-];
 
 const DEFAULT_SETTINGS = [
   { key: 'currency', value: 'SAR' },
@@ -64,8 +30,8 @@ export async function POST(request: NextRequest) {
       return error('بيانات المستخدم غير مكتملة (الاسم، البريد الإلكتروني، كلمة المرور)');
     }
 
-    if (userData.password.length < 6) {
-      return error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
+    if (userData.password.length < 8 || userData.password.length > 128 || isCommonPassword(userData.password)) {
+      return error('كلمة المرور يجب أن تكون 8 أحرف على الأقل وغير شائعة');
     }
 
     const s = sb();
@@ -76,7 +42,11 @@ export async function POST(request: NextRequest) {
     }
 
     const setupToken = setup_token || request.nextUrl.searchParams.get('setup_token');
-    if (process.env.NEXT_PUBLIC_SETUP_TOKEN && setupToken !== process.env.NEXT_PUBLIC_SETUP_TOKEN) {
+    // SETUP_TOKEN stays server-side. The public name is accepted temporarily for
+    // existing deployments, but should be replaced because it exposes the value
+    // to client bundles.
+    const expectedSetupToken = process.env.SETUP_TOKEN || process.env.NEXT_PUBLIC_SETUP_TOKEN;
+    if (expectedSetupToken && setupToken !== expectedSetupToken) {
       return error('رمز الإعداد غير صحيح', 403);
     }
 
@@ -114,37 +84,14 @@ export async function POST(request: NextRequest) {
       throw userErr;
     }
 
-    // Create parent accounts
-    const parentIds: Record<string, string> = {};
-    for (const acc of DEFAULT_ACCOUNTS.filter(a => !a.parentCode)) {
-      const { data: created, error: accErr } = await s.from('accounts')
-        .insert({
-          company_id: companyId,
-          code: acc.code,
-          name: acc.name,
-          type: acc.type,
-          is_active: true,
-        })
-        .select('id, code')
-        .single();
-
-      if (!accErr && created) {
-        parentIds[acc.code] = created.id;
-      }
-    }
-
-    // Create child accounts
-    for (const acc of DEFAULT_ACCOUNTS.filter(a => a.parentCode)) {
-      const parentId = parentIds[acc.parentCode];
-      if (!parentId) continue;
-      await s.from('accounts').insert({
-        company_id: companyId,
-        code: acc.code,
-        name: acc.name,
-        type: acc.type,
-        parent_id: parentId,
-        is_active: true,
-      });
+    // Create default chart of accounts — single source of truth shared with
+    // /api/auth/register (previously this route used a different inline chart,
+    // so companies seeded via setup ended up with divergent accounts/codes).
+    try {
+      const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
+      await createDefaultChartOfAccounts(s, companyId);
+    } catch (e) {
+      console.warn('Failed to create default chart of accounts:', e);
     }
 
     // Create default settings
@@ -163,7 +110,7 @@ export async function POST(request: NextRequest) {
       companyId,
       user,
       token,
-      setupProtected: !!process.env.NEXT_PUBLIC_SETUP_TOKEN,
+      setupProtected: !!expectedSetupToken,
     }, 201);
 
     setAuthCookie(response, 'token', token, 86400 * 7);

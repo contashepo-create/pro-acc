@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
   return success({ challengeId: token, question: `${a} + ${b} = ?` });
 }
 
-function verifyCaptchaToken(token: string, userAnswer: number): boolean {
+export function verifyCaptchaToken(token: string, userAnswer: number): boolean {
   try {
     const secret = process.env.TOKEN_SECRET || 'fallback-secret';
     const decoded = Buffer.from(token, 'base64url').toString();
@@ -81,47 +81,48 @@ function verifyCaptchaToken(token: string, userAnswer: number): boolean {
 export async function POST(request: NextRequest) {
   try {
     const body = await parseBody<any>(request);
-    const { companyName, name, email, password, phone, captchaId, captchaAnswer } = body;
+    const parsed = registerSchema.safeParse(body);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    // Manual validation
-    if (!companyName || !name || !email || !password) {
-      return error('جميع الحقول مطلوبة');
-    }
-    if (password.length < 6) {
-      return error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
-    }
+    const { companyName, name, email, password, phone } = parsed.data;
+    const { captchaId, captchaAnswer } = body;
 
-    // Verify CAPTCHA - FIXED: now stateless HMAC verification
-    if (CAPTCHA_ENABLED && captchaId && captchaAnswer !== undefined) {
-      const valid = verifyCaptchaToken(captchaId, Number(captchaAnswer));
-      if (!valid) {
-        return error('إجابة التحقق غير صحيحة أو انتهت صلاحيتها');
-      }
-    } else if (CAPTCHA_ENABLED && process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) {
-      // If Turnstile is enabled, verify it
-      // Frontend should send turnstile token
-      const turnstileToken = body.turnstileToken;
-      if (!turnstileToken) {
-        return error('يرجى إكمال التحقق الأمني');
-      }
-      // Verify with Cloudflare
-      try {
-        const verifyRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            secret: process.env.TURNSTILE_SECRET_KEY,
-            response: turnstileToken,
-          }),
-        });
-        const verifyData = await verifyRes.json();
-        if (!verifyData.success) {
-          return error('فشل التحقق الأمني. حاول مرة أخرى');
+    // CAPTCHA is MANDATORY when enabled. Previously omitting the captcha
+    // fields entirely skipped verification (bot-registration bypass).
+    if (CAPTCHA_ENABLED) {
+      if (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) {
+        // Turnstile configured — require and verify the token
+        const turnstileToken = body.turnstileToken;
+        if (!turnstileToken) {
+          return error('يرجى إكمال التحقق الأمني');
         }
-      } catch {
-        // If verification fails, allow in dev but block in production
-        if (process.env.NODE_ENV === 'production') {
-          return error('فشل التحقق الأمني');
+        try {
+          const verifyRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              secret: process.env.TURNSTILE_SECRET_KEY,
+              response: turnstileToken,
+            }),
+          });
+          const verifyData = await verifyRes.json();
+          if (!verifyData.success) {
+            return error('فشل التحقق الأمني. حاول مرة أخرى');
+          }
+        } catch {
+          // If verification endpoint unreachable, allow in dev but block in production
+          if (process.env.NODE_ENV === 'production') {
+            return error('فشل التحقق الأمني');
+          }
+        }
+      } else {
+        // Stateless math captcha — require and verify
+        if (!captchaId || captchaAnswer === undefined) {
+          return error('يرجى إكمال التحقق الأمني');
+        }
+        const valid = verifyCaptchaToken(captchaId, Number(captchaAnswer));
+        if (!valid) {
+          return error('إجابة التحقق غير صحيحة أو انتهت صلاحيتها');
         }
       }
     }

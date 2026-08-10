@@ -49,10 +49,19 @@ export async function getNextJournalNumber(companyId: string, dateOrYear: string
     if (error || data == null) throw error || new Error('RPC failed');
     return data as number;
   } catch {
-    const { data: max } = await s.from('journal_entries')
-      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-    const row = (max as unknown as NumberRow | null);
-    return ((row?.number) || 0) + 1;
+    // Fallback: per-year sequence table — matches the RPC semantics and the
+    // journal route's own legacy fallback (the old MAX(number)+1 fallback
+    // ignored the year, so sequences diverged after a year roll-over).
+    const { data: seq } = await s.from('journal_sequences')
+      .select('last_number').eq('company_id', companyId).eq('year', year).maybeSingle();
+    if (seq) {
+      const row = seq as unknown as SequenceRow;
+      const next = row.last_number + 1;
+      await s.from('journal_sequences').update({ last_number: next }).eq('company_id', companyId).eq('year', year);
+      return next;
+    }
+    await s.from('journal_sequences').insert({ company_id: companyId, year, last_number: 1 });
+    return 1;
   }
 }
 
@@ -123,20 +132,3 @@ export async function getNextQuotationNumber(companyId: string): Promise<number>
 
 type VoucherTable = 'voucher_receipts' | 'voucher_disbursements';
 
-export async function getNextNumberForTable(companyId: string, table: string): Promise<number> {
-  const s = sb();
-  try {
-    if (table === 'voucher_receipts' || table === 'voucher_disbursements') {
-      return getNextVoucherNumber(companyId, table as VoucherTable);
-    }
-    if (table === 'journal_entries') {
-      return getNextVoucherNumber(companyId, 'voucher_receipts' as VoucherTable);
-    }
-    const { data: max } = await s.from(table)
-      .select('number').eq('company_id', companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-    const row = (max as unknown as NumberRow | null);
-    return ((row?.number) || 0) + 1;
-  } catch {
-    return 1;
-  }
-}

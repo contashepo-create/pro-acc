@@ -148,6 +148,7 @@ export default function InvoicesPage() {
           dueDate: form.due_date || form.date,
           items: validItems.map((i: InvoiceItem) => ({
             description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, total: i.total,
+            discount: Number((i as any).discount) || 0,
             item_type: i.item_type || 'service', unit: i.unit || 'وحدة',
             save_to_inventory: i.save_to_inventory || false, item_code: i.item_code || undefined,
           })),

@@ -9,6 +9,8 @@
     "lint": "eslint",
     "test": "jest --verbose",
     "test:watch": "jest --watch",
+    "test:integration": "jest src/__tests__/comprehensive-integration.test.ts --runInBand",
+    "test:regression": "jest --runInBand",
     "migrate": "npx tsx src/migrations/run.ts",
     "seed": "npx tsx scripts/seed.ts"
   },
@@ -22,7 +24,7 @@
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
     "lucide-react": "^1.21.0",
-    "next": "16.2.9",
+    "next": "16.3.0",
     "nodemailer": "^9.0.3",
     "pg": "^8.22.0",
     "qrcode": "^1.5.4",

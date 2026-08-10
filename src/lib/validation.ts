@@ -2,6 +2,31 @@ import { z } from 'zod';
 
 const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
+// --------------- Password policy (shared) ---------------
+
+const COMMON_PASSWORDS = new Set([
+  'password', 'password1', 'p@ssw0rd', '123456', '1234567', '12345678',
+  '123456789', '1234567890', 'qwerty', 'qwerty123', 'abc123', '111111',
+  'letmein', 'admin123', 'iloveyou', 'welcome', 'monkey', 'dragon',
+  'كلمةالمرور', 'كلمةسر', 'كلمةسر123',
+]);
+
+export function isCommonPassword(password: string): boolean {
+  return COMMON_PASSWORDS.has(password.toLowerCase());
+}
+
+/**
+ * Central password policy for account-creation/change flows.
+ * NOTE: loginSchema intentionally stays permissive (min 6) so existing
+ * users with legacy 6-char passwords are not locked out at sign-in.
+ */
+export const passwordPolicy = z.string()
+  .min(8, 'كلمة المرور يجب أن تكون 8 أحرف على الأقل')
+  .max(128, 'كلمة المرور طويلة جداً')
+  .refine((p) => !isCommonPassword(p), {
+    message: 'كلمة المرور شائعة جداً، استخدم كلمة أكثر قوة',
+  });
+
 function isValidDateString(val: string): boolean {
   if (!dateRegex.test(val)) return false;
   const d = new Date(val + 'T00:00:00');
@@ -20,8 +45,8 @@ export const loginSchema = z.object({
 export const registerSchema = z.object({
   companyName: z.string().min(1, 'اسم الشركة مطلوب').max(200),
   name: z.string().min(1, 'الاسم مطلوب').max(100),
-  email: z.string().email('البريد الإلكتروني غير صالح'),
-  password: z.string().min(6, 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'),
+  email: z.string().email('البريد الإلكتروني غير صالح').max(254),
+  password: passwordPolicy,
   phone: z.string().optional(),
 });
 
@@ -31,7 +56,7 @@ export const forgotPasswordSchema = z.object({
 
 export const resetPasswordSchema = z.object({
   token: z.string().min(1, 'الرمز مطلوب'),
-  password: z.string().min(6, 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'),
+  password: passwordPolicy,
 });
 
 // --------------- Admin ---------------
@@ -74,6 +99,20 @@ export const accountSchema = z.object({
   currency: z.string().optional(),
 }).strict();
 
+/**
+ * PUT /api/accounts/[id] — partial update.
+ * Unknown legacy keys from the edit form (type, parentId, ...) are stripped,
+ * never applied: the account type must never change after creation, and
+ * parent reassignment goes through a dedicated flow to avoid cycles.
+ */
+export const accountUpdateSchema = z.object({
+  code: z.string().regex(/^\d{4}$/, 'رمز الحساب يجب أن يكون 4 أرقام').optional(),
+  name: z.string().min(1, 'اسم الحساب مطلوب').max(200).optional(),
+  nameEn: z.string().max(200).nullable().optional(),
+  is_active: z.boolean().optional(),
+  isActive: z.boolean().optional(),
+});
+
 // --------------- Journal Entry ---------------
 
 export const journalEntryLineSchema = z.object({
@@ -84,6 +123,10 @@ export const journalEntryLineSchema = z.object({
 }).refine(
   (line) => line.debit > 0 || line.credit > 0,
   { message: 'يجب إدخال مبلغ المدين أو الدائن' }
+).refine(
+  // Accounting rule: a journal line is either debit OR credit, never both.
+  (line) => !(line.debit > 0 && line.credit > 0),
+  { message: 'السطر الواحد لا يمكن أن يكون مديناً ودائناً معاً' }
 );
 
 export const journalEntrySchema = z.object({
@@ -111,6 +154,7 @@ export const invoiceItemSchema = z.object({
   description: z.string().min(1, 'البيان مطلوب'),
   quantity: z.number().positive('الكمية يجب أن تكون أكبر من صفر'),
   unitPrice: z.number().min(0, 'السعر لا يمكن أن يكون سالباً'),
+  discount: z.number().min(0, 'الخصم لا يمكن أن يكون سالباً').optional().default(0),
   total: z.number().optional(),
   item_type: z.enum(['service', 'product', 'inventory']).optional().default('service'),
   inventory_item_id: z.string().uuid().optional().nullable(),

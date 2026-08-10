@@ -1,9 +1,10 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
-import { getNextVoucherNumber } from '@/lib/numbering';
+import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
+import { insertJournalLines } from '@/lib/journal-utils';
 import { generateId } from '@/lib/utils';
 
 const sb = () => getSupabase();
@@ -14,7 +15,7 @@ const sb = () => getSupabase();
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'invoices', 'read');
     const s = sb();
     const url = request.nextUrl;
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
@@ -57,7 +58,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'invoices', 'create');
     const s = sb();
 
     // التحقق من حدود باقة الفواتير للشركة
@@ -89,8 +90,31 @@ export async function POST(request: NextRequest) {
     const parsed = invoiceSchema.safeParse(bodyToValidate);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { clientId, projectId, date, dueDate, items, subtotal, vatRate, vatAmount, total, notes } = parsed.data;
+    const { clientId, projectId, date, dueDate, items, vatRate, notes, vatEnabled } = parsed.data;
     const year = date.substring(0, 4);
+
+    // TENANT CHECKS: client (and optional project) must belong to this company
+    const { data: contact } = await s.from('contacts').select('id')
+      .eq('id', clientId).eq('company_id', auth.companyId).maybeSingle();
+    if (!contact) return error('العميل غير موجود', 404);
+    if (projectId) {
+      const { data: project } = await s.from('projects').select('id')
+        .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+      if (!project) return error('المشروع غير موجود', 404);
+    }
+
+    // ACCOUNTING INTEGRITY: all amounts recomputed server-side. Client-sent
+    // subtotal/vatAmount/total are ignored (UI hints only) — trusting them
+    // previously allowed VAT-understated invoices and forged ZATCA totals.
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const computedItems = items.map((it) => {
+      const gross = round2(it.quantity * it.unitPrice);
+      const discount = Math.min(round2(it.discount || 0), gross);
+      return { ...it, discount, total: round2(gross - discount) };
+    });
+    const subtotal = round2(computedItems.reduce((sum, it) => sum + it.total, 0));
+    const computedVat = vatEnabled === false ? 0 : round2(subtotal * vatRate);
+    const computedTotal = round2(subtotal + computedVat);
 
     // توليد الرقم التسلسلي للفاتورة
     let number: number;
@@ -114,9 +138,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const computedVat = vatAmount ?? subtotal * vatRate;
-    const computedTotal = total ?? subtotal + computedVat;
-
     // حساب الحالة والمدفوع بناء على التحصيل النقدي المباشر
     const finalPaidAmount = collectedAmount > 0 ? Math.min(collectedAmount, computedTotal) : 0;
     const finalStatus = finalPaidAmount === 0 ? 'unpaid' : (finalPaidAmount >= computedTotal ? 'paid' : 'partial');
@@ -124,6 +145,17 @@ export async function POST(request: NextRequest) {
     let invoiceId: string | null = null;
     let journalEntryId: string | null = null;
     let voucherReceiptId: string | null = null;
+
+    // Pre-validate the collection bank/safe BEFORE creating anything —
+    // an invalid/foreign id must 400 here, not trigger a rollback later.
+    let collectionBankSafe: { id: string; account_id: string | null } | null = null;
+    if (finalPaidAmount > 0 && bankSafeId) {
+      const { data: bs } = await s.from('banks_safes')
+        .select('id, account_id')
+        .eq('id', bankSafeId).eq('company_id', auth.companyId).maybeSingle();
+      if (!bs) return error('الخزينة/البنك المحدد غير موجود');
+      collectionBankSafe = bs as { id: string; account_id: string | null };
+    }
 
     try {
       // 1. إنشاء الفاتورة
@@ -150,15 +182,14 @@ export async function POST(request: NextRequest) {
       if (invErr) throw invErr;
       invoiceId = invoiceRes.id;
 
-      // 2. إدخال البنود
-      for (const item of items) {
-        const itemTotal = item.total ?? item.quantity * (item as any).unit_price;
+      // 2. إدخال البنود (بقيم محسوبة خادمياً شاملة الخصم)
+      for (const item of computedItems) {
         const { error: itemErr } = await s.from('invoice_items').insert({
-          invoice_id: invoiceId, 
-          description: item.description, 
+          invoice_id: invoiceId,
+          description: item.description,
           quantity: item.quantity,
-          unit_price: item.unitPrice, 
-          total: itemTotal,
+          unit_price: item.unitPrice,
+          total: item.total,
         });
         if (itemErr) throw itemErr;
       }
@@ -173,10 +204,13 @@ export async function POST(request: NextRequest) {
       }
 
       // 4. إنشاء قيد اليومية العام للفاتورة
+      // Journal entries get their OWN sequence — previously the invoice
+      // number was reused, colliding with the manual journal sequence.
+      const journalNumber = await getNextJournalNumber(auth.companyId, date);
       const { data: jeRes, error: jeErr } = await s.from('journal_entries')
         .insert({
-          company_id: auth.companyId, 
-          number, 
+          company_id: auth.companyId,
+          number: journalNumber,
           date, 
           type: 'general',
           description: `فاتورة مبيعات رقم ${number}`, 
@@ -191,18 +225,16 @@ export async function POST(request: NextRequest) {
       // 5. بناء سطور القيد المحاسبي المتزن شامل البيع المباشر أو التحصيل الجزئي المسبق (Stripe & ERP Standard T-Account Entry)
       const journalLines: any[] = [];
 
-      // إذا وُجد تحصيل نقدي فوري مسبق
-      if (finalPaidAmount > 0 && bankSafeId) {
-        const { data: bankSafe } = await s.from('banks_safes').select('account_id').eq('id', bankSafeId).maybeSingle();
-        if (bankSafe?.account_id) {
+      // إذا وُجد تحصيل نقدي فوري مسبق (تم التحقق من انتمائه للشركة قبل الإنشاء)
+      if (finalPaidAmount > 0 && bankSafeId && collectionBankSafe) {
+        if (collectionBankSafe.account_id) {
           // مدين 1: البنك/الخزينة المودع بها المبلغ
-          journalLines.push({ 
-            journal_entry_id: journalEntryId, 
-            account_id: bankSafe.account_id, 
-            account_code: '1120', 
-            debit: finalPaidAmount, 
-            credit: 0, 
-            description: `تحصيل مالي فوري للفاتورة رقم ${number}` 
+          journalLines.push({
+            journal_entry_id: journalEntryId,
+            account_id: collectionBankSafe.account_id,
+            debit: finalPaidAmount,
+            credit: 0,
+            description: `تحصيل مالي فوري للفاتورة رقم ${number}`
           });
 
           // إنشاء سند قبض (Voucher Receipt) رسمي مرتبط في السوبابيز
@@ -229,40 +261,38 @@ export async function POST(request: NextRequest) {
       const remainingReceivable = computedTotal - finalPaidAmount;
       if (remainingReceivable > 0) {
         // مدين 2: ذمم العملاء المدينة (المتبقي الآجل)
-        journalLines.push({ 
-          journal_entry_id: journalEntryId, 
-          account_id: arAccount.id, 
-          account_code: '1130', 
-          debit: remainingReceivable, 
-          credit: 0, 
-          description: `المتبقي الآجل للفاتورة رقم ${number}` 
+        journalLines.push({
+          journal_entry_id: journalEntryId,
+          account_id: arAccount.id,
+          debit: remainingReceivable,
+          credit: 0,
+          description: `المتبقي الآجل للفاتورة رقم ${number}`
         });
       }
 
       // دائن 1: إيرادات مقاولات (قيمة المبيعات قبل الضريبة)
-      journalLines.push({ 
-        journal_entry_id: journalEntryId, 
-        account_id: revenueAccount.id, 
-        account_code: '4100', 
-        debit: 0, 
-        credit: subtotal, 
-        description: `إيراد فاتورة مبيعات رقم ${number}` 
+      journalLines.push({
+        journal_entry_id: journalEntryId,
+        account_id: revenueAccount.id,
+        debit: 0,
+        credit: subtotal,
+        description: `إيراد فاتورة مبيعات رقم ${number}`
       });
 
       // دائن 2: ضريبة المبيعات المضافة 15% (إن وُجدت)
       if (computedVat > 0 && vatAccount) {
-        journalLines.push({ 
-          journal_entry_id: journalEntryId, 
-          account_id: vatAccount.id, 
-          account_code: '2120', 
-          debit: 0, 
-          credit: computedVat, 
-          description: `ضريبة فاتورة رقم ${number}` 
+        journalLines.push({
+          journal_entry_id: journalEntryId,
+          account_id: vatAccount.id,
+          debit: 0,
+          credit: computedVat,
+          description: `ضريبة فاتورة رقم ${number}`
         });
       }
 
-      // إدراج السطور وترحيل القيد للدفاتر
-      const { error: linesErr } = await s.from('journal_lines').insert(journalLines);
+      // إدراج السطور وترحيل القيد للدفاتر — عبر insertJournalLines التي تفرض
+      // company_id للسطور وتحلّل كود/اسم الحساب ضمن الشركة نفسها فقط
+      const { error: linesErr } = await insertJournalLines(auth.companyId, journalLines);
       if (linesErr) throw linesErr;
 
       // ربط القيد والتحصيل بالفاتورة

@@ -12,16 +12,15 @@ const sb = () => getSupabase();
 export async function POST(request: NextRequest) {
   try {
     const s = sb();
-    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
-      ? process.env.TELEGRAM_BOT_TOKEN 
-      : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
+    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
+      ? process.env.TELEGRAM_BOT_TOKEN
+      : '';
 
     // SECURITY CHECK: التحقق الصارم من أن الطلب مرسل فعلياً من خوادم تيليجرام الرسمية وليس من مخترق أو محاكي خارجي
     const secretToken = request.headers.get('x-telegram-bot-api-secret-token');
-    const crypto = require('crypto');
-    const expectedSecretToken = crypto.createHash('sha256').update(botToken + 'pro-acc-secure-salt').digest('hex');
+    const expectedSecretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
 
-    if (secretToken !== expectedSecretToken) {
+    if (!expectedSecretToken || secretToken !== expectedSecretToken) {
       console.warn('[Telegram Webhook Bypass Attack Blocked]: Missing or invalid secret token header.');
       return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
     }
@@ -225,9 +224,9 @@ export async function POST(request: NextRequest) {
  * إبلاغ خوادم تليجرام بإلغاء مؤشر التحميل على العميل
  */
 async function answerCallback(callbackQueryId: string, text: string, showAlert = false) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
-    ? process.env.TELEGRAM_BOT_TOKEN 
-    : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
+  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
+    ? process.env.TELEGRAM_BOT_TOKEN
+    : '';
   if (!botToken) return;
 
   try {

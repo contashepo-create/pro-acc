@@ -2,17 +2,9 @@ function clean(s: string): string {
   return (s || '').replace(/^\uFEFF/, '').trim();
 }
 
-/**
- * دالة جلب توكن البوت مع حماية التراجع التلقائي (Secure Fallback)
- * في حال وجود خلل في تعيين المتغير في فيرسال أو تعبئته التلقائية بـ Stripe Key (sk_live)
- * سيقوم النظام تلقائياً باستخدام التوكن الصحيح للبوت الخاص بك لضمان استمرارية الخدمة بنسبة 100%
- */
+/** Returns the configured Telegram bot token without embedding a credential in source. */
 export function getBotToken(): string {
-  const token = clean(process.env.TELEGRAM_BOT_TOKEN || '');
-  if (!token || token.startsWith('sk_') || token.trim() === '') {
-    return '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
-  }
-  return token;
+  return clean(process.env.TELEGRAM_BOT_TOKEN || '');
 }
 
 const BOT_TOKEN = getBotToken();

@@ -5,7 +5,7 @@ import { createHmac } from 'crypto';
 
 const sb = () => getSupabase();
 
-const BACKUP_SECRET = process.env.TOKEN_SECRET || 'backup-secret';
+const BACKUP_SECRET = process.env.BACKUP_SECRET || process.env.TOKEN_SECRET || 'backup-secret';
 
 export async function POST(request: NextRequest) {
   try {

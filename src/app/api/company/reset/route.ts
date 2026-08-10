@@ -32,9 +32,9 @@ export async function POST(request: NextRequest) {
       return error('يجب تفعيل وربط بوت تيليجرام أولاً وحفظ معرف الدردشة (Chat ID) لتأمين عملية تصفير البيانات من الاختراق', 400);
     }
 
-    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_') 
-      ? process.env.TELEGRAM_BOT_TOKEN 
-      : '8946794048:AAEoxOAsWWFSNKxpawtwcpvo2nIy0Pf6N9I';
+    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
+      ? process.env.TELEGRAM_BOT_TOKEN
+      : '';
 
     // ----------------------------------------------------
     // الخطوة 1: طلب تصفير البيانات وإرسال إشعار تليجرام للموافقة

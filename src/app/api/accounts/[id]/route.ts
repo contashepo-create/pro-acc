@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
-import type { } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { accountUpdateSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
@@ -10,7 +10,7 @@ export async function GET(
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'accounts', 'read');
     const { id } = await paramsPromise;
     const s = sb();
 
@@ -43,7 +43,12 @@ export async function PUT(
     const { id } = await paramsPromise;
     const s = sb();
 
-    const body = await parseBody<{ code?: string; name?: string; is_active?: boolean }>(request);
+    const body = await parseBody(request);
+    const parsed = accountUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return error(parsed.error.issues[0].message);
+    }
+    const fields = parsed.data;
 
     const { data: existing } = await s.from('accounts')
       .select('id')
@@ -52,14 +57,11 @@ export async function PUT(
       .maybeSingle();
     if (!existing) return notFound();
 
-    if (body.code) {
-      if (!/^\d{4}$/.test(body.code)) {
-        return error('رمز الحساب يجب أن يكون 4 أرقام');
-      }
+    if (fields.code) {
       const { data: dup } = await s.from('accounts')
         .select('id')
         .eq('company_id', auth.companyId)
-        .eq('code', body.code)
+        .eq('code', fields.code)
         .neq('id', id)
         .maybeSingle();
       if (dup) {
@@ -67,10 +69,12 @@ export async function PUT(
       }
     }
 
+    const isActive = fields.is_active ?? fields.isActive;
     const updateData: Record<string, any> = { updated_at: new Date().toISOString() };
-    if (body.code !== undefined) updateData.code = body.code;
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.is_active !== undefined) updateData.is_active = body.is_active;
+    if (fields.code !== undefined) updateData.code = fields.code;
+    if (fields.name !== undefined) updateData.name = fields.name;
+    if (fields.nameEn !== undefined) updateData.name_en = fields.nameEn;
+    if (isActive !== undefined) updateData.is_active = isActive;
 
     const { data: updated, error: updateError } = await s.from('accounts')
       .update(updateData)
@@ -112,19 +116,37 @@ export async function DELETE(
       return error('لا يمكن حذف حساب له حسابات فرعية. قم بنقل أو حذف الحسابات الفرعية أولاً');
     }
 
-    const { data: jes } = await s.from('journal_entries')
+    // Journal usage check — journal_lines is company-scoped, so query it
+    // directly. The previous two-step (all journal_entries ids, then
+    // `.in(journal_entry_id, ids)`) silently missed usage once the company
+    // passed Supabase's 1000-row default limit on journal_entries.
+    const { data: lines } = await s.from('journal_lines')
       .select('id')
-      .eq('company_id', auth.companyId);
-    const jeIds = (jes || []).map((je: any) => je.id);
-    if (jeIds.length > 0) {
-      const { data: lines } = await s.from('journal_lines')
-        .select('id')
-        .eq('account_code', account.code)
-        .in('journal_entry_id', jeIds)
-        .limit(1);
-      if (lines && lines.length > 0) {
-        return error('لا يمكن حذف حساب له قيود محاسبية. قم بإلغاء تنشيط الحساب بدلاً من حذفه');
-      }
+      .eq('company_id', auth.companyId)
+      .eq('account_code', account.code)
+      .limit(1);
+    if (lines && lines.length > 0) {
+      return error('لا يمكن حذف حساب له قيود محاسبية. قم بإلغاء تنشيط الحساب بدلاً من حذفه');
+    }
+
+    // Operational linkage: a bank/safe or fixed asset pointing at this account
+    // would be orphaned by the delete.
+    const { data: linkedBanks } = await s.from('banks_safes')
+      .select('id')
+      .eq('company_id', auth.companyId)
+      .eq('account_id', id)
+      .limit(1);
+    if (linkedBanks && linkedBanks.length > 0) {
+      return error('لا يمكن حذف حساب مرتبط بخزينة أو بنك. افصل الارتباط أولاً');
+    }
+
+    const { data: linkedAssets } = await s.from('fixed_assets')
+      .select('id')
+      .eq('company_id', auth.companyId)
+      .eq('asset_account_id', id)
+      .limit(1);
+    if (linkedAssets && linkedAssets.length > 0) {
+      return error('لا يمكن حذف حساب مرتبط بأصل ثابت. افصل الارتباط أولاً');
     }
 
     const { error: deleteError } = await s.from('accounts')

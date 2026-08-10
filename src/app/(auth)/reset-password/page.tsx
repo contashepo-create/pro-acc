@@ -26,7 +26,7 @@ function ResetPasswordForm() {
     e.preventDefault();
     setError('');
     if (!token) { setError('رابط إعادة التعيين غير صالح'); return; }
-    if (!password || password.length < 6) { setError('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+    if (!password || password.length < 8) { setError('كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return; }
     if (password !== confirmPassword) { setError('كلمة المرور غير متطابقة'); return; }
 
     setLoading(true);
