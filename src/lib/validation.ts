@@ -123,6 +123,10 @@ export const journalEntryLineSchema = z.object({
 }).refine(
   (line) => line.debit > 0 || line.credit > 0,
   { message: 'يجب إدخال مبلغ المدين أو الدائن' }
+).refine(
+  // Accounting rule: a journal line is either debit OR credit, never both.
+  (line) => !(line.debit > 0 && line.credit > 0),
+  { message: 'السطر الواحد لا يمكن أن يكون مديناً ودائناً معاً' }
 );
 
 export const journalEntrySchema = z.object({

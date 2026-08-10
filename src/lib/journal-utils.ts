@@ -29,14 +29,26 @@ export async function insertJournalLines(
   const s = sb();
 
   // جلب بيانات الحسابات لجميع السطور دفعة واحدة
+  // Company scoping is mandatory: never resolve account metadata cross-tenant.
   const accountIds = [...new Set(lines.map(l => l.account_id))];
   const { data: accounts, error: accErr } = await s.from('accounts')
     .select('id, code, name')
-    .in('id', accountIds);
+    .in('id', accountIds)
+    .eq('company_id', companyId);
 
   if (accErr) return { error: accErr };
 
   const accMap = new Map((accounts || []).map((a: any) => [a.id, a]));
+
+  // ACCOUNTING INTEGRITY: a line whose account cannot be resolved must fail
+  // loudly — previously it was silently written with code '0000' / 'حساب غير
+  // معروف', producing malformed ledger lines that corrupt reports.
+  const unresolved = lines.filter(l => !accMap.has(l.account_id));
+  if (unresolved.length > 0) {
+    return {
+      error: new Error(`تعذر العثور على ${unresolved.length} حساب للقيد — تحقق من الحسابات المختارة`),
+    };
+  }
 
   // بناء السطور بالحقول المطلوبة
   const linesToInsert = lines.map(line => {
@@ -45,8 +57,8 @@ export async function insertJournalLines(
       company_id: companyId,
       journal_entry_id: line.journal_entry_id,
       account_id: line.account_id,
-      account_code: acc?.code || '0000',
-      account_name: acc?.name || 'حساب غير معروف',
+      account_code: acc?.code,
+      account_name: acc?.name,
       debit: line.debit || 0,
       credit: line.credit || 0,
       description: line.description || null,
