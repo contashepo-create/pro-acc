@@ -1,0 +1,1 @@
+[IO.File]::WriteAllText("$PWD\all-in-one.patch", (Get-Clipboard -Raw), [Text.UTF8Encoding]::new($false))
