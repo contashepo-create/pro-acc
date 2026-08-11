@@ -8,10 +8,18 @@ const sb = () => getSupabase();
 export async function GET(request: NextRequest) {
   try {
     const token = extractToken(request);
-    if (!token) return unauthorized();
+    if (!token) {
+      // No token at all → user simply isn't logged in; expected on public pages.
+      return unauthorized();
+    }
 
     const payload = verifyToken(token);
-    if (!payload) return unauthorized();
+    if (!payload) {
+      // Token present but rejected: wrong TOKEN_SECRET between deployments,
+      // expired (7 days), or tampered. Log so a flood of 401s is diagnosable.
+      console.warn('[auth/me] 401: token rejected — تحقق من ثبات TOKEN_SECRET بين عمليات النشر أو انتهاء صلاحية التوكن (7 أيام)');
+      return unauthorized();
+    }
 
     const s = sb();
 
