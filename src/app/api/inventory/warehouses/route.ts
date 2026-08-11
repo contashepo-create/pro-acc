@@ -1,12 +1,13 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { warehouseSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'warehouses', 'read');
     const s = sb();
 
     const { data: warehouses } = await s.from('warehouses')
@@ -22,11 +23,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'warehouses', 'create');
     const data = await parseBody(req);
-    const { name, location } = data;
 
-    if (!name) return error('name is required');
+    const parsed = warehouseSchema.safeParse(data);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { name, location } = parsed.data;
 
     const s = sb();
     const { data: result, error: insertError } = await s.from('warehouses')

@@ -23,8 +23,19 @@ export async function GET(request: NextRequest) {
     const userId = url.searchParams.get('userId');
 
     if (userId) {
+      // TENANT: المستخدم المطلوب يجب أن ينتمي لنفس الشركة قبل كشف صلاحياته
+      const s = sb();
+      const { data: target } = await s.from('users')
+        .select('id').eq('id', userId).eq('company_id', auth.companyId).maybeSingle();
+      if (!target) return error('المستخدم غير موجود', 404);
+
       const perms = await getUserPermissions(userId, auth.companyId);
       return success(perms);
+    }
+
+    // قائمة كل مستخدمي الشركة وصلاحياتهم — يطّلع عليها المدير فأعلى فقط
+    if (auth.role !== 'admin' && auth.role !== 'manager') {
+      return error('ليس لديك صلاحية لعرض صلاحيات المستخدمين', 403);
     }
 
     const users = await getCompanyUsersWithPermissions(auth.companyId);
@@ -61,10 +72,24 @@ export async function POST(request: NextRequest) {
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
-    if (!targetUser) return error('المستخدم غير موجود');
+    if (!targetUser) return error('المستخدم غير موجود', 404);
 
     // 🛑 الحالة 1: حفظ مجمع ودفعي (Batch Save) - طلب شبكي واحد وصاروخي للسرعة الفائقة 🛑
     if (data.batch && Array.isArray(data.permissions)) {
+      // التحقق من صحة الوحدات والإجراءات لمنع تخزين قيم عشوائية
+      const validModules = new Set<string>(Object.values(MODULES) as any);
+      const validActions = new Set<string>([...(Object.values(ACTIONS) as any), '*']);
+      for (const p of data.permissions) {
+        if (!p.module || !validModules.has(p.module)) {
+          return error(`وحدة غير صالحة: ${p.module || '(فارغة)'}`);
+        }
+        for (const a of (p.actions || [])) {
+          if (!validActions.has(a)) {
+            return error(`إجراء غير صالح: ${a}`);
+          }
+        }
+      }
+
       // 1. مسح جميع صلاحيات المستخدم القديمة دفعة واحدة
       await s.from('user_permissions')
         .delete()

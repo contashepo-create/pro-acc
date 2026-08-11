@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -32,7 +32,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireManagerOrAbove(request);
+    const auth = await requireModulePermission(request, 'warehouses', 'update');
     const { id } = await params;
     const s = sb();
     const body = await request.json();
@@ -45,14 +45,18 @@ export async function PUT(
 
     if (!existing) return notFound();
 
+    if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200)) {
+      return error('اسم المستودع غير صالح');
+    }
     const updateData: any = {};
-    if (body.name !== undefined) updateData.name = body.name;
+    if (body.name !== undefined) updateData.name = body.name.trim();
     if (body.location !== undefined) updateData.location = body.location;
     if (body.is_active !== undefined) updateData.is_active = body.is_active;
 
     const { data: updated, error: updateErr } = await s.from('warehouses')
       .update(updateData)
       .eq('id', id)
+      .eq('company_id', auth.companyId)
       .select('*')
       .single();
 
@@ -91,7 +95,7 @@ export async function DELETE(
       return error('لا يمكن حذف المستودع لأنه يحتوي على أصناف');
     }
 
-    await s.from('warehouses').delete().eq('id', id);
+    await s.from('warehouses').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ deleted: true });
   } catch (err) {

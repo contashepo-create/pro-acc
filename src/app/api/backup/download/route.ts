@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { requireAdmin, handleApiError } from '@/lib/api-helpers';
 import { createHmac } from 'crypto';
 
 const sb = () => getSupabase();
@@ -9,7 +9,8 @@ const BACKUP_SECRET = process.env.BACKUP_SECRET || process.env.TOKEN_SECRET || '
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    // SECURITY: تصدير كامل بيانات الشركة (مالية + موظفون + رواتب) — مدير النظام فقط
+    const auth = await requireAdmin(request);
     const s = sb();
     const url = new URL(request.url);
     const format = url.searchParams.get('format') || 'json'; // json, csv, excel

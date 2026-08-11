@@ -42,10 +42,15 @@ export default function InventoryPage() {
       const url = editingItem ? `/api/inventory/${editingItem.id}` : '/api/inventory';
       const method = editingItem ? 'PUT' : 'POST';
       
+      // التعديل: بيانات وصفية فقط — الكمية/السعر يتحركان بالحركات المخزنية حصراً
+      const payload = editingItem
+        ? { name: form.name, unit: form.unit, category: form.category || null, warehouse_id: form.warehouse_id || undefined }
+        : { code: form.code, name: form.name, unit: form.unit, warehouse_id: form.warehouse_id, category: form.category || null };
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (json.success) {

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError, error, success } from '@/lib/api-helpers';
+import { requireAdmin, handleApiError, error, success } from '@/lib/api-helpers';
 import { createHmac } from 'crypto';
 
 const sb = () => getSupabase();
@@ -9,7 +9,8 @@ const BACKUP_SECRET = process.env.BACKUP_SECRET || process.env.TOKEN_SECRET || '
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    // SECURITY: استعادة/استبدال بيانات الشركة — مدير النظام فقط
+    const auth = await requireAdmin(request);
     const s = sb();
 
     const body = await request.json();

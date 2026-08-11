@@ -179,30 +179,10 @@ export async function POST(req: NextRequest) {
         if (itemErr) throw itemErr;
       }
 
-      // تحديث المخزون بالمتوسط المرجح عند الارتباط بأمر شراء
-      // (السلوك الحالي مبني على مطابقة code = description — قيد موثق،
-      // التوحيد الكامل ضمن مراجعة قسم المخزون)
-      if (purchase_order_id) {
-        for (const item of computedItems) {
-          const { data: invItem } = await s.from('inventory_items')
-            .select('id, quantity, unit_price')
-            .eq('company_id', auth.companyId)
-            .eq('code', item.description)
-            .maybeSingle();
-          if (invItem) {
-            const curQty = parseFloat(invItem.quantity) || 0;
-            const curPrice = parseFloat(invItem.unit_price) || 0;
-            const newQty = curQty + item.quantity;
-            const newPrice = curQty === 0
-              ? item.unit_price
-              : ((curQty * curPrice) + (item.quantity * item.unit_price)) / newQty;
-            await s.from('inventory_items')
-              .update({ quantity: newQty, unit_price: newPrice })
-              .eq('id', invItem.id)
-              .eq('company_id', auth.companyId);
-          }
-        }
-      }
+      // توحيد كاتب المخزون (القسم 7): المخزون يتحرك من «استلام أمر الشراء»
+      // فقط. سابقاً كانت الفاتورة المرتبطة بأمر شراء تضيف المخزون مرة أخرى —
+      // فلو استُلم الأمر ثم فُوتر تضاعفت الكمية. القيد المحاسبي أدناه يبقى هو
+      // الأثر المالي للفاتورة؛ الكمية أثرها في الاستلام.
 
       // الترحيل المحاسبي — فشل صريح عند غياب الحسابات بدل التجاهل الصامت
       const { data: invAcc } = await s.from('accounts').select('id')
@@ -229,7 +209,7 @@ export async function POST(req: NextRequest) {
       if (jeErr) throw jeErr;
       journalEntryId = je.id;
 
-      const journalLines = [
+      const journalLines: any[] = [
         { journal_entry_id: journalEntryId, account_id: invAcc.id, debit: subtotal, credit: 0, description: `مشتريات فاتورة رقم ${nextNum}` },
       ];
       if (taxAmount > 0) {
@@ -238,7 +218,7 @@ export async function POST(req: NextRequest) {
         if (!vatAcc) throw new Error('حساب ضريبة المشتريات (1180) مفقود — فعّل دليل الحسابات أولاً');
         journalLines.push({ journal_entry_id: journalEntryId, account_id: vatAcc.id, debit: taxAmount, credit: 0, description: `ضريبة مشتريات فاتورة رقم ${nextNum}` });
       }
-      journalLines.push({ journal_entry_id: journalEntryId, account_id: apAcc.id, debit: 0, credit: total, description: `ذمم موردين فاتورة رقم ${nextNum}` });
+      journalLines.push({ journal_entry_id: journalEntryId, account_id: apAcc.id, debit: 0, credit: total, contact_id: supplier_id, description: `ذمم موردين فاتورة رقم ${nextNum}` });
 
       const { error: linesErr } = await insertJournalLines(auth.companyId, journalLines);
       if (linesErr) throw linesErr;

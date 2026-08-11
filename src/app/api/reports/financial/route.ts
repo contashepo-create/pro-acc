@@ -26,8 +26,8 @@ export async function GET(req: NextRequest) {
       
     if (!accounts) return success({ accounts: [], total_debit: 0, total_credit: 0 });
 
-    // جلب القيود المحاسبية ضمن النطاق الزمني المحدد
-    let jeQuery = s.from('journal_entries').select('id').eq('company_id', auth.companyId);
+    // جلب القيود المحاسبية ضمن النطاق الزمني المحدد (تُستبعد الملغاة/المحذوفة ناعماً)
+    let jeQuery = s.from('journal_entries').select('id').eq('company_id', auth.companyId).is('deleted_at', null);
     if (from) jeQuery = jeQuery.gte('date', from);
     if (to) jeQuery = jeQuery.lte('date', to);
     const { data: jes } = await jeQuery;

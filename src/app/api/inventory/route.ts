@@ -1,12 +1,13 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { inventoryItemSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'inventory', 'read');
     const s = sb();
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
@@ -41,15 +42,23 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'inventory', 'create');
     const s = sb();
     const data = await parseBody(req);
-    const { code, name, unit, warehouse_id, category } = data;
-    if (!code || !name || !unit || !warehouse_id) return error('code, name, unit, warehouse_id are required');
+
+    const parsed = inventoryItemSchema.safeParse(data);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { code, name, unit, warehouse_id, category } = parsed.data;
+
+    // TENANT: المستودع المستضيف يجب أن ينتمي لهذه الشركة (كان يقبل مستودعاً أجنبياً)
+    const { data: warehouse } = await s.from('warehouses')
+      .select('id').eq('id', warehouse_id).eq('company_id', auth.companyId).maybeSingle();
+    if (!warehouse) return error('المستودع غير موجود', 404);
 
     const { data: existing } = await s.from('inventory_items').select('id').eq('company_id', auth.companyId).eq('code', code).maybeSingle();
     if (existing) return error('كود الصنف موجود مسبقاً');
 
+    // الرصيد يبدأ صفراً دائماً — يتحرك بالحركات المخزنية فقط
     const { data: result, error: insertError } = await s.from('inventory_items')
       .insert({ company_id: auth.companyId, code, name, unit, warehouse_id, category: category || null, quantity: 0, unit_price: 0, is_active: true })
       .select('*').single();

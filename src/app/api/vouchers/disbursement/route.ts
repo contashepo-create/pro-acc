@@ -1,17 +1,36 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, requireModulePermission, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireModulePermission, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber } from '@/lib/numbering';
+import { disbursementVoucherCreateSchema } from '@/lib/validation';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { requireApproval } from '@/lib/notifications';
 import { checkTransactionBeforeSave } from '@/lib/approval-helpers';
 import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
+import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations } from '@/lib/voucher-utils';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
 const sb = () => getSupabase();
 
 /**
+ * الحساب المدين المقابل لسند الصرف حسب النوع (حساب البنك دائماً دائن).
+ * القاعدة المحاسبية: الصرف يُنقص النقدية (دائن) ويُنقص الالتزام/يزيد الأصل (مدين).
+ */
+function disbursementDebitCode(type: string): string {
+  switch (type) {
+    case 'supplier': return ACCOUNT_CODES.ACCOUNTS_PAYABLE;        // سداد ذمم موردين
+    case 'employee_advance': return ACCOUNT_CODES.EMPLOYEE_ADVANCES; // سلفة موظف (أصل)
+    case 'subcontractor': return ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES; // سداد مقاول باطن
+    case 'client_refund': return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;  // رد مبلغ لعميل
+    case 'other':
+    default: return ACCOUNT_CODES.DIRECT_COSTS;                     // مصروف مباشر عام
+  }
+}
+
+/**
  * GET /api/vouchers/disbursement
+ * يعيد المفتاحين disbursements و vouchers (الصفحة تقرأ disbursements —
+ * كان يُعاد vouchers فقط فتظهر القائمة فارغة دائماً)
  */
 export async function GET(request: NextRequest) {
   try {
@@ -27,6 +46,7 @@ export async function GET(request: NextRequest) {
     const result = await s.from('voucher_disbursements')
       .select('*, contacts(name), employees(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
       .eq('company_id', auth.companyId)
+      .neq('status', 'cancelled')
       .gte('date', from || '1970-01-01')
       .lte('date', to || '2999-12-31')
       .or(disbType ? `disbursement_type.eq.${disbType}` : 'disbursement_type.neq.null')
@@ -42,6 +62,7 @@ export async function GET(request: NextRequest) {
       const fallbackResult = await s.from('voucher_disbursements')
         .select('*', { count: 'exact' })
         .eq('company_id', auth.companyId)
+        .neq('status', 'cancelled')
         .gte('date', from || '1970-01-01')
         .lte('date', to || '2999-12-31')
         .or(disbType ? `disbursement_type.eq.${disbType}` : 'disbursement_type.neq.null')
@@ -50,12 +71,13 @@ export async function GET(request: NextRequest) {
         .range(offset, offset + pageSize - 1);
 
       if (fallbackResult.error) throw fallbackResult.error;
-      
+
       data = fallbackResult.data;
       count = fallbackResult.count || 0;
     }
 
     return success({
+      disbursements: data || [],
       vouchers: data || [],
       total: count,
       page,
@@ -69,8 +91,13 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/vouchers/disbursement
- * إنشاء سند صرف جديد
- * FIXED: يدعم استقبال كلاً من camelCase و snake_case لتلافي خطأ "جميع الحقول المطلوبة يجب تعبئتها"
+ * FIXES الجوهرية:
+ * - اتجاه القيد كان معكوساً تماماً (البنك مدين +) — الصرف الآن: مدين المقابل /
+ *   دائن الخزينة. كل سند سابق كان ينفخ رصيد البنك دفترياً بدل إنقاصه.
+ * - الحساب المقابل كان يُمرَّر ككود ('2110') في خانة account_id (انهيار مؤكد
+ *   بعد إنفاذ insertJournalLines في القسم 3) — يُحلَّل الآن لمعرف حقيقي.
+ * - تحقق Zod + انتماء الأطراف للشركة + تخصيص اختياري على فواتير الشراء.
+ * - تدفق اعتماد التيليجرام (pending) محفوظ كما هو.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -78,157 +105,174 @@ export async function POST(request: NextRequest) {
     const s = sb();
     const body = await parseBody<any>(request);
 
-    const {
-      date,
-      disbursement_type,
-      disbursementType,
-      contact_id,
-      contactId,
-      employee_id,
-      employeeId,
-      amount,
-      bank_safe_id,
-      bankSafeId,
-      reason,
-    } = body;
+    // توافقية مزدوجة: camelCase → snake_case قبل التحقق
+    const normalized = {
+      date: body.date,
+      disbursement_type: body.disbursement_type || body.disbursementType,
+      contact_id: body.contact_id || body.contactId || null,
+      employee_id: body.employee_id || body.employeeId || null,
+      amount: typeof body.amount === 'string' ? parseFloat(body.amount) : body.amount,
+      bank_safe_id: body.bank_safe_id || body.bankSafeId,
+      reason: body.reason,
+      invoice_items: body.invoice_items || body.invoiceItems || undefined,
+    };
 
-    // توافقية مزدوجة للمتغيرات (Dual Compatibility)
-    const finalDisbType = disbursementType || disbursement_type;
-    const finalBankSafeId = bankSafeId || bank_safe_id;
-    const finalContactId = contactId || contact_id;
-    const finalEmployeeId = employeeId || employee_id;
+    const parsed = disbursementVoucherCreateSchema.safeParse(normalized);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    if (!date || !finalDisbType || !amount || !finalBankSafeId || !reason) {
-      return error('جميع الحقول المطلوبة يجب تعبئتها');
+    const { date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
+
+    // انتماء الأطراف للشركة (قبل أي كتابة)
+    if (contact_id) {
+      const { data: contact } = await s.from('contacts')
+        .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف المحدد غير موجود', 404);
+    }
+    if (employee_id) {
+      const { data: employee } = await s.from('employees')
+        .select('id').eq('id', employee_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!employee) return error('الموظف المحدد غير موجود', 404);
     }
 
-    // 1. التحقق من الموافقة المسبقة من التيليغرام
+    // 1. بوابة الاعتماد المسبق عبر التيليجرام (محفوظة كما هي)
     const bypassApproval = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
     if (!bypassApproval) {
       const tempTransactionId = crypto.randomUUID();
-      
+
       const approvalCheck = await checkTransactionBeforeSave(
         auth.companyId,
         auth.userId,
-        Number(amount),
+        amount,
         'voucher_disbursement',
         tempTransactionId,
         reason
       );
-      
+
       if (approvalCheck.blocked) {
-        // حفظ السند مسبقاً في قاعدة البيانات بحالة 'pending' ودون ترحيل القيد ليكون متاحاً للاعتماد
+        // حفظ السند بحالة 'pending' دون ترحيل قيد — يُرحَّل عند الاعتماد
         const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_disbursements');
         await s.from('voucher_disbursements').insert({
           id: tempTransactionId,
           company_id: auth.companyId,
           number: nextNumber,
           date,
-          disbursement_type: finalDisbType,
-          contact_id: finalContactId || null,
-          employee_id: finalEmployeeId || null,
-          amount: Number(amount),
-          bank_safe_id: finalBankSafeId,
+          disbursement_type,
+          contact_id: contact_id || null,
+          employee_id: employee_id || null,
+          amount,
+          bank_safe_id,
           reason,
           created_by: auth.userId,
           status: 'pending',
-          created_at: new Date().toISOString(),
         });
 
         return success({
           requiresApproval: true,
           blocked: true,
           message: approvalCheck.message,
-          transactionId: tempTransactionId
+          transactionId: tempTransactionId,
         });
       }
     }
 
-    // 2. التحقق من الرصيد
+    // 2. الخزينة + كفاية الرصيد (الصرف يُنقص النقدية — الفحص هنا صحيح)
     const { data: bankSafe } = await s.from('banks_safes')
       .select('account_id')
-      .eq('id', finalBankSafeId)
+      .eq('id', bank_safe_id)
       .eq('company_id', auth.companyId)
-      .single();
+      .maybeSingle();
 
-    if (!bankSafe) {
-      return error('البنك/الخزينة غير موجود');
-    }
+    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
 
     if (bankSafe.account_id) {
       const balance = await getAccountBalanceFromJournal(bankSafe.account_id, auth.companyId);
-      if (balance < Number(amount)) {
+      if (balance < amount) {
         return error(`الرصيد غير كافٍ. الرصيد الحالي: ${balance.toFixed(2)} ر.س`);
       }
     }
 
-    // 3. إنشاء سند الصرف
-    const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_disbursements');
-    const transactionId = crypto.randomUUID();
-
-    const { data: voucher, error: voucherError } = await s.from('voucher_disbursements')
-      .insert({
-        company_id: auth.companyId,
-        number: nextNumber,
-        date,
-        disbursement_type: finalDisbType,
-        contact_id: finalContactId || null,
-        employee_id: finalEmployeeId || null,
-        amount: Number(amount),
-        bank_safe_id: finalBankSafeId,
-        reason,
-        created_by: auth.userId,
-        status: 'approved',
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (voucherError) throw voucherError;
-
-    // 4. إنشاء القيد المحاسبي
-    const debitAccountId = bankSafe.account_id;
-    let creditAccountId: string = ACCOUNT_CODES.CASH;
-
-    if (finalDisbType === 'supplier') {
-      creditAccountId = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
-    } else if (finalDisbType === 'employee_advance') {
-      creditAccountId = ACCOUNT_CODES.EMPLOYEE_ADVANCES;
-    } else if (finalDisbType === 'subcontractor') {
-      creditAccountId = ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES;
+    const counterpartAccountId = await resolveAccountId(auth.companyId, disbursementDebitCode(disbursement_type));
+    if (!bankSafe.account_id || !counterpartAccountId) {
+      return error('الحسابات المحاسبية للسند غير مكتملة (حساب الخزينة أو الحساب المقابل مفقود) — راجع شجرة الحسابات', 400);
     }
 
-    const { error: journalError } = await createJournalEntry(
-      auth.companyId,
-      {
-        date,
-        type: 'general',
-        description: `سند صرف رقم ${nextNumber}: ${reason}`,
-        lines: [
-          {
-            account_id: debitAccountId,
-            debit: Number(amount),
-            credit: 0,
-            bank_safe_id: finalBankSafeId,
-          },
-          {
-            account_id: creditAccountId,
-            debit: 0,
-            credit: Number(amount),
-          },
-        ],
-        reference_type: 'voucher_disbursement',
-        reference_id: (voucher as any).id,
-        created_by: auth.userId,
+    // 3. الإنشاء مع تراجع آلي عند أي فشل
+    const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_disbursements');
+
+    let voucherId: string | null = null;
+    let journalEntryId: string | null = null;
+
+    try {
+      const { data: voucher, error: voucherError } = await s.from('voucher_disbursements')
+        .insert({
+          company_id: auth.companyId,
+          number: nextNumber,
+          date,
+          disbursement_type,
+          contact_id: contact_id || null,
+          employee_id: employee_id || null,
+          amount,
+          bank_safe_id,
+          reason,
+          created_by: auth.userId,
+          status: 'approved',
+        })
+        .select()
+        .single();
+      if (voucherError) throw voucherError;
+      voucherId = voucher.id;
+
+      // 4. القيد بالاتجاه الصحيح: مدين المقابل / دائن الخزينة (المال خارج)
+      const { journalId, error: journalError } = await createJournalEntry(
+        auth.companyId,
+        {
+          date,
+          type: 'general',
+          description: `سند صرف رقم ${nextNumber}: ${reason}`,
+          lines: [
+            { account_id: counterpartAccountId, debit: amount, credit: 0, contact_id: contact_id || null },
+            { account_id: bankSafe.account_id, debit: 0, credit: amount },
+          ],
+          reference_type: 'voucher_disbursement',
+          reference_id: voucher.id,
+          created_by: auth.userId,
+        }
+      );
+      if (journalError) throw journalError;
+      journalEntryId = journalId;
+
+      await s.from('voucher_disbursements')
+        .update({ journal_entry_id: journalEntryId })
+        .eq('id', voucherId);
+
+      // 5. تخصيص اختياري على فواتير المشتريات غير المسددة
+      if (invoice_items && invoice_items.length > 0) {
+        const { error: allocErr } = await applyInvoiceAllocations(
+          auth.companyId, 'disbursement', voucherId, journalEntryId, amount, invoice_items, contact_id || null
+        );
+        if (allocErr) throw new Error(allocErr);
       }
-    );
 
-    if (journalError) throw journalError;
+      // 6. إشعار التيليجرام (كما كان)
+      await requireApproval(auth.companyId, amount, 'voucher_disbursement', auth.userId, voucherId, reason);
 
-    // 5. إرسال إشعار التيليغرام (اختياري)
-    await requireApproval(auth.companyId, Number(amount), 'voucher_disbursement', auth.userId, (voucher as any).id, reason);
-
-    return success(voucher, 201);
+      return success({ ...voucher, journal_entry_id: journalEntryId }, 201);
+    } catch (txErr) {
+      console.error('Disbursement creation failed, rolling back:', txErr);
+      try {
+        if (journalEntryId) {
+          await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
+          await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);
+        }
+        if (voucherId) {
+          await revertInvoiceAllocations(auth.companyId, 'disbursement', voucherId);
+          await s.from('voucher_disbursements').delete().eq('id', voucherId).eq('company_id', auth.companyId);
+        }
+      } catch (rollbackErr) {
+        console.error('Disbursement rollback failed:', rollbackErr);
+      }
+      throw txErr;
+    }
   } catch (err) {
     return handleApiError(err);
   }

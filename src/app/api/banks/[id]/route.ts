@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
-import type { } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
 import { getNextJournalNumber } from '@/lib/numbering';
@@ -33,13 +32,14 @@ export async function GET(
 
     if (bank.account_id) {
       // الرصيد الحالي = كل القيود (افتتاحي + عمليات)
-      currentBalance = await getAccountBalanceFromJournal(bank.account_id);
-      
+      currentBalance = await getAccountBalanceFromJournal(bank.account_id, auth.companyId);
+
       // الرصيد الافتتاحي = قيود من نوع opening_balance فقط
       const { data: openingLines } = await s.from('journal_lines')
         .select('debit, credit, journal_entries!inner(type)')
-        .eq('account_id', bank.account_id);
-      
+        .eq('account_id', bank.account_id)
+        .eq('company_id', auth.companyId);
+
       if (openingLines) {
         openingBalance = (openingLines as any[])
           .filter((l: any) => l.journal_entries?.type === 'opening_balance')
@@ -49,7 +49,7 @@ export async function GET(
 
     // الرصيد الافتتاحي من عمود banks_safes (المحفوظ) له أولوية
     const savedOpeningBalance = parseFloat(bank.opening_balance) || 0;
-    
+
     return success({
       ...bank,
       account_code: bank.accounts?.code || null,
@@ -97,141 +97,87 @@ export async function PUT(
       if (updateError) throw updateError;
     }
 
-    // إذا تم تغيير الرصيد الافتتاحي، نحدّث القيد المحاسبي الافتتاحي
+    // إذا تم تغيير الرصيد الافتتاحي، نحدّث قيد الافتتاح الخاص بهذا البنك فقط
+    // (البحث السابق كان يلتقط "أحدث قيد افتتاحي بالشركة" — قيد بنكٍ آخر! —
+    // ويحذف سطر البنك فقط تاركاً سطر رأس المال → قيد غير متوازن)
     if (body.opening_balance !== undefined && (bankRes as any).account_id) {
       const newOpeningBalance = parseFloat(body.opening_balance) || 0;
       const oldOpeningBalance = parseFloat((bankRes as any).opening_balance) || 0;
       const accountId = (bankRes as any).account_id;
-      
+      const bankName = body.name || (bankRes as any).name;
+
       if (newOpeningBalance !== oldOpeningBalance) {
-        // البحث عن القيد الافتتاحي الموجود
-        const { data: existingJournalEntry } = await s.from('journal_entries')
-          .select('id, date')
+        // حساب رأس المال إلزامي لأي رصيد غير صفري — بلا مقابل لا قيد متوازن
+        const { data: capitalAccount } = await s.from('accounts')
+          .select('id, code, name')
           .eq('company_id', auth.companyId)
-          .eq('type', 'opening_balance')
-          .order('created_at', { ascending: false })
-          .limit(1)
+          .eq('code', '3100')
           .maybeSingle();
 
-        if (existingJournalEntry) {
-          // حذف السطور القديمة للقيد الافتتاحي لهذا الحساب
-          await s.from('journal_lines')
-            .delete()
-            .eq('journal_entry_id', (existingJournalEntry as any).id)
-            .eq('account_id', accountId);
+        if (newOpeningBalance !== 0 && !capitalAccount) {
+          return error('حساب رأس المال (3100) مفقود — لا يمكن ترحيل رصيد افتتاحي متوازن');
+        }
 
-          // إذا كان هناك حساب مقابل (رأس المال)، نحدّثه أيضاً
-          const { data: capitalAccount } = await s.from('accounts')
-            .select('id, code, name')
+        // قيد الافتتاح الخاص بهذا البنك تحديداً: نستدل عليه من سطور حسابه
+        const { data: ownLines } = await s.from('journal_lines')
+          .select('journal_entry_id')
+          .eq('account_id', accountId)
+          .eq('company_id', auth.companyId);
+        const ownJeIds = [...new Set((ownLines || []).map((l: any) => l.journal_entry_id))];
+
+        let openingEntryId: string | null = null;
+        if (ownJeIds.length > 0) {
+          const { data: obEntries } = await s.from('journal_entries')
+            .select('id')
             .eq('company_id', auth.companyId)
-            .eq('code', '3100')
-            .maybeSingle();
+            .eq('type', 'opening_balance')
+            .in('id', ownJeIds)
+            .limit(1);
+          openingEntryId = obEntries?.[0]?.id || null;
+        }
 
-          // إنشاء سطور جديدة
-          const lines: any[] = [];
-          
-          if (newOpeningBalance > 0) {
-            lines.push({
-              journal_entry_id: (existingJournalEntry as any).id,
-              account_id: accountId,
-              debit: newOpeningBalance,
-              credit: 0,
-              description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
-            });
-            if (capitalAccount) {
-              lines.push({
-                journal_entry_id: (existingJournalEntry as any).id,
-                account_id: capitalAccount.id,
-                debit: 0,
-                credit: newOpeningBalance,
-                description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
-              });
-            }
-          } else if (newOpeningBalance < 0) {
-            lines.push({
-              journal_entry_id: (existingJournalEntry as any).id,
-              account_id: accountId,
-              debit: 0,
-              credit: Math.abs(newOpeningBalance),
-              description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
-            });
-            if (capitalAccount) {
-              lines.push({
-                journal_entry_id: (existingJournalEntry as any).id,
-                account_id: capitalAccount.id,
-                debit: Math.abs(newOpeningBalance),
-                credit: 0,
-                description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
-              });
-            }
-          }
-
-          if (lines.length > 0) {
-            await insertJournalLines(auth.companyId, lines);
-          }
-        } else if (newOpeningBalance !== 0) {
-          // لا يوجد قيد افتتاحي، ننشئ واحداً
+        if (!openingEntryId && newOpeningBalance !== 0) {
+          // لا قيد افتتاحي لهذا البنك — ننشئ واحداً جديداً
           const jeNum = await getNextJournalNumber(auth.companyId, new Date().toISOString());
-          const { data: newEntry } = await s.from('journal_entries')
+          const { data: newEntry, error: newEntryErr } = await s.from('journal_entries')
             .insert({
               company_id: auth.companyId,
               number: jeNum,
               date: new Date().toISOString().split('T')[0],
               type: 'opening_balance',
-              description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+              description: `رصيد افتتاحي - ${bankName}`,
               created_by: auth.userId,
             })
             .select('id')
             .single();
+          if (newEntryErr) throw newEntryErr;
+          openingEntryId = newEntry.id;
+        }
 
-          if (newEntry) {
-            const { data: capitalAccount } = await s.from('accounts')
-              .select('id, code, name')
-              .eq('company_id', auth.companyId)
-              .eq('code', '3100')
-              .maybeSingle();
+        if (openingEntryId) {
+          // إعادة كتابة سطري الطرفين (بنك + رأس مال) — القيد يبقى متوازناً دائماً
+          const affectedAccountIds = capitalAccount ? [accountId, capitalAccount.id] : [accountId];
+          await s.from('journal_lines')
+            .delete()
+            .eq('journal_entry_id', openingEntryId)
+            .in('account_id', affectedAccountIds);
 
-            const lines: any[] = [];
-            
-            if (newOpeningBalance > 0) {
-              lines.push({
-                journal_entry_id: (newEntry as any).id,
-                account_id: accountId,
-                debit: newOpeningBalance,
-                credit: 0,
-                description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
-              });
-              if (capitalAccount) {
-                lines.push({
-                  journal_entry_id: (newEntry as any).id,
-                  account_id: capitalAccount.id,
-                  debit: 0,
-                  credit: newOpeningBalance,
-                  description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
-                });
-              }
-            } else {
-              lines.push({
-                journal_entry_id: (newEntry as any).id,
-                account_id: accountId,
-                debit: 0,
-                credit: Math.abs(newOpeningBalance),
-                description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
-              });
-              if (capitalAccount) {
-                lines.push({
-                  journal_entry_id: (newEntry as any).id,
-                  account_id: capitalAccount.id,
-                  debit: Math.abs(newOpeningBalance),
-                  credit: 0,
-                  description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
-                });
-              }
-            }
+          const lines: any[] = [];
+          if (newOpeningBalance > 0 && capitalAccount) {
+            lines.push(
+              { journal_entry_id: openingEntryId, account_id: accountId, debit: newOpeningBalance, credit: 0, description: `رصيد افتتاحي - ${bankName}` },
+              { journal_entry_id: openingEntryId, account_id: capitalAccount.id, debit: 0, credit: newOpeningBalance, description: `رصيد افتتاحي - ${bankName}` },
+            );
+          } else if (newOpeningBalance < 0 && capitalAccount) {
+            lines.push(
+              { journal_entry_id: openingEntryId, account_id: accountId, debit: 0, credit: Math.abs(newOpeningBalance), description: `رصيد افتتاحي - ${bankName}` },
+              { journal_entry_id: openingEntryId, account_id: capitalAccount.id, debit: Math.abs(newOpeningBalance), credit: 0, description: `رصيد افتتاحي - ${bankName}` },
+            );
+          }
 
-            if (lines.length > 0) {
-              await insertJournalLines(auth.companyId, lines);
-            }
+          if (lines.length > 0) {
+            const { error: linesErr } = await insertJournalLines(auth.companyId, lines);
+            if (linesErr) throw linesErr;
           }
         }
       }
@@ -250,8 +196,8 @@ export async function PUT(
       account_code: u.accounts?.code || null,
       account_name: u.accounts?.name || null,
       opening_balance: parseFloat(u.opening_balance) || 0,
-      current_balance: await getAccountBalanceFromJournal(u.account_id || ''),
-      balance: await getAccountBalanceFromJournal(u.account_id || ''),
+      current_balance: u.account_id ? await getAccountBalanceFromJournal(u.account_id, auth.companyId) : 0,
+      balance: u.account_id ? await getAccountBalanceFromJournal(u.account_id, auth.companyId) : 0,
     });
   } catch (err) {
     return handleApiError(err);

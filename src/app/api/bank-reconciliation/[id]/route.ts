@@ -37,8 +37,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const s = sb();
 
     const updateData: any = {};
-    if (body.closingBalance !== undefined) updateData.closing_balance = body.closingBalance;
-    if (body.status !== undefined) updateData.status = body.status;
+    if (body.closingBalance !== undefined) {
+      if (isNaN(parseFloat(body.closingBalance))) return error('الرصيد الختامي يجب أن يكون رقماً');
+      updateData.closing_balance = parseFloat(body.closingBalance);
+    }
+    if (body.status !== undefined) {
+      if (!['draft', 'final'].includes(body.status)) return error('حالة التسوية غير صالحة');
+      updateData.status = body.status;
+    }
 
     const { data: result, error: updateError } = await s.from('bank_reconciliation')
       .update(updateData)

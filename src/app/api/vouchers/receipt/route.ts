@@ -1,26 +1,25 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber } from '@/lib/numbering';
-import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
+import { createJournalEntry } from '@/lib/journal-utils';
+import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations } from '@/lib/voucher-utils';
+import { receiptVoucherCreateSchema } from '@/lib/validation';
 import { ACCOUNT_CODES } from '@/lib/constants';
-import { canBypassTelegramConfirmation } from '@/lib/permissions'; 
+import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
 const sb = () => getSupabase();
 
 /**
- * Helper function to get account ID based on receipt type
+ * كود الحساب الدائن المقابل لسند القبض (يُحلَّل إلى معرف فعلي في POST —
+ * تمرير الكود كـ account_id كان يبني قيوداً تنهار مع إنفاذ القسم 3)
  */
-function getAccountCode(receiptType: string): string {
+function receiptCounterpartCode(receiptType: string): string {
   switch (receiptType) {
-    case 'client':
-      return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
-    case 'supplier_refund':
-      return ACCOUNT_CODES.ACCOUNTS_PAYABLE;
+    case 'client': return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;      // تخفيض ذمم العميل
+    case 'supplier_refund': return ACCOUNT_CODES.ACCOUNTS_PAYABLE; // عكس سداد مورد
     case 'general':
-      return ACCOUNT_CODES.CASH;
-    default:
-      return ACCOUNT_CODES.CASH;
+    default: return ACCOUNT_CODES.OTHER_REVENUE;                   // إيراد متنوع
   }
 }
 
@@ -29,7 +28,7 @@ function getAccountCode(receiptType: string): string {
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'receipts', 'read');
     const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
@@ -38,7 +37,7 @@ export async function GET(request: NextRequest) {
 
     const offset = (page - 1) * pageSize;
 
-    // محاولة جلب العلاقات أولاً (بدون employees لأنها غير موجودة محاسبياً في سندات القبض)
+    // الملغاة لا تظهر في القوائم — عكس قيدها محفوظ في الدفاتر
     const result = await s.from('voucher_receipts')
       .select(`
         *,
@@ -47,6 +46,7 @@ export async function GET(request: NextRequest) {
         journal_entries(number)
       `, { count: 'exact' })
       .eq('company_id', auth.companyId)
+      .neq('status', 'cancelled')
       .gte('date', from || '1970-01-01')
       .lte('date', to || '2999-12-31')
       .or(receiptType ? `receipt_type.eq.${receiptType}` : 'receipt_type.neq.null')
@@ -62,6 +62,7 @@ export async function GET(request: NextRequest) {
       const fallbackResult = await s.from('voucher_receipts')
         .select('*', { count: 'exact' })
         .eq('company_id', auth.companyId)
+        .neq('status', 'cancelled')
         .gte('date', from || '1970-01-01')
         .lte('date', to || '2999-12-31')
         .or(receiptType ? `receipt_type.eq.${receiptType}` : 'receipt_type.neq.null')
@@ -89,60 +90,48 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/vouchers/receipt
- * إنشاء سند قبض جديد
- * FIXED: يدعم استقبال كلاً من camelCase و snake_case لتلافي خطأ "جميع الحقول المطلوبة يجب تعبئتها"
+ * سند قبض: يضيف مالاً للخزينة — لا فحص رصيد هنا (كان فحصاً منسوخاً من الصرف
+ * يمنع القبض المشروع عند رصيد منخفض). القيد: مدين الخزينة / دائن المقابل
+ * المحلول لمعرف فعلي. التخصيص على فواتير العميل اختياري ومُحصَّن بالمتبقي.
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'receipts', 'create');
     const s = sb();
     const body = await request.json();
 
-    const {
-      date,
-      receipt_type,
-      receiptType,
-      contact_id,
-      contactId,
-      amount,
-      bank_safe_id,
-      bankSafeId,
-      reason,
-    } = body;
+    // توافقية مزدوجة: camelCase → snake_case قبل التحقق
+    const normalized = {
+      date: body.date,
+      receipt_type: body.receipt_type || body.receiptType,
+      contact_id: body.contact_id || body.contactId || null,
+      amount: typeof body.amount === 'string' ? parseFloat(body.amount) : body.amount,
+      bank_safe_id: body.bank_safe_id || body.bankSafeId,
+      reason: body.reason,
+      invoice_items: body.invoice_items || body.invoiceItems || undefined,
+    };
 
-    // توافقية مزدوجة للمتغيرات (Dual Compatibility)
-    const finalReceiptType = receiptType || receipt_type;
-    const finalBankSafeId = bankSafeId || bank_safe_id;
-    const finalContactId = contactId || contact_id;
+    const parsed = receiptVoucherCreateSchema.safeParse(normalized);
+    if (!parsed.success) return error(parsed.error.issues[0].message, 400);
 
-    if (!date || !finalReceiptType || !amount || !finalBankSafeId || !reason) {
-      return error('جميع الحقول المطلوبة يجب تعبئتها', 400);
-    }
+    const { date, receipt_type, contact_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
 
-    if (parseFloat(amount) <= 0) {
-      return error('المبلغ يجب أن يكون أكبر من صفر', 400);
-    }
-
-    // Get bank safe info
+    // الخزينة/البنك: انتماء للشركة + حساب محاسبي مربوط (القيد يحتاجه)
     const { data: bankSafe } = await s.from('banks_safes')
       .select('account_id')
-      .eq('id', finalBankSafeId)
+      .eq('id', bank_safe_id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
+    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
 
-    if (!bankSafe) {
-      return error('البنك/الخزينة غير موجود', 404);
+    // الطرف (عميل/مورد) يجب أن ينتمي للشركة
+    if (contact_id) {
+      const { data: contact } = await s.from('contacts')
+        .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف المحدد غير موجود', 404);
     }
 
-    // Check account balance
-    if (bankSafe.account_id) {
-      const balance = await getAccountBalanceFromJournal(bankSafe.account_id, auth.companyId);
-      if (balance < parseFloat(amount)) {
-        return error(`الرصيد غير كافٍ. الرصيد الحالي: ${balance.toFixed(2)} ر.س، المبلغ المطلوب: ${amount} ر.س`, 400);
-      }
-    }
-
-    // Check bypass permission
+    // بوابة الاعتماد عبر تيليجرام (كما كانت — لا إزالة لميزة موجودة)
     const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
     if (!canBypass) {
       const { data: config } = await s.from('company_telegram_configs')
@@ -150,88 +139,93 @@ export async function POST(request: NextRequest) {
         .eq('company_id', auth.companyId)
         .maybeSingle();
 
-      if (config && config.approvals_enabled && parseFloat(amount) > (config.approval_threshold || 0)) {
+      if (config && config.approvals_enabled && amount > (config.approval_threshold || 0)) {
         return error('هذه العملية تتطلب اعتماد تيليجرام تقديراً لإدارة النظام', 400);
       }
     }
 
-    // Create receipt
+    // حل الحسابات: خزينة + مقابل — الفشل هنا صريح قبل أي كتابة
+    const counterpartAccountId = await resolveAccountId(auth.companyId, receiptCounterpartCode(receipt_type));
+    if (!bankSafe.account_id || !counterpartAccountId) {
+      return error('الحسابات المحاسبية للسند غير مكتملة (حساب الخزينة أو الحساب المقابل مفقود) — راجع شجرة الحسابات', 400);
+    }
+
     const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_receipts');
     const receiptDate = new Date(date).toISOString().split('T')[0];
 
-    const { data: receipt, error: receiptError } = await s.from('voucher_receipts')
-      .insert({
-        company_id: auth.companyId,
-        number: nextNumber,
-        date: receiptDate,
-        receipt_type: finalReceiptType,
-        contact_id: finalContactId || null,
-        amount: parseFloat(amount),
-        bank_safe_id: finalBankSafeId,
-        reason,
-        created_by: auth.userId,
-        status: 'approved',
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+    let receiptId: string | null = null;
+    let journalEntryId: string | null = null;
 
-    if (receiptError) throw receiptError;
+    try {
+      const { data: receipt, error: receiptError } = await s.from('voucher_receipts')
+        .insert({
+          company_id: auth.companyId,
+          number: nextNumber,
+          date: receiptDate,
+          receipt_type,
+          contact_id: contact_id || null,
+          amount,
+          bank_safe_id,
+          reason,
+          created_by: auth.userId,
+          status: 'approved',
+        })
+        .select()
+        .single();
+      if (receiptError) throw receiptError;
+      receiptId = receipt.id;
 
-    // Create journal entry
-    const { error: journalError } = await createJournalEntry(
-      auth.companyId,
-      {
-        date: receiptDate,
-        type: 'general',
-        description: `سند قبض رقم ${nextNumber}: ${reason}`,
-        lines: [
-          {
-            account_id: bankSafe.account_id,
-            debit: parseFloat(amount),
-            credit: 0,
-            bank_safe_id: finalBankSafeId,
-            contact_id: finalContactId || null,
-          },
-          {
-            account_id: getAccountCode(finalReceiptType),
-            debit: 0,
-            credit: parseFloat(amount),
-          },
-        ],
-        reference_type: 'voucher_receipt',
-        reference_id: (receipt as any).id,
-        created_by: auth.userId,
+      // القيد: مدين الخزينة (المبلغ داخل) / دائن المقابل
+      const { journalId, error: journalError } = await createJournalEntry(
+        auth.companyId,
+        {
+          date: receiptDate,
+          type: 'general',
+          description: `سند قبض رقم ${nextNumber}: ${reason}`,
+          lines: [
+            { account_id: bankSafe.account_id, debit: amount, credit: 0 },
+            { account_id: counterpartAccountId, debit: 0, credit: amount, contact_id: contact_id || null },
+          ],
+          reference_type: 'voucher_receipt',
+          reference_id: receipt.id,
+          created_by: auth.userId,
+        }
+      );
+      if (journalError) throw journalError;
+      journalEntryId = journalId;
+
+      await s.from('voucher_receipts')
+        .update({ journal_entry_id: journalEntryId })
+        .eq('id', receiptId);
+
+      // تخصيص اختياري على فواتير العميل غير المسددة
+      if (invoice_items && invoice_items.length > 0) {
+        const { error: allocErr } = await applyInvoiceAllocations(
+          auth.companyId, 'receipt', receiptId, journalEntryId, amount, invoice_items, contact_id || null
+        );
+        if (allocErr) throw new Error(allocErr);
       }
-    );
 
-    if (journalError) throw journalError;
-
-    return success(receipt, 201);
+      return success({ ...receipt, journal_entry_id: journalEntryId }, 201);
+    } catch (txErr) {
+      console.error('Receipt creation failed, rolling back:', txErr);
+      try {
+        if (journalEntryId) {
+          await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
+          await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);
+        }
+        if (receiptId) {
+          // استرجاع أي تخصيصات طُبقت على الفواتير قبل حذف السند
+          await revertInvoiceAllocations(auth.companyId, 'receipt', receiptId);
+          await s.from('voucher_receipts').delete().eq('id', receiptId).eq('company_id', auth.companyId);
+        }
+      } catch (rollbackErr) {
+        console.error('Receipt rollback failed:', rollbackErr);
+      }
+      throw txErr;
+    }
   } catch (err) {
     console.error('Receipt creation error:', err);
-    return handleApiError(err);
-  }
-}
-
-/**
- * DELETE /api/vouchers/receipt/[id]
- */
-export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  try {
-    const auth = await requireApiAuth(request);
-    const { id } = await params;
-    const s = sb();
-
-    const { error: deleteError } = await s.from('voucher_receipts')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', auth.companyId);
-
-    if (deleteError) throw deleteError;
-
-    return success({ deleted: true });
-  } catch (err) {
     return handleApiError(err);
   }
 }
