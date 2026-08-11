@@ -12,6 +12,7 @@ interface ActionButtonsProps {
   onEdit?: (item: any) => void;
   onDelete?: (item: any) => void;
   onView?: (item: any) => void;
+  showView?: boolean;
   status?: string;
   showStatus?: boolean;
 }
@@ -21,6 +22,7 @@ export function ActionButtons({
   onEdit, 
   onDelete, 
   onView,
+  showView = true,
   status,
   showStatus = false 
 }: ActionButtonsProps) {
@@ -56,27 +58,42 @@ export function ActionButtons({
 
   return (
     <>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
         {showStatus && status && statusBadge(status)}
         
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => (onView ? onView(item) : setShowViewModal(true))}
-          title="عرض"
-        >
-          <Eye size={16} />
-        </Button>
+        {showView && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => (onView ? onView(item) : setShowViewModal(true))}
+            title="معاينة وعرض التفاصيل"
+            className="text-slate-600 hover:text-accent hover:bg-accent/10"
+          >
+            <Eye size={16} />
+          </Button>
+        )}
         
         {onEdit && (
-          <Button variant="ghost" size="sm" onClick={() => onEdit(item)} title="تعديل">
-            <Edit size={16} className="text-blue-600" />
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={() => onEdit(item)} 
+            title="تعديل السجل"
+            className="text-blue-600 hover:bg-blue-50"
+          >
+            <Edit size={16} />
           </Button>
         )}
         
         {onDelete && (
-          <Button variant="ghost" size="sm" onClick={() => setShowDeleteModal(true)} title="حذف">
-            <Trash2 size={16} className="text-danger" />
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={() => setShowDeleteModal(true)} 
+            title="حذف"
+            className="text-danger hover:bg-danger/10"
+          >
+            <Trash2 size={16} />
           </Button>
         )}
       </div>
