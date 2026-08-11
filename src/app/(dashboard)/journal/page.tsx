@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
@@ -17,6 +18,7 @@ export default function JournalPage() {
   const [entries, setEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [viewing, setViewing] = useState<any>(null);
 
   const fetchData = async () => {
     try {
@@ -56,6 +58,14 @@ export default function JournalPage() {
       render: (r: any) => (
         <ActionButtons
           item={r}
+          onView={async () => {
+            try {
+              const res = await fetch(`/api/journal/${r.id}`, { credentials: 'same-origin' });
+              const json = await res.json();
+              if (json.success) setViewing(json.data);
+              else toast.error(json.message || 'تعذر عرض القيد');
+            } catch { toast.error('تعذر عرض القيد'); }
+          }}
           onEdit={() => router.push(`/journal/new?edit=${r.id}`)}
           onDelete={() => handleDelete(r)}
         />
@@ -78,6 +88,34 @@ export default function JournalPage() {
       ) : (
         <DataTable columns={columns} data={entries} searchable searchKeys={['number', 'description']} />
       )}
+      <RecordViewModal
+        isOpen={!!viewing}
+        onClose={() => setViewing(null)}
+        title={viewing ? `قيد رقم ${viewing.number}` : 'عرض القيد'}
+        record={viewing}
+        extra={viewing?.lines?.length ? (
+          <div className="border border-border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-bg-secondary text-text-muted">
+                <tr>
+                  <th className="p-2 text-right">الحساب</th>
+                  <th className="p-2 text-right">مدين</th>
+                  <th className="p-2 text-right">دائن</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {viewing.lines.map((l: any) => (
+                  <tr key={l.id}>
+                    <td className="p-2">{l.account_code} — {l.account_name || ''}</td>
+                    <td className="p-2 font-mono">{formatCurrency(l.debit || 0)}</td>
+                    <td className="p-2 font-mono">{formatCurrency(l.credit || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      />
     </div>
   );
 }

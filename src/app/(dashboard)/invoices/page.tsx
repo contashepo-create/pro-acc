@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, ArrowRight, FileText, Save, X, Search, Eye } from 'lucide-react';
+import { Plus, Trash2, ArrowRight, FileText, Save, X } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -15,6 +15,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { toDateInput } from '@/lib/form-utils';
 
 interface InvoiceItem {
   id?: string;
@@ -99,12 +100,12 @@ export default function InvoicesPage() {
       if (json.success) {
         setEditingInvoice(invoice);
         setForm({
-          client_id: json.data.contact_id,
+          client_id: json.data.contact_id || json.data.client_id || '',
           project_id: json.data.project_id || '',
-          date: json.data.date,
-          due_date: json.data.due_date || '',
+          date: toDateInput(json.data.date),
+          due_date: toDateInput(json.data.due_date),
           notes: json.data.notes || '',
-          vat_enabled: (json.data.vat_rate || json.data.tax_rate || 0) > 0,
+          vat_enabled: Number(json.data.vat_rate || json.data.tax_rate || 0) > 0,
           items: json.data.items?.map((i: any) => ({
             id: i.id,
             description: i.description,
@@ -216,18 +217,18 @@ export default function InvoicesPage() {
   const columns = [
     { key: 'number', label: 'رقم الفاتورة', sortable: true, render: (row: any) => `#${row.number}` },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
-    { key: 'contact_name', label: 'العميل', sortable: true },
+    { key: 'contact_name', label: 'العميل', sortable: true, render: (row: any) => row.contact_name || row.client_name || '—' },
     { key: 'total', label: 'الإجمالي', sortable: true, render: (row: any) => formatCurrency(row.total) },
     { key: 'status', label: 'الحالة', sortable: true, render: (row: any) => statusBadge(row.status) },
     { key: 'paid_amount', label: 'المدفوع', render: (row: any) => formatCurrency(row.paid_amount) },
     { key: 'actions', label: '', render: (row: any) => (
       <div className="flex items-center gap-1">
-        <a href={`/invoices/${row.id}/view`} target="_blank" rel="noopener noreferrer">
-          <Button variant="ghost" size="sm" title="عرض/طباعة">
-            <Eye size={16} />
-          </Button>
-        </a>
-        <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} />
+        <ActionButtons
+          item={row}
+          onView={() => { window.location.href = `/invoices/${row.id}/view`; }}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+        />
       </div>
     )},
   ];
