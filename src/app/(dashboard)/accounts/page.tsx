@@ -82,25 +82,6 @@ export default function AccountsPage() {
     }
   };
 
-  const handleSeedDefaults = async () => {
-    if (!confirm('هل تريد إنشاء الحسابات الرئيسية الافتراضية؟ سيتم إنشاء 50 حساب محاسبي معروف')) return;
-    setLoading(true);
-    try {
-      const res = await fetch('/api/accounts/seed-default', { method: 'POST' });
-      const json = await res.json();
-      if (json.success) {
-        alert(json.data.message);
-        fetchData();
-      } else {
-        alert(json.message || 'فشل إنشاء الحسابات');
-      }
-    } catch {
-      alert('فشل الاتصال بالخادم');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleSave = async () => {
     if (!form.code || !form.name) {
       setSaveError('رمز واسم الحساب مطلوبان');
@@ -176,21 +157,18 @@ export default function AccountsPage() {
     <div className="space-y-6">
       <PageHeader
         title="دليل الحسابات"
-        description="إدارة شجرة الحسابات المحاسبية - 50 حساب افتراضي معروف"
+        description="إدارة دليل الحسابات الموحد والمصمم وفق المعايير المحاسبية الدولية (IFRS)"
         actions={
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={handleSeedDefaults}>إنشاء الحسابات الافتراضية</Button>
-            <Button onClick={handleOpenAdd} leftIcon={<Plus size={18} />}>
-              إضافة حساب
-            </Button>
-          </div>
+          <Button onClick={handleOpenAdd} leftIcon={<Plus size={18} />}>
+            إضافة حساب
+          </Button>
         }
       />
 
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>}
 
       {flatData.length === 0 ? (
-        <EmptyState title="لا توجد حسابات" description="اضغط إنشاء الحسابات الافتراضية للحصول على 50 حساب معروف أو أضف حساباً جديداً" actionLabel="إنشاء الحسابات الافتراضية" onAction={handleSeedDefaults} />
+        <EmptyState title="لا توجد حسابات" description="أضف حساباً جديداً إلى دليل الحسابات" actionLabel="إضافة حساب" onAction={handleOpenAdd} />
       ) : (
         <DataTable columns={[...columns, { 
           key: 'actions', 

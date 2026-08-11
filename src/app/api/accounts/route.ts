@@ -10,12 +10,24 @@ export async function GET(request: NextRequest) {
     const auth = await requireModulePermission(request, 'accounts', 'read');
     const s = sb();
 
-    const { data, error: queryError } = await s.from('accounts')
+    let { data, error: queryError } = await s.from('accounts')
       .select('id, code, name, name_en, type, parent_id, is_active, created_at')
       .eq('company_id', auth.companyId)
       .order('code');
 
     if (queryError) throw queryError;
+
+    // AUTO-SEED: إذا لم تكن شجرة الحسابات موجودة للشركة، أنشئ الشجرة الافتراضية تلقائياً
+    if (!data || data.length === 0) {
+      const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
+      await createDefaultChartOfAccounts(s, auth.companyId);
+
+      const refetch = await s.from('accounts')
+        .select('id, code, name, name_en, type, parent_id, is_active, created_at')
+        .eq('company_id', auth.companyId)
+        .order('code');
+      data = refetch.data || [];
+    }
 
     const accounts: any[] = (data || []).map((a: any) => ({ ...a, children: [] as any[] }));
     const accountMap = new Map(accounts.map((a: any) => [a.id, a]));
