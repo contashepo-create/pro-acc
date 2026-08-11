@@ -1,0 +1,179 @@
+process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
+
+import { 
+  INVOICE_TEMPLATES, 
+  getTemplateConfig, 
+  DEFAULT_INVOICE_SETTINGS, 
+  resolveInvoiceTitle 
+} from '@/lib/invoice-templates';
+import { createToken } from '@/lib/auth';
+
+type Row = Record<string, any>;
+type Op = { op: string; col?: string; val?: any };
+
+function makeDb(db: Record<string, Row[]>) {
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  let insertCounter = 0;
+
+  const from = (table: string) => {
+    const ops: Op[] = [];
+    const mut: { kind?: string; payload?: any } = {};
+    const call: any = { table, ops, mut };
+    calls.push(call);
+
+    const applyFilters = () =>
+      (db[table] || []).filter((r) =>
+        ops.every((o) => {
+          if (o.op === 'eq') return r[o.col!] === o.val;
+          if (o.op === 'neq') return r[o.col!] !== o.val;
+          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
+          if (o.op === 'gte') return r[o.col!] >= o.val;
+          if (o.op === 'lte') return r[o.col!] <= o.val;
+          if (o.op === 'lt') return r[o.col!] < o.val;
+          return true;
+        })
+      );
+
+    const api: any = {
+      select: () => api,
+      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
+      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
+      lt: (col: string, val: any) => { ops.push({ op: 'lt', col, val }); return api; },
+      order: () => api,
+      limit: () => api,
+      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      delete: () => { mut.kind = 'delete'; return api; },
+      maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
+      single: async () => {
+        const row = applyFilters()[0] ?? null;
+        return { data: row, error: row ? null : { message: 'not found' } };
+      },
+      then: (onF: any, onR: any) =>
+        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
+    };
+    return api;
+  };
+
+  return { from, calls };
+}
+
+let mockDb: ReturnType<typeof makeDb>;
+
+jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
+
+import { GET as equityChangesGET } from '@/app/api/reports/equity-changes/route';
+import { GET as contactBalancesGET } from '@/app/api/reports/contact-balances/route';
+import { GET as expenseAnalysisGET } from '@/app/api/reports/expense-analysis/route';
+
+const C1 = 'company-1';
+
+function baseDb() {
+  return {
+    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
+    companies: [{ id: C1, is_active: true }],
+    contacts: [
+      { id: 'c1', company_id: C1, name: 'شركة الأفق', type: 'client', tax_number: '300000000000003', is_active: true },
+      { id: 's1', company_id: C1, name: 'مؤسسة التوريدات', type: 'supplier', tax_number: '300000000000004', is_active: true },
+    ],
+    accounts: [
+      { id: 'a-cap', company_id: C1, code: '3100', name: 'رأس المال', type: 'equity', is_active: true },
+      { id: 'a-ret', company_id: C1, code: '3200', name: 'الأرباح المحتجزة', type: 'equity', is_active: true },
+      { id: 'a-rev', company_id: C1, code: '4100', name: 'إيرادات عقود', type: 'revenue', is_active: true },
+      { id: 'a-exp1', company_id: C1, code: '5110', name: 'مواد خام', type: 'expense', is_active: true },
+      { id: 'a-exp2', company_id: C1, code: '5210', name: 'رواتب وأجور', type: 'expense', is_active: true },
+    ],
+    journal_entries: [
+      { id: 'je-1', company_id: C1, date: '2026-01-15', type: 'general', deleted_at: null },
+      { id: 'je-2', company_id: C1, date: '2026-02-10', type: 'general', deleted_at: null },
+    ],
+    journal_lines: [
+      { id: 'jl-1', company_id: C1, journal_entry_id: 'je-1', account_id: 'a-rev', debit: 0, credit: 50000, contact_id: 'c1' },
+      { id: 'jl-2', company_id: C1, journal_entry_id: 'je-1', account_id: 'a-exp1', debit: 20000, credit: 0, contact_id: 's1' },
+      { id: 'jl-3', company_id: C1, journal_entry_id: 'je-2', account_id: 'a-exp2', debit: 10000, credit: 0 },
+    ],
+  };
+}
+
+function authedRequest(qs = '') {
+  const token = createToken('u1', 'admin');
+  return {
+    url: `http://localhost/api/test${qs}`,
+    headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
+    cookies: { get: () => undefined },
+  } as any;
+}
+
+describe('Invoice Templates & ZATCA classification logic', () => {
+  test('has 6 distinct layout templates with unique identifiers', () => {
+    expect(INVOICE_TEMPLATES.length).toBeGreaterThanOrEqual(6);
+    const ids = INVOICE_TEMPLATES.map(t => t.id);
+    expect(ids).toContain('modern');
+    expect(ids).toContain('classic');
+    expect(ids).toContain('compact');
+    expect(ids).toContain('elegant');
+    expect(ids).toContain('construction');
+    expect(ids).toContain('thermal');
+  });
+
+  test('resolveInvoiceTitle correctly resolves B2B (Standard) vs B2C (Simplified)', () => {
+    // Auto mode with client VAT -> Standard Tax Invoice (B2B)
+    const b2bInv = { client_tax_number: '300000000000003' };
+    const b2bResult = resolveInvoiceTitle(b2bInv, 'auto');
+    expect(b2bResult.titleAr).toBe('فاتورة ضريبية');
+    expect(b2bResult.isSimplified).toBe(false);
+
+    // Auto mode with cash consumer without VAT -> Simplified Tax Invoice (B2C)
+    const b2cInv = { client_tax_number: null };
+    const b2cResult = resolveInvoiceTitle(b2cInv, 'auto');
+    expect(b2cResult.titleAr).toBe('فاتورة ضريبية مبسطة');
+    expect(b2cResult.isSimplified).toBe(true);
+
+    // Explicit standard override
+    const explicitStd = resolveInvoiceTitle(b2cInv, 'standard');
+    expect(explicitStd.titleAr).toBe('فاتورة ضريبية');
+    expect(explicitStd.isSimplified).toBe(false);
+
+    // Explicit simplified override
+    const explicitSimp = resolveInvoiceTitle(b2bInv, 'simplified');
+    expect(explicitSimp.titleAr).toBe('فاتورة ضريبية مبسطة');
+    expect(explicitSimp.isSimplified).toBe(true);
+  });
+});
+
+describe('New Accounting Reports Endpoints', () => {
+  test('GET /api/reports/equity-changes computes equity movements & net income', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await equityChangesGET(authedRequest('?from=2026-01-01&to=2026-12-31'));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.changes.net_income).toBe(20000); // 50,000 rev - 30,000 exp
+    expect(json.data.ending.net_income).toBe(20000);
+  });
+
+  test('GET /api/reports/contact-balances calculates customer and supplier sub-ledger balances', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await contactBalancesGET(authedRequest('?from=2026-01-01&to=2026-12-31'));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.contacts.length).toBeGreaterThan(0);
+  });
+
+  test('GET /api/reports/expense-analysis breaks down expenses with percentages', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await expenseAnalysisGET(authedRequest('?from=2026-01-01&to=2026-12-31'));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.total_expense).toBe(30000); // 20k + 10k
+    expect(json.data.categories).toHaveLength(2);
+    expect(json.data.categories[0].percentage).toBeCloseTo(66.67, 1);
+  });
+});
