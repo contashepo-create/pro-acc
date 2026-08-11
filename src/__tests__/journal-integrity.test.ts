@@ -204,6 +204,31 @@ describe('journalEntrySchema — double-entry rules', () => {
     });
     expect(res.success).toBe(true);
   });
+
+  test('rejects the same account as both debit and credit in one entry', () => {
+    const res = journalEntrySchema.safeParse({
+      date: '2026-08-01', type: 'general',
+      lines: [
+        { accountCode: '1110', debit: 500, credit: 0 },
+        { accountCode: '1110', debit: 0, credit: 200 },
+        { accountCode: '4100', debit: 0, credit: 300 },
+      ],
+    });
+    expect(res.success).toBe(false);
+    if (!res.success) expect(res.error.issues[0].message).toContain('نفس الحساب');
+  });
+
+  test('allows the same account repeated on ONE side only (net posting stays compliant)', () => {
+    const res = journalEntrySchema.safeParse({
+      date: '2026-08-01', type: 'general',
+      lines: [
+        { accountCode: '1110', debit: 300, credit: 0 },
+        { accountCode: '1110', debit: 200, credit: 0 },
+        { accountCode: '4100', debit: 0, credit: 500 },
+      ],
+    });
+    expect(res.success).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

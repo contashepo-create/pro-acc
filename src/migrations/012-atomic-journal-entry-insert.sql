@@ -41,6 +41,22 @@ BEGIN
     RAISE EXCEPTION 'خطأ في الموازنة: مجموع الديون (%) لا يساوي مجموع الدائنين (%)', v_total_debit, v_total_credit;
   END IF;
 
+  -- Accounting control (double-entry standards): the same account must NOT be
+  -- posted as BOTH debit and credit within one voucher. Post the net instead.
+  IF EXISTS (
+    SELECT 1
+    FROM (
+      SELECT l->>'accountCode' AS code,
+             SUM(COALESCE((l->>'debit')::NUMERIC, 0))  AS d,
+             SUM(COALESCE((l->>'credit')::NUMERIC, 0)) AS c
+      FROM jsonb_array_elements(p_lines) AS l
+      GROUP BY 1
+    ) t
+    WHERE t.d > 0 AND t.c > 0
+  ) THEN
+    RAISE EXCEPTION 'لا يجوز أن يكون نفس الحساب مديناً ودائناً في القيد الواحد';
+  END IF;
+
   -- Balance is valid, proceed with insertion (all in one transaction)
   INSERT INTO journal_entries (company_id, number, date, type, description, created_by)
   VALUES (p_company_id, v_number, p_date, p_type, p_description, p_created_by)

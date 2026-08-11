@@ -145,6 +145,26 @@ export const journalEntrySchema = z.object({
         return Math.abs(totalDebit - totalCredit) < 0.01;
       },
       { message: 'مجموع الديون يجب أن يساوي مجموع الدائنين' }
+    )
+    .refine(
+      (lines) => {
+        // Accounting control (double-entry standards): the same account must
+        // NOT be posted as BOTH debit and credit within one voucher — the two
+        // sides net to zero for that account while inflating ledger turnover.
+        // Post the net amount on a single side instead.
+        const sides = new Map<string, { debit: number; credit: number }>();
+        for (const l of lines) {
+          const agg = sides.get(l.accountCode) ?? { debit: 0, credit: 0 };
+          agg.debit += l.debit;
+          agg.credit += l.credit;
+          sides.set(l.accountCode, agg);
+        }
+        for (const { debit, credit } of sides.values()) {
+          if (debit > 0 && credit > 0) return false;
+        }
+        return true;
+      },
+      { message: 'لا يجوز أن يكون نفس الحساب مديناً ودائناً في القيد الواحد. اجمع الصافي في سطر واحد وفق المعايير المحاسبية' }
     ),
 }).strict();
 

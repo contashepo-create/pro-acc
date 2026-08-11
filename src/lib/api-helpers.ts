@@ -28,8 +28,23 @@ export function validationError(errors: Record<string, string[]> | string) {
 
 export function serverError(err: unknown) {
   console.error('Server error:', err);
-  const message = err instanceof Error ? err.message : 'حدث خطأ في الخادم';
-  return NextResponse.json({ success: false, message }, { status: 500 });
+  // NOTE: Supabase/PostgREST errors are NOT Error instances — they are plain
+  // objects shaped { message, code, details, hint }. `instanceof Error` alone
+  // misses them and the real cause used to be hidden behind the generic
+  // message. Unwrap every common shape so the actual error surfaces.
+  let message = 'حدث خطأ في الخادم';
+  let details: string | undefined;
+  if (err instanceof Error && err.message) {
+    message = err.message;
+  } else if (err && typeof err === 'object') {
+    const e = err as Record<string, any>;
+    if (typeof e.message === 'string' && e.message) message = e.message;
+    else if (typeof e.msg === 'string' && e.msg) message = e.msg;
+    else if (e.error && typeof e.error.message === 'string' && e.error.message) message = e.error.message;
+    if (typeof e.details === 'string' && e.details) details = e.details;
+    else if (typeof e.hint === 'string' && e.hint) details = e.hint;
+  }
+  return NextResponse.json({ success: false, message, ...(details ? { details } : {}) }, { status: 500 });
 }
 
 export class AuthError extends Error {

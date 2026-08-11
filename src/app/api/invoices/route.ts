@@ -39,7 +39,38 @@ export async function GET(request: NextRequest) {
       .order('date', { ascending: false }).order('number', { ascending: false })
       .range(offset, offset + pageSize - 1);
 
-    if (queryError) throw queryError;
+    if (queryError) {
+      // Schema-drift resilience: if a column (e.g. deleted_at / zatca_qr /
+      // journal_entry_id) or the contacts embed is missing in the DB, PostgREST
+      // 500s the whole page. Retry with a guaranteed-safe minimal select and
+      // resolve client names in a separate query instead of locking the user out.
+      const em = `${queryError.message || ''} ${queryError.details || ''} ${queryError.hint || ''} ${queryError.code || ''}`;
+      const schemaDrift = /column|relationship|could not find|does not exist|PGRST|42P01|42703/i.test(em);
+      if (!schemaDrift) throw queryError;
+      console.error('[invoices] primary query failed (schema drift?), retrying minimal select:', em);
+
+      let fallback = s.from('invoices')
+        .select('id, number, contact_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, created_at', { count: 'exact' })
+        .eq('company_id', auth.companyId);
+      if (status) fallback = fallback.eq('status', status);
+      if (clientId) fallback = fallback.eq('contact_id', clientId);
+      if (dateFrom) fallback = fallback.gte('date', dateFrom);
+      if (dateTo) fallback = fallback.lte('date', dateTo);
+
+      const { data: fData, error: fErr, count: fCount } = await fallback
+        .order('date', { ascending: false }).order('number', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (fErr) throw fErr;
+
+      const contactIds = [...new Set((fData || []).map((i: any) => i.contact_id).filter(Boolean))] as string[];
+      const names: Record<string, string> = {};
+      if (contactIds.length > 0) {
+        const { data: cs } = await s.from('contacts').select('id, name').in('id', contactIds).eq('company_id', auth.companyId);
+        for (const c of cs || []) names[(c as any).id] = (c as any).name;
+      }
+      const invoices = (fData || []).map((i: any) => ({ ...i, client_name: names[i.contact_id] || '' }));
+      return success({ invoices, total: fCount || 0, page, pageSize, totalPages: Math.ceil((fCount || 0) / pageSize) || 1 });
+    }
 
     const invoices = (data || []).map((i: any) => ({
       ...i, client_name: i.contacts?.name || '',
