@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
+import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -86,13 +87,12 @@ export async function POST(request: NextRequest) {
     const reverseLines = originalLines.map((line: any) => ({
       journal_entry_id: re.id,
       account_id: line.account_id,
-      account_code: line.account_code,
       debit: parseFloat(line.credit) || 0,  // العكس: credit -> debit
       credit: parseFloat(line.debit) || 0,   // العكس: debit -> credit
       description: `عكس: ${line.description || ''}`,
     }));
 
-    const { error: linesErr } = await s.from('journal_lines').insert(reverseLines);
+    const { error: linesErr } = await insertJournalLines(auth.companyId, reverseLines);
 
     if (linesErr) {
       // التراجع عن إنشاء القيد العكسي

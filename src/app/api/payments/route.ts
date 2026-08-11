@@ -206,10 +206,12 @@ export async function PUT(request: NextRequest) {
             date: today, type: 'general',
             description: `سداد إلكتروني — فاتورة`, created_by: auth.userId,
           });
-          await s.from('journal_lines').insert([
+          const { insertJournalLines } = await import('@/lib/journal-utils');
+          const { error: jlErr } = await insertJournalLines(auth.companyId, [
             { journal_entry_id: jeId, account_id: cash.id, debit: rec.amount, credit: 0, description: 'سداد إلكتروني' },
             { journal_entry_id: jeId, account_id: ar.id, debit: 0, credit: rec.amount, description: 'سداد فاتورة' },
           ]);
+          if (jlErr) throw jlErr;
 
           await s.from('payment_records').update({ journal_entry_id: jeId }).eq('id', recordId);
         }

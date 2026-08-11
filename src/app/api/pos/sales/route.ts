@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireApiAuth, handleApiError, success, error, parseBody } from '@/lib/api-helpers';
 import { getNextJournalNumber } from '@/lib/numbering';
+import { insertJournalLines } from '@/lib/journal-utils';
 const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
@@ -59,11 +60,12 @@ export async function POST(req: NextRequest) {
       const { data: cashAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1110').maybeSingle();
       const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
 
-      if (cashAcc && revAcc) {
-        await s.from('journal_lines').insert([
-          { journal_entry_id: je.id, account_id: cashAcc.id, account_code: '1110', debit: total, credit: 0, description: `مبيعات POS ${number}` },
-          { journal_entry_id: je.id, account_id: revAcc.id, account_code: '4100', debit: 0, credit: total, description: `إيراد POS ${number}` },
+      if (cashAcc && revAcc && je) {
+        const { error: jlErr } = await insertJournalLines(auth.companyId, [
+          { journal_entry_id: je.id, account_id: cashAcc.id, debit: total, credit: 0, description: `مبيعات POS ${number}` },
+          { journal_entry_id: je.id, account_id: revAcc.id, debit: 0, credit: total, description: `إيراد POS ${number}` },
         ]);
+        if (jlErr) throw jlErr;
       }
     } catch (jeErr) {
       console.warn('POS journal creation failed:', jeErr);
