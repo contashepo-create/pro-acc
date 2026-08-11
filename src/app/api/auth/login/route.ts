@@ -14,21 +14,34 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const { email, password } = parsed.data;
+    const normalizedEmail = email.toLowerCase().trim();
     const s = sb();
 
     // Rate limiting check
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || 'unknown';
-    const rateLimit = await checkRateLimit(email.toLowerCase(), ip);
+    const rateLimit = await checkRateLimit(normalizedEmail, ip);
     if (!rateLimit.allowed) {
       return error(`تم حظر محاولات الدخول مؤقتاً. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
     }
 
-    const { data: user, error: userErr } = await s.from('users')
+    const { data: users, error: userErr } = await s.from('users')
       .select('id, name, email, password_hash, role, is_active, company_id')
-      .eq('email', email.toLowerCase()).single();
+      .eq('email', normalizedEmail).limit(2);
 
-    if (userErr || !user) return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
-    const u = user as { id: string; name: string; email: string; password_hash: string; role: string; is_active: boolean; company_id: string };
+    if (userErr) {
+      // DATABASE/QUERY error must NOT masquerade as "wrong credentials" —
+      // log the real cause so the 401 becomes diagnosable in server logs.
+      console.error('[login] users query failed (db/schema issue?):', JSON.stringify(userErr));
+      return serverError(userErr);
+    }
+    if (!users || users.length === 0) {
+      console.warn('[login] 401: no user with email', normalizedEmail, '— (wrong email أو قاعدة البيانات فارغة/غير مزامنة)');
+      return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
+    }
+    if (users.length > 1) {
+      console.error('[login] duplicate rows for email', normalizedEmail, '— migration 013 (email uniqueness) not applied?');
+    }
+    const u = users[0] as { id: string; name: string; email: string; password_hash: string; role: string; is_active: boolean; company_id: string };
     if (!u.is_active) return error('هذا الحساب غير نشط. تواصل مع مدير النظام', 403);
 
     const { data: company, error: companyErr } = await s.from('companies')
@@ -37,12 +50,17 @@ export async function POST(request: NextRequest) {
     const c = company as { id: string; is_active: boolean; name: string } | null;
     if (!c || !c.is_active) return error('الشركة غير نشطة. تواصل مع مدير النظام', 403);
 
+    if (!u.password_hash || !u.password_hash.includes(':')) {
+      console.error('[login] 401: stored password_hash has invalid format for user', u.id, '— (أُنشئ خارج النظام؟ أعد تعيين كلمة المرور)');
+      return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
+    }
     const valid = await verifyPassword(password, u.password_hash);
     if (!valid) {
+      console.warn('[login] 401: password mismatch for user', u.id);
       // Log failed attempt for rate limiting
       try {
         await s.from('login_attempts').insert({
-          email: email.toLowerCase(),
+          email: normalizedEmail,
           ip_address: ip,
           success: false,
           attempted_at: new Date().toISOString(),
@@ -68,7 +86,7 @@ export async function POST(request: NextRequest) {
       await s.from('users').update({ last_login: new Date().toISOString() }).eq('id', u.id);
       // Log successful attempt
       await s.from('login_attempts').insert({
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         ip_address: ip,
         success: true,
         attempted_at: new Date().toISOString(),
