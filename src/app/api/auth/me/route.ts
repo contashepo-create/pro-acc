@@ -1,13 +1,13 @@
 import { NextRequest } from 'next/server';
 import { success, error, unauthorized, serverError, notFound } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
+import { verifyToken, extractToken } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.cookies.get('token')?.value;
+    const token = extractToken(request);
     if (!token) return unauthorized();
 
     const payload = verifyToken(token);

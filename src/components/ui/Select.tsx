@@ -1,11 +1,13 @@
 'use client';
 
 import React, { useState, useRef, useEffect, type SelectHTMLAttributes } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, Search, X } from 'lucide-react';
 
 interface SelectOption {
   value: string;
   label: string;
+  disabled?: boolean;
 }
 
 interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'onChange' | 'onClick'> {
@@ -31,8 +33,17 @@ export function Select({
 }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [mounted, setMounted] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 0 });
+
   const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const selectedOption = options.find((opt) => opt.value === value);
 
@@ -42,9 +53,33 @@ export function Select({
       )
     : options;
 
+  const updateCoords = () => {
+    if (buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      const width = Math.max(rect.width, 320); // minimum 320px for comfortable reading
+      let left = rect.left;
+      if (left + width > window.innerWidth - 16) {
+        left = window.innerWidth - width - 16;
+      }
+      if (left < 16) left = 16;
+
+      setCoords({
+        top: rect.bottom + window.scrollY + 4,
+        left,
+        width,
+      });
+    }
+  };
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        dropdownRef.current &&
+        !dropdownRef.current.contains(target)
+      ) {
         setIsOpen(false);
         setSearchQuery('');
       }
@@ -54,18 +89,97 @@ export function Select({
   }, []);
 
   useEffect(() => {
+    if (isOpen) {
+      updateCoords();
+      window.addEventListener('resize', updateCoords);
+      window.addEventListener('scroll', updateCoords, true);
+      return () => {
+        window.removeEventListener('resize', updateCoords);
+        window.removeEventListener('scroll', updateCoords, true);
+      };
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
     if (isOpen && searchable && searchInputRef.current) {
       searchInputRef.current.focus();
     }
   }, [isOpen, searchable]);
 
   const handleSelect = (opt: SelectOption) => {
+    if (opt.disabled) return;
     onChange?.(opt.value);
     setIsOpen(false);
     setSearchQuery('');
   };
 
   const selectId = id || label?.replace(/\s+/g, '-').toLowerCase();
+
+  const dropdownMenu = (
+    <div
+      ref={dropdownRef}
+      style={{
+        position: 'absolute',
+        top: `${coords.top}px`,
+        left: `${coords.left}px`,
+        width: `${coords.width}px`,
+        zIndex: 99999,
+      }}
+      className="bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden animate-in fade-in duration-150"
+    >
+      {searchable && (
+        <div className="p-2 border-b border-border bg-bg-secondary">
+          <div className="relative">
+            <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              dir="auto"
+              className="input-base !pr-8 text-sm bg-bg-primary"
+              placeholder="بحث بالرمز أو الاسم..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
+                onClick={() => setSearchQuery('')}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      <div className="max-h-64 overflow-y-auto divide-y divide-border/20">
+        {filteredOptions.length === 0 ? (
+          <div className="p-4 text-sm text-text-muted text-center">
+            لا توجد نتائج مطابقة
+          </div>
+        ) : (
+          filteredOptions.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              disabled={opt.disabled}
+              className={`w-full text-right px-3.5 py-2.5 text-sm transition-colors flex items-center justify-between ${
+                opt.disabled
+                  ? 'opacity-50 cursor-not-allowed bg-bg-secondary/50 text-text-muted font-bold'
+                  : opt.value === value
+                  ? 'bg-accent/10 text-accent font-semibold'
+                  : 'text-text-primary hover:bg-bg-hover'
+              }`}
+              onClick={() => handleSelect(opt)}
+            >
+              <span>{opt.label}</span>
+              {opt.value === value && <span className="text-accent text-xs">✓</span>}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col gap-1.5" ref={containerRef}>
@@ -79,6 +193,7 @@ export function Select({
       )}
       <div className="relative">
         <button
+          ref={buttonRef}
           id={selectId}
           type="button"
           className={`input-base select-base flex items-center justify-between cursor-pointer ${
@@ -89,64 +204,17 @@ export function Select({
           autoFocus={props.autoFocus}
           tabIndex={props.tabIndex}
         >
-          <span>{selectedOption ? selectedOption.label : placeholder}</span>
+          <span className="truncate">{selectedOption ? selectedOption.label : placeholder}</span>
           <ChevronDown
-            className={`w-4 h-4 text-text-muted transition-transform duration-200 ${
+            className={`w-4 h-4 text-text-muted transition-transform duration-200 shrink-0 ${
               isOpen ? 'rotate-180' : ''
             }`}
           />
         </button>
 
-        {isOpen && (
-          <div className="absolute z-[100] mt-1 w-full bg-bg-card border border-border rounded-lg shadow-dropdown overflow-hidden">
-            {searchable && (
-              <div className="p-2 border-b border-border">
-                <div className="relative">
-                  <Search className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
-                  <input
-                    ref={searchInputRef}
-                    type="text"
-                    dir="auto"
-                    className="input-base !pr-8 text-sm"
-                    placeholder="بحث..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                  />
-                  {searchQuery && (
-                    <button
-                      className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
-                      onClick={() => setSearchQuery('')}
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-            <div className="max-h-60 overflow-y-auto">
-              {filteredOptions.length === 0 ? (
-                <div className="p-3 text-sm text-text-muted text-center">
-                  لا توجد نتائج
-                </div>
-              ) : (
-                filteredOptions.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className={`w-full text-right px-3 py-2 text-sm transition-colors hover:bg-bg-hover ${
-                      opt.value === value
-                        ? 'bg-accent-light text-accent'
-                        : 'text-text-primary'
-                    }`}
-                    onClick={() => handleSelect(opt)}
-                  >
-                    {opt.label}
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-        )}
+        {isOpen && mounted && typeof document !== 'undefined'
+          ? createPortal(dropdownMenu, document.body)
+          : null}
       </div>
       {error && (
         <p className="text-xs text-danger" role="alert">{error}</p>
