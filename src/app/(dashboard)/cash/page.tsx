@@ -14,6 +14,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 
 export default function CashPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -116,27 +117,20 @@ export default function CashPage() {
   };
 
   const handleEdit = async (transaction: any) => {
-    try {
-      const res = await fetch(`/api/cash/${transaction.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingTransaction(transaction);
-        setForm({
-          date: json.data.date,
-          type: json.data.type,
-          amount: json.data.amount,
-          account_id: json.data.account_id,
-          bank_safe_id: json.data.bank_safe_id || '',
-          contact_id: json.data.contact_id || '',
-          reason: json.data.reason || '',
-        });
-        setShowModal(true);
-      } else {
-        toast.error(json.message || 'فشل تحميل البيانات');
-      }
-    } catch (e) {
-      toast.error('خطأ في الاتصال بالخادم');
-    }
+    const { data, error } = await fetchRecord(`/api/cash/${transaction.id}`);
+    const src = recordOrRow(data, transaction);
+    if (!data && error) toast.error(error);
+    setEditingTransaction(transaction);
+    setForm(applyDates({
+      date: src.date,
+      type: src.type || 'receipt',
+      amount: src.amount || 0,
+      account_id: src.account_id || '',
+      bank_safe_id: src.bank_safe_id || '',
+      contact_id: src.contact_id || '',
+      reason: src.reason || '',
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (transaction: any) => {

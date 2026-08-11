@@ -15,11 +15,17 @@ export async function GET(
     const { id } = await params;
     const s = sb();
 
-    const { data, error: queryError } = await s.from('cash_transactions')
+    let { data, error: queryError } = await s.from('cash_transactions')
       .select('*, banks_safes(name), accounts(name), contacts(name), journal_entries(number)')
       .eq('id', id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
+    if (queryError) {
+      const fallback = await s.from('cash_transactions')
+        .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      data = fallback.data;
+      queryError = fallback.error;
+    }
 
     if (queryError || !data) {
       return notFound();

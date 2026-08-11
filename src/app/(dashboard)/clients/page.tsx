@@ -83,7 +83,7 @@ export default function ClientsPage() {
           iban: d.iban || '', bank_name: d.bank_name || '', swift_code: d.swift_code || '',
           opening_balance: d.opening_balance || 0, opening_balance_type: d.opening_balance_type || 'debit',
           payment_terms: d.payment_terms || 'immediate', notes: d.notes || '',
-          date_of_birth: d.date_of_birth || '', gender: d.gender || '', national_id: d.national_id || '', category: d.category || '',
+          date_of_birth: (d.date_of_birth || '').toString().slice(0, 10), gender: d.gender || '', national_id: d.national_id || '', category: d.category || '',
         });
         setShowModal(true);
       }

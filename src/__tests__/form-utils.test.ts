@@ -1,4 +1,4 @@
-import { toDateInput, unwrapData } from '@/lib/form-utils';
+import { toDateInput, unwrapData, applyDates, recordOrRow } from '@/lib/form-utils';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -33,5 +33,17 @@ describe('GET /api/journal/[id] does not select a phantom reference column', () 
   });
   test('PUT handler exists for edit save', () => {
     expect(src).toMatch(/export async function PUT/);
+  });
+});
+
+describe('missing detail routes that made edit forms empty', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  test('fiscal/[id] and fixed-assets/[id] expose GET+PUT', () => {
+    for (const rel of ['../app/api/fiscal/[id]/route.ts', '../app/api/fixed-assets/[id]/route.ts']) {
+      const src = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+      expect(src).toMatch(/export async function GET/);
+      expect(src).toMatch(/export async function PUT/);
+    }
   });
 });

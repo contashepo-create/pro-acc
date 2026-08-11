@@ -16,3 +16,32 @@ export function unwrapData<T = any>(json: any): T | null {
   if (json.success === false) return null;
   return (json.data ?? json) as T;
 }
+
+/** Same-origin GET that never throws. Used by every edit form. */
+export async function fetchRecord(url: string): Promise<{ data: any | null; error: string | null }> {
+  try {
+    const res = await fetch(url, { credentials: 'same-origin' });
+    const json = await res.json();
+    if (json?.success && json.data) return { data: json.data, error: null };
+    return { data: null, error: json?.message || 'تعذر تحميل البيانات' };
+  } catch {
+    return { data: null, error: 'خطأ في الاتصال بالخادم' };
+  }
+}
+
+/** Normalize the listed date keys so `<input type="date">` shows the saved value. */
+export function applyDates<T extends Record<string, any>>(obj: T, keys: string[]): T {
+  const out = { ...obj };
+  for (const k of keys) {
+    if (k in out) (out as any)[k] = toDateInput(out[k]);
+  }
+  return out;
+}
+
+/**
+ * Prefer the GET payload; if it failed, fall back to the list row so the
+ * edit modal is never blank. Caller should toast `error` when data came from fallback.
+ */
+export function recordOrRow(fetched: any | null, row: any): any {
+  return fetched || row || {};
+}

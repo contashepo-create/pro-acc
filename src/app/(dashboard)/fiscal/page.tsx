@@ -12,6 +12,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { toast } from '@/components/ui/Toast';
 
 export default function FiscalPage() {
   const [fiscalYears, setFiscalYears] = useState<any[]>([]);
@@ -62,17 +64,16 @@ export default function FiscalPage() {
   };
 
   const handleEdit = async (year: any) => {
-    try {
-      const res = await fetch(`/api/fiscal/${year.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingYear(year);
-        setForm({ name: json.data.name, start_date: json.data.start_date, end_date: json.data.end_date });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load fiscal year:', e);
-    }
+    const { data, error } = await fetchRecord(`/api/fiscal/${year.id}`);
+    const src = recordOrRow(data, year);
+    if (!data && error) toast.error(error);
+    setEditingYear(year);
+    setForm(applyDates({
+      name: src.name || '',
+      start_date: src.start_date || '',
+      end_date: src.end_date || '',
+    }, ['start_date', 'end_date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (year: any) => {

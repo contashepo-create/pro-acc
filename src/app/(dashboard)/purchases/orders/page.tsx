@@ -14,6 +14,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { toast } from '@/components/ui/Toast';
 
 interface OrderItem {
   description: string;
@@ -122,22 +124,17 @@ export default function PurchaseOrdersPage() {
   };
 
   const handleEdit = async (order: any) => {
-    try {
-      const res = await fetch(`/api/purchases/orders/${order.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingOrder(order);
-        setForm({
-          date: json.data.date,
-          supplier_id: json.data.supplier_id,
-          notes: json.data.notes || '',
-          items: json.data.items?.length ? json.data.items : [{ ...emptyItem }],
-        });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load order:', e);
-    }
+    const { data, error } = await fetchRecord(`/api/purchases/orders/${order.id}`);
+    const src = recordOrRow(data, order);
+    if (!data && error) toast.error(error);
+    setEditingOrder(order);
+    setForm(applyDates({
+      date: src.date,
+      supplier_id: src.supplier_id || '',
+      notes: src.notes || '',
+      items: src.items?.length ? src.items : [{ ...emptyItem }],
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleReceive = async (order: any) => {

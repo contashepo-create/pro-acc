@@ -13,6 +13,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { toast } from '@/components/ui/Toast';
 
 export default function SalarySheetsPage() {
   const [sheets, setSheets] = useState<any[]>([]);
@@ -68,22 +70,17 @@ export default function SalarySheetsPage() {
   };
 
   const handleEdit = async (sheet: any) => {
-    try {
-      const res = await fetch(`/api/salary-sheets/${sheet.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingSheet(sheet);
-        setForm({
-          name: json.data.name,
-          month: json.data.month,
-          year: json.data.year,
-          date: json.data.date,
-        });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load sheet:', e);
-    }
+    const { data, error } = await fetchRecord(`/api/salary-sheets/${sheet.id}`);
+    const src = recordOrRow(data, sheet);
+    if (!data && error) toast.error(error);
+    setEditingSheet(sheet);
+    setForm(applyDates({
+      name: src.name || '',
+      month: src.month || 1,
+      year: src.year || new Date().getFullYear(),
+      date: src.date,
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (sheet: any) => {

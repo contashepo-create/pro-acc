@@ -13,6 +13,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { toast } from '@/components/ui/Toast';
 
 export default function ReceiptPage() {
   const [receipts, setReceipts] = useState<any[]>([]);
@@ -78,24 +80,19 @@ export default function ReceiptPage() {
   };
 
   const handleEdit = async (receipt: any) => {
-    try {
-      const res = await fetch(`/api/vouchers/receipt/${receipt.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingReceipt(receipt);
-        setForm({
-          date: json.data.date,
-          receipt_type: json.data.receipt_type,
-          bank_safe_id: json.data.bank_safe_id,
-          contact_id: json.data.contact_id || '',
-          amount: json.data.amount,
-          reason: json.data.reason || '',
-        });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load receipt:', e);
-    }
+    const { data, error } = await fetchRecord(`/api/vouchers/receipt/${receipt.id}`);
+    const src = recordOrRow(data, receipt);
+    if (!data && error) toast.error(error);
+    setEditingReceipt(receipt);
+    setForm(applyDates({
+      date: src.date,
+      receipt_type: src.receipt_type || 'client',
+      bank_safe_id: src.bank_safe_id || '',
+      contact_id: src.contact_id || '',
+      amount: src.amount || 0,
+      reason: src.reason || '',
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (receipt: any) => {
