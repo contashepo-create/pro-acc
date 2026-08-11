@@ -18,13 +18,8 @@ export async function GET(request: NextRequest) {
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
 
-    // Get cash and bank accounts (1110, 1120)
-    const { data: cashAccounts } = await s.from('accounts')
-      .select('id, code, name')
-      .eq('company_id', auth.companyId)
-      .in('code', ['1110', '1120']);
-
-    const cashAccountIds = (cashAccounts || []).map((a: any) => a.id);
+    const { listCashBankAccountIds } = await import('@/lib/account-resolve');
+    const cashAccountIds = await listCashBankAccountIds(s, auth.companyId);
 
     if (cashAccountIds.length === 0) {
       return success({

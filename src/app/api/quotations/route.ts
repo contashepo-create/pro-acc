@@ -63,8 +63,12 @@ export async function POST(req: NextRequest) {
 
     for (const item of items) {
       await s.from('quotation_items').insert({
-        quotation_id: result.id, description: item.description, quantity: item.quantity,
-        unit_price: item.unit_price, total: item.quantity * item.unit_price,
+        company_id: auth.companyId,
+        quotation_id: result.id,
+        description: item.description,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total: item.quantity * item.unit_price,
       });
     }
 

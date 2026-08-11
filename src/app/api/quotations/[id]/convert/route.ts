@@ -168,6 +168,7 @@ export async function POST(
     if (items.length > 0) {
       const invItems = items.map((item: any) => ({
         id: generateId(),
+        company_id: auth.companyId,
         invoice_id: invoiceId,
         description: item.description,
         quantity: item.quantity,

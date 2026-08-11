@@ -170,6 +170,7 @@ export async function POST(req: NextRequest) {
 
       for (const item of computedItems) {
         const { error: itemErr } = await s.from('purchase_invoice_items').insert({
+          company_id: auth.companyId,
           purchase_invoice_id: invoiceId,
           description: item.description,
           quantity: item.quantity,

@@ -14,6 +14,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { toast } from '@/components/ui/Toast';
 
 interface PurchaseItem {
   description: string;
@@ -149,25 +151,20 @@ export default function PurchaseInvoicesPage() {
   };
 
   const handleEdit = async (invoice: any) => {
-    try {
-      const res = await fetch(`/api/purchases/invoices/${invoice.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingInvoice(invoice);
-        setForm({
-          date: json.data.date,
-          supplier_id: json.data.supplier_id,
-          purchase_order_id: json.data.purchase_order_id || '',
-          notes: json.data.notes || '',
-          tax_percent: Math.round((Number(json.data.tax_rate) || 0) * 100),
-          status: json.data.status || 'unpaid',
-          items: json.data.items?.length ? json.data.items : [{ ...emptyItem }],
-        });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load invoice:', e);
-    }
+    const { data, error } = await fetchRecord(`/api/purchases/invoices/${invoice.id}`);
+    const src = recordOrRow(data, invoice);
+    if (!data && error) toast.error(error);
+    setEditingInvoice(invoice);
+    setForm(applyDates({
+      date: src.date,
+      supplier_id: src.supplier_id || '',
+      purchase_order_id: src.purchase_order_id || '',
+      notes: src.notes || '',
+      tax_percent: Math.round((Number(src.tax_rate) || 0) * 100),
+      status: src.status || 'unpaid',
+      items: src.items?.length ? src.items : [{ ...emptyItem }],
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (invoice: any) => {

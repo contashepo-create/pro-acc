@@ -15,6 +15,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { toast } from '@/components/ui/Toast';
 
 export default function ProgressBillingPage() {
   const [claims, setClaims] = useState<any[]>([]);
@@ -44,7 +46,7 @@ export default function ProgressBillingPage() {
       ]);
       if (claimJson.success) setClaims(claimJson.data?.claims || []);
       else setError(claimJson.message || 'فشل');
-      if (projJson.success) setProjects(projJson.data?.projects || []);
+      if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -76,24 +78,21 @@ export default function ProgressBillingPage() {
   };
 
   const handleEdit = async (claim: any) => {
-    try {
-      const res = await fetch(`/api/progress-billing/${claim.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingClaim(claim);
-        setForm({
-          project_id: json.data.project_id,
-          date: json.data.date,
-          gross_amount: json.data.gross_amount,
-          retention_percentage: json.data.retention_percentage,
-          notes: json.data.notes || '',
-          is_final: json.data.is_final || false,
-        });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load claim:', e);
-    }
+    const { data, error } = await fetchRecord(`/api/progress-billing/${claim.id}`);
+    const src = recordOrRow(data, claim);
+    if (!data && error) toast.error(error);
+    setEditingClaim(claim);
+    setForm(applyDates({
+      project_id: src.project_id || '',
+      date: src.date,
+      gross_amount: src.gross_amount || 0,
+      retention_percentage: src.retention_percentage ?? src.retention_rate ?? 10,
+      notes: src.notes || src.description || '',
+      is_final: src.is_final || false,
+      tax_enabled: Number(src.tax_rate || 0) > 0,
+      tax_rate: src.tax_rate || 0.15,
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (claim: any) => {

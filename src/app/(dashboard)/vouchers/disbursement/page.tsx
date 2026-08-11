@@ -14,6 +14,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 
 export default function DisbursementPage() {
   const [disbursements, setDisbursements] = useState<any[]>([]);
@@ -119,28 +120,20 @@ export default function DisbursementPage() {
   };
 
   const handleEdit = async (disbursement: any) => {
-    try {
-      const res = await fetch(`/api/vouchers/disbursement/${disbursement.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingDisbursement(disbursement);
-        setForm({
-          date: json.data.date,
-          disbursement_type: json.data.disbursement_type,
-          bank_safe_id: json.data.bank_safe_id,
-          contact_id: json.data.contact_id || '',
-          employee_id: json.data.employee_id || '',
-          amount: json.data.amount,
-          reason: json.data.reason || '',
-        });
-        setShowModal(true);
-      } else {
-        toast.error(json.message || 'فشل تحميل السند');
-      }
-    } catch (err) {
-      console.error('Failed to load disbursement:', err);
-      toast.error('خطأ في تحميل السند');
-    }
+    const { data, error } = await fetchRecord(`/api/vouchers/disbursement/${disbursement.id}`);
+    const src = recordOrRow(data, disbursement);
+    if (!data && error) toast.error(error);
+    setEditingDisbursement(disbursement);
+    setForm(applyDates({
+      date: src.date,
+      disbursement_type: src.disbursement_type || 'supplier',
+      bank_safe_id: src.bank_safe_id || '',
+      contact_id: src.contact_id || '',
+      employee_id: src.employee_id || '',
+      amount: src.amount || 0,
+      reason: src.reason || '',
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (disbursement: any) => {

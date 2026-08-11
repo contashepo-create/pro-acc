@@ -1,17 +1,53 @@
-import { success } from '@/lib/api-helpers';
+import { NextRequest } from 'next/server';
+import { success, error, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+
+function secretsMatch(provided: string | null, expected: string | undefined): boolean {
+  if (!provided || !expected) return false;
+  if (provided.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < provided.length; i++) {
+    diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return diff === 0;
+}
 
 /**
  * GET /api/diagnostics
  * نقطة تشخيص ذاتية عامة (لا تكشف أسراراً ولا بيانات، فقط حالة جاهزية النظام).
- * تجيب مباشرة على سؤال: "لماذا تسجيل الدخول 401؟ لماذا الفواتير 500؟"
- * - تحقق من متغيرات البيئة (وجودها فقط، بدون قيمها)
- * - اتصال قاعدة البيانات
- * - الجداول والأعمدة المحورية (انحراف المخطط / هجرات ناقصة)
  * - دوال RPC المطلوبة
  * - عدد المستخدمين (قاعدة فارغة = تسجيل دخول سيفشل دائماً)
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  try {
+    const headerSecret = request.headers.get('x-diagnostics-secret')
+      || request.headers.get('x-cron-secret')
+      || (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+    const allowedSecret = process.env.DIAGNOSTICS_SECRET || process.env.CRON_SECRET;
+    let authorized = secretsMatch(headerSecret, allowedSecret);
+
+    if (!authorized) {
+      try {
+        const { requireAdmin, requireAdminAuth } = await import('@/lib/api-helpers');
+        try {
+          await requireAdminAuth(request);
+          authorized = true;
+        } catch {
+          await requireAdmin(request);
+          authorized = true;
+        }
+      } catch {
+        authorized = false;
+      }
+    }
+
+    if (!authorized) {
+      return error('غير مصرح — التشخيص يتطلب تسجيل دخول المدير أو سر DIAGNOSTICS_SECRET', 401);
+    }
+  } catch (err) {
+    return handleApiError(err);
+  }
+
   const report: Record<string, any> = {
     ok: true,
     deployment: {

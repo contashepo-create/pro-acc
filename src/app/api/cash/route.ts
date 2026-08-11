@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
         *,
         accounts(name),
         transaction_categories(name),
-        bank_safes(name),
+        banks_safes(name),
         contacts(name)
       `, { count: 'exact' })
       .eq('company_id', auth.companyId);
@@ -46,11 +46,19 @@ export async function GET(request: NextRequest) {
 
     if (result.error) {
       console.error('Cash fetch error:', result.error);
-      return success({ transactions: [], total: 0, page, pageSize, totalPages: 0 });
+      return success({ transactions: [], rows: [], total: 0, page, pageSize, totalPages: 0 });
     }
 
+    const transactions = (result.data || []).map((t: any) => ({
+      ...t,
+      account_name: t.accounts?.name || t.account_name || null,
+      bank_name: t.banks_safes?.name || t.bank_name || null,
+      contact_name: t.contacts?.name || t.contact_name || null,
+    }));
+
     return success({
-      transactions: result.data || [],
+      transactions,
+      rows: transactions,
       total: result.count || 0,
       page,
       pageSize,
@@ -85,13 +93,20 @@ export async function POST(request: NextRequest) {
       tax_enabled,
     } = body;
 
-    if (!date || !type || !amount || !reason) {
+    const normalizedType = type === 'receipt' ? 'revenue' : type;
+    if (!date || !normalizedType || !amount || !reason) {
       return error('التاريخ، النوع، المبلغ، والسبب مطلوبة', 400);
+    }
+
+    if (normalizedType !== 'revenue' && normalizedType !== 'expense') {
+      return error('نوع الحركة يجب أن يكون قبض أو صرف', 400);
     }
 
     if (parseFloat(amount) <= 0) {
       return error('المبلغ يجب أن يكون أكبر من صفر', 400);
     }
+
+    const txnType = normalizedType;
 
     // Get account info if specified
     let accountInfo = null;
@@ -127,9 +142,9 @@ export async function POST(request: NextRequest) {
 
     // Determine credit account based on transaction type
     let creditAccountCode: string | null = null;
-    if (type === 'revenue') {
+    if (txnType === 'revenue') {
       creditAccountCode = ACCOUNT_CODES.CONTRACT_REVENUE;
-    } else if (type === 'expense') {
+    } else if (txnType === 'expense') {
       creditAccountCode = ACCOUNT_CODES.DIRECT_COSTS;
     } else if (bankSafeInfo?.account_id) {
       creditAccountCode = null; // use bank account itself
@@ -146,18 +161,18 @@ export async function POST(request: NextRequest) {
     // VAT calculation
     const vRate = (tax_enabled && tax_rate) ? tax_rate : 0;
     const baseAmount = parseFloat(amount);
-    const taxAmount = type === 'revenue' ? baseAmount * vRate / (1 + vRate) : 0;
+    const taxAmount = txnType === 'revenue' ? baseAmount * vRate / (1 + vRate) : 0;
     // For revenue: amount includes VAT, so net = amount / (1+rate), VAT = amount - net
     // For expense: amount is the expense, VAT is extra
-    const expenseTaxAmount = type === 'expense' ? baseAmount * vRate : 0;
-    const totalPayment = type === 'expense' ? baseAmount + expenseTaxAmount : baseAmount;
+    const expenseTaxAmount = txnType === 'expense' ? baseAmount * vRate : 0;
+    const totalPayment = txnType === 'expense' ? baseAmount + expenseTaxAmount : baseAmount;
 
     // Insert cash transaction record
     const { data: transaction, error: insertErr } = await s.from('cash_transactions')
       .insert({
         company_id: auth.companyId,
         date,
-        type,
+        type: txnType,
         amount: baseAmount,
         account_id: debitAccountId || null,
         bank_safe_id: bankSafeId || null,
@@ -178,7 +193,7 @@ export async function POST(request: NextRequest) {
     if (debitAccountId && creditAccountId) {
       const journalLines: any[] = [];
 
-      if (type === 'revenue') {
+      if (txnType === 'revenue') {
         // Revenue: debit cash (full), credit revenue (net), credit VAT_SALES (vat)
         const netRevenue = baseAmount - taxAmount;
         journalLines.push({

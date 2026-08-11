@@ -86,7 +86,7 @@ export async function GET(request: NextRequest) {
 
     // Also get from invoices directly for more accurate VAT
     let invoiceQuery = s.from('invoices')
-      .select('id, number, date, subtotal, vat_amount, total')
+      .select('id, number, date, subtotal, vat_amount, tax_amount, total')
       .eq('company_id', auth.companyId)
       .neq('status', 'cancelled')
       .is('deleted_at', null);

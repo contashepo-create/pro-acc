@@ -79,6 +79,7 @@ export async function PUT(
       await s.from('quotation_items').delete().eq('quotation_id', id);
       for (const item of body.items) {
         await s.from('quotation_items').insert({
+          company_id: auth.companyId,
           quotation_id: id,
           description: item.description,
           quantity: item.quantity,

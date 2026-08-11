@@ -158,9 +158,12 @@ describe('Default chart of accounts — structural & accounting integrity', () =
     // auto-account.ts opening balances post against 3100 (capital)
     expect(byCode.get('3100')).toMatchObject({ type: 'equity', parentCode: '3000' });
     // cash / banks / AR / AP / VAT / retained earnings / depreciation
-    for (const code of ['1110', '1120', '1130', '2110', '1180', '2120', '3200', '5260', '1290']) {
+    for (const code of ['1110', '1120', '1130', '1135', '2110', '1180', '2120', '3200', '5130', '5140', '5260', '1290']) {
       expect(byCode.has(code)).toBe(true);
     }
+    expect(byCode.get('1290')!.parentCode).toBe('1200');
+    expect(byCode.get('1000')!.isHeader).toBe(true);
+    expect(byCode.get('1110')!.isHeader).toBeFalsy();
   });
 
   test('arabic and english names are non-empty', () => {
@@ -183,10 +186,16 @@ describe('createDefaultChartOfAccounts', () => {
     const created = await createDefaultChartOfAccounts(mockDb as any, C1);
 
     expect(created).toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
-    const inserts = mockDb.calls.filter((c) => c.mut.kind === 'insert');
-    expect(inserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length);
-    for (const c of inserts) expect(c.mut.payload.company_id).toBe(C1);
+    const accountInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'accounts');
+    expect(accountInserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length);
+    for (const c of accountInserts) expect(c.mut.payload.company_id).toBe(C1);
 
+    const cashSafe = mockDb.calls.find((c) => c.mut.kind === 'insert' && c.table === 'banks_safes');
+    expect(cashSafe).toBeDefined();
+    expect(cashSafe!.mut.payload.type).toBe('safe');
+    expect(cashSafe!.mut.payload.name).toBe('الخزينة الرئيسية');
+
+    const inserts = accountInserts;
     // Parent linking: 1110's update must point at the id that 1100 got
     const insertId = (code: string) =>
       inserts.find((c) => c.mut.payload.code === code)!.mut.payload.id;
@@ -209,9 +218,9 @@ describe('createDefaultChartOfAccounts', () => {
 
     const created = await createDefaultChartOfAccounts(mockDb as any, C1);
 
-    const inserts = mockDb.calls.filter((c) => c.mut.kind === 'insert');
-    expect(inserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length - 1);
-    expect(inserts.find((c) => c.mut.payload.code === '1000')).toBeUndefined();
+    const accountInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'accounts');
+    expect(accountInserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length - 1);
+    expect(accountInserts.find((c) => c.mut.payload.code === '1000')).toBeUndefined();
     expect(created).toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
   });
 });

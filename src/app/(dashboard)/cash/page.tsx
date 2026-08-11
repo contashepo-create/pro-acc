@@ -14,6 +14,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 
 export default function CashPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -53,13 +54,22 @@ export default function CashPage() {
         conRes.json(),
       ]);
       if (txJson.success) {
-        setTransactions(txJson.data?.rows || []);
+        setTransactions(txJson.data?.transactions || txJson.data?.rows || []);
       } else {
         setError(txJson.message || 'فشل');
         toast.error(txJson.message || 'فشل تحميل البيانات');
       }
       if (bankJson.success) setBanks(bankJson.data?.banks || []);
-      if (accJson.success) setAccounts(accJson.data?.accounts || []);
+      if (accJson.success) {
+        const flatten = (nodes: any[], out: any[] = []): any[] => {
+          for (const n of nodes || []) {
+            if (!n.is_header) out.push(n);
+            if (n.children?.length) flatten(n.children, out);
+          }
+          return out;
+        };
+        setAccounts(flatten(accJson.data?.accounts || []));
+      }
       if (conJson.success) setContacts(conJson.data?.contacts || []);
     } catch (err) {
       setError('فشل تحميل البيانات');
@@ -88,7 +98,13 @@ export default function CashPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          type: form.type === 'receipt' || form.type === 'revenue' ? 'revenue' : 'expense',
+          accountId: form.account_id,
+          bankSafeId: form.bank_safe_id,
+          contactId: form.contact_id,
+        }),
       });
       const json = await res.json();
       if (json.success) {
@@ -116,27 +132,20 @@ export default function CashPage() {
   };
 
   const handleEdit = async (transaction: any) => {
-    try {
-      const res = await fetch(`/api/cash/${transaction.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingTransaction(transaction);
-        setForm({
-          date: json.data.date,
-          type: json.data.type,
-          amount: json.data.amount,
-          account_id: json.data.account_id,
-          bank_safe_id: json.data.bank_safe_id || '',
-          contact_id: json.data.contact_id || '',
-          reason: json.data.reason || '',
-        });
-        setShowModal(true);
-      } else {
-        toast.error(json.message || 'فشل تحميل البيانات');
-      }
-    } catch (e) {
-      toast.error('خطأ في الاتصال بالخادم');
-    }
+    const { data, error } = await fetchRecord(`/api/cash/${transaction.id}`);
+    const src = recordOrRow(data, transaction);
+    if (!data && error) toast.error(error);
+    setEditingTransaction(transaction);
+    setForm(applyDates({
+      date: src.date,
+      type: src.type || 'receipt',
+      amount: src.amount || 0,
+      account_id: src.account_id || '',
+      bank_safe_id: src.bank_safe_id || '',
+      contact_id: src.contact_id || '',
+      reason: src.reason || '',
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (transaction: any) => {
@@ -163,6 +172,7 @@ export default function CashPage() {
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'success' | 'danger'; label: string }> = {
       receipt: { variant: 'success', label: 'قبض' },
+      revenue: { variant: 'success', label: 'قبض' },
       expense: { variant: 'danger', label: 'صرف' },
     };
     const m = map[type] || { variant: 'success', label: type };
@@ -196,8 +206,8 @@ export default function CashPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="النقدية"
-        description="إدارة المعاملات النقدية"
+        title="حركة النقدية"
+        description="قبض وصرف يومي مرتبط بالخزائن والبنوك المسجّلة في دليل الحسابات"
         actions={
           <Button onClick={() => { setEditingTransaction(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>
             إضافة معاملة

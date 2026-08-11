@@ -5,6 +5,7 @@ import { Edit, Trash2, Eye } from 'lucide-react';
 import { Button } from './Button';
 import { Modal } from './Modal';
 import { Badge } from './Badge';
+import { RecordViewModal } from './RecordViewModal';
 
 interface ActionButtonsProps {
   item: any;
@@ -24,6 +25,7 @@ export function ActionButtons({
   showStatus = false 
 }: ActionButtonsProps) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showViewModal, setShowViewModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const handleDelete = async () => {
@@ -57,11 +59,14 @@ export function ActionButtons({
       <div className="flex items-center gap-2">
         {showStatus && status && statusBadge(status)}
         
-        {onView && (
-          <Button variant="ghost" size="sm" onClick={() => onView(item)} title="عرض">
-            <Eye size={16} />
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => (onView ? onView(item) : setShowViewModal(true))}
+          title="عرض"
+        >
+          <Eye size={16} />
+        </Button>
         
         {onEdit && (
           <Button variant="ghost" size="sm" onClick={() => onEdit(item)} title="تعديل">
@@ -75,6 +80,12 @@ export function ActionButtons({
           </Button>
         )}
       </div>
+
+      <RecordViewModal
+        isOpen={showViewModal}
+        onClose={() => setShowViewModal(false)}
+        record={item}
+      />
 
       <Modal
         isOpen={showDeleteModal}

@@ -3,6 +3,7 @@ import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
+import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -77,7 +78,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       if (jeErr) throw jeErr;
       const jeId = closingJe.id;
 
-      const closingLines: any[] = [];
+      const closingLines: Array<{ journal_entry_id: string; account_id: string; debit: number; credit: number }> = [];
       if (netIncome > 0) {
         for (const acc of (revenueAccounts || [])) {
           const bal = -(accountBalances[acc.id] || 0);
@@ -92,7 +93,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         }
         closingLines.push({ journal_entry_id: jeId, account_id: retainedAccount.id, debit: loss, credit: 0 });
       }
-      if (closingLines.length > 0) await s.from('journal_lines').insert(closingLines);
+      if (closingLines.length > 0) {
+        const { error: jlErr } = await insertJournalLines(companyId, closingLines);
+        if (jlErr) throw jlErr;
+      }
     }
 
     const { error: updErr } = await s.from('fiscal_years')

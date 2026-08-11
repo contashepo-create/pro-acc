@@ -195,6 +195,7 @@ export async function POST(request: NextRequest) {
           for (const item of items) {
             const itemTotal = Number(item.total) || (Number(item.quantity) * Number(item.unit_price)) || 0;
             const { error: iiErr } = await s.from('invoice_items').insert({
+              company_id: auth.companyId,
               invoice_id: invoiceId,
               description: item.description,
               quantity: Number(item.quantity) || 1,
@@ -205,6 +206,7 @@ export async function POST(request: NextRequest) {
           }
         } else {
           const { error: iiErr } = await s.from('invoice_items').insert({
+            company_id: auth.companyId,
             invoice_id: invoiceId,
             description: `أعمال مشروع: ${mappedBody.name}`,
             quantity: 1,

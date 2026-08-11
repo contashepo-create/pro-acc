@@ -42,10 +42,10 @@ export const ACCOUNT_CODES = {
 
 export const PROJECT_EXPENSE_CODES: Record<string, string> = {
   materials: '5110',
-  labor: '5210',
+  labor: '5120',
   subcontractor: '5130',
-  equipment: '5120',
-  other: '5100',
+  equipment: '5140',
+  other: '5400',
 };
 
 export type AccountCode = (typeof ACCOUNT_CODES)[keyof typeof ACCOUNT_CODES];

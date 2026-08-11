@@ -21,9 +21,15 @@ export async function GET(
 
     if (!project) return notFound();
 
+    const { data: boq } = await s.from('boq_items')
+      .select('*').eq('project_id', id).order('id');
+
+    const p = project as any;
     return success({
-      ...(project as any),
-      client_name: (project as any).contacts?.name || null,
+      ...p,
+      client_id: p.client_id || p.contact_id || '',
+      client_name: p.contacts?.name || null,
+      boq_items: boq || [],
     });
   } catch (err) {
     return handleApiError(err);

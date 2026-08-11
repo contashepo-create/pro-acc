@@ -12,6 +12,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { toast } from '@/components/ui/Toast';
 
 export default function FixedAssetsPage() {
   const [assets, setAssets] = useState<any[]>([]);
@@ -70,28 +72,23 @@ export default function FixedAssetsPage() {
   };
 
   const handleEdit = async (asset: any) => {
-    try {
-      const res = await fetch(`/api/fixed-assets/${asset.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingAsset(asset);
-        setForm({
-          name: json.data.name,
-          code: json.data.code,
-          category: json.data.category || '',
-          purchase_date: json.data.purchase_date,
-          purchase_cost: json.data.purchase_cost,
-          useful_life_years: json.data.useful_life_years,
-          depreciation_rate: json.data.depreciation_rate,
-          depreciation_method: json.data.depreciation_method,
-          location: json.data.location || '',
-          notes: json.data.notes || '',
-        });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load asset:', e);
-    }
+    const { data, error } = await fetchRecord(`/api/fixed-assets/${asset.id}`);
+    const src = recordOrRow(data, asset);
+    if (!data && error) toast.error(error);
+    setEditingAsset(asset);
+    setForm(applyDates({
+      name: src.name || '',
+      code: src.code || '',
+      category: src.category || '',
+      purchase_date: src.purchase_date,
+      purchase_cost: src.purchase_cost || 0,
+      useful_life_years: src.useful_life_years || 5,
+      depreciation_rate: src.depreciation_rate || 20,
+      depreciation_method: src.depreciation_method || 'straight_line',
+      location: src.location || '',
+      notes: src.notes || '',
+    }, ['purchase_date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (asset: any) => {

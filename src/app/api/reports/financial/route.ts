@@ -11,7 +11,7 @@ const sb = () => getSupabase();
  */
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'reports', 'read');
     const s = sb();
     const url = new URL(req.url);
     const type = url.searchParams.get('type') || 'trial_balance';
@@ -37,7 +37,9 @@ export async function GET(req: NextRequest) {
     let linesData: any[] = [];
     if (jeIds.length > 0) {
       const { data: lines } = await s.from('journal_lines')
-        .select('account_id, debit, credit').in('journal_entry_id', jeIds);
+        .select('account_id, debit, credit')
+        .eq('company_id', auth.companyId)
+        .in('journal_entry_id', jeIds);
       linesData = lines || [];
     }
 

@@ -267,8 +267,8 @@ describe('reports/financial — excludes soft-deleted journal entries', () => {
       { id: 'je-2', company_id: C1, date: '2026-01-02', deleted_at: '2026-01-03' }, // soft-deleted
     );
     db.journal_lines.push(
-      { account_id: AR, journal_entry_id: 'je-1', debit: 500, credit: 0 },
-      { account_id: AR, journal_entry_id: 'je-2', debit: 9999, credit: 0 }, // should be excluded
+      { company_id: C1, account_id: AR, journal_entry_id: 'je-1', debit: 500, credit: 0 },
+      { company_id: C1, account_id: AR, journal_entry_id: 'je-2', debit: 9999, credit: 0 }, // should be excluded
     );
     mockDb = makeDb(db);
     const res = await financialReportGET(withUrl(authedRequest(undefined, 'GET'), '?type=trial_balance'));

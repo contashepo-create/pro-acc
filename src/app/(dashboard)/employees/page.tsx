@@ -12,6 +12,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<any[]>([]);
@@ -98,27 +99,20 @@ export default function EmployeesPage() {
   };
 
   const handleEdit = async (employee: any) => {
-    try {
-      const res = await fetch(`/api/employees/${employee.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingEmployee(employee);
-        setForm({
-          name: json.data.name,
-          phone: json.data.phone || '',
-          email: json.data.email || '',
-          salary: json.data.salary,
-          department: json.data.department || '',
-          position: json.data.position || '',
-          hire_date: json.data.hire_date,
-        });
-        setShowModal(true);
-      } else {
-        toast.error(json.message || 'فشل تحميل البيانات');
-      }
-    } catch (e) {
-      toast.error('خطأ في الاتصال بالخادم');
-    }
+    const { data, error } = await fetchRecord(`/api/employees/${employee.id}`);
+    const src = recordOrRow(data, employee);
+    if (!data && error) toast.error(error);
+    setEditingEmployee(employee);
+    setForm(applyDates({
+      name: src.name || '',
+      phone: src.phone || '',
+      email: src.email || '',
+      salary: src.salary || 0,
+      department: src.department || '',
+      position: src.position || '',
+      hire_date: src.hire_date,
+    }, ['hire_date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (employee: any) => {

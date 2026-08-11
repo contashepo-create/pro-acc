@@ -92,9 +92,9 @@ async function main() {
       [invId, COMPANY_ID, invNo, cid, 30, subtotal, 0.15, vat, total]
     );
     await pool.query(
-      `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price, total, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
-      [randomUUID(), invId, 'Service', qty, price, subtotal]
+      `INSERT INTO invoice_items (id, company_id, invoice_id, description, quantity, unit_price, total, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+      [randomUUID(), COMPANY_ID, invId, 'Service', qty, price, subtotal]
     );
 
     const jeId = randomUUID();
@@ -105,15 +105,15 @@ async function main() {
     );
     // Balanced: AR = total (dr); Revenue = subtotal (cr); VAT = vat (cr)
     await pool.query(
-      `INSERT INTO journal_lines (id, journal_entry_id, account_id, account_code, account_name, debit, credit, created_at)
+      `INSERT INTO journal_lines (id, company_id, journal_entry_id, account_id, account_code, account_name, debit, credit, created_at)
        VALUES
-        ($1,$2,$3,'1130','Accounts Receivable',$4,0,NOW()),
-        ($5,$2,$6,'4100','Contract Revenue',0,$7,NOW()),
-        ($8,$2,$9,'2120','VAT Payable',0,$10,NOW())`,
+        ($1,$2,$3,$4,'1130','Accounts Receivable',$5,0,NOW()),
+        ($6,$2,$3,$7,'4100','Contract Revenue',0,$8,NOW()),
+        ($9,$2,$3,$10,'2120','VAT Payable',0,$11,NOW())`,
       [
-        randomUUID(), jeId, byCode['1130'], total,
-        randomUUID(), byCode['4100'], subtotal,
-        randomUUID(), byCode['2120'], vat,
+        randomUUID(), COMPANY_ID, jeId, byCode['1130'], total,
+        randomUUID(), COMPANY_ID, jeId, byCode['4100'], subtotal,
+        randomUUID(), COMPANY_ID, jeId, byCode['2120'], vat,
       ]
     );
     invNo++;

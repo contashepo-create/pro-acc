@@ -46,26 +46,33 @@ BEGIN
     p_created_by
   ) RETURNING id INTO v_journal_id;
 
-  -- Insert journal lines
+  -- Insert journal lines (company_id is NOT NULL — must be set)
   -- Debit: Accounts Receivable
-  INSERT INTO journal_lines (journal_entry_id, account_id, account_code, debit, credit, description)
-  VALUES (v_journal_id, p_ar_account_id, '1130', p_total, 0, 'فاتورة مبيعات رقم ' || p_number);
+  INSERT INTO journal_lines (company_id, journal_entry_id, account_id, account_code, account_name, debit, credit, description)
+  VALUES (p_company_id, v_journal_id, p_ar_account_id, '1130',
+          COALESCE((SELECT name FROM accounts WHERE id = p_ar_account_id AND company_id = p_company_id), 'ذمم العملاء'),
+          p_total, 0, 'فاتورة مبيعات رقم ' || p_number);
 
   -- Credit: Revenue
-  INSERT INTO journal_lines (journal_entry_id, account_id, account_code, debit, credit, description)
-  VALUES (v_journal_id, p_revenue_account_id, '4100', 0, p_subtotal, 'إيراد فاتورة رقم ' || p_number);
+  INSERT INTO journal_lines (company_id, journal_entry_id, account_id, account_code, account_name, debit, credit, description)
+  VALUES (p_company_id, v_journal_id, p_revenue_account_id, '4100',
+          COALESCE((SELECT name FROM accounts WHERE id = p_revenue_account_id AND company_id = p_company_id), 'إيرادات'),
+          0, p_subtotal, 'إيراد فاتورة رقم ' || p_number);
 
   -- Credit: VAT (if applicable)
   IF p_vat_amount > 0 AND p_vat_account_id IS NOT NULL THEN
-    INSERT INTO journal_lines (journal_entry_id, account_id, account_code, debit, credit, description)
-    VALUES (v_journal_id, p_vat_account_id, '2120', 0, p_vat_amount, 'ضريبة فاتورة رقم ' || p_number);
+    INSERT INTO journal_lines (company_id, journal_entry_id, account_id, account_code, account_name, debit, credit, description)
+    VALUES (p_company_id, v_journal_id, p_vat_account_id, '2120',
+            COALESCE((SELECT name FROM accounts WHERE id = p_vat_account_id AND company_id = p_company_id), 'ضريبة المبيعات'),
+            0, p_vat_amount, 'ضريبة فاتورة رقم ' || p_number);
   END IF;
 
   -- Insert invoice items
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
   LOOP
-    INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, total)
+    INSERT INTO invoice_items (company_id, invoice_id, description, quantity, unit_price, total)
     VALUES (
+      p_company_id,
       v_invoice_id,
       v_item->>'description',
       COALESCE((v_item->>'quantity')::NUMERIC, 0),

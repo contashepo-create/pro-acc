@@ -13,15 +13,25 @@ export async function GET(
     const { id } = await paramsPromise;
     const s = sb();
 
-    // Fetch invoice with full client data
-    const { data: invRes, error: invErr } = await s.from('invoices')
+    // Schema-drift resilient: vat_* vs tax_*, optional deleted_at / contacts embed.
+    let invRes: any = null;
+    let invErr: any = null;
+    const primary = await s.from('invoices')
       .select(`
         id, number, contact_id, project_id, date, due_date, subtotal,
-        tax_rate, tax_amount, total, paid_amount, status, notes,
+        vat_rate, vat_amount, tax_rate, tax_amount, total, paid_amount, status, notes,
         journal_entry_id, created_by, created_at,
         contacts(id, name, tax_number, address, phone, email, commercial_registration)
       `)
-      .eq('id', id).eq('company_id', auth.companyId).is('deleted_at', null).maybeSingle();
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    invRes = primary.data; invErr = primary.error;
+
+    if (invErr) {
+      const fallback = await s.from('invoices')
+        .select('id, number, contact_id, project_id, date, due_date, subtotal, total, paid_amount, status, notes, journal_entry_id, created_by, created_at')
+        .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      invRes = fallback.data; invErr = fallback.error;
+    }
     if (invErr || !invRes) return notFound();
 
     const { data: itemsRes } = await s.from('invoice_items')
@@ -75,6 +85,68 @@ export async function GET(
       company: company || {},
       journal_lines: journalLines,
     });
+  } catch (err) {
+    return handleApiError(err);
+  }
+}
+
+export async function PUT(
+  request: NextRequest,
+  { params: paramsPromise }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const auth = await requireModulePermission(request, 'invoices', 'update');
+    const { id } = await paramsPromise;
+    const s = sb();
+    const body = await parseBody<any>(request);
+
+    const { data: existing } = await s.from('invoices')
+      .select('id, status, journal_entry_id, number')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!existing) return notFound();
+    if ((existing as any).status === 'cancelled') return error('لا يمكن تعديل فاتورة ملغاة');
+
+    const header: any = {};
+    if (body.notes !== undefined) header.notes = body.notes;
+    if (body.dueDate || body.due_date) header.due_date = body.dueDate || body.due_date;
+    if (body.date) header.date = body.date;
+    if (body.clientId || body.contact_id) header.contact_id = body.clientId || body.contact_id;
+    if (body.projectId !== undefined || body.project_id !== undefined) {
+      header.project_id = body.projectId ?? body.project_id ?? null;
+    }
+
+    // Financial rewrite only while unpaid (journal already posted otherwise).
+    if ((existing as any).status === 'unpaid' && Array.isArray(body.items) && body.items.length > 0) {
+      const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+      const items = body.items.map((it: any) => {
+        const qty = Number(it.quantity) || 0;
+        const price = Number(it.unitPrice ?? it.unit_price) || 0;
+        const disc = Number(it.discount) || 0;
+        const gross = round2(qty * price);
+        const discount = Math.min(round2(disc), gross);
+        return { description: it.description, quantity: qty, unit_price: price, total: round2(gross - discount) };
+      });
+      const subtotal = round2(items.reduce((s: number, i: any) => s + i.total, 0));
+      const vatRate = body.vatEnabled === false ? 0 : Number(body.vatRate ?? body.vat_rate ?? 0.15);
+      const vatAmount = round2(subtotal * vatRate);
+      header.subtotal = subtotal;
+      header.vat_rate = vatRate;
+      header.vat_amount = vatAmount;
+      header.tax_rate = vatRate;
+      header.tax_amount = vatAmount;
+      header.total = round2(subtotal + vatAmount);
+
+      await s.from('invoice_items').delete().eq('invoice_id', id);
+      for (const item of items) {
+        await s.from('invoice_items').insert({ company_id: auth.companyId, invoice_id: id, ...item });
+      }
+    }
+
+    const { data: updated, error: updErr } = await s.from('invoices')
+      .update(header).eq('id', id).eq('company_id', auth.companyId).select('*').single();
+    if (updErr) throw updErr;
+
+    return success(updated);
   } catch (err) {
     return handleApiError(err);
   }

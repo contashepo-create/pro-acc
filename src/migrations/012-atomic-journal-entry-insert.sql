@@ -17,7 +17,7 @@ DECLARE
   v_number INT;
   v_year INT;
   v_total_debit NUMERIC := 0;
-  v_total_credit NUMERIC;
+  v_total_credit NUMERIC := 0;
   v_line JSONB;
   v_result JSONB;
 BEGIN
@@ -66,12 +66,20 @@ BEGIN
   FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines)
   LOOP
     INSERT INTO journal_lines (
-      journal_entry_id, account_id, account_code,
+      company_id, journal_entry_id, account_id, account_code, account_name,
       debit, credit, description, contact_id, project_id
     ) VALUES (
+      p_company_id,
       v_entry_id,
       (v_line->>'accountId')::UUID,
-      v_line->>'accountCode',
+      COALESCE(
+        NULLIF(v_line->>'accountCode', ''),
+        (SELECT code FROM accounts WHERE id = (v_line->>'accountId')::UUID AND company_id = p_company_id)
+      ),
+      COALESCE(
+        NULLIF(v_line->>'accountName', ''),
+        (SELECT name FROM accounts WHERE id = (v_line->>'accountId')::UUID AND company_id = p_company_id)
+      ),
       COALESCE((v_line->>'debit')::NUMERIC, 0),
       COALESCE((v_line->>'credit')::NUMERIC, 0),
       v_line->>'description',

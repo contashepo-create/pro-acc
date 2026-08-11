@@ -28,9 +28,23 @@ export async function GET(
     const { id } = await paramsPromise;
     const s = sb();
 
-    const { data: entryRes, error: entryErr } = await s.from('journal_entries')
-      .select('id, company_id, number, date, type, description, reference, created_by, created_at')
+    // Do NOT select a non-existent `reference` column — the schema uses
+    // reference_type / reference_id. A failed GET left the edit form empty.
+    let entryRes: any = null;
+    let entryErr: any = null;
+    const primary = await s.from('journal_entries')
+      .select('id, company_id, number, date, type, description, reference_type, reference_id, created_by, created_at')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    entryRes = primary.data;
+    entryErr = primary.error;
+
+    if (entryErr) {
+      const fallback = await s.from('journal_entries')
+        .select('id, company_id, number, date, type, description, created_by, created_at')
+        .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      entryRes = fallback.data;
+      entryErr = fallback.error;
+    }
     if (entryErr || !entryRes) return notFound();
 
     const { data: linesRes } = await s.from('journal_lines')
@@ -47,6 +61,74 @@ export async function GET(
     const totalCredit = lines.reduce((s: number, l: any) => s + l.credit, 0);
 
     return success({ ...entryRes, totalDebit, totalCredit, lines });
+  } catch (err) {
+    return handleApiError(err);
+  }
+}
+
+export async function PUT(
+  request: NextRequest,
+  { params: paramsPromise }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const auth = await requireModulePermission(request, 'journal', 'update');
+    const { id } = await paramsPromise;
+    const s = sb();
+    const body = await request.json();
+
+    const { data: existing } = await s.from('journal_entries')
+      .select('id, number')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!existing) return notFound();
+
+    for (const ref of REFERENCING_TABLES) {
+      try {
+        const { data: refs } = await s.from(ref.table)
+          .select('id').eq('journal_entry_id', id).limit(1);
+        if (refs && refs.length > 0) {
+          return error(`لا يمكن تعديل قيد مرتبط بـ: ${ref.name}`);
+        }
+      } catch { /* table/column may not exist */ }
+    }
+
+    const { journalEntrySchema } = await import('@/lib/validation');
+    const parsed = journalEntrySchema.safeParse(body);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+
+    const { date, type, description, lines } = parsed.data;
+    const resolved: Array<{ account_id: string; debit: number; credit: number; description: string | null }> = [];
+
+    for (const line of lines) {
+      const { data: account } = await s.from('accounts')
+        .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+      if (!account) return error(`الحساب برمز ${line.accountCode} غير موجود`);
+      resolved.push({
+        account_id: account.id,
+        debit: line.debit,
+        credit: line.credit,
+        description: line.description || null,
+      });
+    }
+
+    const { error: updErr } = await s.from('journal_entries')
+      .update({ date, type, description: description || null })
+      .eq('id', id).eq('company_id', auth.companyId);
+    if (updErr) throw updErr;
+
+    const { error: delErr } = await s.from('journal_lines').delete().eq('journal_entry_id', id);
+    if (delErr) throw delErr;
+
+    const { insertJournalLines } = await import('@/lib/journal-utils');
+    const { error: linesErr } = await insertJournalLines(auth.companyId, resolved.map((l) => ({
+      journal_entry_id: id,
+      account_id: l.account_id,
+      debit: l.debit,
+      credit: l.credit,
+      description: l.description,
+    })));
+    if (linesErr) throw linesErr;
+
+    return success({ id, number: existing.number, date, type, description });
   } catch (err) {
     return handleApiError(err);
   }

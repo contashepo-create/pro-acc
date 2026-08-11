@@ -91,10 +91,17 @@ export async function GET(request: NextRequest) {
   try {
     const authHeader = request.headers.get('authorization') || '';
     const cronSecret = authHeader.replace('Bearer ', '') || request.headers.get('x-cron-secret');
-
-    if (cronSecret !== process.env.CRON_SECRET) {
+    const expected = process.env.CRON_SECRET;
+    if (!expected) {
+      return error('CRON_SECRET غير مضبوط — العملية مرفوضة', 401);
+    }
+    if (!cronSecret || cronSecret.length !== expected.length) {
       return error('غير مصرح', 401);
     }
+    let diff = 0;
+    for (let i = 0; i < expected.length; i++) diff |= cronSecret.charCodeAt(i) ^ expected.charCodeAt(i);
+    if (diff !== 0) return error('غير مصرح', 401);
+
     return await doCleanup();
   } catch (err) {
     return serverError(err);
@@ -104,9 +111,17 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const cronSecret = request.headers.get('x-cron-secret');
-    if (cronSecret !== process.env.CRON_SECRET) {
+    const expected = process.env.CRON_SECRET;
+    if (!expected) {
+      return error('CRON_SECRET غير مضبوط — العملية مرفوضة', 401);
+    }
+    if (!cronSecret || cronSecret.length !== expected.length) {
       return error('غير مصرح', 401);
     }
+    let diff = 0;
+    for (let i = 0; i < expected.length; i++) diff |= cronSecret.charCodeAt(i) ^ expected.charCodeAt(i);
+    if (diff !== 0) return error('غير مصرح', 401);
+
     return await doCleanup();
   } catch (err) {
     return serverError(err);

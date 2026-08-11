@@ -20,6 +20,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { toDateInput } from '@/lib/form-utils';
 import { useSidebarStore } from '@/store/sidebar-store';
 import { useAuthStore } from '@/store/auth-store';
 
@@ -215,21 +216,27 @@ export default function ProjectsPage() {
       const json = await res.json();
       if (json.success) {
         setEditingProject(project);
+        const d = json.data;
         setForm({
-          name: json.data.name,
-          client_id: json.data.client_id || '',
-          start_date: json.data.start_date,
-          end_date: json.data.end_date || '',
-          contract_value: json.data.contract_value || 0,
-          description: json.data.description || '',
-          location: json.data.location || '',
+          name: d.name || '',
+          client_id: d.client_id || d.contact_id || '',
+          start_date: toDateInput(d.start_date),
+          end_date: toDateInput(d.end_date),
+          contract_value: d.contract_value || 0,
+          description: d.description || '',
+          location: d.location || '',
           auto_invoice: false,
         });
-        setBoqItems(json.data.boq_items || []);
+        setBoqItems((d.boq_items || []).length
+          ? d.boq_items
+          : [{ description: '', unit: 'متر', quantity: 1, unit_price: 0, total: 0 }]);
         setShowModal(true);
+      } else {
+        toast.error(json.message || 'تعذر تحميل المشروع');
       }
     } catch (e) {
       console.error('Failed to load project:', e);
+      toast.error('تعذر تحميل المشروع');
     }
   };
 

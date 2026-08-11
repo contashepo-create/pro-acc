@@ -136,7 +136,7 @@ export default function UsersPage() {
           password: '',
           role: d.role || 'accountant',
           phone: d.phone || '',
-          birth_date: d.birth_date || '',
+          birth_date: (d.birth_date || '').toString().slice(0, 10),
           city: d.city || '',
         });
         setShowModal(true);
