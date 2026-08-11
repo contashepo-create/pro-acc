@@ -14,7 +14,14 @@ interface JournalLine { accountCode: string; debit: number; credit: number; desc
 
 function flatten(accounts: any[], depth = 0, out: any[] = []): any[] {
   for (const a of accounts || []) {
-    out.push({ code: a.code, name: a.name, label: `${'  '.repeat(depth)}${a.code} — ${a.name}`, depth });
+    const isParent = Boolean(a.children && a.children.length > 0);
+    out.push({
+      code: a.code,
+      name: a.name,
+      label: `${'  '.repeat(depth)}${a.code} — ${a.name}${isParent ? ' (حساب رئيسي — غير قابل للترحيل)' : ''}`,
+      depth,
+      isParent,
+    });
     if (a.children && a.children.length) flatten(a.children, depth + 1, out);
   }
   return out;
@@ -137,52 +144,112 @@ export default function NewJournalPage() {
   };
 
   const accountOptions = [
-    { value: '', label: 'اختر حساباً' },
-    ...accounts.map((a) => ({ value: a.code, label: a.label })),
+    { value: '', label: 'اختر حساباً فرعياً للترحيل...' },
+    ...accounts.map((a) => ({
+      value: a.code,
+      label: a.label,
+      disabled: a.isParent,
+    })),
   ];
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
+    <div className="max-w-5xl mx-auto p-6">
       <PageHeader
         title={editId ? 'تعديل قيد' : 'تسجيل قيد جديد'}
-        description="كل سطر يمثل حساباً واحداً: مدين أو دائن (لا كلاهما)"
+        description="تسجيل الأطراف المدينة والدائنة مقيدة بالحسابات الفرعية وفق المعايير المحاسبية العالمية"
         actions={<Button variant="ghost" onClick={() => router.push('/journal')} leftIcon={<ArrowRight size={16} />}>رجوع للقيود</Button>}
       />
 
-      <div className="space-y-4 mt-4">
-        <div className="grid grid-cols-2 gap-4">
+      <div className="space-y-6 mt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <Select label="النوع" value={form.type} onChange={(v) => setForm({ ...form, type: v })} options={[{ value: 'general', label: 'عام' }, { value: 'opening_balance', label: 'افتتاحي' }, { value: 'accrual', label: 'استحقاق' }]} />
         </div>
 
-        <Textarea label="البيان" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        <Textarea label="البيان العام للقيد" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
 
-        <div className="border rounded-xl overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-bg-secondary text-text-muted">
-              <tr>
-                <th className="p-2 text-right min-w-[260px]">الحساب</th>
-                <th className="p-2 text-right">البيان</th>
-                <th className="p-2 text-right w-32">مدين</th>
-                <th className="p-2 text-right w-32">دائن</th>
-                <th className="p-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {form.lines.map((line: any, i: number) => (
-                <tr key={i} className="border-t align-top">
-                  <td className="p-2"><Select value={line.accountCode} onChange={(v) => updateLine(i, 'accountCode', v)} options={accountOptions} /></td>
-                  <td className="p-2"><Input value={line.description} onChange={(e) => updateLine(i, 'description', e.target.value)} /></td>
-                  <td className="p-2"><Input type="number" value={line.debit} onChange={(e) => updateLine(i, 'debit', parseFloat(e.target.value) || 0)} /></td>
-                  <td className="p-2"><Input type="number" value={line.credit} onChange={(e) => updateLine(i, 'credit', parseFloat(e.target.value) || 0)} /></td>
-                  <td className="p-2"><button onClick={() => removeLine(i)} className="text-danger"><Trash2 size={16} /></button></td>
+        <div className="bg-bg-card border border-border rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-border">
+            <h3 className="font-bold text-sm text-text-primary">بنود وشروط القيد (مدين / دائن)</h3>
+            <span className="text-xs text-text-muted">ملاحظة: يُسمح بالترحيل المباشر على الحسابات الفرعية فقط</span>
+          </div>
+
+          <div className="border border-border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-bg-secondary text-text-muted">
+                <tr>
+                  <th className="p-3 text-right min-w-[280px]">الحساب الفرعي (Posting Account)</th>
+                  <th className="p-3 text-right">البيان الفرعي</th>
+                  <th className="p-3 text-right w-36">مدين (Debit)</th>
+                  <th className="p-3 text-right w-36">دائن (Credit)</th>
+                  <th className="p-3 w-12 text-center"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {form.lines.map((line: any, i: number) => (
+                  <tr key={i} className="hover:bg-bg-hover/50 align-middle">
+                    <td className="p-2.5">
+                      <Select
+                        searchable
+                        value={line.accountCode}
+                        onChange={(v) => updateLine(i, 'accountCode', v)}
+                        options={accountOptions}
+                        placeholder="بحث بالرمز أو اسم الحساب الفرعي..."
+                      />
+                    </td>
+                    <td className="p-2.5">
+                      <Input
+                        placeholder="بيان السطر (اختياري)"
+                        value={line.description}
+                        onChange={(e) => updateLine(i, 'description', e.target.value)}
+                      />
+                    </td>
+                    <td className="p-2.5">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="0.00"
+                        value={line.debit || ''}
+                        onChange={(e) => updateLine(i, 'debit', parseFloat(e.target.value) || 0)}
+                      />
+                    </td>
+                    <td className="p-2.5">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="any"
+                        placeholder="0.00"
+                        value={line.credit || ''}
+                        onChange={(e) => updateLine(i, 'credit', parseFloat(e.target.value) || 0)}
+                      />
+                    </td>
+                    <td className="p-2.5 text-center">
+                      <button
+                        type="button"
+                        onClick={() => removeLine(i)}
+                        className="text-danger hover:text-danger/80 p-1.5 rounded-lg hover:bg-danger/10 transition-colors"
+                        title="حذف السطر"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-        <Button variant="ghost" onClick={addLine} leftIcon={<Plus size={16} />}>إضافة سطر</Button>
+          <div className="flex items-center justify-between pt-2">
+            <Button variant="ghost" onClick={addLine} leftIcon={<Plus size={16} />}>
+              إضافة سطر جديد
+            </Button>
+            <div className="text-xs text-text-muted flex gap-4 font-mono">
+              <span>إجمالي المدين: <strong className="text-text-primary">{form.lines.reduce((s: number, l: any) => s + (Number(l.debit) || 0), 0).toFixed(2)}</strong></span>
+              <span>إجمالي الدائن: <strong className="text-text-primary">{form.lines.reduce((s: number, l: any) => s + (Number(l.credit) || 0), 0).toFixed(2)}</strong></span>
+            </div>
+          </div>
+        </div>
 
         {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
 
