@@ -137,7 +137,7 @@ export async function PUT(
       description: `سند قبض رقم ${old.number}: ${newReason}`,
       lines: [
         { account_id: bankAccount.account_id, debit: newAmount, credit: 0 },
-        { account_id: counterpartAccountId, debit: 0, credit: newAmount },
+        { account_id: counterpartAccountId, debit: 0, credit: newAmount, contact_id: newContactId || null },
       ],
       reference_type: 'voucher_receipt',
       reference_id: id,

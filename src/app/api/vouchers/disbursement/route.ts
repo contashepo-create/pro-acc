@@ -230,7 +230,7 @@ export async function POST(request: NextRequest) {
           type: 'general',
           description: `سند صرف رقم ${nextNumber}: ${reason}`,
           lines: [
-            { account_id: counterpartAccountId, debit: amount, credit: 0 },
+            { account_id: counterpartAccountId, debit: amount, credit: 0, contact_id: contact_id || null },
             { account_id: bankSafe.account_id, debit: 0, credit: amount },
           ],
           reference_type: 'voucher_disbursement',

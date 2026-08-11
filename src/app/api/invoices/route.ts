@@ -260,12 +260,14 @@ export async function POST(request: NextRequest) {
       // حساب المتبقي على ذمم العميل المدينة
       const remainingReceivable = computedTotal - finalPaidAmount;
       if (remainingReceivable > 0) {
-        // مدين 2: ذمم العملاء المدينة (المتبقي الآجل)
+        // مدين 2: ذمم العملاء المدينة (المتبقي الآجل) — موسوم بـ contact_id
+        // ليدخل في رصيد العميل (الآجل المستحق عليه)
         journalLines.push({
           journal_entry_id: journalEntryId,
           account_id: arAccount.id,
           debit: remainingReceivable,
           credit: 0,
+          contact_id: clientId,
           description: `المتبقي الآجل للفاتورة رقم ${number}`
         });
       }

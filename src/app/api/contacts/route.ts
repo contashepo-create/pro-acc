@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
-import { success, error, handleApiError, parseBody, getPaginationParams, requireApiAuth, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { contactCreateSchema } from '@/lib/validation';
+import { postContactOpeningBalance } from '@/lib/contact-utils';
 
 const sb = () => getSupabase();
 
@@ -44,9 +46,10 @@ export async function POST(req: NextRequest) {
     const auth = await requireModulePermission(req, 'contacts', 'create');
     const s = sb();
     const data = await parseBody(req);
-    const { name, type, phone, email, address, tax_number, commercial_registration, credit_limit } = data;
 
-    if (!name || !type) return error('name and type are required');
+    const parsed = contactCreateSchema.safeParse(data);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { name, type, phone, email, address, tax_number, commercial_registration, credit_limit } = parsed.data;
 
     // Check plan limits based on contact type
     if (type === 'client' || type === 'supplier') {
@@ -73,11 +76,31 @@ export async function POST(req: NextRequest) {
         commercial_registration: commercial_registration || null,
         credit_limit: credit_limit || 0,
         is_active: true,
+        created_by: auth.userId,
       })
       .select('*')
       .single();
 
     if (insertError) throw insertError;
+
+    // رصيد افتتاحي اختياري للطرف — يُرحَّل كقيد متوازن موسوم بـ contact_id
+    const openingBalance = parseFloat((data as any).opening_balance) || 0;
+    const openingBalanceType = (data as any).opening_balance_type === 'credit' ? 'credit' : 'debit';
+    if (openingBalance !== 0) {
+      const { error: obErr } = await postContactOpeningBalance(auth.companyId, {
+        contactId: result.id,
+        type,
+        amount: openingBalance,
+        balanceType: openingBalanceType,
+        name,
+        userId: auth.userId,
+      });
+      if (obErr) {
+        // فشل القيد الافتتاحي يلغي إنشاء الطرف (لا طرف برصيد غير مُرحَّل)
+        await s.from('contacts').delete().eq('id', result.id).eq('company_id', auth.companyId);
+        throw obErr;
+      }
+    }
 
     return success(result, 201);
   } catch (err) {

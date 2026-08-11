@@ -367,6 +367,36 @@ export const warehouseSchema = z.object({
   location: z.string().max(300).optional().nullable(),
 }).strict();
 
+// --------------- Contacts / Clients / Suppliers ---------------
+
+export const contactTypeSchema = z.enum(['client', 'supplier', 'subcontractor', 'both'] as const, {
+  message: 'نوع الطرف غير صالح',
+});
+
+export const contactCreateSchema = z.object({
+  name: z.string().min(1, 'الاسم مطلوب').max(200),
+  type: contactTypeSchema,
+  phone: z.string().max(50).optional().nullable(),
+  email: z.string().email('البريد الإلكتروني غير صالح').optional().nullable().or(z.literal('')),
+  address: z.string().max(500).optional().nullable(),
+  tax_number: z.string().max(100).optional().nullable(),
+  commercial_registration: z.string().max(100).optional().nullable(),
+  credit_limit: z.number().min(0, 'الحد الائتماني لا يمكن أن يكون سالباً').optional(),
+  opening_balance: z.number().min(0).optional(),
+  opening_balance_type: z.enum(['debit', 'credit'] as const).optional(),
+}).strict();
+
+export const contactUpdateSchema = z.object({
+  name: z.string().min(1, 'الاسم مطلوب').max(200).optional(),
+  type: contactTypeSchema.optional(),
+  phone: z.string().max(50).nullable().optional(),
+  email: z.string().email('البريد الإلكتروني غير صالح').nullable().optional().or(z.literal('')),
+  address: z.string().max(500).nullable().optional(),
+  tax_number: z.string().max(100).nullable().optional(),
+  commercial_registration: z.string().max(100).nullable().optional(),
+  credit_limit: z.number().min(0).nullable().optional(),
+}).strict();
+
 // --------------- Project ---------------
 
 export const projectSchema = z.object({

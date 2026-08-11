@@ -81,6 +81,8 @@ export async function postReversalEntry(
       debit: parseFloat(l.credit) || 0, // تبديل مدين/دائن
       credit: parseFloat(l.debit) || 0,
       description: l.description,
+      contact_id: l.contact_id || null,   // يبقى الوسم ليتعادل رصيد الطرف
+      project_id: l.project_id || null,
     }))
   );
   if (linesErr) return { error: linesErr };

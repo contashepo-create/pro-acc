@@ -1,8 +1,15 @@
 import { NextRequest } from 'next/server';
-import { success, error, handleApiError, parseBody, getPaginationParams, requireApiAuth, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getContactBalances, postContactOpeningBalance } from '@/lib/contact-utils';
 
 const sb = () => getSupabase();
+
+const VALID_CLIENT_TYPES = new Set(['client', 'both']);
+
+function isValidEmail(v: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -32,27 +39,17 @@ export async function GET(req: NextRequest) {
       ...c,
       account_code: c.accounts?.code || null,
       account_name: c.accounts?.name || null,
-      balance: 0,
     }));
 
-    // Calculate real balances from journal_lines
-    const accountIds = clients.filter((c: any) => c.account_id).map((c: any) => c.account_id);
-    if (accountIds.length > 0) {
-      const { data: lines } = await s.from('journal_lines')
-        .select('account_id, debit, credit')
-        .in('account_id', accountIds);
-      const balanceMap: Record<string, number> = {};
-      (lines || []).forEach((l: any) => {
-        const accId = l.account_id;
-        if (!balanceMap[accId]) balanceMap[accId] = 0;
-        balanceMap[accId] += (parseFloat(l.debit) || 0) - (parseFloat(l.credit) || 0);
-      });
-      clients.forEach((c: any) => {
-        if (c.account_id && balanceMap[c.account_id] !== undefined) {
-          c.balance = balanceMap[c.account_id];
-        }
-      });
-    }
+    // أرصدة حقيقية من سطور القيد الموسومة بـ contact_id (دفعية، مقيدة بالشركة).
+    const balanceMap = await getContactBalances(
+      auth.companyId,
+      clients.map((c: any) => c.id),
+    );
+    clients.forEach((c: any) => {
+      // موجب = العميل مدين لنا (ذمم مدينة مستحقة)
+      c.balance = balanceMap[c.id] || 0;
+    });
 
     return success({ clients, total: count || 0, page, pageSize });
   } catch (err) {
@@ -66,12 +63,33 @@ export async function POST(req: NextRequest) {
     const s = sb();
     const data = await parseBody(req);
 
-    if (!data.name) return error('اسم العميل مطلوب');
+    // تحقق الحقول الجوهرية (الحقول الموسّعة تمرّر كما هي أدناه)
+    if (!data.name || typeof data.name !== 'string' || !data.name.trim()) {
+      return error('اسم العميل مطلوب');
+    }
+    const type = data.type || 'client';
+    if (!VALID_CLIENT_TYPES.has(type)) {
+      return error('نوع العميل غير صالح');
+    }
+    if (data.email && !isValidEmail(data.email)) {
+      return error('البريد الإلكتروني غير صالح');
+    }
+
+    // Check plan limits
+    try {
+      const { checkPlanLimit } = await import('@/lib/plan-limits');
+      const limitCheck = await checkPlanLimit(auth.companyId, 'clients');
+      if (!limitCheck.allowed) {
+        return error(limitCheck.message || 'تم الوصول للحد الأقصى من العملاء', 403);
+      }
+    } catch (e) {
+      console.warn('Plan limit check failed:', e);
+    }
 
     const insertData: any = {
       company_id: auth.companyId,
-      name: data.name,
-      type: data.type || 'client',
+      name: data.name.trim(),
+      type,
       phone: data.phone || null,
       email: data.email || null,
       address: data.address || null,
@@ -103,6 +121,24 @@ export async function POST(req: NextRequest) {
       .single();
 
     if (insertError) throw insertError;
+
+    // رصيد افتتاحي للعميل — قيد متوازن موسوم بـ contact_id
+    const openingBalance = parseFloat(data.opening_balance) || 0;
+    const openingBalanceType = data.opening_balance_type === 'credit' ? 'credit' : 'debit';
+    if (openingBalance !== 0) {
+      const { error: obErr } = await postContactOpeningBalance(auth.companyId, {
+        contactId: result.id,
+        type,
+        amount: openingBalance,
+        balanceType: openingBalanceType,
+        name: data.name.trim(),
+        userId: auth.userId,
+      });
+      if (obErr) {
+        await s.from('contacts').delete().eq('id', result.id).eq('company_id', auth.companyId);
+        throw obErr;
+      }
+    }
 
     return success(result, 201);
   } catch (err) {

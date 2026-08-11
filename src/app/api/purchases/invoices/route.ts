@@ -209,7 +209,7 @@ export async function POST(req: NextRequest) {
       if (jeErr) throw jeErr;
       journalEntryId = je.id;
 
-      const journalLines = [
+      const journalLines: any[] = [
         { journal_entry_id: journalEntryId, account_id: invAcc.id, debit: subtotal, credit: 0, description: `مشتريات فاتورة رقم ${nextNum}` },
       ];
       if (taxAmount > 0) {
@@ -218,7 +218,7 @@ export async function POST(req: NextRequest) {
         if (!vatAcc) throw new Error('حساب ضريبة المشتريات (1180) مفقود — فعّل دليل الحسابات أولاً');
         journalLines.push({ journal_entry_id: journalEntryId, account_id: vatAcc.id, debit: taxAmount, credit: 0, description: `ضريبة مشتريات فاتورة رقم ${nextNum}` });
       }
-      journalLines.push({ journal_entry_id: journalEntryId, account_id: apAcc.id, debit: 0, credit: total, description: `ذمم موردين فاتورة رقم ${nextNum}` });
+      journalLines.push({ journal_entry_id: journalEntryId, account_id: apAcc.id, debit: 0, credit: total, contact_id: supplier_id, description: `ذمم موردين فاتورة رقم ${nextNum}` });
 
       const { error: linesErr } = await insertJournalLines(auth.companyId, journalLines);
       if (linesErr) throw linesErr;

@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
           description: `سند قبض رقم ${nextNumber}: ${reason}`,
           lines: [
             { account_id: bankSafe.account_id, debit: amount, credit: 0 },
-            { account_id: counterpartAccountId, debit: 0, credit: amount },
+            { account_id: counterpartAccountId, debit: 0, credit: amount, contact_id: contact_id || null },
           ],
           reference_type: 'voucher_receipt',
           reference_id: receipt.id,

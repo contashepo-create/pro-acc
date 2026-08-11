@@ -146,7 +146,7 @@ export async function PUT(
       type: 'general',
       description: `سند صرف رقم ${old.number}: ${newReason}`,
       lines: [
-        { account_id: counterpartAccountId, debit: newAmount, credit: 0 },
+        { account_id: counterpartAccountId, debit: newAmount, credit: 0, contact_id: newContactId || null },
         { account_id: bankAccount.account_id, debit: 0, credit: newAmount },
       ],
       reference_type: 'voucher_disbursement',

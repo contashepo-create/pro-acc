@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { getContactBalance } from '@/lib/contact-utils';
 
 const sb = () => getSupabase();
 
@@ -9,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'clients', 'read');
     const { id } = await params;
     const s = sb();
 
@@ -17,15 +18,19 @@ export async function GET(
       .select('*, accounts(code, name)')
       .eq('id', id)
       .eq('company_id', auth.companyId)
-      .eq('type', 'client')
+      .in('type', ['client', 'both'])
       .maybeSingle();
 
     if (!client) return notFound();
+
+    const balance = await getContactBalance(auth.companyId, id);
 
     return success({
       ...(client as any),
       account_code: (client as any).accounts?.code || null,
       account_name: (client as any).accounts?.name || null,
+      balance,
+      balance_type: balance >= 0 ? 'debit' : 'credit',
     });
   } catch (err) {
     return handleApiError(err);
@@ -61,6 +66,7 @@ export async function PUT(
     const { data: updated, error: updateErr } = await s.from('contacts')
       .update(updateData)
       .eq('id', id)
+      .eq('company_id', auth.companyId)
       .select('*')
       .single();
 
@@ -89,17 +95,24 @@ export async function DELETE(
 
     if (!existing) return notFound();
 
-    // Check if client has invoices
     const { data: invoices } = await s.from('invoices')
-      .select('id')
-      .eq('contact_id', id)
-      .limit(1);
-
+      .select('id').eq('contact_id', id).eq('company_id', auth.companyId).limit(1);
     if (invoices && invoices.length > 0) {
       return error('لا يمكن حذف العميل لأنه مرتبط بفواتير');
     }
 
-    await s.from('contacts').delete().eq('id', id);
+    const { data: rcptDep } = await s.from('voucher_receipts')
+      .select('id').eq('contact_id', id).eq('company_id', auth.companyId).limit(1);
+    if (rcptDep && rcptDep.length > 0) {
+      return error('لا يمكن حذف العميل لأنه مرتبط بسندات قبض');
+    }
+
+    const balance = await getContactBalance(auth.companyId, id);
+    if (Math.abs(balance) > 0.01) {
+      return error('لا يمكن حذف عميل له رصيد — صفِّ الحساب أولاً');
+    }
+
+    await s.from('contacts').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ deleted: true });
   } catch (err) {
