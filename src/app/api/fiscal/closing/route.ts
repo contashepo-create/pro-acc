@@ -152,9 +152,11 @@ export async function POST(request: NextRequest) {
 
         if (balance > 0) {
           const { error: lineErr } = await s.from('journal_lines').insert({
+            company_id: auth.companyId,
             journal_entry_id: jeId,
             account_id: acc.id,
             account_code: acc.code,
+            account_name: acc.name,
             debit: balance,
             credit: 0,
             description: `إقفال ${acc.name}`,
@@ -165,9 +167,11 @@ export async function POST(request: NextRequest) {
 
       // دائن: أرباح العام
       const { error: revEarningsErr } = await s.from('journal_lines').insert({
+        company_id: auth.companyId,
         journal_entry_id: jeId,
         account_id: currentYearEarningsAcc.id,
         account_code: '3300',
+        account_name: 'أرباح العام',
         debit: 0,
         credit: totalRevenue,
         description: 'نقل الإيرادات إلى أرباح العام',
@@ -197,9 +201,11 @@ export async function POST(request: NextRequest) {
 
       // مدين: أرباح العام
       const { error: expEarningsErr } = await s.from('journal_lines').insert({
+        company_id: auth.companyId,
         journal_entry_id: jeId,
         account_id: currentYearEarningsAcc.id,
         account_code: '3300',
+        account_name: 'أرباح العام',
         debit: totalExpenses,
         credit: 0,
         description: 'نقل المصروفات من أرباح العام',
@@ -219,9 +225,11 @@ export async function POST(request: NextRequest) {
 
         if (balance > 0) {
           const { error: lineErr } = await s.from('journal_lines').insert({
+            company_id: auth.companyId,
             journal_entry_id: jeId,
             account_id: acc.id,
             account_code: acc.code,
+            account_name: acc.name,
             debit: 0,
             credit: balance,
             description: `إقفال ${acc.name}`,
@@ -255,17 +263,21 @@ export async function POST(request: NextRequest) {
         // ربح: مدين أرباح العام، دائن الأرباح المحتجزة
         const { error: profitErr } = await s.from('journal_lines').insert([
           {
+            company_id: auth.companyId,
             journal_entry_id: jeId,
             account_id: currentYearEarningsAcc.id,
             account_code: '3300',
+            account_name: 'أرباح العام',
             debit: netIncome,
             credit: 0,
             description: 'نقل صافي الربح',
           },
           {
+            company_id: auth.companyId,
             journal_entry_id: jeId,
             account_id: retainedEarningsAcc.id,
             account_code: ACCOUNT_CODES.RETAINED_EARNINGS,
+            account_name: 'أرباح محتجزة',
             debit: 0,
             credit: netIncome,
             description: 'صافي الربح إلى الأرباح المحتجزة',
@@ -277,17 +289,21 @@ export async function POST(request: NextRequest) {
         const loss = Math.abs(netIncome);
         const { error: lossErr } = await s.from('journal_lines').insert([
           {
+            company_id: auth.companyId,
             journal_entry_id: jeId,
             account_id: retainedEarningsAcc.id,
             account_code: ACCOUNT_CODES.RETAINED_EARNINGS,
+            account_name: 'أرباح محتجزة',
             debit: loss,
             credit: 0,
             description: 'صافي الخسارة من الأرباح المحتجزة',
           },
           {
+            company_id: auth.companyId,
             journal_entry_id: jeId,
             account_id: currentYearEarningsAcc.id,
             account_code: '3300',
+            account_name: 'أرباح العام',
             debit: 0,
             credit: loss,
             description: 'نقل صافي الخسارة',

@@ -3,6 +3,7 @@ import { success, error, parseBody, getPaginationParams, requireApiAuth, handleA
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { getNextJournalNumber } from '@/lib/numbering';
+import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -124,7 +125,7 @@ export async function POST(req: NextRequest) {
 
       if (jeErr) throw jeErr;
 
-      const lines: any[] = [
+      const lines = [
         { journal_entry_id: je.id, account_id: costAccount.id, debit: gross_amount, credit: 0 },
         { journal_entry_id: je.id, account_id: apAccount.id, debit: 0, credit: netAmount },
       ];
@@ -132,7 +133,8 @@ export async function POST(req: NextRequest) {
         lines.push({ journal_entry_id: je.id, account_id: retentionAccount.id, debit: 0, credit: retentionAmount });
       }
 
-      await s.from('journal_lines').insert(lines);
+      const { error: jlErr } = await insertJournalLines(auth.companyId, lines);
+      if (jlErr) throw jlErr;
     }
 
     return success(cert, 201);

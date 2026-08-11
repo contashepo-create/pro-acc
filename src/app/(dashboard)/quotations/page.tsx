@@ -16,6 +16,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { toDateInput } from '@/lib/form-utils';
 
 export default function QuotationsPage() {
   const [quotations, setQuotations] = useState<any[]>([]);
@@ -101,17 +102,24 @@ export default function QuotationsPage() {
       const json = await res.json();
       if (json.success) {
         setEditingQuotation(quotation);
+        const d = json.data;
         setForm({
-          date: json.data.date,
-          contact_id: json.data.contact_id,
-          valid_until: json.data.valid_until || '',
-          notes: json.data.notes || '',
-          items: json.data.items || [{ description: '', quantity: 1, unit_price: 0, total: 0 }],
+          date: toDateInput(d.date),
+          contact_id: d.contact_id || '',
+          valid_until: toDateInput(d.valid_until),
+          notes: d.notes || '',
+          tax_rate: d.tax_rate ?? 0.15,
+          tax_enabled: Number(d.tax_rate || 0) > 0,
+          items: (d.items || []).length
+            ? d.items
+            : [{ description: '', quantity: 1, unit_price: 0, total: 0 }],
         });
         setShowModal(true);
+      } else {
+        toast.error(json.message || 'تعذر تحميل عرض السعر');
       }
     } catch (e) {
-      console.error('Failed to load quotation:', e);
+      toast.error('تعذر تحميل عرض السعر');
     }
   };
 
@@ -222,6 +230,28 @@ export default function QuotationsPage() {
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات عرض السعر" />
           <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold">بنود العرض</h4>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setForm({ ...form, items: [...form.items, { description: '', quantity: 1, unit_price: 0, total: 0 }] })}>إضافة بند</Button>
+            </div>
+            {form.items.map((item: any, idx: number) => (
+              <div key={idx} className="grid grid-cols-12 gap-2">
+                <input className="input-base col-span-5 text-sm" placeholder="البيان" value={item.description} onChange={(e) => {
+                  const items = [...form.items]; items[idx] = { ...items[idx], description: e.target.value }; setForm({ ...form, items });
+                }} />
+                <input className="input-base col-span-2 text-sm" type="number" placeholder="الكمية" value={item.quantity} onChange={(e) => {
+                  const q = parseFloat(e.target.value) || 0; const items = [...form.items];
+                  items[idx] = { ...items[idx], quantity: q, total: q * (Number(items[idx].unit_price) || 0) }; setForm({ ...form, items });
+                }} />
+                <input className="input-base col-span-3 text-sm" type="number" placeholder="سعر الوحدة" value={item.unit_price} onChange={(e) => {
+                  const p = parseFloat(e.target.value) || 0; const items = [...form.items];
+                  items[idx] = { ...items[idx], unit_price: p, total: p * (Number(items[idx].quantity) || 0) }; setForm({ ...form, items });
+                }} />
+                <div className="col-span-2 text-sm font-mono flex items-center">{formatCurrency(item.total || 0)}</div>
+              </div>
+            ))}
+          </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

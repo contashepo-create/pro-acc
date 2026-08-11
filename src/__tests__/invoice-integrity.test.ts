@@ -170,6 +170,12 @@ describe('POST /api/invoices — server-side amounts (never trust client)', () =
     expect(inv.company_id).toBe(C1);
     expect(inv.status).toBe('unpaid');
     expect(inv.paid_amount).toBe(0);
+
+    const itemInserts = insertsOf('invoice_items');
+    expect(itemInserts.length).toBeGreaterThan(0);
+    for (const ins of itemInserts) {
+      expect(ins.mut.payload.company_id).toBe(C1);
+    }
   });
 
   test('honours per-item discount in server computation', async () => {
@@ -186,6 +192,7 @@ describe('POST /api/invoices — server-side amounts (never trust client)', () =
     const item = insertsOf('invoice_items')[0].mut.payload;
     expect(item.total).toBe(150);
     expect(item.unit_price).toBe(100);
+    expect(item.company_id).toBe(C1);
   });
 
   test('discount is capped at the item gross', async () => {
@@ -326,6 +333,20 @@ describe('PATCH /api/invoices/[id]', () => {
     expect(arReversal.debit).toBe(0);
     expect(arReversal.credit).toBe(1150);
     for (const l of revLines) expect(l.company_id).toBe(C1);
+  });
+});
+
+describe('SQL invoice_items inserts always list company_id', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  test('create_invoice_with_journal and 023 write company_id on invoice_items', () => {
+    const dir = path.join(__dirname, '../migrations');
+    for (const file of ['014-atomic-invoice-creation.sql', '022-fix-journal-lines-company-id.sql', '023-fix-child-rows-company-id.sql']) {
+      const sql = fs.readFileSync(path.join(dir, file), 'utf8');
+      const inserts = [...sql.matchAll(/INSERT INTO invoice_items\s*\(([^)]+)\)/gi)];
+      expect(inserts.length).toBeGreaterThan(0);
+      for (const m of inserts) expect(m[1]).toMatch(/company_id/i);
+    }
   });
 });
 

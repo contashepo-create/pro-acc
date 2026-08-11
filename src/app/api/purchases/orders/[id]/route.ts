@@ -81,6 +81,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         const lineTotal = round2(item.quantity * item.unit_price);
         sum += lineTotal;
         const { error: itemErr } = await s.from('purchase_order_items').insert({
+          company_id: auth.companyId,
           purchase_order_id: id,
           description: item.description,
           quantity: item.quantity,

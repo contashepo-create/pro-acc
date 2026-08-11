@@ -3,6 +3,7 @@ import { success, error, parseBody, getPaginationParams, requireApiAuth, handleA
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
+import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -73,13 +74,14 @@ export async function POST(req: NextRequest) {
           .select('id').single();
 
         const totalDebit = gross_amount + taxAmount;
-        const jl: any[] = [
-          { company_id: auth.companyId, journal_entry_id: je.id, account_id: arAcc.id, account_code: ACCOUNT_CODES.ACCRUED_REVENUE, debit: totalDebit, credit: 0 },
-          { company_id: auth.companyId, journal_entry_id: je.id, account_id: revAcc.id, account_code: ACCOUNT_CODES.CONTRACT_REVENUE, debit: 0, credit: netAmount },
+        const jl = [
+          { journal_entry_id: je.id, account_id: arAcc.id, debit: totalDebit, credit: 0 },
+          { journal_entry_id: je.id, account_id: revAcc.id, debit: 0, credit: netAmount },
         ];
-        if (retentionAmount > 0 && retAcc) jl.push({ company_id: auth.companyId, journal_entry_id: je.id, account_id: retAcc.id, account_code: ACCOUNT_CODES.RETENTIONS, debit: 0, credit: retentionAmount });
-        if (taxAmount > 0 && vatAcc) jl.push({ company_id: auth.companyId, journal_entry_id: je.id, account_id: vatAcc.id, account_code: ACCOUNT_CODES.VAT_SALES, debit: 0, credit: taxAmount });
-        await s.from('journal_lines').insert(jl);
+        if (retentionAmount > 0 && retAcc) jl.push({ journal_entry_id: je.id, account_id: retAcc.id, debit: 0, credit: retentionAmount });
+        if (taxAmount > 0 && vatAcc) jl.push({ journal_entry_id: je.id, account_id: vatAcc.id, debit: 0, credit: taxAmount });
+        const { error: jlErr } = await insertJournalLines(auth.companyId, jl);
+        if (jlErr) throw jlErr;
       }
     } catch (journalError) {
       console.warn('Failed to create journal entry for progress billing:', journalError);

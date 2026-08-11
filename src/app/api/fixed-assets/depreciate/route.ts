@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireApiAuth, handleApiError, success } from '@/lib/api-helpers';
 import { getNextJournalNumber } from '@/lib/numbering';
+import { insertJournalLines } from '@/lib/journal-utils';
 
 // @ts-ignore
 const sb = () => getSupabase() as any;
@@ -80,10 +81,11 @@ export async function POST(request: NextRequest) {
         .select('id').eq('company_id', auth.companyId).eq('code', '1290').maybeSingle();
 
       if (depExpAcc && accumAcc) {
-        await s.from('journal_lines').insert([
-          { journal_entry_id: je.id, account_id: depExpAcc.id, account_code: '5260', debit: monthlyDepreciation, credit: 0, description: `إهلاك ${asset.code}` },
-          { journal_entry_id: je.id, account_id: accumAcc.id, account_code: '1290', debit: 0, credit: monthlyDepreciation, description: `مجمع إهلاك ${asset.code}` },
+        const { error: jlErr } = await insertJournalLines(auth.companyId, [
+          { journal_entry_id: je.id, account_id: depExpAcc.id, debit: monthlyDepreciation, credit: 0, description: `إهلاك ${asset.code}` },
+          { journal_entry_id: je.id, account_id: accumAcc.id, debit: 0, credit: monthlyDepreciation, description: `مجمع إهلاك ${asset.code}` },
         ]);
+        if (jlErr) throw jlErr;
       }
 
       // Update asset

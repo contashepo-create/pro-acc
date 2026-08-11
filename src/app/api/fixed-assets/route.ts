@@ -4,6 +4,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { createAutoAccount } from '@/lib/auto-account';
+import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -117,22 +118,21 @@ export async function POST(req: NextRequest) {
         .select('id')
         .single();
 
-      const jl: any[] = [
-        { 
-          journal_entry_id: je.id, 
-          account_id: assetAccount?.id || assetAcc.id, 
-          debit: purchase_cost, 
-          credit: 0 
+      const { error: jlErr } = await insertJournalLines(auth.companyId, [
+        {
+          journal_entry_id: je.id,
+          account_id: assetAccount?.id || assetAcc.id,
+          debit: purchase_cost,
+          credit: 0,
         },
-        { 
-          journal_entry_id: je.id, 
-          account_id: bankAcc.id, 
-          debit: 0, 
-          credit: purchase_cost 
-        }
-      ];
-
-      await s.from('journal_lines').insert(jl);
+        {
+          journal_entry_id: je.id,
+          account_id: bankAcc.id,
+          debit: 0,
+          credit: purchase_cost,
+        },
+      ]);
+      if (jlErr) throw jlErr;
     }
 
     return success(asset, 201);

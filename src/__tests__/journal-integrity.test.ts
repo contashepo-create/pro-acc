@@ -235,6 +235,29 @@ describe('journalEntrySchema — double-entry rules', () => {
 // 2. insertJournalLines integrity
 // ---------------------------------------------------------------------------
 
+describe('SQL journal RPCs write company_id', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+
+  test('create_journal_entry / create_invoice_with_journal INSERT lists include company_id', () => {
+    const migrationsDir = path.join(__dirname, '../migrations');
+    const files = [
+      '012-atomic-journal-entry-insert.sql',
+      '014-atomic-invoice-creation.sql',
+      '022-fix-journal-lines-company-id.sql',
+      '023-fix-child-rows-company-id.sql',
+    ];
+    for (const file of files) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+      const inserts = [...sql.matchAll(/INSERT INTO journal_lines\s*\(([^)]+)\)/gi)];
+      expect(inserts.length).toBeGreaterThan(0);
+      for (const m of inserts) {
+        expect(m[1]).toMatch(/company_id/i);
+      }
+    }
+  });
+});
+
 describe('insertJournalLines', () => {
   test('fails loudly when an account cannot be resolved (no 0000 fallback)', async () => {
     mockDb = makeDb(baseDb());
@@ -382,6 +405,32 @@ describe('POST /api/journal (atomic RPC path)', () => {
     mockDb.rpcImpl = async () => ({ data: null, error: { message: 'خطأ في الموازنة: المدين لا يساوي الدائن', code: 'P0001' } });
     const res = await journalPOST(authedRequest(balancedBody));
     expect(res.status).toBe(400);
+  });
+
+  test('falls back to legacy insert (with company_id) when live RPC omits company_id', async () => {
+    mockDb = makeDb(withTaxAccount(baseDb()));
+    mockDb.rpcImpl = async (name: string) => {
+      if (name === 'create_journal_entry') {
+        return {
+          data: null,
+          error: {
+            code: '23502',
+            message: 'null value in column "company_id" of relation "journal_lines" violates not-null constraint',
+          },
+        };
+      }
+      return { data: null, error: { message: `Could not find the function ${name}` } };
+    };
+
+    const res = await journalPOST(authedRequest(balancedBody));
+    expect(res.status).toBe(201);
+
+    const lineInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'journal_lines');
+    expect(lineInserts.length).toBeGreaterThan(0);
+    for (const ins of lineInserts) {
+      const rows = Array.isArray(ins.mut.payload) ? ins.mut.payload : [ins.mut.payload];
+      for (const r of rows) expect(r.company_id).toBe(C1);
+    }
   });
 });
 

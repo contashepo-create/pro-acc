@@ -24,6 +24,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
@@ -45,7 +46,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
-    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
+    try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch {}
     set({ user: null, company: null, isAuthenticated: false });
   },
 

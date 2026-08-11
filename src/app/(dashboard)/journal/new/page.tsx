@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
 import { toast } from '@/components/ui/Toast';
+import { toDateInput } from '@/lib/form-utils';
 
 interface JournalLine { accountCode: string; debit: number; credit: number; description: string; }
 
@@ -51,25 +52,28 @@ export default function NewJournalPage() {
       .then((j) => { if (j.success) setAccounts(flatten(j.data?.accounts || [])); });
 
     if (p) {
-      fetch(`/api/journal/${p}`)
+      fetch(`/api/journal/${p}`, { credentials: 'same-origin' })
         .then((r) => r.json())
         .then((j) => {
-          if (j.success) {
+          if (j.success && j.data) {
             const d = j.data;
             setForm({
-              date: d.date,
-              type: d.type,
-              description: d.description,
+              date: toDateInput(d.date),
+              type: d.type || 'general',
+              description: d.description || '',
               lines:
-                d.lines?.map((l: any) => ({
-                  accountCode: l.account_code,
-                  debit: l.debit,
-                  credit: l.credit,
+                (d.lines || []).map((l: any) => ({
+                  accountCode: l.account_code || l.accountCode || '',
+                  debit: Number(l.debit) || 0,
+                  credit: Number(l.credit) || 0,
                   description: l.description || '',
-                })) || [{ accountCode: '', debit: 0, credit: 0, description: '' }],
+                })),
             });
+          } else {
+            toast.error(j.message || 'تعذر تحميل القيد للتعديل');
           }
-        });
+        })
+        .catch(() => toast.error('تعذر تحميل القيد للتعديل'));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -216,6 +216,7 @@ export async function POST(request: NextRequest) {
       // 2. إدخال البنود (بقيم محسوبة خادمياً شاملة الخصم)
       for (const item of computedItems) {
         const { error: itemErr } = await s.from('invoice_items').insert({
+          company_id: auth.companyId,
           invoice_id: invoiceId,
           description: item.description,
           quantity: item.quantity,
@@ -389,11 +390,11 @@ export async function POST(request: NextRequest) {
         if (voucherReceiptId) await s.from('voucher_receipts').delete().eq('id', voucherReceiptId);
         if (journalEntryId) {
           await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
-          await s.from('journal_entries').delete().eq('id', journalEntryId);
+          await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);
         }
         if (invoiceId) {
           await s.from('invoice_items').delete().eq('invoice_id', invoiceId);
-          await s.from('invoices').delete().eq('id', invoiceId);
+          await s.from('invoices').delete().eq('id', invoiceId).eq('company_id', auth.companyId);
         }
       } catch (rollbackErr) {
         console.error('Rollback failed:', rollbackErr);

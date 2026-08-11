@@ -176,8 +176,12 @@ export async function POST(request: NextRequest) {
       if (rpcErr.message?.includes('الموازنة') || rpcErr.code === 'P0001') {
         return error(rpcErr.message || 'خطأ في الموازنة');
       }
-      // RPC function not found - fall through to legacy logic below
-      if (!rpcErr.message?.includes('function') && !rpcErr.message?.includes('does not exist') && !rpcErr.message?.includes('Could not find')) {
+      // RPC function not found OR the live function still omits journal_lines.company_id
+      // (23502 not-null) — fall through to the legacy path that writes company_id.
+      const rpcMsg = rpcErr.message || '';
+      const missingFn = rpcMsg.includes('function') || rpcMsg.includes('does not exist') || rpcMsg.includes('Could not find');
+      const missingCompanyId = rpcErr.code === '23502' || /null value in column ["']?company_id["']?/i.test(rpcMsg) || /violates not-null constraint/i.test(rpcMsg);
+      if (!missingFn && !missingCompanyId) {
         throw rpcAttempt;
       }
     }

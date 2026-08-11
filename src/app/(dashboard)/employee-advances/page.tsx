@@ -13,6 +13,8 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { toast } from '@/components/ui/Toast';
 
 export default function EmployeeAdvancesPage() {
   const [advances, setAdvances] = useState<any[]>([]);
@@ -71,22 +73,17 @@ export default function EmployeeAdvancesPage() {
   };
 
   const handleEdit = async (advance: any) => {
-    try {
-      const res = await fetch(`/api/employee-advances/${advance.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingAdvance(advance);
-        setForm({
-          employee_id: json.data.employee_id,
-          amount: json.data.amount,
-          date: json.data.date,
-          reason: json.data.reason || '',
-        });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load advance:', e);
-    }
+    const { data, error } = await fetchRecord(`/api/employee-advances/${advance.id}`);
+    const src = recordOrRow(data, advance);
+    if (!data && error) toast.error(error);
+    setEditingAdvance(advance);
+    setForm(applyDates({
+      employee_id: src.employee_id || '',
+      amount: src.amount || 0,
+      date: src.date,
+      reason: src.reason || '',
+    }, ['date']));
+    setShowModal(true);
   };
 
   const handleDelete = async (advance: any) => {
