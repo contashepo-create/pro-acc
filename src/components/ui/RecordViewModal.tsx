@@ -6,11 +6,13 @@ import { Button } from './Button';
 import { Badge } from './Badge';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { Eye } from 'lucide-react';
+import { formatCurrency, formatDate } from '@/lib/utils';
 
 const HIDDEN = new Set([
   'id', 'company_id', 'created_by', 'updated_at', 'deleted_at',
   'contacts', 'accounts', 'projects', 'employees', 'invoices',
   'journal_entry_id', 'password', 'password_hash', 'token', 'items', 'lines', 'boq_items',
+  'journal_entry_id', 'password', 'password_hash', 'token',
 ]);
 
 const LABELS: Record<string, string> = {
@@ -29,6 +31,11 @@ const LABELS: Record<string, string> = {
   description: 'البيان والتفاصيل',
   notes: 'ملاحظات',
   reason: 'السبب / البيان',
+  date: 'التاريخ',
+  due_date: 'تاريخ الاستحقاق',
+  name: 'الاسم',
+  description: 'البيان',
+  notes: 'ملاحظات',
   status: 'الحالة',
   type: 'النوع',
   total: 'الإجمالي',
@@ -54,6 +61,22 @@ const LABELS: Record<string, string> = {
   account_name: 'اسم الحساب',
   phone: 'رقم الهاتف / الجوال',
   email: 'البريد الإلكتروني',
+  vat_amount: 'الضريبة',
+  tax_amount: 'الضريبة',
+  vat_rate: 'نسبة الضريبة',
+  tax_rate: 'نسبة الضريبة',
+  paid_amount: 'المدفوع',
+  amount: 'المبلغ',
+  debit: 'مدين',
+  credit: 'دائن',
+  client_name: 'العميل',
+  contact_name: 'العميل',
+  supplier_name: 'المورد',
+  project_name: 'المشروع',
+  account_code: 'رمز الحساب',
+  account_name: 'الحساب',
+  phone: 'الهاتف',
+  email: 'البريد',
   address: 'العنوان',
   location: 'الموقع',
   start_date: 'تاريخ البدء',
@@ -163,6 +186,9 @@ const TRANSLATIONS: Record<string, string> = {
   adjustment: 'تسوية جردية',
   transfer: 'تحويل بين المستودعات',
   return: 'مرتجع للمخزون',
+  contract_value: 'قيمة العقد',
+  valid_until: 'صالح حتى',
+  created_at: 'تاريخ الإنشاء',
 };
 
 function labelOf(key: string) {
@@ -203,6 +229,17 @@ function formatValue(key: string, value: any): ReactNode {
     return <span dir="ltr" className="font-mono font-semibold text-slate-800">{s}</span>;
   }
 
+function formatValue(key: string, value: any): string {
+  if (value == null || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'نعم' : 'لا';
+  if (typeof value === 'object') return '';
+  const s = String(value);
+  if (/date|until|created_at|_at$/i.test(key) && /\d{4}-\d{2}-\d{2}/.test(s)) {
+    return formatDate(s.slice(0, 10));
+  }
+  if (/amount|total|debit|credit|balance|price|value|subtotal|vat|tax|paid/i.test(key) && !Number.isNaN(Number(value))) {
+    return formatCurrency(Number(value));
+  }
   return s;
 }
 
@@ -229,6 +266,10 @@ export function RecordViewModal({
 
   const displayTitle = title || (record.name ? `معاينة: ${record.name}` : record.number ? `معاينة سجل رقم #${record.number}` : 'معاينة تفاصيل السجل');
 
+    if (typeof v === 'object') return false;
+    return true;
+  });
+
   return (
     <Modal
       isOpen={isOpen}
@@ -241,6 +282,9 @@ export function RecordViewModal({
       }
       size="lg"
       footer={<Button variant="ghost" onClick={onClose}>إغلاق المعاينة</Button>}
+      title={title || 'عرض السجل'}
+      size="lg"
+      footer={<Button variant="ghost" onClick={onClose}>إغلاق</Button>}
     >
       <div className="space-y-4">
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -248,6 +292,9 @@ export function RecordViewModal({
             <div key={k} className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 shadow-sm text-right">
               <dt className="text-[11px] font-semibold text-slate-500 mb-1">{labelOf(k)}</dt>
               <dd className="text-xs font-medium text-slate-900 break-words">{formatValue(k, v)}</dd>
+            <div key={k} className="rounded-lg bg-bg-secondary/50 border border-border px-3 py-2">
+              <dt className="text-xs text-text-muted mb-0.5">{labelOf(k)}</dt>
+              <dd className="text-sm font-medium text-text-primary break-words">{formatValue(k, v)}</dd>
             </div>
           ))}
         </dl>

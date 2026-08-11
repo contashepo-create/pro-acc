@@ -67,7 +67,7 @@ export default function NewJournalPage() {
                   debit: Number(l.debit) || 0,
                   credit: Number(l.credit) || 0,
                   description: l.description || '',
-                })) || [{ accountCode: '', debit: 0, credit: 0, description: '' }],
+                })),
             });
           } else {
             toast.error(j.message || 'تعذر تحميل القيد للتعديل');

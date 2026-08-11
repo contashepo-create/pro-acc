@@ -68,6 +68,8 @@ export async function DELETE(
     const { error: delErr } = await s.from('fiscal_years').delete().eq('id', id).eq('company_id', auth.companyId);
     if (delErr) throw delErr;
 
+    const { error: delErr } = await s.from('fiscal_years').delete().eq('id', id).eq('company_id', auth.companyId);
+    if (delErr) throw delErr;
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);

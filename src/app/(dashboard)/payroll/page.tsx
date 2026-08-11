@@ -7,8 +7,6 @@ import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
-import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';

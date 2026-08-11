@@ -26,3 +26,23 @@
 ## 021-add-daily-worker.sql
 Allows `daily_worker` as a `contacts.type` value so the "عمال يومية" (Daily Workers) section is usable.
 Run via: `npx tsx src/migrations/run.ts` (idempotent) or apply directly in the DB.
+
+## 022-fix-journal-lines-company-id.sql
+`journal_lines.company_id` is `NOT NULL`, but `create_journal_entry` and
+`create_invoice_with_journal` omitted it — every atomic journal insert failed
+with a not-null violation. This migration rewrites both RPCs to write
+`company_id` + `account_name`, and adds a `BEFORE INSERT` trigger that
+backfills those columns from `journal_entries` / `accounts` if a leftover
+application path still omits them.
+
+Apply in the Supabase SQL editor (or `npx tsx src/migrations/run.ts`) after
+deploying the matching app code.
+
+## 023-fix-child-rows-company-id.sql
+Same class of bug as 022, on **line/item tables**: `invoice_items`,
+`quotation_items`, `purchase_invoice_items`, `purchase_order_items`, etc.
+`company_id` is `NOT NULL` but several inserts (including
+`create_invoice_with_journal`) omitted it.
+
+This migration rewrites the invoice RPC and adds a `BEFORE INSERT` trigger
+that copies `company_id` from the parent document if the app forgot it.

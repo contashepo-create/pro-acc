@@ -98,6 +98,8 @@ export async function PUT(
     const { date, type, description, lines } = parsed.data;
     const resolved: Array<{ account_id: string; debit: number; credit: number; description: string | null }> = [];
 
+
+    const resolved: Array<{ account_id: string; debit: number; credit: number; description: string | null }> = [];
     for (const line of lines) {
       const { data: account } = await s.from('accounts')
         .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();

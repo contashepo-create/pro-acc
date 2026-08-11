@@ -238,6 +238,9 @@ describe('journalEntrySchema — double-entry rules', () => {
 // ---------------------------------------------------------------------------
 
 describe('SQL journal RPCs write company_id', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+
   test('create_journal_entry / create_invoice_with_journal INSERT lists include company_id', () => {
     const migrationsDir = path.join(__dirname, '../migrations');
     const files = [
@@ -423,6 +426,7 @@ describe('POST /api/journal (atomic RPC path)', () => {
 
     const res = await journalPOST(authedRequest(balancedBody));
     expect(res.status).toBe(201);
+
     const lineInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'journal_lines');
     expect(lineInserts.length).toBeGreaterThan(0);
     for (const ins of lineInserts) {

@@ -69,6 +69,8 @@ export async function POST(req: NextRequest) {
         quantity: item.quantity,
         unit_price: item.unit_price,
         total: item.quantity * item.unit_price,
+        quotation_id: result.id, description: item.description, quantity: item.quantity,
+        unit_price: item.unit_price, total: item.quantity * item.unit_price,
       });
     }
 

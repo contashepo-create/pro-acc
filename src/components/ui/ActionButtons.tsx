@@ -72,6 +72,15 @@ export function ActionButtons({
             <Eye size={16} />
           </Button>
         )}
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => (onView ? onView(item) : setShowViewModal(true))}
+          title="عرض"
+        >
+          <Eye size={16} />
+        </Button>
         
         {onEdit && (
           <Button 

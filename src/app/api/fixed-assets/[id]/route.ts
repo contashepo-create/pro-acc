@@ -70,6 +70,11 @@ export async function DELETE(
     const { error: delErr } = await s.from('fixed_assets').delete().eq('id', id).eq('company_id', auth.companyId);
     if (delErr) throw delErr;
 
+    const { data: existing } = await s.from('fixed_assets')
+      .select('id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!existing) return notFound();
+    const { error: delErr } = await s.from('fixed_assets').delete().eq('id', id).eq('company_id', auth.companyId);
+    if (delErr) throw delErr;
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);
