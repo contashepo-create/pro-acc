@@ -14,6 +14,8 @@
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { createToken } from '@/lib/auth';
 import { generateUBLInvoice } from '@/lib/zatca';
 
@@ -337,9 +339,6 @@ describe('PATCH /api/invoices/[id]', () => {
 });
 
 describe('SQL invoice_items inserts always list company_id', () => {
-  const fs = require('fs') as typeof import('fs');
-  const path = require('path') as typeof import('path');
-
   test('create_invoice_with_journal and 023 write company_id on invoice_items', () => {
     const dir = path.join(__dirname, '../migrations');
     for (const file of ['014-atomic-invoice-creation.sql', '022-fix-journal-lines-company-id.sql', '023-fix-child-rows-company-id.sql']) {

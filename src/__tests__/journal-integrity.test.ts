@@ -12,6 +12,8 @@
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { journalEntrySchema } from '@/lib/validation';
 import { createToken } from '@/lib/auth';
 import { insertJournalLines } from '@/lib/journal-utils';
@@ -236,9 +238,6 @@ describe('journalEntrySchema — double-entry rules', () => {
 // ---------------------------------------------------------------------------
 
 describe('SQL journal RPCs write company_id', () => {
-  const fs = require('fs') as typeof import('fs');
-  const path = require('path') as typeof import('path');
-
   test('create_journal_entry / create_invoice_with_journal INSERT lists include company_id', () => {
     const migrationsDir = path.join(__dirname, '../migrations');
     const files = [
