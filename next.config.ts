@@ -1,8 +1,23 @@
 import type { NextConfig } from "next";
 
-const supabaseOrigin = process.env.NEXT_PUBLIC_SUPABASE_URL
-  ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).origin
-  : "";
+function getSupabaseOrigin(): string {
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!rawUrl) return "";
+  const cleaned = rawUrl.replace(/^\uFEFF/, "").trim();
+  if (!cleaned) return "";
+
+  try {
+    const formattedUrl =
+      cleaned.startsWith("http://") || cleaned.startsWith("https://")
+        ? cleaned
+        : `https://${cleaned}`;
+    return new URL(formattedUrl).origin;
+  } catch {
+    return "";
+  }
+}
+
+const supabaseOrigin = getSupabaseOrigin();
 
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
@@ -21,7 +36,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
-      `connect-src 'self' ${supabaseOrigin} https://api.moyasar.com`.trim(),
+      `connect-src ${["'self'", supabaseOrigin, "https://api.moyasar.com"].filter(Boolean).join(" ")}`,
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'",
