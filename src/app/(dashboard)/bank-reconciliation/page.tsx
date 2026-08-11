@@ -11,6 +11,8 @@ import { Select } from '@/components/ui/Select';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
+import { ActionButtons } from '@/components/ui/ActionButtons';
+import { formatCurrency, formatDate } from '@/lib/utils';
 
 export default function BankReconciliationPage() {
   const [reconciliations, setReconciliations] = useState<any[]>([]);
@@ -55,6 +57,11 @@ export default function BankReconciliationPage() {
       render: (row: any) => row.status === 'completed'
         ? <Badge variant="success">مغلقة</Badge>
         : <Badge variant="warning">معلقة</Badge>,
+    },
+    {
+      key: 'actions',
+      label: 'إجراءات',
+      render: (row: any) => <ActionButtons item={row} />,
     },
   ];
 
