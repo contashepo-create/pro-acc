@@ -6,13 +6,11 @@ import { Button } from './Button';
 import { Badge } from './Badge';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { Eye } from 'lucide-react';
-import { formatCurrency, formatDate } from '@/lib/utils';
 
 const HIDDEN = new Set([
   'id', 'company_id', 'created_by', 'updated_at', 'deleted_at',
   'contacts', 'accounts', 'projects', 'employees', 'invoices',
   'journal_entry_id', 'password', 'password_hash', 'token', 'items', 'lines', 'boq_items',
-  'journal_entry_id', 'password', 'password_hash', 'token',
 ]);
 
 const LABELS: Record<string, string> = {
@@ -31,11 +29,6 @@ const LABELS: Record<string, string> = {
   description: 'البيان والتفاصيل',
   notes: 'ملاحظات',
   reason: 'السبب / البيان',
-  date: 'التاريخ',
-  due_date: 'تاريخ الاستحقاق',
-  name: 'الاسم',
-  description: 'البيان',
-  notes: 'ملاحظات',
   status: 'الحالة',
   type: 'النوع',
   total: 'الإجمالي',
@@ -61,22 +54,6 @@ const LABELS: Record<string, string> = {
   account_name: 'اسم الحساب',
   phone: 'رقم الهاتف / الجوال',
   email: 'البريد الإلكتروني',
-  vat_amount: 'الضريبة',
-  tax_amount: 'الضريبة',
-  vat_rate: 'نسبة الضريبة',
-  tax_rate: 'نسبة الضريبة',
-  paid_amount: 'المدفوع',
-  amount: 'المبلغ',
-  debit: 'مدين',
-  credit: 'دائن',
-  client_name: 'العميل',
-  contact_name: 'العميل',
-  supplier_name: 'المورد',
-  project_name: 'المشروع',
-  account_code: 'رمز الحساب',
-  account_name: 'الحساب',
-  phone: 'الهاتف',
-  email: 'البريد',
   address: 'العنوان',
   location: 'الموقع',
   start_date: 'تاريخ البدء',
@@ -210,37 +187,26 @@ function formatValue(key: string, value: any): ReactNode {
 
   // Status & enum translation
   if (TRANSLATIONS[s]) {
-    return <span className="font-semibold text-slate-800">{TRANSLATIONS[s]}</span>;
+    return <span className="font-semibold text-text-primary">{TRANSLATIONS[s]}</span>;
   }
 
   // Date formatting
   if (/date|until|created_at|_at$/i.test(key) && /\d{4}-\d{2}-\d{2}/.test(s)) {
-    return <span className="font-medium text-slate-800">{formatDate(s.slice(0, 10))}</span>;
+    return <span className="font-medium text-text-primary">{formatDate(s.slice(0, 10))}</span>;
   }
 
   // Currency & financial formatting
   if (/amount|total|debit|credit|balance|price|value|subtotal|cost|salary|pay|gross|net|limit/i.test(key) && !Number.isNaN(Number(value))) {
     const num = Number(value);
-    return <span className="font-mono font-bold text-slate-900">{formatCurrency(num)}</span>;
+    return <span className="font-mono font-bold text-text-primary">{formatCurrency(num)}</span>;
   }
 
   // Phone / Numbers
   if (/phone|mobile|tel|iban|tax_number|commercial_registration|national_id|swift/i.test(key)) {
-    return <span dir="ltr" className="font-mono font-semibold text-slate-800">{s}</span>;
+    return <span dir="ltr" className="font-mono font-semibold text-text-primary">{s}</span>;
   }
 
-function formatValue(key: string, value: any): string {
-  if (value == null || value === '') return '—';
-  if (typeof value === 'boolean') return value ? 'نعم' : 'لا';
-  if (typeof value === 'object') return '';
-  const s = String(value);
-  if (/date|until|created_at|_at$/i.test(key) && /\d{4}-\d{2}-\d{2}/.test(s)) {
-    return formatDate(s.slice(0, 10));
-  }
-  if (/amount|total|debit|credit|balance|price|value|subtotal|vat|tax|paid/i.test(key) && !Number.isNaN(Number(value))) {
-    return formatCurrency(Number(value));
-  }
-  return s;
+  return <span className="text-text-primary">{s}</span>;
 }
 
 export function RecordViewModal({
@@ -266,35 +232,25 @@ export function RecordViewModal({
 
   const displayTitle = title || (record.name ? `معاينة: ${record.name}` : record.number ? `معاينة سجل رقم #${record.number}` : 'معاينة تفاصيل السجل');
 
-    if (typeof v === 'object') return false;
-    return true;
-  });
-
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
       title={
-        <div className="flex items-center gap-2 text-slate-900 font-bold">
+        <div className="flex items-center gap-2 text-text-primary font-bold">
           <Eye size={18} className="text-accent" />
           <span>{displayTitle}</span>
         </div>
       }
       size="lg"
       footer={<Button variant="ghost" onClick={onClose}>إغلاق المعاينة</Button>}
-      title={title || 'عرض السجل'}
-      size="lg"
-      footer={<Button variant="ghost" onClick={onClose}>إغلاق</Button>}
     >
       <div className="space-y-4">
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {entries.map(([k, v]) => (
-            <div key={k} className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 shadow-sm text-right">
-              <dt className="text-[11px] font-semibold text-slate-500 mb-1">{labelOf(k)}</dt>
-              <dd className="text-xs font-medium text-slate-900 break-words">{formatValue(k, v)}</dd>
-            <div key={k} className="rounded-lg bg-bg-secondary/50 border border-border px-3 py-2">
-              <dt className="text-xs text-text-muted mb-0.5">{labelOf(k)}</dt>
-              <dd className="text-sm font-medium text-text-primary break-words">{formatValue(k, v)}</dd>
+            <div key={k} className="rounded-lg bg-bg-secondary/50 border border-border px-3.5 py-2.5 text-right">
+              <dt className="text-[11px] font-semibold text-text-muted mb-1">{labelOf(k)}</dt>
+              <dd className="text-xs font-medium text-text-primary break-words">{formatValue(k, v)}</dd>
             </div>
           ))}
         </dl>

@@ -1,0 +1,3946 @@
+diff --git a/src/__tests__/vouchers-integrity.test.ts b/src/__tests__/vouchers-integrity.test.ts
+new file mode 100644
+index 0000000..2932dd0
+--- /dev/null
++++ b/src/__tests__/vouchers-integrity.test.ts
+@@ -0,0 +1,540 @@
++/**
++ * Section 6 tests — Vouchers (receipt/disbursement) & Banks/Safes
++ *
++ * CRITICAL regressions/bugs covered:
++ * 1. Disbursement JE direction was INVERTED (bank debited on payment) —
++ *    now: debit counterpart / credit bank
++ * 2. Counterpart account passed as CODE ('2110') in account_id — crashed
++ *    after Section 3's insertJournalLines enforcement; now resolved to a
++ *    real company-scoped account id
++ * 3. Receipts blocked by a balance check copy-pasted from disbursements
++ *    (receipts ADD money — never need balance)
++ * 4. Voucher PUT (edit) deletes the original JE → now reversal + new entry
++ * 5. Voucher DELETE destroys JE/allocations → now soft-cancel + reversal +
++ *    allocation reverts
++ * 6. Bank auto-account code collisions (timestamp-4) → sequential unique
++ */
++
++process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
++
++import { createToken } from '@/lib/auth';
++
++type Row = Record<string, any>;
++type Op = { op: string; col?: string; val?: any };
++
++function makeDb(db: Record<string, Row[]>) {
++  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
++  let insertCounter = 0;
++
++  const from = (table: string) => {
++    const ops: Op[] = [];
++    const mut: { kind?: string; payload?: any } = {};
++    const call: any = { table, ops, mut };
++    calls.push(call);
++
++    const applyFilters = () =>
++      (db[table] || []).filter((r) =>
++        ops.every((o) => {
++          if (o.op === 'eq') return r[o.col!] === o.val;
++          if (o.op === 'neq') return r[o.col!] !== o.val;
++          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
++          if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
++          if (o.op === 'gt') return (Number(r[o.col!]) || 0) > (Number(o.val) || 0);
++          return true;
++        })
++      );
++
++    const api: any = {
++      select: () => api,
++      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
++      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
++      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
++      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
++      gt: (col: string, val: any) => { ops.push({ op: 'gt', col, val }); return api; },
++      or: () => api,
++      gte: () => api,
++      lte: () => api,
++      like: () => api,
++      order: () => api,
++      limit: () => api,
++      range: () => api,
++      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
++      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
++      delete: () => { mut.kind = 'delete'; return api; },
++      maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
++      single: async () => {
++        if (mut.kind === 'insert') {
++          mut.payload = { id: `id-${++insertCounter}`, ...mut.payload };
++          (db[table] = db[table] || []).push(mut.payload);
++          return { data: mut.payload, error: null };
++        }
++        if (mut.kind === 'update') {
++          return { data: { ...applyFilters()[0], ...mut.payload }, error: null };
++        }
++        if (mut.kind === 'delete') {
++          return { data: applyFilters()[0] ?? { deleted: true }, error: null };
++        }
++        const row = applyFilters()[0] ?? null;
++        return { data: row, error: row ? null : { message: 'not found' } };
++      },
++      then: (onF: any, onR: any) =>
++        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
++    };
++    return api;
++  };
++
++  const db_: any = { from, calls };
++  db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `missing ${name}` } });
++  db_.rpc = (name: string, params: any) => db_.rpcImpl(name, params);
++  return db_;
++}
++
++let mockDb: ReturnType<typeof makeDb>;
++
++jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
++jest.mock('@/lib/permissions', () => ({
++  canBypassTelegramConfirmation: jest.fn(async () => true),
++  hasModulePermission: jest.fn(async () => true),
++}));
++jest.mock('@/lib/notifications', () => ({ requireApproval: jest.fn(async () => null) }));
++jest.mock('@/lib/approval-helpers', () => ({
++  checkTransactionBeforeSave: jest.fn(async () => ({ blocked: false, message: '' })),
++}));
++
++import * as receiptRoute from '@/app/api/vouchers/receipt/route';
++import { POST as receiptPOST, GET as receiptListGET } from '@/app/api/vouchers/receipt/route';
++import { PUT as receiptPUT, DELETE as receiptDELETE } from '@/app/api/vouchers/receipt/[id]/route';
++import { POST as disbPOST, GET as disbListGET } from '@/app/api/vouchers/disbursement/route';
++import { PUT as disbPUT, DELETE as disbDELETE } from '@/app/api/vouchers/disbursement/[id]/route';
++import { POST as banksPOST } from '@/app/api/banks/route';
++import { PUT as bankPUT } from '@/app/api/banks/[id]/route';
++
++const C1 = 'company-1';
++const C2 = 'company-2';
++const CLIENT = '00000000-0000-4000-8000-000000000c01';
++const SUPPLIER = '00000000-0000-4000-8000-000000000501';
++const SAFE = '00000000-0000-4000-8000-000000000ba1';
++const FOREIGN_SAFE = '00000000-0000-4000-8000-000000000ba2';
++const BANK_ACC = '00000000-0000-4000-8000-000000001110';
++const AR = '00000000-0000-4000-8000-000000001130';
++const AP = '00000000-0000-4000-8000-000000002110';
++const OTHER_REV = '00000000-0000-4000-8000-000000004200';
++const CAPITAL = '00000000-0000-4000-8000-000000003100';
++
++function baseDb() {
++  return {
++    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
++    contacts: [
++      { id: CLIENT, company_id: C1, name: 'عميل' },
++      { id: SUPPLIER, company_id: C1, name: 'مورد' },
++    ],
++    employees: [] as Row[],
++    accounts: [
++      { id: BANK_ACC, company_id: C1, code: '1110-0001', name: 'الخزينة الرئيسية' },
++      { id: AR, company_id: C1, code: '1130', name: 'العملاء' },
++      { id: AP, company_id: C1, code: '2110', name: 'ذمم الموردين' },
++      { id: OTHER_REV, company_id: C1, code: '4200', name: 'إيرادات أخرى' },
++      { id: CAPITAL, company_id: C1, code: '3100', name: 'رأس المال' },
++      { id: 'parent-1110', company_id: C1, code: '1110', name: 'النقدية' },
++    ],
++    banks_safes: [{ id: SAFE, company_id: C1, name: 'الخزينة', type: 'safe', account_id: BANK_ACC, opening_balance: '0' }],
++    companies: [],
++    company_telegram_configs: [],
++    voucher_receipts: [] as Row[],
++    voucher_disbursements: [] as Row[],
++    receipt_invoice_items: [] as Row[],
++    disbursement_invoice_items: [] as Row[],
++    invoices: [] as Row[],
++    purchase_invoices: [] as Row[],
++    journal_entries: [] as Row[],
++    journal_lines: [] as Row[],
++    journal_sequences: [] as Row[],
++    cash_transactions: [] as Row[],
++    employee_advances: [] as Row[],
++  } as Record<string, Row[]>;
++}
++
++function authedRequest(body?: any, method = 'POST') {
++  const token = createToken('u1', 'admin');
++  return {
++    url: 'http://localhost/api/test',
++    method,
++    headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
++    cookies: { get: () => undefined },
++    json: async () => body,
++  } as any;
++}
++
++const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
++const insertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === t);
++const deletesOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'delete' && c.table === t);
++const updatesOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'update' && c.table === t);
++
++// ---------------------------------------------------------------------------
++
++describe('POST /api/vouchers/disbursement — JE direction (critical)', () => {
++  test('supplier payment: debit AP / credit bank — never the reverse', async () => {
++    const db = baseDb();
++    // bank has 10,000 in the ledger
++    db.journal_lines.push({ company_id: C1, account_id: BANK_ACC, debit: 10000, credit: 0 });
++    mockDb = makeDb(db);
++
++    const res = await disbPOST(authedRequest({
++      date: '2026-08-01',
++      disbursement_type: 'supplier',
++      contact_id: SUPPLIER,
++      amount: 500,
++      bank_safe_id: SAFE,
++      reason: 'سداد مورد',
++    }));
++    expect(res.status).toBe(201);
++
++    const jl = insertsOf('journal_lines')[0].mut.payload as Row[];
++    expect(jl).toHaveLength(2);
++    const apLine = jl.find((l) => l.account_code === '2110');
++    const bankLine = jl.find((l) => l.account_id === BANK_ACC);
++    expect(apLine.debit).toBe(500);   // المقابل مدين
++    expect(apLine.credit).toBe(0);
++    expect(bankLine.debit).toBe(0);   // البنك دائن — المال خارج!
++    expect(bankLine.credit).toBe(500);
++    // resolved as real ids, never raw codes
++    expect(apLine.account_id).toBe(AP);
++  });
++
++  test('insufficient balance → 400 with zero writes', async () => {
++    mockDb = makeDb(baseDb()); // no ledger lines → balance 0
++    const res = await disbPOST(authedRequest({
++      date: '2026-08-01',
++      disbursement_type: 'supplier',
++      contact_id: SUPPLIER,
++      amount: 500,
++      bank_safe_id: SAFE,
++      reason: 'سداد',
++    }));
++    expect(res.status).toBe(400);
++    const json = await res.json();
++    expect(json.message).toContain('الرصيد غير كاف');
++    expect(insertsOf('voucher_disbursements')).toHaveLength(0);
++    expect(insertsOf('journal_entries')).toHaveLength(0);
++  });
++});
++
++describe('POST /api/vouchers/receipt — no balance check + resolved accounts', () => {
++  test('receipt on empty safe is ALLOWED (receipts add money)', async () => {
++    mockDb = makeDb(baseDb()); // zero balance
++    const res = await receiptPOST({
++      ...authedRequest(),
++      json: async () => ({
++        date: '2026-08-01',
++        receipt_type: 'client',
++        contact_id: CLIENT,
++        amount: 1000,
++        bank_safe_id: SAFE,
++        reason: 'دفعة من عميل',
++      }),
++    });
++    expect(res.status).toBe(201); // was 400 'الرصيد غير كافٍ' before the fix
++
++    const jl = insertsOf('journal_lines')[0].mut.payload as Row[];
++    const bankLine = jl.find((l) => l.account_id === BANK_ACC);
++    const arLine = jl.find((l) => l.account_id === AR);
++    expect(bankLine.debit).toBe(1000);  // المال داخل
++    expect(arLine.credit).toBe(1000);   // ذمم العميل تنخفض
++    expect(arLine.account_code).toBe('1130');
++  });
++
++  test('general receipt credits OTHER_REVENUE, not a cash self-loop', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await receiptPOST({
++      ...authedRequest(),
++      json: async () => ({
++        date: '2026-08-01', receipt_type: 'general', amount: 250,
++        bank_safe_id: SAFE, reason: 'إيراد متنوع',
++      }),
++    });
++    expect(res.status).toBe(201);
++    const jl = insertsOf('journal_lines')[0].mut.payload as Row[];
++    expect(jl.find((l) => l.account_id === OTHER_REV).credit).toBe(250);
++  });
++
++  test('foreign bank safe → 404; invalid amount → 400', async () => {
++    mockDb = makeDb(baseDb());
++    const r1 = await receiptPOST({
++      ...authedRequest(),
++      json: async () => ({ date: '2026-08-01', receipt_type: 'client', contact_id: CLIENT, amount: 10, bank_safe_id: FOREIGN_SAFE, reason: 'x' }),
++    });
++    expect(r1.status).toBe(404);
++
++    const r2 = await receiptPOST({
++      ...authedRequest(),
++      json: async () => ({ date: '2026-08-01', receipt_type: 'client', contact_id: CLIENT, amount: -5, bank_safe_id: SAFE, reason: 'x' }),
++    });
++    expect(r2.status).toBe(400);
++    expect(insertsOf('voucher_receipts')).toHaveLength(0);
++  });
++
++  test('the broken collection-level DELETE handler is removed', () => {
++    expect((receiptRoute as any).DELETE).toBeUndefined();
++  });
++});
++
++describe('Invoice allocation on receipts', () => {
++  test('allocates to sales invoice: paid_amount/status trio updated + link row saved', async () => {
++    const db = baseDb();
++    db.invoices.push({ id: '00000000-0000-4000-8000-000000000101', company_id: C1, contact_id: CLIENT, number: 1, total: '115', paid_amount: '0', status: 'unpaid' });
++    db.journal_lines.push({ company_id: C1, account_id: BANK_ACC, debit: 10000, credit: 0 });
++    mockDb = makeDb(db);
++
++    const res = await receiptPOST({
++      ...authedRequest(),
++      json: async () => ({
++        date: '2026-08-01', receipt_type: 'client', contact_id: CLIENT, amount: 100,
++        bank_safe_id: SAFE, reason: 'سداد جزئي',
++        invoice_items: [{ invoice_id: '00000000-0000-4000-8000-000000000101', amount: 100 }],
++      }),
++    });
++    expect(res.status).toBe(201);
++
++    const invUpd = updatesOf('invoices')[0].mut.payload;
++    expect(invUpd.paid_amount).toBe(100);
++    expect(invUpd.status).toBe('partial');
++
++    const link = insertsOf('receipt_invoice_items')[0].mut.payload;
++    expect(link.invoice_id).toBe('00000000-0000-4000-8000-000000000101');
++    expect(link.amount).toBe(100);
++    expect(link.company_id).toBe(C1);
++    expect(link.journal_entry_id).toBeTruthy();
++  });
++
++  test('allocation beyond remaining is capped at the remaining amount', async () => {
++    const db = baseDb();
++    db.invoices.push({ id: '00000000-0000-4000-8000-000000000101', company_id: C1, contact_id: CLIENT, number: 1, total: '115', paid_amount: '100', status: 'partial' });
++    mockDb = makeDb(db);
++
++    const res = await receiptPOST({
++      ...authedRequest(),
++      json: async () => ({
++        date: '2026-08-01', receipt_type: 'client', contact_id: CLIENT, amount: 20,
++        bank_safe_id: SAFE, reason: 'تسوية',
++        invoice_items: [{ invoice_id: '00000000-0000-4000-8000-000000000101', amount: 20 }], // remaining is 15
++      }),
++    });
++    expect(res.status).toBe(201);
++    const link = insertsOf('receipt_invoice_items')[0].mut.payload;
++    expect(link.amount).toBe(15); // capped
++    const invUpd = updatesOf('invoices')[0].mut.payload;
++    expect(invUpd.paid_amount).toBe(115);
++    expect(invUpd.status).toBe('paid');
++  });
++
++  test('foreign invoice in allocations → full rollback (no voucher, no JE, invoice untouched)', async () => {
++    const db = baseDb();
++    db.invoices.push({ id: '00000000-0000-4000-8000-000000000102', company_id: C2, contact_id: CLIENT, number: 9, total: '100', paid_amount: '0', status: 'unpaid' });
++    mockDb = makeDb(db);
++
++    const res = await receiptPOST({
++      ...authedRequest(),
++      json: async () => ({
++        date: '2026-08-01', receipt_type: 'client', contact_id: CLIENT, amount: 50,
++        bank_safe_id: SAFE, reason: 'اختراق',
++        invoice_items: [{ invoice_id: '00000000-0000-4000-8000-000000000102', amount: 50 }],
++      }),
++    });
++    expect(res.status).toBe(500);
++    expect(deletesOf('voucher_receipts').length).toBeGreaterThan(0); // rolled back
++    expect(deletesOf('journal_entries').length).toBeGreaterThan(0);
++    expect(updatesOf('invoices')).toHaveLength(0);
++  });
++});
++
++describe('Voucher PUT — reversal + new entry (original JE preserved)', () => {
++  test('editing a receipt amount: old JE reversed (kept), new JE booked', async () => {
++    const db = baseDb();
++    db.voucher_receipts.push({
++      id: 'vr-1', company_id: C1, number: 3, date: '2026-08-01', receipt_type: 'client',
++      contact_id: CLIENT, amount: 100, bank_safe_id: SAFE, reason: 'قديم',
++      status: 'approved', journal_entry_id: 'je-old',
++    });
++    db.journal_lines.push(
++      { id: 'l1', journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'الخزينة', debit: 100, credit: 0 },
++      { id: 'l2', journal_entry_id: 'je-old', account_id: AR, account_code: '1130', account_name: 'العملاء', debit: 0, credit: 100 },
++    );
++    mockDb = makeDb(db);
++
++    const res = await receiptPUT(authedRequest({ amount: 150 }, 'PUT'), paramsOf('vr-1'));
++    expect(res.status).toBe(200);
++
++    const jeInserts = insertsOf('journal_entries');
++    expect(jeInserts).toHaveLength(2); // reversal + new
++    expect(jeInserts[0].mut.payload.reference_type).toBe('voucher_receipt_reversal');
++    expect(jeInserts[1].mut.payload.reference_type).toBe('voucher_receipt');
++
++    // original JE NOT deleted
++    expect(deletesOf('journal_entries')).toHaveLength(0);
++
++    // new entry carries the NEW amount
++    const newLines = insertsOf('journal_lines')[1].mut.payload as Row[];
++    expect(newLines.find((l) => l.account_id === BANK_ACC).debit).toBe(150);
++
++    const upd = updatesOf('voucher_receipts')[0].mut.payload;
++    expect(upd.amount).toBe(150);
++    expect(upd.journal_entry_id).toBeTruthy();
++  });
++
++  test('disbursement PUT now EXISTS (was 405) and posts correct direction', async () => {
++    const db = baseDb();
++    db.voucher_disbursements.push({
++      id: 'vd-1', company_id: C1, number: 4, date: '2026-08-01', disbursement_type: 'supplier',
++      contact_id: SUPPLIER, amount: 200, bank_safe_id: SAFE, reason: 'قديم',
++      status: 'approved', journal_entry_id: 'je-old',
++    });
++    db.journal_lines.push(
++      { id: 'l1', journal_entry_id: 'je-old', account_id: AP, account_code: '2110', account_name: 'موردون', debit: 200, credit: 0 },
++      { id: 'l2', journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 0, credit: 200 },
++      { company_id: C1, account_id: BANK_ACC, debit: 10000, credit: 0 }, // bank balance headroom
++    );
++    mockDb = makeDb(db);
++
++    const res = await disbPUT(authedRequest({ amount: 300 }, 'PUT'), paramsOf('vd-1'));
++    expect(res.status).toBe(200);
++
++    const newLines = insertsOf('journal_lines')[1].mut.payload as Row[];
++    const apLine = newLines.find((l) => l.account_code === '2110');
++    const bankLine = newLines.find((l) => l.account_id === BANK_ACC);
++    expect(apLine.debit).toBe(300);
++    expect(bankLine.credit).toBe(300);
++  });
++});
++
++describe('Voucher DELETE — soft-cancel with reversal & allocation revert', () => {
++  test('receipt delete: reverses JE, reverts invoice allocations, keeps records', async () => {
++    const db = baseDb();
++    db.invoices.push({ id: '00000000-0000-4000-8000-000000000101', company_id: C1, contact_id: CLIENT, number: 1, total: '100', paid_amount: '100', status: 'paid' });
++    db.voucher_receipts.push({
++      id: 'vr-1', company_id: C1, number: 3, date: '2026-08-01', receipt_type: 'client',
++      contact_id: CLIENT, amount: 100, bank_safe_id: SAFE, reason: 'دفعة',
++      status: 'approved', journal_entry_id: 'je-old',
++    });
++    db.journal_lines.push(
++      { id: 'l1', journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 100, credit: 0 },
++      { id: 'l2', journal_entry_id: 'je-old', account_id: AR, account_code: '1130', account_name: 'عملاء', debit: 0, credit: 100 },
++    );
++    db.receipt_invoice_items.push({ id: 'ri-1', voucher_receipt_id: 'vr-1', invoice_id: '00000000-0000-4000-8000-000000000101', amount: '100', journal_entry_id: 'je-old' });
++    mockDb = makeDb(db);
++
++    const res = await receiptDELETE(authedRequest(undefined, 'DELETE'), paramsOf('vr-1'));
++    expect(res.status).toBe(200);
++
++    // reversal posted, original kept
++    const rev = insertsOf('journal_entries')[0].mut.payload;
++    expect(rev.reference_type).toBe('voucher_receipt_reversal');
++    expect(deletesOf('journal_entries')).toHaveLength(0);
++
++    // voucher soft-cancelled, not wiped
++    expect(deletesOf('voucher_receipts')).toHaveLength(0);
++    const upd = updatesOf('voucher_receipts').find((c) => c.mut.payload.status === 'cancelled');
++    expect(upd).toBeTruthy();
++
++    // invoice allocation reverted
++    const invUpd = updatesOf('invoices')[0].mut.payload;
++    expect(invUpd.paid_amount).toBe(0);
++    expect(invUpd.status).toBe('unpaid');
++    expect(deletesOf('receipt_invoice_items')).toHaveLength(1);
++  });
++
++  test('disbursement delete: reverts purchase invoice paid trio', async () => {
++    const db = baseDb();
++    db.purchase_invoices.push({ id: 'pi-1', company_id: C1, supplier_id: SUPPLIER, number: 2, total: '230', paid_amount: '230', status: 'paid' });
++    db.voucher_disbursements.push({
++      id: 'vd-1', company_id: C1, number: 4, date: '2026-08-01', disbursement_type: 'supplier',
++      contact_id: SUPPLIER, amount: 230, bank_safe_id: SAFE, reason: 'سداد',
++      status: 'approved', journal_entry_id: 'je-old',
++    });
++    db.journal_lines.push(
++      { id: 'l1', journal_entry_id: 'je-old', account_id: AP, account_code: '2110', account_name: 'موردون', debit: 230, credit: 0 },
++      { id: 'l2', journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 0, credit: 230 },
++    );
++    db.disbursement_invoice_items.push({ id: 'di-1', voucher_disbursement_id: 'vd-1', purchase_invoice_id: 'pi-1', amount: '230', journal_entry_id: 'je-old' });
++    mockDb = makeDb(db);
++
++    const res = await disbDELETE(authedRequest(undefined, 'DELETE'), paramsOf('vd-1'));
++    expect(res.status).toBe(200);
++
++    const piUpd = updatesOf('purchase_invoices')[0].mut.payload;
++    expect(piUpd.paid_amount).toBe(0);
++    expect(piUpd.status).toBe('unpaid');
++    expect(updatesOf('voucher_disbursements').some((c) => c.mut.payload.status === 'cancelled')).toBe(true);
++  });
++});
++
++describe('GET lists — keys & cancelled exclusion', () => {
++  test('disbursement list returns BOTH keys and hides cancelled', async () => {
++    const db = baseDb();
++    db.voucher_disbursements.push(
++      { id: 'vd-1', company_id: C1, number: 1, date: '2026-08-01', status: 'approved', amount: 100 },
++      { id: 'vd-2', company_id: C1, number: 2, date: '2026-08-02', status: 'cancelled', amount: 200 },
++    );
++    mockDb = makeDb(db);
++    const res = await disbListGET(authedRequest(undefined, 'GET'));
++    const json = await res.json();
++    expect(json.data.disbursements).toHaveLength(1); // cancelled hidden
++    expect(json.data.vouchers).toHaveLength(1);      // legacy alias kept
++    expect(json.data.disbursements[0].id).toBe('vd-1');
++  });
++});
++
++describe('Banks — auto account code uniqueness & opening balance', () => {
++  test('new safe gets a unique sequential sub-account code (no timestamp collision)', async () => {
++    const db = baseDb();
++    db.accounts.push({ id: 'acc-x', company_id: C1, code: '1110-0003', name: 'خزينة أخرى' });
++    mockDb = makeDb(db);
++
++    const res = await banksPOST(authedRequest({ name: 'خزينة الفرع', type: 'safe', opening_balance: 0 }));
++    expect(res.status).toBe(201);
++
++    const accInsert = insertsOf('accounts')[0].mut.payload;
++    expect(accInsert.code).toBe('1110-0004'); // after the existing max — not timestamp-based
++
++    const bsInsert = insertsOf('banks_safes')[0].mut.payload;
++    expect(bsInsert.company_id).toBe(C1);
++    expect(bsInsert.account_id).toBe(accInsert.id || bsInsert.account_id);
++  });
++
++  test('rejects invalid bank type', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await banksPOST(authedRequest({ name: 'خزينة', type: 'crypto-wallet' }));
++    expect(res.status).toBe(400);
++    expect(insertsOf('banks_safes')).toHaveLength(0);
++  });
++
++  test('opening balance change posts a BALANCED pair to the bank\'s own entry', async () => {
++    const db = baseDb();
++    db.banks_safes.push({ id: 'b2', company_id: C1, name: 'بنك', type: 'bank', account_id: BANK_ACC, opening_balance: '0' });
++    db.journal_lines.push({ journal_entry_id: 'je-open', account_id: BANK_ACC, company_id: C1, debit: 0, credit: 0 });
++    db.journal_entries.push({ id: 'je-open', company_id: C1, number: 1, type: 'opening_balance', date: '2026-01-01' });
++    mockDb = makeDb(db);
++
++    const res = await bankPUT(authedRequest({ opening_balance: 5000 }, 'PUT'), paramsOf('b2'));
++    expect(res.status).toBe(200);
++
++    const lines = insertsOf('journal_lines')[0].mut.payload as Row[];
++    expect(lines).toHaveLength(2); // bank + capital — balanced
++    const sum = (k: 'debit' | 'credit') => lines.reduce((s, l) => s + (l[k] || 0), 0);
++    expect(sum('debit')).toBe(5000);
++    expect(sum('credit')).toBe(5000);
++    expect(lines.find((l) => l.account_id === CAPITAL)).toBeTruthy();
++  });
++
++  test('opening balance without capital account → 400 (never an unbalanced entry)', async () => {
++    const db = baseDb();
++    db.accounts = db.accounts.filter((a) => a.code !== '3100'); // no capital
++    db.banks_safes.push({ id: 'b3', company_id: C1, name: 'بنك', type: 'bank', account_id: BANK_ACC, opening_balance: '0' });
++    mockDb = makeDb(db);
++
++    const res = await bankPUT(authedRequest({ opening_balance: 1000 }, 'PUT'), paramsOf('b3'));
++    expect(res.status).toBe(400);
++    const json = await res.json();
++    expect(json.message).toContain('رأس المال');
++    expect(insertsOf('journal_lines')).toHaveLength(0);
++  });
++});
+diff --git a/src/app/api/bank-reconciliation/[id]/route.ts b/src/app/api/bank-reconciliation/[id]/route.ts
+index 1fcd648..4193a7f 100644
+--- a/src/app/api/bank-reconciliation/[id]/route.ts
++++ b/src/app/api/bank-reconciliation/[id]/route.ts
+@@ -37,8 +37,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id:
+     const s = sb();
+ 
+     const updateData: any = {};
+-    if (body.closingBalance !== undefined) updateData.closing_balance = body.closingBalance;
+-    if (body.status !== undefined) updateData.status = body.status;
++    if (body.closingBalance !== undefined) {
++      if (isNaN(parseFloat(body.closingBalance))) return error('الرصيد الختامي يجب أن يكون رقماً');
++      updateData.closing_balance = parseFloat(body.closingBalance);
++    }
++    if (body.status !== undefined) {
++      if (!['draft', 'final'].includes(body.status)) return error('حالة التسوية غير صالحة');
++      updateData.status = body.status;
++    }
+ 
+     const { data: result, error: updateError } = await s.from('bank_reconciliation')
+       .update(updateData)
+diff --git a/src/app/api/bank-reconciliation/route.ts b/src/app/api/bank-reconciliation/route.ts
+index 85a6f62..4c367fe 100644
+--- a/src/app/api/bank-reconciliation/route.ts
++++ b/src/app/api/bank-reconciliation/route.ts
+@@ -1,5 +1,5 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
++import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+ 
+ const sb = () => getSupabase();
+@@ -19,14 +19,21 @@ export async function GET(req: NextRequest) {
+ 
+ export async function POST(req: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(req);
++    const auth = await requireModulePermission(req, 'banks', 'create');
+     const s = sb();
+     const { bankSafeId, date, closingBalance, items } = await parseBody(req);
+     if (!bankSafeId || !date || closingBalance === undefined)
+       return error('bankSafeId, date, closingBalance are required');
++    if (isNaN(parseFloat(closingBalance)))
++      return error('الرصيد الختامي يجب أن يكون رقماً');
++
++    // TENANT CHECK: الخزينة/البنك المطابَق يجب أن ينتمي لهذه الشركة
++    const { data: bankSafe } = await s.from('banks_safes')
++      .select('id').eq('id', bankSafeId).eq('company_id', auth.companyId).maybeSingle();
++    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
+ 
+     const { data: rec, error: recErr } = await s.from('bank_reconciliation')
+-      .insert({ company_id: auth.companyId, bank_safe_id: bankSafeId, date, closing_balance: closingBalance })
++      .insert({ company_id: auth.companyId, bank_safe_id: bankSafeId, date, closing_balance: parseFloat(closingBalance) })
+       .select('*').single();
+     if (recErr) throw recErr;
+ 
+diff --git a/src/app/api/banks/[id]/route.ts b/src/app/api/banks/[id]/route.ts
+index 6fecfae..738fdd5 100644
+--- a/src/app/api/banks/[id]/route.ts
++++ b/src/app/api/banks/[id]/route.ts
+@@ -1,6 +1,5 @@
+ import { NextRequest } from 'next/server';
+ import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+-import type { } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+ import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
+ import { getNextJournalNumber } from '@/lib/numbering';
+@@ -33,12 +32,13 @@ export async function GET(
+ 
+     if (bank.account_id) {
+       // الرصيد الحالي = كل القيود (افتتاحي + عمليات)
+-      currentBalance = await getAccountBalanceFromJournal(bank.account_id);
++      currentBalance = await getAccountBalanceFromJournal(bank.account_id, auth.companyId);
+       
+       // الرصيد الافتتاحي = قيود من نوع opening_balance فقط
+       const { data: openingLines } = await s.from('journal_lines')
+         .select('debit, credit, journal_entries!inner(type)')
+-        .eq('account_id', bank.account_id);
++        .eq('account_id', bank.account_id)
++        .eq('company_id', auth.companyId);
+       
+       if (openingLines) {
+         openingBalance = (openingLines as any[])
+@@ -97,141 +97,87 @@ export async function PUT(
+       if (updateError) throw updateError;
+     }
+ 
+-    // إذا تم تغيير الرصيد الافتتاحي، نحدّث القيد المحاسبي الافتتاحي
++    // إذا تم تغيير الرصيد الافتتاحي، نحدّث قيد الافتتاح الخاص بهذا البنك فقط
++    // (البحث السابق كان يلتقط "أحدث قيد افتتاحي بالشركة" — قيد بنكٍ آخر! —
++    // ويحذف سطر البنك فقط تاركاً سطر رأس المال → قيد غير متوازن)
+     if (body.opening_balance !== undefined && (bankRes as any).account_id) {
+       const newOpeningBalance = parseFloat(body.opening_balance) || 0;
+       const oldOpeningBalance = parseFloat((bankRes as any).opening_balance) || 0;
+       const accountId = (bankRes as any).account_id;
+-      
++      const bankName = body.name || (bankRes as any).name;
++
+       if (newOpeningBalance !== oldOpeningBalance) {
+-        // البحث عن القيد الافتتاحي الموجود
+-        const { data: existingJournalEntry } = await s.from('journal_entries')
+-          .select('id, date')
++        // حساب رأس المال إلزامي لأي رصيد غير صفري — بلا مقابل لا قيد متوازن
++        const { data: capitalAccount } = await s.from('accounts')
++          .select('id, code, name')
+           .eq('company_id', auth.companyId)
+-          .eq('type', 'opening_balance')
+-          .order('created_at', { ascending: false })
+-          .limit(1)
++          .eq('code', '3100')
+           .maybeSingle();
+ 
+-        if (existingJournalEntry) {
+-          // حذف السطور القديمة للقيد الافتتاحي لهذا الحساب
+-          await s.from('journal_lines')
+-            .delete()
+-            .eq('journal_entry_id', (existingJournalEntry as any).id)
+-            .eq('account_id', accountId);
++        if (newOpeningBalance !== 0 && !capitalAccount) {
++          return error('حساب رأس المال (3100) مفقود — لا يمكن ترحيل رصيد افتتاحي متوازن');
++        }
+ 
+-          // إذا كان هناك حساب مقابل (رأس المال)، نحدّثه أيضاً
+-          const { data: capitalAccount } = await s.from('accounts')
+-            .select('id, code, name')
+-            .eq('company_id', auth.companyId)
+-            .eq('code', '3100')
+-            .maybeSingle();
++        // قيد الافتتاح الخاص بهذا البنك تحديداً: نستدل عليه من سطور حسابه
++        const { data: ownLines } = await s.from('journal_lines')
++          .select('journal_entry_id')
++          .eq('account_id', accountId)
++          .eq('company_id', auth.companyId);
++        const ownJeIds = [...new Set((ownLines || []).map((l: any) => l.journal_entry_id))];
+ 
+-          // إنشاء سطور جديدة
+-          const lines: any[] = [];
+-          
+-          if (newOpeningBalance > 0) {
+-            lines.push({
+-              journal_entry_id: (existingJournalEntry as any).id,
+-              account_id: accountId,
+-              debit: newOpeningBalance,
+-              credit: 0,
+-              description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+-            });
+-            if (capitalAccount) {
+-              lines.push({
+-                journal_entry_id: (existingJournalEntry as any).id,
+-                account_id: capitalAccount.id,
+-                debit: 0,
+-                credit: newOpeningBalance,
+-                description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+-              });
+-            }
+-          } else if (newOpeningBalance < 0) {
+-            lines.push({
+-              journal_entry_id: (existingJournalEntry as any).id,
+-              account_id: accountId,
+-              debit: 0,
+-              credit: Math.abs(newOpeningBalance),
+-              description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+-            });
+-            if (capitalAccount) {
+-              lines.push({
+-                journal_entry_id: (existingJournalEntry as any).id,
+-                account_id: capitalAccount.id,
+-                debit: Math.abs(newOpeningBalance),
+-                credit: 0,
+-                description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+-              });
+-            }
+-          }
++        let openingEntryId: string | null = null;
++        if (ownJeIds.length > 0) {
++          const { data: obEntries } = await s.from('journal_entries')
++            .select('id')
++            .eq('company_id', auth.companyId)
++            .eq('type', 'opening_balance')
++            .in('id', ownJeIds)
++            .limit(1);
++          openingEntryId = obEntries?.[0]?.id || null;
++        }
+ 
+-          if (lines.length > 0) {
+-            await insertJournalLines(auth.companyId, lines);
+-          }
+-        } else if (newOpeningBalance !== 0) {
+-          // لا يوجد قيد افتتاحي، ننشئ واحداً
++        if (!openingEntryId && newOpeningBalance !== 0) {
++          // لا قيد افتتاحي لهذا البنك — ننشئ واحداً جديداً
+           const jeNum = await getNextJournalNumber(auth.companyId, new Date().toISOString());
+-          const { data: newEntry } = await s.from('journal_entries')
++          const { data: newEntry, error: newEntryErr } = await s.from('journal_entries')
+             .insert({
+               company_id: auth.companyId,
+               number: jeNum,
+               date: new Date().toISOString().split('T')[0],
+               type: 'opening_balance',
+-              description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
++              description: `رصيد افتتاحي - ${bankName}`,
+               created_by: auth.userId,
+             })
+             .select('id')
+             .single();
++          if (newEntryErr) throw newEntryErr;
++          openingEntryId = newEntry.id;
++        }
++
++        if (openingEntryId) {
++          // إعادة كتابة سطري الطرفين (بنك + رأس مال) — القيد يبقى متوازناً دائماً
++          const affectedAccountIds = capitalAccount ? [accountId, capitalAccount.id] : [accountId];
++          await s.from('journal_lines')
++            .delete()
++            .eq('journal_entry_id', openingEntryId)
++            .in('account_id', affectedAccountIds);
+ 
+-          if (newEntry) {
+-            const { data: capitalAccount } = await s.from('accounts')
+-              .select('id, code, name')
+-              .eq('company_id', auth.companyId)
+-              .eq('code', '3100')
+-              .maybeSingle();
+-
+-            const lines: any[] = [];
+-            
+-            if (newOpeningBalance > 0) {
+-              lines.push({
+-                journal_entry_id: (newEntry as any).id,
+-                account_id: accountId,
+-                debit: newOpeningBalance,
+-                credit: 0,
+-                description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+-              });
+-              if (capitalAccount) {
+-                lines.push({
+-                  journal_entry_id: (newEntry as any).id,
+-                  account_id: capitalAccount.id,
+-                  debit: 0,
+-                  credit: newOpeningBalance,
+-                  description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+-                });
+-              }
+-            } else {
+-              lines.push({
+-                journal_entry_id: (newEntry as any).id,
+-                account_id: accountId,
+-                debit: 0,
+-                credit: Math.abs(newOpeningBalance),
+-                description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+-              });
+-              if (capitalAccount) {
+-                lines.push({
+-                  journal_entry_id: (newEntry as any).id,
+-                  account_id: capitalAccount.id,
+-                  debit: Math.abs(newOpeningBalance),
+-                  credit: 0,
+-                  description: `رصيد افتتاحي - ${body.name || (bankRes as any).name}`,
+-                });
+-              }
+-            }
+-
+-            if (lines.length > 0) {
+-              await insertJournalLines(auth.companyId, lines);
+-            }
++          const lines: any[] = [];
++          if (newOpeningBalance > 0 && capitalAccount) {
++            lines.push(
++              { journal_entry_id: openingEntryId, account_id: accountId, debit: newOpeningBalance, credit: 0, description: `رصيد افتتاحي - ${bankName}` },
++              { journal_entry_id: openingEntryId, account_id: capitalAccount.id, debit: 0, credit: newOpeningBalance, description: `رصيد افتتاحي - ${bankName}` },
++            );
++          } else if (newOpeningBalance < 0 && capitalAccount) {
++            lines.push(
++              { journal_entry_id: openingEntryId, account_id: accountId, debit: 0, credit: Math.abs(newOpeningBalance), description: `رصيد افتتاحي - ${bankName}` },
++              { journal_entry_id: openingEntryId, account_id: capitalAccount.id, debit: Math.abs(newOpeningBalance), credit: 0, description: `رصيد افتتاحي - ${bankName}` },
++            );
++          }
++
++          if (lines.length > 0) {
++            const { error: linesErr } = await insertJournalLines(auth.companyId, lines);
++            if (linesErr) throw linesErr;
+           }
+         }
+       }
+@@ -250,8 +196,8 @@ export async function PUT(
+       account_code: u.accounts?.code || null,
+       account_name: u.accounts?.name || null,
+       opening_balance: parseFloat(u.opening_balance) || 0,
+-      current_balance: await getAccountBalanceFromJournal(u.account_id || ''),
+-      balance: await getAccountBalanceFromJournal(u.account_id || ''),
++      current_balance: u.account_id ? await getAccountBalanceFromJournal(u.account_id, auth.companyId) : 0,
++      balance: u.account_id ? await getAccountBalanceFromJournal(u.account_id, auth.companyId) : 0,
+     });
+   } catch (err) {
+     return handleApiError(err);
+diff --git a/src/app/api/banks/route.ts b/src/app/api/banks/route.ts
+index 74eb900..ea71b0f 100644
+--- a/src/app/api/banks/route.ts
++++ b/src/app/api/banks/route.ts
+@@ -28,8 +28,8 @@ export async function GET(request: NextRequest) {
+       let currentBalance = 0;
+       
+       if (bs.account_id) {
+-        // حساب الرصيد الحالي من جميع القيود (يشمل الافتتاحي + العمليات)
+-        currentBalance = await getAccountBalanceFromJournal(bs.account_id);
++        // حساب الرصيد الحالي من جميع القيود (يشمل الافتتاحي + العمليات) — مقيد بالشركة
++        currentBalance = await getAccountBalanceFromJournal(bs.account_id, auth.companyId);
+       }
+ 
+       return {
+@@ -48,6 +48,27 @@ export async function GET(request: NextRequest) {
+   }
+ }
+ 
++/**
++ * توليد كود حساب فرعي فريد للخزينة/البنك.
++ * كان 4 أرقام من الطابع الزمني: بنكان خلال ~10 ثوانٍ بذات النوع يتشاركان
++ * الحساب المحاسبي نفسه وتندمج أرصدتهما صامتةً — الآن تسلسل تصاعدي مضمون.
++ */
++async function nextBankAccountCode(companyId: string, parentCode: string): Promise<string> {
++  const s = sb();
++  const { data: siblings } = await s.from('accounts')
++    .select('code')
++    .eq('company_id', companyId);
++  let maxSuffix = 0;
++  for (const row of siblings || []) {
++    const code = (row as any).code as string;
++    if (code && code.startsWith(`${parentCode}-`)) {
++      const suffix = parseInt(code.slice(parentCode.length + 1), 10);
++      if (!isNaN(suffix) && suffix > maxSuffix) maxSuffix = suffix;
++    }
++  }
++  return `${parentCode}-${String(maxSuffix + 1).padStart(4, '0')}`;
++}
++
+ export async function POST(request: NextRequest) {
+   try {
+     const auth = await requireModulePermission(request, 'banks', 'create');
+@@ -56,13 +77,19 @@ export async function POST(request: NextRequest) {
+     const { name, type, account_number, opening_balance } = data;
+ 
+     if (!name || !type) return error('name, type are required');
++    if (typeof name !== 'string' || name.trim().length === 0 || name.length > 200) {
++      return error('اسم الخزينة/البنك غير صالح');
++    }
++    if (type !== 'bank' && type !== 'safe') {
++      return error('النوع يجب أن يكون bank أو safe');
++    }
+ 
+     const parsedOpeningBalance = parseFloat(opening_balance) || 0;
+ 
+-    // Create auto account in chart of accounts
+-    const accountCode = `${type === 'bank' ? '1120' : '1110'}-${Date.now().toString().slice(-4)}`;
++    // Create auto account in chart of accounts — بكود فريد مضمون
+     const parentCode = type === 'bank' ? '1120' : '1110';
+-    
++    const accountCode = await nextBankAccountCode(auth.companyId, parentCode);
++
+     console.log(`Creating auto account for bank/safe: ${name} with code ${accountCode}`);
+     
+     const newAccount = await createAutoAccount({
+diff --git a/src/app/api/vouchers/disbursement/[id]/route.ts b/src/app/api/vouchers/disbursement/[id]/route.ts
+index ca606dd..e907108 100644
+--- a/src/app/api/vouchers/disbursement/[id]/route.ts
++++ b/src/app/api/vouchers/disbursement/[id]/route.ts
+@@ -1,46 +1,193 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, notFound, handleApiError } from '@/lib/api-helpers';
+-import type { } from '@/lib/api-helpers';
++import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
++import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
++import { resolveAccountId, postReversalEntry, revertInvoiceAllocations } from '@/lib/voucher-utils';
++import { voucherUpdateSchema } from '@/lib/validation';
++import { ACCOUNT_CODES } from '@/lib/constants';
+ 
+ const sb = () => getSupabase();
+ 
++function disbursementDebitCode(type: string): string {
++  switch (type) {
++    case 'supplier': return ACCOUNT_CODES.ACCOUNTS_PAYABLE;
++    case 'employee_advance': return ACCOUNT_CODES.EMPLOYEE_ADVANCES;
++    case 'subcontractor': return ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES;
++    case 'client_refund': return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
++    case 'other':
++    default: return ACCOUNT_CODES.DIRECT_COSTS;
++  }
++}
++
+ export async function GET(
+   request: NextRequest,
+   { params }: { params: Promise<{ id: string }> }
+ ) {
+   try {
+-    const { requireApiAuth, requireModulePermission, requireManagerOrAbove } = await import('@/lib/api-helpers');
+-    const ctx = await requireApiAuth(request);
++    const ctx = await requireModulePermission(request, 'disbursements', 'read');
+     const { id } = await params;
+     const s = sb();
+ 
+     const { data: voucher } = await s.from('voucher_disbursements')
+-      .select('*, contacts!contact_id(name), banks_safes!bank_safe_id(name), journal_entries!journal_entry_id(sequence_number), employees!employee_id(name)')
++      // العمود الصحيح number (كان sequence_number — join ميت يعيد null دائماً)
++      .select('*, contacts!contact_id(name), banks_safes!bank_safe_id(name), journal_entries!journal_entry_id(number), employees!employee_id(name)')
+       .eq('id', id)
+       .eq('company_id', ctx.companyId)
+       .maybeSingle();
+ 
+     if (!voucher) return notFound();
+ 
++    const { data: invoiceItems } = await s.from('disbursement_invoice_items')
++      .select('*, purchase_invoices!purchase_invoice_id(invoice_number)')
++      .eq('voucher_disbursement_id', id);
++
+     return success({
+-      ...voucher,
++      ...(voucher as Record<string, any>),
+       contact_name: (voucher as Record<string, any>).contacts?.name || null,
+       bank_safe_name: (voucher as Record<string, any>).banks_safes?.name || null,
+-      journal_entry_number: (voucher as Record<string, any>).journal_entries?.sequence_number || null,
++      journal_entry_number: (voucher as Record<string, any>).journal_entries?.number || null,
+       employee_name: (voucher as Record<string, any>).employees?.name || null,
++      invoice_items: (invoiceItems || []).map((di: any) => ({
++        ...di,
++        invoice_number: di.purchase_invoices?.invoice_number || null,
++      })),
+     });
+   } catch (err) {
+     return handleApiError(err);
+   }
+ }
+ 
++/**
++ * PUT /api/vouchers/disbursement/[id] — كان مفقوداً كلياً (الصفحة ترسل PUT → 405)
++ * تعديل = عكس القيد القديم (يبقى للتدقيق) + قيد جديد بالاتجاه الصحيح.
++ */
++export async function PUT(
++  request: NextRequest,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  try {
++    const ctx = await requireManagerOrAbove(request);
++    const { id } = await params;
++    const s = sb();
++    const body = await request.json();
++
++    const parsed = voucherUpdateSchema.safeParse(body);
++    if (!parsed.success) return error(parsed.error.issues[0].message);
++
++    const { data: oldVoucher } = await s.from('voucher_disbursements')
++      .select('*')
++      .eq('id', id)
++      .eq('company_id', ctx.companyId)
++      .maybeSingle();
++
++    if (!oldVoucher) return notFound();
++    const old = oldVoucher as Record<string, any>;
++    if (old.status === 'cancelled') return error('السند ملغى ولا يمكن تعديله');
++    if (old.status === 'pending') return error('السند قيد الاعتماد ولا يمكن تعديله');
++
++    const { data: depRes } = await s.from('cash_transactions')
++      .select('id').eq('voucher_disbursement_id', id).limit(1);
++    if (depRes && depRes.length > 0) {
++      return error('لا يمكن تعديل سند الصرف لأنه مرتبط بحركات نقدية');
++    }
++
++    const { data: allocRes } = await s.from('disbursement_invoice_items')
++      .select('id').eq('voucher_disbursement_id', id).limit(1);
++    if (allocRes && allocRes.length > 0) {
++      return error('لا يمكن تعديل سند مخصص على فواتير — ألغِ السند وأنشئ سنداً جديداً');
++    }
++
++    const newDate = parsed.data.date || old.date;
++    const newAmount = parsed.data.amount ?? parseFloat(old.amount);
++    const newBankSafeId = parsed.data.bank_safe_id || old.bank_safe_id;
++    const newReason = parsed.data.reason || old.reason;
++    const newContactId = parsed.data.contact_id !== undefined ? parsed.data.contact_id : old.contact_id;
++    const newEmployeeId = parsed.data.employee_id !== undefined ? parsed.data.employee_id : old.employee_id;
++
++    const { data: bankAccount } = await s.from('banks_safes')
++      .select('account_id')
++      .eq('id', newBankSafeId)
++      .eq('company_id', ctx.companyId)
++      .maybeSingle();
++    if (!bankAccount?.account_id) return error('البنك/الخزينة غير موجود', 404);
++
++    if (newContactId) {
++      const { data: contact } = await s.from('contacts')
++        .select('id').eq('id', newContactId).eq('company_id', ctx.companyId).maybeSingle();
++      if (!contact) return error('الطرف المحدد غير موجود', 404);
++    }
++
++    // كفاية الرصيد عند رفع مبلغ الصرف (الصرف يُنقص النقدية)
++    if (newAmount > parseFloat(old.amount)) {
++      const balance = await getAccountBalanceFromJournal(bankAccount.account_id, ctx.companyId);
++      if (balance < newAmount) {
++        return error(`الرصيد غير كافٍ. الرصيد الحالي: ${balance.toFixed(2)} ر.س`);
++      }
++    }
++
++    const counterpartAccountId = await resolveAccountId(ctx.companyId, disbursementDebitCode(old.disbursement_type));
++    if (!counterpartAccountId) return error('الحساب المقابل غير موجود — راجع شجرة الحسابات', 400);
++
++    // 1. عكس القيد القديم (الأصل يبقى)
++    if (old.journal_entry_id) {
++      const { error: revErr } = await postReversalEntry(ctx.companyId, {
++        journalEntryId: old.journal_entry_id,
++        referenceType: 'voucher_disbursement_reversal',
++        referenceId: id,
++        description: `عكس سند صرف رقم ${old.number} (تعديل)`,
++        userId: ctx.userId,
++      });
++      if (revErr) throw revErr;
++    }
++
++    // 2. قيد جديد بالاتجاه الصحيح: مدين المقابل / دائن الخزينة
++    const { journalId, error: journalError } = await createJournalEntry(ctx.companyId, {
++      date: newDate,
++      type: 'general',
++      description: `سند صرف رقم ${old.number}: ${newReason}`,
++      lines: [
++        { account_id: counterpartAccountId, debit: newAmount, credit: 0 },
++        { account_id: bankAccount.account_id, debit: 0, credit: newAmount },
++      ],
++      reference_type: 'voucher_disbursement',
++      reference_id: id,
++      created_by: ctx.userId,
++    });
++    if (journalError) throw journalError;
++
++    const { data: updated, error: updateErr } = await s.from('voucher_disbursements')
++      .update({
++        date: newDate,
++        contact_id: newContactId,
++        employee_id: newEmployeeId,
++        amount: newAmount,
++        bank_safe_id: newBankSafeId,
++        reason: newReason,
++        journal_entry_id: journalId,
++        updated_at: new Date().toISOString(),
++      })
++      .eq('id', id)
++      .eq('company_id', ctx.companyId)
++      .select('*')
++      .single();
++
++    if (updateErr) throw updateErr;
++    return success(updated);
++  } catch (err) {
++    return handleApiError(err);
++  }
++}
++
++/**
++ * DELETE /api/vouchers/disbursement/[id]
++ * إلغاء ناعم: استرجاع تخصيصات فواتير الشراء + قيد عكسي + status='cancelled'.
++ * كان يحذف السند والقيد مادياً — تدمير كامل لسجل المدفوعات.
++ */
+ export async function DELETE(
+   request: NextRequest,
+   { params }: { params: Promise<{ id: string }> }
+ ) {
+   try {
+-    const { requireApiAuth, requireManagerOrAbove } = await import('@/lib/api-helpers');
+     const ctx = await requireManagerOrAbove(request);
+     const { id } = await params;
+     const s = sb();
+@@ -52,33 +199,41 @@ export async function DELETE(
+       .maybeSingle();
+ 
+     if (!voucher) return notFound();
++    if ((voucher as Record<string, any>).status === 'cancelled') return error('السند ملغى مسبقاً');
+ 
+     const { data: depRes } = await s.from('cash_transactions')
+-      .select('id')
+-      .eq('voucher_disbursement_id', id)
+-      .limit(1);
+-
++      .select('id').eq('voucher_disbursement_id', id).limit(1);
+     if (depRes && depRes.length > 0) {
+-      return error('لا يمكن حذف سند الصرف لأنه مرتبط بحركات نقدية');
++      return error('لا يمكن إلغاء سند الصرف لأنه مرتبط بحركات نقدية');
+     }
+ 
+-    // Sequential deletes (was a transaction)
+-    if ((voucher as Record<string, any>).disbursement_type === 'employee_advance' && (voucher as Record<string, any>).employee_id) {
++    // استرجاع التخصيصات على فواتير الشراء قبل العكس
++    await revertInvoiceAllocations(ctx.companyId, 'disbursement', id);
++
++    // سلفة موظف مرتبطة: تُزال لأن أساسها أُلغي
++    if ((voucher as Record<string, any>).disbursement_type === 'employee_advance' && (voucher as Record<string, any>).journal_entry_id) {
+       await s.from('employee_advances')
+         .delete()
+         .eq('journal_entry_id', (voucher as Record<string, any>).journal_entry_id);
+     }
+ 
++    // قيد عكسي — الأصل يبقى للتدقيق
+     if ((voucher as Record<string, any>).journal_entry_id) {
+-      await s.from('journal_lines')
+-        .delete()
+-        .eq('journal_entry_id', (voucher as Record<string, any>).journal_entry_id);
+-      await s.from('journal_entries')
+-        .delete()
+-        .eq('id', (voucher as Record<string, any>).journal_entry_id);
++      const { error: revErr } = await postReversalEntry(ctx.companyId, {
++        journalEntryId: (voucher as Record<string, any>).journal_entry_id,
++        referenceType: 'voucher_disbursement_reversal',
++        referenceId: id,
++        description: `عكس سند صرف رقم ${(voucher as Record<string, any>).number} (إلغاء)`,
++        userId: ctx.userId,
++      });
++      if (revErr) throw revErr;
+     }
+ 
+-    await s.from('voucher_disbursements').delete().eq('id', id);
++    const { error: updErr } = await s.from('voucher_disbursements')
++      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
++      .eq('id', id)
++      .eq('company_id', ctx.companyId);
++    if (updErr) throw updErr;
+ 
+     return success({ deleted: true });
+   } catch (err) {
+diff --git a/src/app/api/vouchers/disbursement/route.ts b/src/app/api/vouchers/disbursement/route.ts
+index 5fe4770..a9e26a0 100644
+--- a/src/app/api/vouchers/disbursement/route.ts
++++ b/src/app/api/vouchers/disbursement/route.ts
+@@ -1,17 +1,36 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, requireModulePermission, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
++import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireModulePermission, handleApiError, requireManagerOrAbove } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+ import { getNextVoucherNumber } from '@/lib/numbering';
++import { disbursementVoucherCreateSchema } from '@/lib/validation';
+ import { ACCOUNT_CODES } from '@/lib/constants';
+ import { requireApproval } from '@/lib/notifications';
+ import { checkTransactionBeforeSave } from '@/lib/approval-helpers';
+ import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
++import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations } from '@/lib/voucher-utils';
+ import { canBypassTelegramConfirmation } from '@/lib/permissions';
+ 
+ const sb = () => getSupabase();
+ 
++/**
++ * الحساب المدين المقابل لسند الصرف حسب النوع (حساب البنك دائماً دائن).
++ * القاعدة المحاسبية: الصرف يُنقص النقدية (دائن) ويُنقص الالتزام/يزيد الأصل (مدين).
++ */
++function disbursementDebitCode(type: string): string {
++  switch (type) {
++    case 'supplier': return ACCOUNT_CODES.ACCOUNTS_PAYABLE;        // سداد ذمم موردين
++    case 'employee_advance': return ACCOUNT_CODES.EMPLOYEE_ADVANCES; // سلفة موظف (أصل)
++    case 'subcontractor': return ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES; // سداد مقاول باطن
++    case 'client_refund': return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;  // رد مبلغ لعميل
++    case 'other':
++    default: return ACCOUNT_CODES.DIRECT_COSTS;                     // مصروف مباشر عام
++  }
++}
++
+ /**
+  * GET /api/vouchers/disbursement
++ * يعيد المفتاحين disbursements و vouchers (الصفحة تقرأ disbursements —
++ * كان يُعاد vouchers فقط فتظهر القائمة فارغة دائماً)
+  */
+ export async function GET(request: NextRequest) {
+   try {
+@@ -27,6 +46,7 @@ export async function GET(request: NextRequest) {
+     const result = await s.from('voucher_disbursements')
+       .select('*, contacts(name), employees(name), banks_safes(name), journal_entries(number)', { count: 'exact' })
+       .eq('company_id', auth.companyId)
++      .neq('status', 'cancelled')
+       .gte('date', from || '1970-01-01')
+       .lte('date', to || '2999-12-31')
+       .or(disbType ? `disbursement_type.eq.${disbType}` : 'disbursement_type.neq.null')
+@@ -42,6 +62,7 @@ export async function GET(request: NextRequest) {
+       const fallbackResult = await s.from('voucher_disbursements')
+         .select('*', { count: 'exact' })
+         .eq('company_id', auth.companyId)
++        .neq('status', 'cancelled')
+         .gte('date', from || '1970-01-01')
+         .lte('date', to || '2999-12-31')
+         .or(disbType ? `disbursement_type.eq.${disbType}` : 'disbursement_type.neq.null')
+@@ -50,12 +71,13 @@ export async function GET(request: NextRequest) {
+         .range(offset, offset + pageSize - 1);
+ 
+       if (fallbackResult.error) throw fallbackResult.error;
+-      
++
+       data = fallbackResult.data;
+       count = fallbackResult.count || 0;
+     }
+ 
+     return success({
++      disbursements: data || [],
+       vouchers: data || [],
+       total: count,
+       page,
+@@ -69,8 +91,13 @@ export async function GET(request: NextRequest) {
+ 
+ /**
+  * POST /api/vouchers/disbursement
+- * إنشاء سند صرف جديد
+- * FIXED: يدعم استقبال كلاً من camelCase و snake_case لتلافي خطأ "جميع الحقول المطلوبة يجب تعبئتها"
++ * FIXES الجوهرية:
++ * - اتجاه القيد كان معكوساً تماماً (البنك مدين +) — الصرف الآن: مدين المقابل /
++ *   دائن الخزينة. كل سند سابق كان ينفخ رصيد البنك دفترياً بدل إنقاصه.
++ * - الحساب المقابل كان يُمرَّر ككود ('2110') في خانة account_id (انهيار مؤكد
++ *   بعد إنفاذ insertJournalLines في القسم 3) — يُحلَّل الآن لمعرف حقيقي.
++ * - تحقق Zod + انتماء الأطراف للشركة + تخصيص اختياري على فواتير الشراء.
++ * - تدفق اعتماد التيليجرام (pending) محفوظ كما هو.
+  */
+ export async function POST(request: NextRequest) {
+   try {
+@@ -78,157 +105,174 @@ export async function POST(request: NextRequest) {
+     const s = sb();
+     const body = await parseBody<any>(request);
+ 
+-    const {
+-      date,
+-      disbursement_type,
+-      disbursementType,
+-      contact_id,
+-      contactId,
+-      employee_id,
+-      employeeId,
+-      amount,
+-      bank_safe_id,
+-      bankSafeId,
+-      reason,
+-    } = body;
+-
+-    // توافقية مزدوجة للمتغيرات (Dual Compatibility)
+-    const finalDisbType = disbursementType || disbursement_type;
+-    const finalBankSafeId = bankSafeId || bank_safe_id;
+-    const finalContactId = contactId || contact_id;
+-    const finalEmployeeId = employeeId || employee_id;
+-
+-    if (!date || !finalDisbType || !amount || !finalBankSafeId || !reason) {
+-      return error('جميع الحقول المطلوبة يجب تعبئتها');
++    // توافقية مزدوجة: camelCase → snake_case قبل التحقق
++    const normalized = {
++      date: body.date,
++      disbursement_type: body.disbursement_type || body.disbursementType,
++      contact_id: body.contact_id || body.contactId || null,
++      employee_id: body.employee_id || body.employeeId || null,
++      amount: typeof body.amount === 'string' ? parseFloat(body.amount) : body.amount,
++      bank_safe_id: body.bank_safe_id || body.bankSafeId,
++      reason: body.reason,
++      invoice_items: body.invoice_items || body.invoiceItems || undefined,
++    };
++
++    const parsed = disbursementVoucherCreateSchema.safeParse(normalized);
++    if (!parsed.success) return error(parsed.error.issues[0].message);
++
++    const { date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
++
++    // انتماء الأطراف للشركة (قبل أي كتابة)
++    if (contact_id) {
++      const { data: contact } = await s.from('contacts')
++        .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
++      if (!contact) return error('الطرف المحدد غير موجود', 404);
++    }
++    if (employee_id) {
++      const { data: employee } = await s.from('employees')
++        .select('id').eq('id', employee_id).eq('company_id', auth.companyId).maybeSingle();
++      if (!employee) return error('الموظف المحدد غير موجود', 404);
+     }
+ 
+-    // 1. التحقق من الموافقة المسبقة من التيليغرام
++    // 1. بوابة الاعتماد المسبق عبر التيليجرام (محفوظة كما هي)
+     const bypassApproval = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
+     if (!bypassApproval) {
+       const tempTransactionId = crypto.randomUUID();
+-      
++
+       const approvalCheck = await checkTransactionBeforeSave(
+         auth.companyId,
+         auth.userId,
+-        Number(amount),
++        amount,
+         'voucher_disbursement',
+         tempTransactionId,
+         reason
+       );
+-      
++
+       if (approvalCheck.blocked) {
+-        // حفظ السند مسبقاً في قاعدة البيانات بحالة 'pending' ودون ترحيل القيد ليكون متاحاً للاعتماد
++        // حفظ السند بحالة 'pending' دون ترحيل قيد — يُرحَّل عند الاعتماد
+         const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_disbursements');
+         await s.from('voucher_disbursements').insert({
+           id: tempTransactionId,
+           company_id: auth.companyId,
+           number: nextNumber,
+           date,
+-          disbursement_type: finalDisbType,
+-          contact_id: finalContactId || null,
+-          employee_id: finalEmployeeId || null,
+-          amount: Number(amount),
+-          bank_safe_id: finalBankSafeId,
++          disbursement_type,
++          contact_id: contact_id || null,
++          employee_id: employee_id || null,
++          amount,
++          bank_safe_id,
+           reason,
+           created_by: auth.userId,
+           status: 'pending',
+-          created_at: new Date().toISOString(),
+         });
+ 
+         return success({
+           requiresApproval: true,
+           blocked: true,
+           message: approvalCheck.message,
+-          transactionId: tempTransactionId
++          transactionId: tempTransactionId,
+         });
+       }
+     }
+ 
+-    // 2. التحقق من الرصيد
++    // 2. الخزينة + كفاية الرصيد (الصرف يُنقص النقدية — الفحص هنا صحيح)
+     const { data: bankSafe } = await s.from('banks_safes')
+       .select('account_id')
+-      .eq('id', finalBankSafeId)
++      .eq('id', bank_safe_id)
+       .eq('company_id', auth.companyId)
+-      .single();
++      .maybeSingle();
+ 
+-    if (!bankSafe) {
+-      return error('البنك/الخزينة غير موجود');
+-    }
++    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
+ 
+     if (bankSafe.account_id) {
+       const balance = await getAccountBalanceFromJournal(bankSafe.account_id, auth.companyId);
+-      if (balance < Number(amount)) {
++      if (balance < amount) {
+         return error(`الرصيد غير كافٍ. الرصيد الحالي: ${balance.toFixed(2)} ر.س`);
+       }
+     }
+ 
+-    // 3. إنشاء سند الصرف
+-    const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_disbursements');
+-    const transactionId = crypto.randomUUID();
+-
+-    const { data: voucher, error: voucherError } = await s.from('voucher_disbursements')
+-      .insert({
+-        company_id: auth.companyId,
+-        number: nextNumber,
+-        date,
+-        disbursement_type: finalDisbType,
+-        contact_id: finalContactId || null,
+-        employee_id: finalEmployeeId || null,
+-        amount: Number(amount),
+-        bank_safe_id: finalBankSafeId,
+-        reason,
+-        created_by: auth.userId,
+-        status: 'approved',
+-        created_at: new Date().toISOString(),
+-      })
+-      .select()
+-      .single();
+-
+-    if (voucherError) throw voucherError;
+-
+-    // 4. إنشاء القيد المحاسبي
+-    const debitAccountId = bankSafe.account_id;
+-    let creditAccountId: string = ACCOUNT_CODES.CASH;
+-
+-    if (finalDisbType === 'supplier') {
+-      creditAccountId = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
+-    } else if (finalDisbType === 'employee_advance') {
+-      creditAccountId = ACCOUNT_CODES.EMPLOYEE_ADVANCES;
+-    } else if (finalDisbType === 'subcontractor') {
+-      creditAccountId = ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES;
++    const counterpartAccountId = await resolveAccountId(auth.companyId, disbursementDebitCode(disbursement_type));
++    if (!bankSafe.account_id || !counterpartAccountId) {
++      return error('الحسابات المحاسبية للسند غير مكتملة (حساب الخزينة أو الحساب المقابل مفقود) — راجع شجرة الحسابات', 400);
+     }
+ 
+-    const { error: journalError } = await createJournalEntry(
+-      auth.companyId,
+-      {
+-        date,
+-        type: 'general',
+-        description: `سند صرف رقم ${nextNumber}: ${reason}`,
+-        lines: [
+-          {
+-            account_id: debitAccountId,
+-            debit: Number(amount),
+-            credit: 0,
+-            bank_safe_id: finalBankSafeId,
+-          },
+-          {
+-            account_id: creditAccountId,
+-            debit: 0,
+-            credit: Number(amount),
+-          },
+-        ],
+-        reference_type: 'voucher_disbursement',
+-        reference_id: (voucher as any).id,
+-        created_by: auth.userId,
+-      }
+-    );
++    // 3. الإنشاء مع تراجع آلي عند أي فشل
++    const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_disbursements');
+ 
+-    if (journalError) throw journalError;
++    let voucherId: string | null = null;
++    let journalEntryId: string | null = null;
+ 
+-    // 5. إرسال إشعار التيليغرام (اختياري)
+-    await requireApproval(auth.companyId, Number(amount), 'voucher_disbursement', auth.userId, (voucher as any).id, reason);
++    try {
++      const { data: voucher, error: voucherError } = await s.from('voucher_disbursements')
++        .insert({
++          company_id: auth.companyId,
++          number: nextNumber,
++          date,
++          disbursement_type,
++          contact_id: contact_id || null,
++          employee_id: employee_id || null,
++          amount,
++          bank_safe_id,
++          reason,
++          created_by: auth.userId,
++          status: 'approved',
++        })
++        .select()
++        .single();
++      if (voucherError) throw voucherError;
++      voucherId = voucher.id;
++
++      // 4. القيد بالاتجاه الصحيح: مدين المقابل / دائن الخزينة (المال خارج)
++      const { journalId, error: journalError } = await createJournalEntry(
++        auth.companyId,
++        {
++          date,
++          type: 'general',
++          description: `سند صرف رقم ${nextNumber}: ${reason}`,
++          lines: [
++            { account_id: counterpartAccountId, debit: amount, credit: 0 },
++            { account_id: bankSafe.account_id, debit: 0, credit: amount },
++          ],
++          reference_type: 'voucher_disbursement',
++          reference_id: voucher.id,
++          created_by: auth.userId,
++        }
++      );
++      if (journalError) throw journalError;
++      journalEntryId = journalId;
++
++      await s.from('voucher_disbursements')
++        .update({ journal_entry_id: journalEntryId })
++        .eq('id', voucherId);
++
++      // 5. تخصيص اختياري على فواتير المشتريات غير المسددة
++      if (invoice_items && invoice_items.length > 0) {
++        const { error: allocErr } = await applyInvoiceAllocations(
++          auth.companyId, 'disbursement', voucherId, journalEntryId, amount, invoice_items, contact_id || null
++        );
++        if (allocErr) throw new Error(allocErr);
++      }
++
++      // 6. إشعار التيليجرام (كما كان)
++      await requireApproval(auth.companyId, amount, 'voucher_disbursement', auth.userId, voucherId, reason);
+ 
+-    return success(voucher, 201);
++      return success({ ...voucher, journal_entry_id: journalEntryId }, 201);
++    } catch (txErr) {
++      console.error('Disbursement creation failed, rolling back:', txErr);
++      try {
++        if (journalEntryId) {
++          await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
++          await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);
++        }
++        if (voucherId) {
++          await revertInvoiceAllocations(auth.companyId, 'disbursement', voucherId);
++          await s.from('voucher_disbursements').delete().eq('id', voucherId).eq('company_id', auth.companyId);
++        }
++      } catch (rollbackErr) {
++        console.error('Disbursement rollback failed:', rollbackErr);
++      }
++      throw txErr;
++    }
+   } catch (err) {
+     return handleApiError(err);
+   }
+diff --git a/src/app/api/vouchers/receipt/[id]/route.ts b/src/app/api/vouchers/receipt/[id]/route.ts
+index 05b1969..54f53f1 100644
+--- a/src/app/api/vouchers/receipt/[id]/route.ts
++++ b/src/app/api/vouchers/receipt/[id]/route.ts
+@@ -1,17 +1,28 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, notFound, handleApiError } from '@/lib/api-helpers';
++import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+-import { getNextJournalNumber } from '@/lib/numbering';
++import { createJournalEntry } from '@/lib/journal-utils';
++import { resolveAccountId, postReversalEntry, revertInvoiceAllocations } from '@/lib/voucher-utils';
++import { voucherUpdateSchema } from '@/lib/validation';
++import { ACCOUNT_CODES } from '@/lib/constants';
+ 
+ const sb = () => getSupabase();
+ 
++function receiptCounterpartCode(receiptType: string): string {
++  switch (receiptType) {
++    case 'client': return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
++    case 'supplier_refund': return ACCOUNT_CODES.ACCOUNTS_PAYABLE;
++    case 'general':
++    default: return ACCOUNT_CODES.OTHER_REVENUE;
++  }
++}
++
+ export async function GET(
+   request: NextRequest,
+   { params }: { params: Promise<{ id: string }> }
+ ) {
+   try {
+-    const { requireApiAuth, requireModulePermission } = await import('@/lib/api-helpers');
+-    const ctx = await requireApiAuth(request);
++    const ctx = await requireModulePermission(request, 'receipts', 'read');
+     const { id } = await params;
+     const s = sb();
+ 
+@@ -42,18 +53,24 @@ export async function GET(
+   }
+ }
+ 
++/**
++ * PUT /api/vouchers/receipt/[id]
++ * تعديل سند = عكس القيد القديم (يبقى للتدقيق) + قيد جديد بالقيم الجديدة.
++ * لا قيد غير متوازن أبداً: الحساب المقابل إلزامي الحل قبل أي كتابة.
++ */
+ export async function PUT(
+   request: NextRequest,
+   { params }: { params: Promise<{ id: string }> }
+ ) {
+   try {
+-    const { requireManagerOrAbove } = await import('@/lib/api-helpers');
+     const ctx = await requireManagerOrAbove(request);
+     const { id } = await params;
+     const s = sb();
+     const body = await request.json();
+ 
+-    // جلب السند الحالي
++    const parsed = voucherUpdateSchema.safeParse(body);
++    if (!parsed.success) return error(parsed.error.issues[0].message);
++
+     const { data: oldVoucher } = await s.from('voucher_receipts')
+       .select('*')
+       .eq('id', id)
+@@ -61,115 +78,105 @@ export async function PUT(
+       .maybeSingle();
+ 
+     if (!oldVoucher) return notFound();
+-
+     const old = oldVoucher as any;
++    if (old.status === 'cancelled') return error('السند ملغى ولا يمكن تعديله');
+ 
+-    // التحقق من أن السند ليس مرتبط بحركات نقدية
++    // لا تعديل لسند مربوط بحركات نقدية (حارس موجود — يبقى)
+     const { data: depRes } = await s.from('cash_transactions')
+-      .select('id')
+-      .eq('voucher_receipt_id', id)
+-      .limit(1);
+-
++      .select('id').eq('voucher_receipt_id', id).limit(1);
+     if (depRes && depRes.length > 0) {
+       return error('لا يمكن تعديل سند القبض لأنه مرتبط بحركات نقدية');
+     }
+ 
+-    // حذف القيد القديم
+-    if (old.journal_entry_id) {
+-      await s.from('journal_lines').delete().eq('journal_entry_id', old.journal_entry_id);
+-      await s.from('journal_entries').delete().eq('id', old.journal_entry_id);
++    // لا تعديل لسند عليه تخصيصات فواتير (تعقيد الاسترجاع) — أنشئ سنداً جديداً
++    const { data: allocRes } = await s.from('receipt_invoice_items')
++      .select('id').eq('voucher_receipt_id', id).limit(1);
++    if (allocRes && allocRes.length > 0) {
++      return error('لا يمكن تعديل سند مخصص على فواتير — ألغِ السند وأنشئ سنداً جديداً');
+     }
+ 
+-    // إنشاء قيد جديد
++    const newDate = parsed.data.date || old.date;
++    const newAmount = parsed.data.amount ?? parseFloat(old.amount);
++    const newBankSafeId = parsed.data.bank_safe_id || old.bank_safe_id;
++    const newReason = parsed.data.reason || old.reason;
++    const newContactId = parsed.data.contact_id !== undefined ? parsed.data.contact_id : old.contact_id;
++
++    // انتماء الخزينة والطرف للشركة
+     const { data: bankAccount } = await s.from('banks_safes')
+       .select('account_id')
+-      .eq('id', body.bank_safe_id)
++      .eq('id', newBankSafeId)
++      .eq('company_id', ctx.companyId)
+       .maybeSingle();
++    if (!bankAccount?.account_id) return error('البنك/الخزينة غير موجود', 404);
+ 
+-    if (!bankAccount?.account_id) {
+-      return error('الحساب البنكي غير موجود');
++    if (newContactId) {
++      const { data: contact } = await s.from('contacts')
++        .select('id').eq('id', newContactId).eq('company_id', ctx.companyId).maybeSingle();
++      if (!contact) return error('الطرف المحدد غير موجود', 404);
+     }
+ 
+-    const jeNum = await getNextJournalNumber(ctx.companyId, body.date || old.date);
+-    const { data: je, error: jeErr } = await s.from('journal_entries')
+-      .insert({
+-        company_id: ctx.companyId,
+-        number: jeNum,
+-        date: body.date || old.date,
+-        type: 'general',
+-        description: `سند قبض: ${body.reason || old.reason}`,
+-        reference_type: 'voucher_receipt',
+-        reference_id: id,
+-        created_by: ctx.userId,
+-      })
+-      .select('id')
+-      .single();
+-
+-    if (jeErr) throw jeErr;
+-
+-    // إنشاء سطور القيد
+-    const jl: any[] = [
+-      {
+-        journal_entry_id: je.id,
+-        account_id: bankAccount.account_id,
+-        debit: body.amount || old.amount,
+-        credit: 0,
+-      }
+-    ];
+-
+-    // الحساب المقابل
+-    let counterpartAccountId = body.account_id || null;
+-    if (!counterpartAccountId && old.contact_id) {
+-      const { data: arAccount } = await s.from('accounts')
+-        .select('id')
+-        .eq('company_id', ctx.companyId)
+-        .eq('code', '1130')
+-        .maybeSingle();
+-      counterpartAccountId = arAccount?.id || null;
+-    }
++    const counterpartAccountId = await resolveAccountId(ctx.companyId, receiptCounterpartCode(old.receipt_type));
++    if (!counterpartAccountId) return error('الحساب المقابل غير موجود — راجع شجرة الحسابات', 400);
+ 
+-    if (counterpartAccountId) {
+-      jl.push({
+-        journal_entry_id: je.id,
+-        account_id: counterpartAccountId,
+-        debit: 0,
+-        credit: body.amount || old.amount,
++    // 1. عكس القيد القديم (يبقى الأصل في الدفاتر)
++    if (old.journal_entry_id) {
++      const { error: revErr } = await postReversalEntry(ctx.companyId, {
++        journalEntryId: old.journal_entry_id,
++        referenceType: 'voucher_receipt_reversal',
++        referenceId: id,
++        description: `عكس سند قبض رقم ${old.number} (تعديل)`,
++        userId: ctx.userId,
+       });
++      if (revErr) throw revErr;
+     }
+ 
+-    await s.from('journal_lines').insert(jl);
++    // 2. قيد جديد بالقيم المعدَّلة
++    const { journalId, error: journalError } = await createJournalEntry(ctx.companyId, {
++      date: newDate,
++      type: 'general',
++      description: `سند قبض رقم ${old.number}: ${newReason}`,
++      lines: [
++        { account_id: bankAccount.account_id, debit: newAmount, credit: 0 },
++        { account_id: counterpartAccountId, debit: 0, credit: newAmount },
++      ],
++      reference_type: 'voucher_receipt',
++      reference_id: id,
++      created_by: ctx.userId,
++    });
++    if (journalError) throw journalError;
+ 
+-    // تحديث السند
+     const { data: updated, error: updateErr } = await s.from('voucher_receipts')
+       .update({
+-        date: body.date || old.date,
+-        receipt_type: body.receipt_type || old.receipt_type,
+-        contact_id: body.contact_id || old.contact_id,
+-        amount: body.amount || old.amount,
+-        bank_safe_id: body.bank_safe_id || old.bank_safe_id,
+-        reason: body.reason || old.reason,
+-        journal_entry_id: je.id,
+-        status: 'approved',
++        date: newDate,
++        contact_id: newContactId,
++        amount: newAmount,
++        bank_safe_id: newBankSafeId,
++        reason: newReason,
++        journal_entry_id: journalId,
+         updated_at: new Date().toISOString(),
+       })
+       .eq('id', id)
++      .eq('company_id', ctx.companyId)
+       .select('*')
+       .single();
+ 
+     if (updateErr) throw updateErr;
+-
+     return success(updated);
+   } catch (err) {
+     return handleApiError(err);
+   }
+ }
+ 
++/**
++ * DELETE /api/vouchers/receipt/[id]
++ * إلغاء ناعم: استرجاع التخصيصات + قيد عكسي + status='cancelled'.
++ * القيد الأصلي والسند يبقيان للتدقيق — لا حذف مادي لأثر مالي.
++ */
+ export async function DELETE(
+   request: NextRequest,
+   { params }: { params: Promise<{ id: string }> }
+ ) {
+   try {
+-    const { requireManagerOrAbove } = await import('@/lib/api-helpers');
+     const ctx = await requireManagerOrAbove(request);
+     const { id } = await params;
+     const s = sb();
+@@ -181,24 +188,34 @@ export async function DELETE(
+       .maybeSingle();
+ 
+     if (!voucher) return notFound();
++    if ((voucher as any).status === 'cancelled') return error('السند ملغى مسبقاً');
+ 
+     const { data: depRes } = await s.from('cash_transactions')
+-      .select('id')
+-      .eq('voucher_receipt_id', id)
+-      .limit(1);
+-
++      .select('id').eq('voucher_receipt_id', id).limit(1);
+     if (depRes && depRes.length > 0) {
+-      return error('لا يمكن حذف سند القبض لأنه مرتبط بحركات نقدية');
++      return error('لا يمكن إلغاء سند القبض لأنه مرتبط بحركات نقدية');
+     }
+ 
+-    await s.from('receipt_invoice_items').delete().eq('voucher_receipt_id', id);
++    // استرجاع تخصيصات الفواتير (يعيد paid_amount/status كما كانت)
++    await revertInvoiceAllocations(ctx.companyId, 'receipt', id);
+ 
++    // قيد عكسي — الأصل يبقى
+     if ((voucher as any).journal_entry_id) {
+-      await s.from('journal_lines').delete().eq('journal_entry_id', (voucher as any).journal_entry_id);
+-      await s.from('journal_entries').delete().eq('id', (voucher as any).journal_entry_id);
++      const { error: revErr } = await postReversalEntry(ctx.companyId, {
++        journalEntryId: (voucher as any).journal_entry_id,
++        referenceType: 'voucher_receipt_reversal',
++        referenceId: id,
++        description: `عكس سند قبض رقم ${(voucher as any).number} (إلغاء)`,
++        userId: ctx.userId,
++      });
++      if (revErr) throw revErr;
+     }
+ 
+-    await s.from('voucher_receipts').delete().eq('id', id);
++    const { error: updErr } = await s.from('voucher_receipts')
++      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
++      .eq('id', id)
++      .eq('company_id', ctx.companyId);
++    if (updErr) throw updErr;
+ 
+     return success({ deleted: true });
+   } catch (err) {
+diff --git a/src/app/api/vouchers/receipt/route.ts b/src/app/api/vouchers/receipt/route.ts
+index 6a85c9e..2330977 100644
+--- a/src/app/api/vouchers/receipt/route.ts
++++ b/src/app/api/vouchers/receipt/route.ts
+@@ -1,26 +1,27 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, requireApiAuth, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
++import { success, error, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+ import { getNextVoucherNumber } from '@/lib/numbering';
+-import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
++import { createJournalEntry } from '@/lib/journal-utils';
++import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations } from '@/lib/voucher-utils';
++import { receiptVoucherCreateSchema } from '@/lib/validation';
+ import { ACCOUNT_CODES } from '@/lib/constants';
+-import { canBypassTelegramConfirmation } from '@/lib/permissions'; 
++import { canBypassTelegramConfirmation } from '@/lib/permissions';
+ 
+ const sb = () => getSupabase();
+ 
++const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
++
+ /**
+- * Helper function to get account ID based on receipt type
++ * كود الحساب الدائن المقابل لسند القبض (يُحلَّل إلى معرف فعلي في POST —
++ * تمرير الكود كـ account_id كان يبني قيوداً تنهار مع إنفاذ القسم 3)
+  */
+-function getAccountCode(receiptType: string): string {
++function receiptCounterpartCode(receiptType: string): string {
+   switch (receiptType) {
+-    case 'client':
+-      return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
+-    case 'supplier_refund':
+-      return ACCOUNT_CODES.ACCOUNTS_PAYABLE;
++    case 'client': return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;      // تخفيض ذمم العميل
++    case 'supplier_refund': return ACCOUNT_CODES.ACCOUNTS_PAYABLE; // عكس سداد مورد
+     case 'general':
+-      return ACCOUNT_CODES.CASH;
+-    default:
+-      return ACCOUNT_CODES.CASH;
++    default: return ACCOUNT_CODES.OTHER_REVENUE;                   // إيراد متنوع
+   }
+ }
+ 
+@@ -29,7 +30,7 @@ function getAccountCode(receiptType: string): string {
+  */
+ export async function GET(request: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(request);
++    const auth = await requireModulePermission(request, 'receipts', 'read');
+     const s = sb();
+     const url = new URL(request.url);
+     const { page, pageSize } = getPaginationParams(url);
+@@ -38,7 +39,7 @@ export async function GET(request: NextRequest) {
+ 
+     const offset = (page - 1) * pageSize;
+ 
+-    // محاولة جلب العلاقات أولاً (بدون employees لأنها غير موجودة محاسبياً في سندات القبض)
++    // الملغاة لا تظهر في القوائم — عكس قيدها محفوظ في الدفاتر
+     const result = await s.from('voucher_receipts')
+       .select(`
+         *,
+@@ -47,6 +48,7 @@ export async function GET(request: NextRequest) {
+         journal_entries(number)
+       `, { count: 'exact' })
+       .eq('company_id', auth.companyId)
++      .neq('status', 'cancelled')
+       .gte('date', from || '1970-01-01')
+       .lte('date', to || '2999-12-31')
+       .or(receiptType ? `receipt_type.eq.${receiptType}` : 'receipt_type.neq.null')
+@@ -62,6 +64,7 @@ export async function GET(request: NextRequest) {
+       const fallbackResult = await s.from('voucher_receipts')
+         .select('*', { count: 'exact' })
+         .eq('company_id', auth.companyId)
++        .neq('status', 'cancelled')
+         .gte('date', from || '1970-01-01')
+         .lte('date', to || '2999-12-31')
+         .or(receiptType ? `receipt_type.eq.${receiptType}` : 'receipt_type.neq.null')
+@@ -89,60 +92,48 @@ export async function GET(request: NextRequest) {
+ 
+ /**
+  * POST /api/vouchers/receipt
+- * إنشاء سند قبض جديد
+- * FIXED: يدعم استقبال كلاً من camelCase و snake_case لتلافي خطأ "جميع الحقول المطلوبة يجب تعبئتها"
++ * سند قبض: يضيف مالاً للخزينة — لا فحص رصيد هنا (كان فحصاً منسوخاً من الصرف
++ * يمنع القبض المشروع عند رصيد منخفض). القيد: مدين الخزينة / دائن المقابل
++ * المحلول لمعرف فعلي. التخصيص على فواتير العميل اختياري ومُحصَّن بالمتبقي.
+  */
+ export async function POST(request: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(request);
++    const auth = await requireModulePermission(request, 'receipts', 'create');
+     const s = sb();
+     const body = await request.json();
+ 
+-    const {
+-      date,
+-      receipt_type,
+-      receiptType,
+-      contact_id,
+-      contactId,
+-      amount,
+-      bank_safe_id,
+-      bankSafeId,
+-      reason,
+-    } = body;
+-
+-    // توافقية مزدوجة للمتغيرات (Dual Compatibility)
+-    const finalReceiptType = receiptType || receipt_type;
+-    const finalBankSafeId = bankSafeId || bank_safe_id;
+-    const finalContactId = contactId || contact_id;
+-
+-    if (!date || !finalReceiptType || !amount || !finalBankSafeId || !reason) {
+-      return error('جميع الحقول المطلوبة يجب تعبئتها', 400);
+-    }
++    // توافقية مزدوجة: camelCase → snake_case قبل التحقق
++    const normalized = {
++      date: body.date,
++      receipt_type: body.receipt_type || body.receiptType,
++      contact_id: body.contact_id || body.contactId || null,
++      amount: typeof body.amount === 'string' ? parseFloat(body.amount) : body.amount,
++      bank_safe_id: body.bank_safe_id || body.bankSafeId,
++      reason: body.reason,
++      invoice_items: body.invoice_items || body.invoiceItems || undefined,
++    };
+ 
+-    if (parseFloat(amount) <= 0) {
+-      return error('المبلغ يجب أن يكون أكبر من صفر', 400);
+-    }
++    const parsed = receiptVoucherCreateSchema.safeParse(normalized);
++    if (!parsed.success) return error(parsed.error.issues[0].message, 400);
+ 
+-    // Get bank safe info
++    const { date, receipt_type, contact_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
++
++    // الخزينة/البنك: انتماء للشركة + حساب محاسبي مربوط (القيد يحتاجه)
+     const { data: bankSafe } = await s.from('banks_safes')
+       .select('account_id')
+-      .eq('id', finalBankSafeId)
++      .eq('id', bank_safe_id)
+       .eq('company_id', auth.companyId)
+       .maybeSingle();
++    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
+ 
+-    if (!bankSafe) {
+-      return error('البنك/الخزينة غير موجود', 404);
+-    }
+-
+-    // Check account balance
+-    if (bankSafe.account_id) {
+-      const balance = await getAccountBalanceFromJournal(bankSafe.account_id, auth.companyId);
+-      if (balance < parseFloat(amount)) {
+-        return error(`الرصيد غير كافٍ. الرصيد الحالي: ${balance.toFixed(2)} ر.س، المبلغ المطلوب: ${amount} ر.س`, 400);
+-      }
++    // الطرف (عميل/مورد) يجب أن ينتمي للشركة
++    if (contact_id) {
++      const { data: contact } = await s.from('contacts')
++        .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
++      if (!contact) return error('الطرف المحدد غير موجود', 404);
+     }
+ 
+-    // Check bypass permission
++    // بوابة الاعتماد عبر تيليجرام (كما كانت — لا إزالة لميزة موجودة)
+     const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
+     if (!canBypass) {
+       const { data: config } = await s.from('company_telegram_configs')
+@@ -150,88 +141,93 @@ export async function POST(request: NextRequest) {
+         .eq('company_id', auth.companyId)
+         .maybeSingle();
+ 
+-      if (config && config.approvals_enabled && parseFloat(amount) > (config.approval_threshold || 0)) {
++      if (config && config.approvals_enabled && amount > (config.approval_threshold || 0)) {
+         return error('هذه العملية تتطلب اعتماد تيليجرام تقديراً لإدارة النظام', 400);
+       }
+     }
+ 
+-    // Create receipt
++    // حل الحسابات: خزينة + مقابل — الفشل هنا صريح قبل أي كتابة
++    const counterpartAccountId = await resolveAccountId(auth.companyId, receiptCounterpartCode(receipt_type));
++    if (!bankSafe.account_id || !counterpartAccountId) {
++      return error('الحسابات المحاسبية للسند غير مكتملة (حساب الخزينة أو الحساب المقابل مفقود) — راجع شجرة الحسابات', 400);
++    }
++
+     const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_receipts');
+     const receiptDate = new Date(date).toISOString().split('T')[0];
+ 
+-    const { data: receipt, error: receiptError } = await s.from('voucher_receipts')
+-      .insert({
+-        company_id: auth.companyId,
+-        number: nextNumber,
+-        date: receiptDate,
+-        receipt_type: finalReceiptType,
+-        contact_id: finalContactId || null,
+-        amount: parseFloat(amount),
+-        bank_safe_id: finalBankSafeId,
+-        reason,
+-        created_by: auth.userId,
+-        status: 'approved',
+-        created_at: new Date().toISOString(),
+-      })
+-      .select()
+-      .single();
+-
+-    if (receiptError) throw receiptError;
+-
+-    // Create journal entry
+-    const { error: journalError } = await createJournalEntry(
+-      auth.companyId,
+-      {
+-        date: receiptDate,
+-        type: 'general',
+-        description: `سند قبض رقم ${nextNumber}: ${reason}`,
+-        lines: [
+-          {
+-            account_id: bankSafe.account_id,
+-            debit: parseFloat(amount),
+-            credit: 0,
+-            bank_safe_id: finalBankSafeId,
+-            contact_id: finalContactId || null,
+-          },
+-          {
+-            account_id: getAccountCode(finalReceiptType),
+-            debit: 0,
+-            credit: parseFloat(amount),
+-          },
+-        ],
+-        reference_type: 'voucher_receipt',
+-        reference_id: (receipt as any).id,
+-        created_by: auth.userId,
++    let receiptId: string | null = null;
++    let journalEntryId: string | null = null;
++
++    try {
++      const { data: receipt, error: receiptError } = await s.from('voucher_receipts')
++        .insert({
++          company_id: auth.companyId,
++          number: nextNumber,
++          date: receiptDate,
++          receipt_type,
++          contact_id: contact_id || null,
++          amount,
++          bank_safe_id,
++          reason,
++          created_by: auth.userId,
++          status: 'approved',
++        })
++        .select()
++        .single();
++      if (receiptError) throw receiptError;
++      receiptId = receipt.id;
++
++      // القيد: مدين الخزينة (المبلغ داخل) / دائن المقابل
++      const { journalId, error: journalError } = await createJournalEntry(
++        auth.companyId,
++        {
++          date: receiptDate,
++          type: 'general',
++          description: `سند قبض رقم ${nextNumber}: ${reason}`,
++          lines: [
++            { account_id: bankSafe.account_id, debit: amount, credit: 0 },
++            { account_id: counterpartAccountId, debit: 0, credit: amount },
++          ],
++          reference_type: 'voucher_receipt',
++          reference_id: receipt.id,
++          created_by: auth.userId,
++        }
++      );
++      if (journalError) throw journalError;
++      journalEntryId = journalId;
++
++      await s.from('voucher_receipts')
++        .update({ journal_entry_id: journalEntryId })
++        .eq('id', receiptId);
++
++      // تخصيص اختياري على فواتير العميل غير المسددة
++      if (invoice_items && invoice_items.length > 0) {
++        const { error: allocErr } = await applyInvoiceAllocations(
++          auth.companyId, 'receipt', receiptId, journalEntryId, amount, invoice_items, contact_id || null
++        );
++        if (allocErr) throw new Error(allocErr);
+       }
+-    );
+ 
+-    if (journalError) throw journalError;
+-
+-    return success(receipt, 201);
++      return success({ ...receipt, journal_entry_id: journalEntryId }, 201);
++    } catch (txErr) {
++      console.error('Receipt creation failed, rolling back:', txErr);
++      try {
++        if (journalEntryId) {
++          await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
++          await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);
++        }
++        if (receiptId) {
++          // استرجاع أي تخصيصات طُبقت على الفواتير قبل حذف السند
++          await revertInvoiceAllocations(auth.companyId, 'receipt', receiptId);
++          await s.from('voucher_receipts').delete().eq('id', receiptId).eq('company_id', auth.companyId);
++        }
++      } catch (rollbackErr) {
++        console.error('Receipt rollback failed:', rollbackErr);
++      }
++      throw txErr;
++    }
+   } catch (err) {
+     console.error('Receipt creation error:', err);
+     return handleApiError(err);
+   }
+ }
+-
+-/**
+- * DELETE /api/vouchers/receipt/[id]
+- */
+-export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+-  try {
+-    const auth = await requireApiAuth(request);
+-    const { id } = await params;
+-    const s = sb();
+-
+-    const { error: deleteError } = await s.from('voucher_receipts')
+-      .delete()
+-      .eq('id', id)
+-      .eq('company_id', auth.companyId);
+-
+-    if (deleteError) throw deleteError;
+-
+-    return success({ deleted: true });
+-  } catch (err) {
+-    return handleApiError(err);
+-  }
+-}
+diff --git a/src/lib/voucher-utils.ts b/src/lib/voucher-utils.ts
+new file mode 100644
+index 0000000..60d6caa
+--- /dev/null
++++ b/src/lib/voucher-utils.ts
+@@ -0,0 +1,209 @@
++/**
++ * دوال مساعدة لسندات القبض/الصرف
++ *
++ * المبادئ المفروضة هنا:
++ * 1. لا حذف للقيود المرحَّلة أبداً — الإلغاء/التعديل يتم بقيد عكسي يُبقي
++ *    القيد الأصلي في الدفاتر للتدقيق.
++ * 2. أكواد الحسابات (مثل 1130) لا تُمرَّر أبداً كـ account_id — تُحلَّل
++ *    أولاً إلى معرف الحساب الفعلي ضمن الشركة (إصلاح انهيار ما بعد القسم 3).
++ * 3. تخصيص المدفوعات على الفواتير يحدّث ثلاثية (paid_amount/status/total)
++ *    ذرّياً مع سطور الربط، والاسترجاع يعكسه تماماً.
++ */
++
++import { getSupabase } from '@/lib/supabase-client';
++import { getNextJournalNumber } from '@/lib/numbering';
++import { insertJournalLines } from '@/lib/journal-utils';
++
++const sb = () => getSupabase();
++
++const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
++
++export type VoucherKind = 'receipt' | 'disbursement';
++
++/**
++ * تحليل كود حساب ثابت إلى معرف الحساب الفعلي ضمن الشركة.
++ * يعيد null إن لم يوجد — على المنادي أن يفشل صراحةً لا أن يكتب قيداً بلا مقابل.
++ */
++export async function resolveAccountId(companyId: string, code: string): Promise<string | null> {
++  const s = sb();
++  const { data } = await s.from('accounts')
++    .select('id')
++    .eq('company_id', companyId)
++    .eq('code', code)
++    .maybeSingle();
++  return data?.id || null;
++}
++
++/**
++ * إنشاء قيد عكسي لقيد موجود مع الإبقاء على الأصل.
++ * الأصل لا يُحذف أبداً — هذا هو سجل التدقيق.
++ */
++export async function postReversalEntry(
++  companyId: string,
++  opts: {
++    journalEntryId: string;
++    referenceType: string;
++    referenceId: string;
++    description: string;
++    userId: string;
++  }
++): Promise<{ error: any | null }> {
++  const s = sb();
++
++  const { data: oldLines } = await s.from('journal_lines')
++    .select('account_id, debit, credit, description')
++    .eq('journal_entry_id', opts.journalEntryId);
++
++  if (!oldLines || oldLines.length === 0) return { error: null }; // لا قيد فعلياً — لا شيء لعكسه
++
++  const today = new Date().toISOString().split('T')[0];
++  const revNumber = await getNextJournalNumber(companyId, today);
++  const { data: revJe, error: revErr } = await s.from('journal_entries')
++    .insert({
++      company_id: companyId,
++      number: revNumber,
++      date: today,
++      type: 'general',
++      description: opts.description,
++      reference_type: opts.referenceType,
++      reference_id: opts.referenceId,
++      created_by: opts.userId,
++    })
++    .select('id')
++    .single();
++  if (revErr) return { error: revErr };
++
++  const { error: linesErr } = await insertJournalLines(
++    companyId,
++    oldLines.map((l: any) => ({
++      journal_entry_id: revJe.id,
++      account_id: l.account_id,
++      debit: parseFloat(l.credit) || 0, // تبديل مدين/دائن
++      credit: parseFloat(l.debit) || 0,
++      description: l.description,
++    }))
++  );
++  if (linesErr) return { error: linesErr };
++
++  return { error: null };
++}
++
++interface AllocationInput { invoice_id: string; amount: number }
++
++/**
++ * تخصيص مبلغ سند على الفواتير:
++ * - receipt          → invoices (مبيعات) عبر receipt_invoice_items
++ * - disbursement     → purchase_invoices عبر disbursement_invoice_items
++ * التخصيص يُحصر بالمتبقي على الفاتورة، ومجموع التخصيصات لا يتجاوز مبلغ السند.
++ * يعيد رسالة خطأ عربية عند الفشل — ولا حالة جزئية: عند أي فشل يُبلّغ المنادي ليتراجع.
++ */
++export async function applyInvoiceAllocations(
++  companyId: string,
++  kind: VoucherKind,
++  voucherId: string,
++  journalEntryId: string | null,
++  voucherAmount: number,
++  allocations: AllocationInput[],
++  contactId: string | null
++): Promise<{ error: string | null; applied: number }> {
++  const s = sb();
++  const isReceipt = kind === 'receipt';
++  const invoiceTable = isReceipt ? 'invoices' : 'purchase_invoices';
++  const linkTable = isReceipt ? 'receipt_invoice_items' : 'disbursement_invoice_items';
++  const linkVoucherCol = isReceipt ? 'voucher_receipt_id' : 'voucher_disbursement_id';
++  const linkInvoiceCol = isReceipt ? 'invoice_id' : 'purchase_invoice_id';
++
++  const totalAllocated = round2(allocations.reduce((sum, a) => sum + a.amount, 0));
++  if (totalAllocated > voucherAmount + 0.001) {
++    return { error: 'مجموع التخصيصات أكبر من مبلغ السند', applied: 0 };
++  }
++
++  let applied = 0;
++  for (const alloc of allocations) {
++    const { data: invoice } = await s.from(invoiceTable)
++      .select('id, total, paid_amount, status, contact_id, supplier_id')
++      .eq('id', alloc.invoice_id)
++      .eq('company_id', companyId)
++      .maybeSingle();
++    if (!invoice) return { error: `الفاتورة المحددة غير موجودة`, applied: 0 };
++    if (invoice.status === 'cancelled') return { error: 'لا يمكن التخصيص على فاتورة ملغاة', applied: 0 };
++
++    // الفاتورة يجب أن تخص نفس الطرف (عميل السند/مورده)
++    const invoiceContact = isReceipt ? invoice.contact_id : invoice.supplier_id;
++    if (contactId && invoiceContact && invoiceContact !== contactId) {
++      return { error: 'الفاتورة المخصصة لا تخص نفس الطرف المحدد في السند', applied: 0 };
++    }
++
++    const total = round2(parseFloat(invoice.total) || 0);
++    const paid = round2(parseFloat(invoice.paid_amount) || 0);
++    const remaining = round2(total - paid);
++    if (remaining <= 0) return { error: 'الفاتورة مسددة بالكامل', applied: 0 };
++
++    const toApply = round2(Math.min(alloc.amount, remaining));
++    const newPaid = round2(paid + toApply);
++    const newStatus = newPaid >= total - 0.005 ? 'paid' : 'partial';
++
++    const { data: upd, error: updErr } = await s.from(invoiceTable)
++      .update({ paid_amount: newPaid, status: newStatus })
++      .eq('id', invoice.id)
++      .eq('company_id', companyId)
++      .select('id')
++      .maybeSingle();
++    if (updErr || !upd) return { error: 'فشل تحديث الفاتورة المخصصة', applied: 0 };
++
++    const { error: linkErr } = await s.from(linkTable).insert({
++      company_id: companyId,
++      [linkVoucherCol]: voucherId,
++      [linkInvoiceCol]: invoice.id,
++      amount: toApply,
++      journal_entry_id: journalEntryId,
++    });
++    if (linkErr) return { error: 'فشل حفظ ربط التخصيص', applied: 0 };
++
++    applied = round2(applied + toApply);
++  }
++
++  return { error: null, applied };
++}
++
++/**
++ * استرجاع تخصيصات سند ملغى/محذوف: يخصم من paid_amount للفواتير ويعيد
++ * حساب الحالة (لا يلمس فاتورة ملغاة)، ثم يحذف سطور الربط.
++ */
++export async function revertInvoiceAllocations(
++  companyId: string,
++  kind: VoucherKind,
++  voucherId: string
++): Promise<void> {
++  const s = sb();
++  const isReceipt = kind === 'receipt';
++  const invoiceTable = isReceipt ? 'invoices' : 'purchase_invoices';
++  const linkTable = isReceipt ? 'receipt_invoice_items' : 'disbursement_invoice_items';
++  const linkVoucherCol = isReceipt ? 'voucher_receipt_id' : 'voucher_disbursement_id';
++  const linkInvoiceCol = isReceipt ? 'invoice_id' : 'purchase_invoice_id';
++
++  const { data: links } = await s.from(linkTable)
++    .select(`id, amount, ${linkInvoiceCol}`)
++    .eq(linkVoucherCol, voucherId);
++
++  for (const link of links || []) {
++    const invoiceId = link[linkInvoiceCol];
++    const { data: invoice } = await s.from(invoiceTable)
++      .select('id, total, paid_amount, status')
++      .eq('id', invoiceId)
++      .eq('company_id', companyId)
++      .maybeSingle();
++    if (!invoice || invoice.status === 'cancelled') continue;
++
++    const total = round2(parseFloat(invoice.total) || 0);
++    const newPaid = round2(Math.max(0, (parseFloat(invoice.paid_amount) || 0) - (parseFloat(link.amount) || 0)));
++    const newStatus = newPaid <= 0 ? 'unpaid' : (newPaid >= total - 0.005 ? 'paid' : 'partial');
++
++    await s.from(invoiceTable)
++      .update({ paid_amount: newPaid, status: newStatus })
++      .eq('id', invoiceId)
++      .eq('company_id', companyId);
++  }
++
++  await s.from(linkTable).delete().eq(linkVoucherCol, voucherId);
++}
+diff --git a/src/__tests__/stock-integrity.test.ts b/src/__tests__/stock-integrity.test.ts
+new file mode 100644
+index 0000000..40e8b87
+--- /dev/null
++++ b/src/__tests__/stock-integrity.test.ts
+@@ -0,0 +1,387 @@
++/**
++ * Section 7 tests — Inventory (items / movements / warehouses)
++ *
++ * Critical fixes covered:
++ * 1. UNIFIED STOCK WRITER: api/inventory-transactions POST previously logged
++ *    movements WITHOUT touching item stock (ledger ≠ warehouse). Both
++ *    movement routes now delegate to the same hardened engine.
++ * 2. Cross-tenant: item/warehouse looked up WITHOUT company filter →
++ *    foreign stock was mutable. Now 404.
++ * 3. 'adjustment' JE was posted SINGLE-SIDED (trial balance corruption) —
++ *    now balanced (surplus→4200, deficit→5100). 'return' posts Dr 1170/Cr 5100.
++ * 4. Transfer upsert REPLACED destination stock (repeated transfers
++ *    destroyed prior balances) — now additive with weighted average.
++ * 5. Movement PATCH/DELETE un-hardened: quantity edits and deletes now
++ *    blocked with counter-movement guidance (integrity > convenience).
++ * 6. Purchase invoice no longer bumps stock (single writer = PO receipt).
++ */
++
++process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
++
++import { createToken } from '@/lib/auth';
++
++type Row = Record<string, any>;
++type Op = { op: string; col?: string; val?: any };
++
++function makeDb(db: Record<string, Row[]>) {
++  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
++  let insertCounter = 0;
++
++  const from = (table: string) => {
++    const ops: Op[] = [];
++    const mut: { kind?: string; payload?: any } = {};
++    const call: any = { table, ops, mut };
++    calls.push(call);
++
++    const applyFilters = () =>
++      (db[table] || []).filter((r) =>
++        ops.every((o) => {
++          if (o.op === 'eq') return r[o.col!] === o.val;
++          if (o.op === 'neq') return r[o.col!] !== o.val;
++          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
++          if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
++          if (o.op === 'gt') return (Number(r[o.col!]) || 0) > (Number(o.val) || 0);
++          return true;
++        })
++      );
++
++    const api: any = {
++      select: () => api,
++      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
++      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
++      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
++      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
++      gt: (col: string, val: any) => { ops.push({ op: 'gt', col, val }); return api; },
++      or: () => api,
++      gte: () => api,
++      lte: () => api,
++      order: () => api,
++      limit: () => api,
++      range: () => api,
++      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
++      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
++      delete: () => { mut.kind = 'delete'; return api; },
++      maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
++      single: async () => {
++        if (mut.kind === 'insert') {
++          mut.payload = { id: `id-${++insertCounter}`, ...mut.payload };
++          (db[table] = db[table] || []).push(mut.payload);
++          return { data: mut.payload, error: null };
++        }
++        if (mut.kind === 'update') {
++          return { data: { ...applyFilters()[0], ...mut.payload }, error: null };
++        }
++        if (mut.kind === 'delete') {
++          return { data: applyFilters()[0] ?? { deleted: true }, error: null };
++        }
++        const row = applyFilters()[0] ?? null;
++        return { data: row, error: row ? null : { message: 'not found' } };
++      },
++      then: (onF: any, onR: any) =>
++        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
++    };
++    return api;
++  };
++
++  const db_: any = { from, calls };
++  db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `missing ${name}` } });
++  db_.rpc = (name: string, params: any) => db_.rpcImpl(name, params);
++  return db_;
++}
++
++let mockDb: ReturnType<typeof makeDb>;
++
++jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
++
++import { POST as movementPOST } from '@/app/api/inventory-transactions/route';
++import { POST as movementAliasPOST } from '@/app/api/inventory/transactions/route';
++import { PUT as movementPUT, DELETE as movementDELETE } from '@/app/api/inventory-transactions/[id]/route';
++import { POST as itemPOST } from '@/app/api/inventory/route';
++import { PUT as itemPUT, DELETE as itemDELETE } from '@/app/api/inventory/[id]/route';
++import { POST as purchaseInvoicePOST } from '@/app/api/purchases/invoices/route';
++
++const C1 = 'company-1';
++const C2 = 'company-2';
++const W1 = '00000000-0000-4000-8000-00000000aa01';
++const W2 = '00000000-0000-4000-8000-00000000aa02';
++const FOREIGN_W = '00000000-0000-4000-8000-00000000aa09';
++const ITEM = '00000000-0000-4000-8000-00000000bb01';
++const FOREIGN_ITEM = '00000000-0000-4000-8000-00000000bb09';
++const ACC_INV = '00000000-0000-4000-8000-000000001170';
++const ACC_REV = '00000000-0000-4000-8000-000000004200';
++const ACC_COST = '00000000-0000-4000-8000-000000005100';
++const ACC_AP = '00000000-0000-4000-8000-000000002110';
++const ACC_VATP = '00000000-0000-4000-8000-000000001180';
++const SUPPLIER = '00000000-0000-4000-8000-000000000501';
++const PO = '00000000-0000-4000-8000-000000000c01';
++
++function baseDb() {
++  return {
++    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
++    warehouses: [
++      { id: W1, company_id: C1, name: 'المستودع الرئيسي' },
++      { id: W2, company_id: C1, name: 'مستودع الفرع' },
++      { id: FOREIGN_W, company_id: C2, name: 'أجنبي' },
++    ],
++    inventory_items: [
++      { id: ITEM, company_id: C1, code: 'STEEL', name: 'حديد', unit: 'طن', warehouse_id: W1, quantity: '10', unit_price: '100', category: null, is_active: true },
++      { id: FOREIGN_ITEM, company_id: C2, code: 'X', name: 'أجنبي', unit: 'وحدة', warehouse_id: FOREIGN_W, quantity: '5', unit_price: '50', is_active: true },
++    ],
++    inventory_transactions: [] as Row[],
++    accounts: [
++      { id: ACC_INV, company_id: C1, code: '1170', name: 'المخزون' },
++      { id: ACC_REV, company_id: C1, code: '4200', name: 'إيرادات أخرى' },
++      { id: ACC_COST, company_id: C1, code: '5100', name: 'تكاليف مباشرة' },
++      { id: ACC_AP, company_id: C1, code: '2110', name: 'ذمم الموردين' },
++      { id: ACC_VATP, company_id: C1, code: '1180', name: 'ضريبة مشتريات' },
++    ],
++    contacts: [{ id: SUPPLIER, company_id: C1, name: 'مورد' }],
++    purchase_orders: [{ id: PO, company_id: C1, po_number: 1, supplier_id: SUPPLIER }],
++    purchase_invoices: [] as Row[],
++    purchase_invoice_items: [] as Row[],
++    journal_entries: [] as Row[],
++    journal_lines: [] as Row[],
++    journal_sequences: [] as Row[],
++  } as Record<string, Row[]>;
++}
++
++function authedRequest(body?: any, method = 'POST') {
++  const token = createToken('u1', 'admin');
++  return {
++    url: 'http://localhost/api/test',
++    method,
++    headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
++    cookies: { get: () => undefined },
++    json: async () => body,
++  } as any;
++}
++
++const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
++const insertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === t);
++const updatesOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'update' && c.table === t);
++
++const movement = (over: any = {}) => ({
++  item_id: ITEM,
++  warehouse_id: W1,
++  type: 'add',
++  quantity: 5,
++  unit_price: 120,
++  date: '2026-08-01',
++  ...over,
++});
++
++// ---------------------------------------------------------------------------
++
++describe('stock movements — tenant isolation & validation', () => {
++  test('foreign item → 404 with zero writes', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await movementPOST(authedRequest(movement({ item_id: FOREIGN_ITEM })));
++    expect(res.status).toBe(404);
++    expect(insertsOf('inventory_transactions')).toHaveLength(0);
++    expect(updatesOf('inventory_items')).toHaveLength(0);
++  });
++
++  test('foreign source warehouse → 404; negative quantity → 400', async () => {
++    mockDb = makeDb(baseDb());
++    const r1 = await movementPOST(authedRequest(movement({ warehouse_id: FOREIGN_W })));
++    expect(r1.status).toBe(404);
++
++    mockDb = makeDb(baseDb());
++    const r2 = await movementPOST(authedRequest(movement({ quantity: -5 })));
++    expect(r2.status).toBe(400);
++    expect(insertsOf('inventory_transactions')).toHaveLength(0);
++  });
++});
++
++describe('stock movements — the unified engine actually moves stock', () => {
++  test('add: quantity increases with weighted-average price', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await movementPOST(authedRequest(movement({ type: 'add', quantity: 10, unit_price: 160 })));
++    expect(res.status).toBe(201);
++
++    const upd = updatesOf('inventory_items')[0];
++    expect(upd.mut.payload.quantity).toBe(20);
++    // (10×100 + 10×160) / 20 = 130
++    expect(upd.mut.payload.unit_price).toBe(130);
++    expect(upd.ops.some((o) => o.col === 'company_id' && o.val === C1)).toBe(true);
++
++    const txn = insertsOf('inventory_transactions')[0].mut.payload;
++    expect(txn.company_id).toBe(C1);
++    expect(txn.total_value).toBe(1600);
++  });
++
++  test('the alias route api/inventory/transactions behaves identically', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await movementAliasPOST(authedRequest(movement({ type: 'add', quantity: 5, unit_price: 100 })));
++    expect(res.status).toBe(201);
++    expect(updatesOf('inventory_items')[0].mut.payload.quantity).toBe(15);
++  });
++
++  test('issue: overshoot blocked before any write; valid issue posts Dr 5100 / Cr 1170', async () => {
++    mockDb = makeDb(baseDb());
++    const r1 = await movementPOST(authedRequest(movement({ type: 'issue', quantity: 25 })));
++    expect(r1.status).toBe(400);
++    expect(insertsOf('journal_entries')).toHaveLength(0);
++    expect(updatesOf('inventory_items')).toHaveLength(0);
++
++    mockDb = makeDb(baseDb());
++    const r2 = await movementPOST(authedRequest(movement({ type: 'issue', quantity: 4 })));
++    expect(r2.status).toBe(201);
++    expect(updatesOf('inventory_items')[0].mut.payload.quantity).toBe(6);
++
++    const jl = insertsOf('journal_lines')[0].mut.payload as Row[];
++    const sum = (k: 'debit' | 'credit') => jl.reduce((s, l) => s + (l[k] || 0), 0);
++    expect(sum('debit')).toBe(400); // 4 × دفتري 100
++    expect(sum('credit')).toBe(400);
++    expect(jl.find((l) => l.account_code === '5100').debit).toBe(400);
++    expect(jl.find((l) => l.account_code === '1170').credit).toBe(400);
++    for (const l of jl) expect(l.company_id).toBe(C1);
++  });
++
++  test("adjustment ('adjustment' alias): balanced JE — surplus→4200 / deficit→5100", async () => {
++    // surplus: 10 → 13 at book price 100 = +300
++    mockDb = makeDb(baseDb());
++    const rUp = await movementPOST(authedRequest(movement({ type: 'adjustment', quantity: 13 })));
++    expect(rUp.status).toBe(201);
++    let jl = insertsOf('journal_lines')[0].mut.payload as Row[];
++    expect(jl.find((l) => l.account_code === '1170').debit).toBe(300);
++    expect(jl.find((l) => l.account_code === '4200').credit).toBe(300);
++    expect(updatesOf('inventory_items')[0].mut.payload.quantity).toBe(13);
++
++    // deficit: 10 → 7 → 3 units × book 100 = 300 to costs
++    mockDb = makeDb(baseDb());
++    const rDown = await movementPOST(authedRequest(movement({ type: 'adjustment', quantity: 7 })));
++    expect(rDown.status).toBe(201);
++    jl = insertsOf('journal_lines')[0].mut.payload as Row[];
++    expect(jl.find((l) => l.account_code === '5100').debit).toBe(300);
++    expect(jl.find((l) => l.account_code === '1170').credit).toBe(300);
++  });
++
++  test('return: stock back in with Dr 1170 / Cr 5100 reversal of issue cost', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await movementPOST(authedRequest(movement({ type: 'return', quantity: 2 })));
++    expect(res.status).toBe(201);
++    expect(updatesOf('inventory_items')[0].mut.payload.quantity).toBe(12);
++    const jl = insertsOf('journal_lines')[0].mut.payload as Row[];
++    expect(jl.find((l) => l.account_code === '1170').debit).toBe(200);
++    expect(jl.find((l) => l.account_code === '5100').credit).toBe(200);
++  });
++
++  test('transfer: additive at destination (was REPLACING the balance)', async () => {
++    const db = baseDb();
++    db.inventory_items.push({
++      id: 'tgt-1', company_id: C1, code: 'STEEL', name: 'حديد', unit: 'طن',
++      warehouse_id: W2, quantity: '3', unit_price: '90', is_active: true,
++    });
++    mockDb = makeDb(db);
++
++    const res = await movementPOST(authedRequest(movement({ type: 'transfer', quantity: 4, to_warehouse_id: W2 })));
++    expect(res.status).toBe(201);
++
++    // source reduced 10 → 6
++    expect(updatesOf('inventory_items').find((c) => c.ops.some((o) => o.val === ITEM))!.mut.payload.quantity).toBe(6);
++    // destination MERGED 3 + 4 = 7 — not overwritten to 4
++    const tgtUpd = updatesOf('inventory_items').find((c) => c.ops.some((o) => o.val === 'tgt-1'));
++    expect(tgtUpd!.mut.payload.quantity).toBe(7);
++  });
++
++  test('missing inventory account → loud failure, no stock mutation (was silent unbalanced JE)', async () => {
++    const db = baseDb();
++    db.accounts = db.accounts.filter((a) => a.code !== '1170');
++    mockDb = makeDb(db);
++    const res = await movementPOST(authedRequest(movement({ type: 'issue', quantity: 2 })));
++    expect(res.status).toBe(400);
++    const json = await res.json();
++    expect(json.message).toContain('1170');
++    expect(updatesOf('inventory_items')).toHaveLength(0);
++  });
++});
++
++describe('movement history is immutable (quantity/price/type)', () => {
++  test('PUT changing quantity → 400 with counter-movement guidance', async () => {
++    const db = baseDb();
++    db.inventory_transactions.push({ id: 'tx-1', company_id: C1, item_id: ITEM, type: 'add', quantity: 5 });
++    mockDb = makeDb(db);
++    const res = await movementPUT(authedRequest({ quantity: 99 }, 'PUT'), paramsOf('tx-1'));
++    expect(res.status).toBe(400);
++    const json = await res.json();
++    expect(json.message).toContain('حركة عكسية');
++    expect(updatesOf('inventory_transactions')).toHaveLength(0);
++  });
++
++  test('PUT notes only → 200 (metadata is fixable)', async () => {
++    const db = baseDb();
++    db.inventory_transactions.push({ id: 'tx-1', company_id: C1, item_id: ITEM, type: 'add', quantity: 5 });
++    mockDb = makeDb(db);
++    const res = await movementPUT(authedRequest({ notes: 'تصحيح وصف' }, 'PUT'), paramsOf('tx-1'));
++    expect(res.status).toBe(200);
++    expect(updatesOf('inventory_transactions')[0].mut.payload.notes).toBe('تصحيح وصف');
++  });
++
++  test('DELETE → blocked with reversal guidance (no silent ledger/stock divergence)', async () => {
++    const db = baseDb();
++    db.inventory_transactions.push({ id: 'tx-1', company_id: C1, item_id: ITEM, type: 'add', quantity: 5 });
++    mockDb = makeDb(db);
++    const res = await movementDELETE(authedRequest(undefined, 'DELETE'), paramsOf('tx-1'));
++    expect(res.status).toBe(400);
++    expect(mockDb.calls.filter((c) => c.mut.kind === 'delete' && c.table === 'inventory_transactions')).toHaveLength(0);
++  });
++});
++
++describe('inventory items — create/edit/delete guards', () => {
++  test('item creation on a foreign warehouse → 404', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await itemPOST(authedRequest({ code: 'CEM', name: 'أسمنت', unit: 'كيس', warehouse_id: FOREIGN_W }));
++    expect(res.status).toBe(404);
++    expect(insertsOf('inventory_items')).toHaveLength(0);
++  });
++
++  test('item PUT: quantity/price are rejected — stock moves via transactions only', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await itemPUT(authedRequest({ name: 'حديد مسلح', quantity: 999 }, 'PUT'), paramsOf(ITEM));
++    expect(res.status).toBe(400);
++    expect(updatesOf('inventory_items')).toHaveLength(0);
++  });
++
++  test('item PUT: rename works; warehouse move with stock → 400', async () => {
++    mockDb = makeDb(baseDb());
++    const r1 = await itemPUT(authedRequest({ name: 'حديد مسلح' }, 'PUT'), paramsOf(ITEM));
++    expect(r1.status).toBe(200);
++    expect(updatesOf('inventory_items')[0].mut.payload.name).toBe('حديد مسلح');
++
++    mockDb = makeDb(baseDb());
++    const r2 = await itemPUT(authedRequest({ warehouse_id: W2 }, 'PUT'), paramsOf(ITEM)); // has qty 10
++    expect(r2.status).toBe(400);
++  });
++
++  test('item DELETE: blocked with stock or history; allowed for pristine drafts', async () => {
++    mockDb = makeDb(baseDb());
++    const r1 = await itemDELETE(authedRequest(undefined, 'DELETE'), paramsOf(ITEM)); // qty 10
++    expect(r1.status).toBe(400);
++
++    const db = baseDb();
++    db.inventory_items.push({ id: 'draft-item', company_id: C1, code: 'TMP', name: 'مؤقت', unit: 'وحدة', warehouse_id: W1, quantity: '0', is_active: true });
++    mockDb = makeDb(db);
++    const r2 = await itemDELETE(authedRequest(undefined, 'DELETE'), paramsOf('draft-item'));
++    expect(r2.status).toBe(200);
++  });
++});
++
++describe('single stock writer — purchase invoice no longer bumps stock', () => {
++  test('invoice with PO: JE posts, inventory untouched (receipt is the stock writer)', async () => {
++    mockDb = makeDb(baseDb());
++    const res = await purchaseInvoicePOST(authedRequest({
++      date: '2026-08-01',
++      supplier_id: SUPPLIER,
++      purchase_order_id: PO,
++      items: [{ description: 'STEEL', quantity: 2, unit_price: 100 }],
++      tax_rate: 0,
++    }));
++    expect(res.status).toBe(201);
++    // no inventory_items updates from the invoice anymore (was the double-entry bug)
++    expect(updatesOf('inventory_items')).toHaveLength(0);
++    expect(insertsOf('inventory_transactions')).toHaveLength(0);
++    // but the financial JE still posted
++    expect(insertsOf('journal_entries')).toHaveLength(1);
++  });
++});
+diff --git a/src/app/(dashboard)/inventory-transactions/page.tsx b/src/app/(dashboard)/inventory-transactions/page.tsx
+index c9bce7f..cbdf7c1 100644
+--- a/src/app/(dashboard)/inventory-transactions/page.tsx
++++ b/src/app/(dashboard)/inventory-transactions/page.tsx
+@@ -63,13 +63,25 @@ export default function InventoryTransactionsPage() {
+       const url = editingTransaction ? `/api/inventory-transactions/${editingTransaction.id}` : '/api/inventory-transactions';
+       const method = editingTransaction ? 'PUT' : 'POST';
+       
++      // التعديل: الملاحظات/التاريخ فقط (الكمية والسعر لا يُعدَّلان — حركة عكسية)
++      // الإنشاء: الحقول الجوهرية فقط — القيم يحسبها الخادم (total_value وغيرها)
++      const payload = editingTransaction
++        ? { date: form.date, notes: form.notes }
++        : {
++            item_id: form.item_id,
++            warehouse_id: form.warehouse_id,
++            type: form.type,
++            quantity: form.quantity,
++            unit_price: form.unit_price,
++            date: form.date,
++            notes: form.notes,
++            to_warehouse_id: form.to_warehouse_id || undefined,
++          };
++
+       const res = await fetch(url, {
+         method,
+         headers: { 'Content-Type': 'application/json' },
+-        body: JSON.stringify({
+-          ...form,
+-          total_value: form.quantity * form.unit_price,
+-        }),
++        body: JSON.stringify(payload),
+       });
+       const json = await res.json();
+       if (json.success) {
+@@ -77,7 +89,7 @@ export default function InventoryTransactionsPage() {
+         setEditingTransaction(null);
+         setForm({
+           item_id: '', warehouse_id: '', type: 'add', quantity: 0, unit_price: 0,
+-          date: new Date().toISOString().split('T')[0], notes: '',
++          date: new Date().toISOString().split('T')[0], notes: '', to_warehouse_id: '',
+         });
+         fetchData();
+       } else setSaveError(json.message || 'فشل الحفظ');
+@@ -98,6 +110,7 @@ export default function InventoryTransactionsPage() {
+           unit_price: json.data.unit_price,
+           date: json.data.date,
+           notes: json.data.notes || '',
++          to_warehouse_id: '',
+         });
+         setShowModal(true);
+       }
+@@ -125,6 +138,8 @@ export default function InventoryTransactionsPage() {
+       add: { variant: 'success', label: 'إضافة' },
+       issue: { variant: 'danger', label: 'صرف' },
+       adjustment: { variant: 'warning', label: 'تسوية' },
++      adjust: { variant: 'warning', label: 'تسوية' },
++      return: { variant: 'success', label: 'مرتجع' },
+       transfer: { variant: 'info', label: 'تحويل' },
+     };
+     const m = map[type] || { variant: 'info', label: type };
+@@ -152,6 +167,8 @@ export default function InventoryTransactionsPage() {
+     },
+   ];
+ 
++  const isEdit = !!editingTransaction;
++
+   if (loading) return <LoadingSkeleton variant="table" count={8} />;
+   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
+ 
+@@ -162,11 +179,14 @@ export default function InventoryTransactionsPage() {
+       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingTransaction(null); }} title={editingTransaction ? 'تعديل معاملة مخزون' : 'إضافة معاملة مخزون'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingTransaction(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
+         <div className="space-y-4">
+           <div className="grid grid-cols-2 gap-4">
+-            <Select label="الصنف" value={form.item_id} onChange={(v) => setForm({...form, item_id: v})} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i: any) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
+-            <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w: any) => ({ value: w.id, label: w.name }))]} />
+-            <Select label="النوع" value={form.type} onChange={(v) => setForm({...form, type: v})} options={[{ value: 'add', label: 'إضافة' }, { value: 'issue', label: 'صرف' }, { value: 'adjustment', label: 'تسوية' }, { value: 'transfer', label: 'تحويل' }]} />
+-            <Input label="الكمية" type="number" value={form.quantity} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
+-            <Input label="سعر الوحدة" type="number" value={form.unit_price} onChange={(e) => setForm({...form, unit_price: parseFloat(e.target.value) || 0})} />
++            <Select label="الصنف" value={form.item_id} onChange={(v) => setForm({...form, item_id: v})} disabled={isEdit} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i: any) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
++            <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} disabled={isEdit} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w: any) => ({ value: w.id, label: w.name }))]} />
++            <Select label="النوع" value={form.type} onChange={(v) => setForm({...form, type: v})} disabled={isEdit} options={[{ value: 'add', label: 'إضافة' }, { value: 'issue', label: 'صرف' }, { value: 'adjustment', label: 'تسوية' }, { value: 'transfer', label: 'تحويل' }, { value: 'return', label: 'مرتجع' }]} />
++            {!isEdit && form.type === 'transfer' && (
++              <Select label="إلى مستودع" value={form.to_warehouse_id} onChange={(v) => setForm({...form, to_warehouse_id: v})} options={[{ value: '', label: 'اختر مستودع الوجهة' }, ...warehouses.filter((w: any) => w.id !== form.warehouse_id).map((w: any) => ({ value: w.id, label: w.name }))]} />
++            )}
++            <Input label="الكمية" type="number" value={form.quantity} disabled={isEdit} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
++            <Input label="سعر الوحدة" type="number" value={form.unit_price} disabled={isEdit} onChange={(e) => setForm({...form, unit_price: parseFloat(e.target.value) || 0})} />
+             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+           </div>
+           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات المعاملة" />
+diff --git a/src/app/(dashboard)/inventory/page.tsx b/src/app/(dashboard)/inventory/page.tsx
+index 3ba1623..ba5630f 100644
+--- a/src/app/(dashboard)/inventory/page.tsx
++++ b/src/app/(dashboard)/inventory/page.tsx
+@@ -42,10 +42,15 @@ export default function InventoryPage() {
+       const url = editingItem ? `/api/inventory/${editingItem.id}` : '/api/inventory';
+       const method = editingItem ? 'PUT' : 'POST';
+       
++      // التعديل: بيانات وصفية فقط — الكمية/السعر يتحركان بالحركات المخزنية حصراً
++      const payload = editingItem
++        ? { name: form.name, unit: form.unit, category: form.category || null, warehouse_id: form.warehouse_id || undefined }
++        : { code: form.code, name: form.name, unit: form.unit, warehouse_id: form.warehouse_id, category: form.category || null };
++
+       const res = await fetch(url, {
+         method,
+         headers: { 'Content-Type': 'application/json' },
+-        body: JSON.stringify(form),
++        body: JSON.stringify(payload),
+       });
+       const json = await res.json();
+       if (json.success) {
+diff --git a/src/app/api/inventory-transactions/[id]/route.ts b/src/app/api/inventory-transactions/[id]/route.ts
+index f608bbe..b50f864 100644
+--- a/src/app/api/inventory-transactions/[id]/route.ts
++++ b/src/app/api/inventory-transactions/[id]/route.ts
+@@ -1,5 +1,5 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
++import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+ 
+ const sb = () => getSupabase();
+@@ -9,7 +9,7 @@ export async function GET(
+   { params }: { params: Promise<{ id: string }> }
+ ) {
+   try {
+-    const auth = await requireApiAuth(request);
++    const auth = await requireModulePermission(request, 'inventory_transactions', 'read');
+     const { id } = await params;
+     const s = sb();
+ 
+@@ -27,12 +27,18 @@ export async function GET(
+   }
+ }
+ 
++/**
++ * PUT /api/inventory-transactions/[id]
++ * الحركة المخزنية أثر مالي ومخزني — الكمية/السعر/النوع لا تُعدَّل أبداً
++ * (تعديلها بلا إعادة ترحيل يفسد الدفتر مقابل الرصيد). يُسمح فقط بتصحيح
++ * الملاحظات والتاريخ. لتصحيح كمية: سجّل حركة عكسية ثم حركة صحيحة.
++ */
+ export async function PUT(
+   request: NextRequest,
+   { params }: { params: Promise<{ id: string }> }
+ ) {
+   try {
+-    const auth = await requireManagerOrAbove(request);
++    const auth = await requireModulePermission(request, 'inventory_transactions', 'update');
+     const { id } = await params;
+     const s = sb();
+     const body = await request.json();
+@@ -45,16 +51,22 @@ export async function PUT(
+ 
+     if (!existing) return notFound();
+ 
++    if (
++      body.quantity !== undefined || body.unit_price !== undefined ||
++      body.total_value !== undefined || body.type !== undefined || body.item_id !== undefined
++    ) {
++      return error('لا يمكن تعديل كمية/سعر/نوع حركة مسجلة — سجّل حركة عكسية ثم حركة صحيحة');
++    }
++
+     const updateData: any = {};
+-    if (body.quantity !== undefined) updateData.quantity = body.quantity;
+-    if (body.unit_price !== undefined) updateData.unit_price = body.unit_price;
+-    if (body.total_value !== undefined) updateData.total_value = body.total_value;
+     if (body.date !== undefined) updateData.date = body.date;
+     if (body.notes !== undefined) updateData.notes = body.notes;
++    if (Object.keys(updateData).length === 0) return error('لا يوجد ما يمكن تعديله');
+ 
+     const { data: updated, error: updateErr } = await s.from('inventory_transactions')
+       .update(updateData)
+       .eq('id', id)
++      .eq('company_id', auth.companyId)
+       .select('*')
+       .single();
+ 
+@@ -66,6 +78,11 @@ export async function PUT(
+   }
+ }
+ 
++/**
++ * DELETE /api/inventory-transactions/[id]
++ * محظور: حذف حركة أثّرت على الرصيد والدفاتر بلا أثر عكسي هو الفساد بعينه.
++ * البديل المحاسبي: حركة عكسية (issue↔return)، أو تسوية جرد.
++ */
+ export async function DELETE(
+   request: NextRequest,
+   { params }: { params: Promise<{ id: string }> }
+@@ -83,9 +100,7 @@ export async function DELETE(
+ 
+     if (!existing) return notFound();
+ 
+-    await s.from('inventory_transactions').delete().eq('id', id);
+-
+-    return success({ deleted: true });
++    return error('الحركات المخزنية لا تُحذف — سجّل حركة عكسية (مرتجع/صرف) أو تسوية جرد للتصحيح');
+   } catch (err) {
+     return handleApiError(err);
+   }
+diff --git a/src/app/api/inventory-transactions/route.ts b/src/app/api/inventory-transactions/route.ts
+index 368b8ae..d58de2c 100644
+--- a/src/app/api/inventory-transactions/route.ts
++++ b/src/app/api/inventory-transactions/route.ts
+@@ -1,13 +1,17 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
++import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+-import { generateId } from '@/lib/utils';
++import { applyStockMovement } from '@/lib/stock-movements';
++import { inventoryMovementSchema } from '@/lib/validation';
+ 
+ const sb = () => getSupabase();
+ 
++/**
++ * GET /api/inventory-transactions
++ */
+ export async function GET(request: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(request);
++    const auth = await requireModulePermission(request, 'inventory_transactions', 'read');
+     const s = sb();
+     const url = new URL(request.url);
+     const itemId = url.searchParams.get('itemId');
+@@ -28,36 +32,24 @@ export async function GET(request: NextRequest) {
+   }
+ }
+ 
++/**
++ * POST /api/inventory-transactions
++ * سابقاً: كان يسجّل الحركة فقط دون تحديث رصيد الصنف إطلاقاً —
++ * الدفتر يفترق عن المخزون الفعلي مع كل حركة من الواجهة.
++ * الآن: يفوّض للمحرك الموحّد applyStockMovement (تحقق + عزل + رصيد + قيود).
++ */
+ export async function POST(request: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(request);
+-    const s = sb();
++    const auth = await requireModulePermission(request, 'inventory_transactions', 'create');
+     const body = await request.json();
+ 
+-    if (!body.item_id || !body.warehouse_id || !body.type || !body.quantity) {
+-      return error('الصنف والمستودع والنوع والكمية مطلوبة');
+-    }
+-
+-    const { data: transaction, error: insertErr } = await s.from('inventory_transactions')
+-      .insert({
+-        id: generateId(),
+-        company_id: auth.companyId,
+-        item_id: body.item_id,
+-        warehouse_id: body.warehouse_id,
+-        type: body.type,
+-        quantity: body.quantity,
+-        unit_price: body.unit_price || 0,
+-        total_value: body.total_value || (body.quantity * (body.unit_price || 0)),
+-        date: body.date || new Date().toISOString().split('T')[0],
+-        notes: body.notes || null,
+-        created_by: auth.userId,
+-      })
+-      .select('*')
+-      .single();
++    const parsed = inventoryMovementSchema.safeParse(body);
++    if (!parsed.success) return error(parsed.error.issues[0].message);
+ 
+-    if (insertErr) throw insertErr;
++    const result = await applyStockMovement(auth.companyId, auth.userId, parsed.data);
++    if (result.error) return error(result.error, result.status || 400);
+ 
+-    return success(transaction, 201);
++    return success(result.transaction, 201);
+   } catch (err) {
+     return handleApiError(err);
+   }
+diff --git a/src/app/api/inventory/[id]/route.ts b/src/app/api/inventory/[id]/route.ts
+new file mode 100644
+index 0000000..a19fb3e
+--- /dev/null
++++ b/src/app/api/inventory/[id]/route.ts
+@@ -0,0 +1,139 @@
++import { NextRequest } from 'next/server';
++import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
++import { getSupabase } from '@/lib/supabase-client';
++import { inventoryItemUpdateSchema } from '@/lib/validation';
++
++const sb = () => getSupabase();
++
++/**
++ * GET /api/inventory/[id] — صنف واحد مع اسم مستودعه
++ */
++export async function GET(
++  request: NextRequest,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  try {
++    const auth = await requireModulePermission(request, 'inventory', 'read');
++    const { id } = await params;
++    const s = sb();
++
++    const { data: item } = await s.from('inventory_items')
++      .select('*, warehouses(name)')
++      .eq('id', id)
++      .eq('company_id', auth.companyId)
++      .maybeSingle();
++
++    if (!item) return notFound();
++
++    return success({
++      ...(item as Record<string, any>),
++      warehouse_name: (item as Record<string, any>).warehouses?.name || null,
++    });
++  } catch (err) {
++    return handleApiError(err);
++  }
++}
++
++/**
++ * PUT /api/inventory/[id]
++ * بيانات وصفية فقط (اسم/وحدة/فئة/تفعيل/مستودع). الكمية والسعر ممنوعان هنا —
++ * الرصيد يتحرك بالحركات المخزنية فقط حتى لا يفترق الدفتر عن الواقع.
++ */
++export async function PUT(
++  request: NextRequest,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  try {
++    const auth = await requireModulePermission(request, 'inventory', 'update');
++    const { id } = await params;
++    const s = sb();
++    const body = await request.json();
++
++    // الواجهة ترسل النموذج كاملاً (quantity/unit_price...) — نرفض بوضوح بدل التجاهل الصامت
++    if (body.quantity !== undefined || body.unit_price !== undefined) {
++      return error('لا يمكن تعديل الكمية أو السعر مباشرة — استخدم الحركات المخزنية (إضافة/صرف/تسوية)');
++    }
++
++    const parsed = inventoryItemUpdateSchema.safeParse(body);
++    if (!parsed.success) return error(parsed.error.issues[0].message);
++
++    const { data: existing } = await s.from('inventory_items')
++      .select('id, quantity, warehouse_id')
++      .eq('id', id)
++      .eq('company_id', auth.companyId)
++      .maybeSingle();
++    if (!existing) return notFound();
++
++    // إعادة توزيع المستودع لصنف عليه رصيد تنقل المخزون دون حركة موثقة — ممنوع
++    if (parsed.data.warehouse_id && parsed.data.warehouse_id !== (existing as any).warehouse_id) {
++      const qty = parseFloat((existing as any).quantity) || 0;
++      if (qty !== 0) {
++        return error('لا يمكن نقل مستودع صنف عليه رصيد — استخدم حركة التحويل');
++      }
++      const { data: targetWarehouse } = await s.from('warehouses')
++        .select('id').eq('id', parsed.data.warehouse_id).eq('company_id', auth.companyId).maybeSingle();
++      if (!targetWarehouse) return error('المستودع غير موجود', 404);
++    }
++
++    const updateData: any = { updated_at: new Date().toISOString() };
++    if (parsed.data.name !== undefined) updateData.name = parsed.data.name;
++    if (parsed.data.unit !== undefined) updateData.unit = parsed.data.unit;
++    if (parsed.data.category !== undefined) updateData.category = parsed.data.category;
++    if (parsed.data.is_active !== undefined) updateData.is_active = parsed.data.is_active;
++    if (parsed.data.warehouse_id !== undefined) updateData.warehouse_id = parsed.data.warehouse_id;
++
++    const { data: updated, error: updateErr } = await s.from('inventory_items')
++      .update(updateData)
++      .eq('id', id)
++      .eq('company_id', auth.companyId)
++      .select('*')
++      .single();
++
++    if (updateErr) throw updateErr;
++    return success(updated);
++  } catch (err) {
++    return handleApiError(err);
++  }
++}
++
++/**
++ * DELETE /api/inventory/[id]
++ * مسودات فقط: صنف عليه رصيد أو حركات سابقة لا يُحذف (يُعطَّل بدلاً من ذلك)
++ */
++export async function DELETE(
++  request: NextRequest,
++  { params }: { params: Promise<{ id: string }> }
++) {
++  try {
++    const auth = await requireManagerOrAbove(request);
++    const { id } = await params;
++    const s = sb();
++
++    const { data: existing } = await s.from('inventory_items')
++      .select('id, quantity')
++      .eq('id', id)
++      .eq('company_id', auth.companyId)
++      .maybeSingle();
++    if (!existing) return notFound();
++
++    if ((parseFloat((existing as any).quantity) || 0) !== 0) {
++      return error('لا يمكن حذف صنف عليه رصيد — أعد الرصيد للصفر بتسوية جرد أولاً');
++    }
++
++    const { data: txns } = await s.from('inventory_transactions')
++      .select('id').eq('item_id', id).limit(1);
++    if (txns && txns.length > 0) {
++      return error('لا يمكن حذف صنف له حركات سابقة — عطّله بدلاً من حذفه');
++    }
++
++    const { error: delErr } = await s.from('inventory_items')
++      .delete()
++      .eq('id', id)
++      .eq('company_id', auth.companyId);
++    if (delErr) throw delErr;
++
++    return success({ deleted: true });
++  } catch (err) {
++    return handleApiError(err);
++  }
++}
+diff --git a/src/app/api/inventory/route.ts b/src/app/api/inventory/route.ts
+index 6d4f627..4eae83b 100644
+--- a/src/app/api/inventory/route.ts
++++ b/src/app/api/inventory/route.ts
+@@ -1,12 +1,13 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
++import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
++import { inventoryItemSchema } from '@/lib/validation';
+ 
+ const sb = () => getSupabase();
+ 
+ export async function GET(req: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(req);
++    const auth = await requireModulePermission(req, 'inventory', 'read');
+     const s = sb();
+     const url = new URL(req.url);
+     const { page, pageSize } = getPaginationParams(url);
+@@ -41,15 +42,23 @@ export async function GET(req: NextRequest) {
+ 
+ export async function POST(req: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(req);
++    const auth = await requireModulePermission(req, 'inventory', 'create');
+     const s = sb();
+     const data = await parseBody(req);
+-    const { code, name, unit, warehouse_id, category } = data;
+-    if (!code || !name || !unit || !warehouse_id) return error('code, name, unit, warehouse_id are required');
++
++    const parsed = inventoryItemSchema.safeParse(data);
++    if (!parsed.success) return error(parsed.error.issues[0].message);
++    const { code, name, unit, warehouse_id, category } = parsed.data;
++
++    // TENANT: المستودع المستضيف يجب أن ينتمي لهذه الشركة (كان يقبل مستودعاً أجنبياً)
++    const { data: warehouse } = await s.from('warehouses')
++      .select('id').eq('id', warehouse_id).eq('company_id', auth.companyId).maybeSingle();
++    if (!warehouse) return error('المستودع غير موجود', 404);
+ 
+     const { data: existing } = await s.from('inventory_items').select('id').eq('company_id', auth.companyId).eq('code', code).maybeSingle();
+     if (existing) return error('كود الصنف موجود مسبقاً');
+ 
++    // الرصيد يبدأ صفراً دائماً — يتحرك بالحركات المخزنية فقط
+     const { data: result, error: insertError } = await s.from('inventory_items')
+       .insert({ company_id: auth.companyId, code, name, unit, warehouse_id, category: category || null, quantity: 0, unit_price: 0, is_active: true })
+       .select('*').single();
+diff --git a/src/app/api/inventory/transactions/route.ts b/src/app/api/inventory/transactions/route.ts
+index 3fe6475..76a011e 100644
+--- a/src/app/api/inventory/transactions/route.ts
++++ b/src/app/api/inventory/transactions/route.ts
+@@ -1,14 +1,17 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
++import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+-import { ACCOUNT_CODES } from '@/lib/constants';
+-import { getNextJournalNumber } from '@/lib/numbering';
++import { applyStockMovement } from '@/lib/stock-movements';
++import { inventoryMovementSchema } from '@/lib/validation';
+ 
+ const sb = () => getSupabase();
+ 
++/**
++ * GET /api/inventory/transactions — عرض موسّع مع فلاتر التاريخ والنوع
++ */
+ export async function GET(req: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(req);
++    const auth = await requireModulePermission(req, 'inventory_transactions', 'read');
+     const url = new URL(req.url);
+     const { page, pageSize } = getPaginationParams(url);
+     const { from, to } = getDateRangeParams(url);
+@@ -48,176 +51,22 @@ export async function GET(req: NextRequest) {
+   }
+ }
+ 
++/**
++ * POST /api/inventory/transactions
++ * مسار توافقي — يفوّض للمحرك الموحّد نفسه (سلوك متماثل مع api/inventory-transactions)
++ */
+ export async function POST(req: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(req);
++    const auth = await requireModulePermission(req, 'inventory_transactions', 'create');
+     const data = await parseBody(req);
+-    const { item_id, warehouse_id, type, quantity, unit_price, date, notes, reference_type, reference_id, to_warehouse_id } = data;
+ 
+-    if (!item_id || !warehouse_id || !type || !quantity || !date) {
+-      return error('company_id, item_id, warehouse_id, type, quantity, date are required');
+-    }
++    const parsed = inventoryMovementSchema.safeParse(data);
++    if (!parsed.success) return error(parsed.error.issues[0].message);
+ 
+-    const s = sb();
+-
+-    // Get item
+-    const { data: item, error: itemErr } = await s.from('inventory_items')
+-      .select('*')
+-      .eq('id', item_id)
+-      .maybeSingle();
+-
+-    if (itemErr || !item) return error('الصنف غير موجود');
+-
+-    const currentQty = parseFloat(item.quantity) || 0;
+-    const currentPrice = parseFloat(item.unit_price) || 0;
+-    let newQty = currentQty;
+-    let newPrice = currentPrice;
+-    let effectiveWarehouse = warehouse_id;
+-
+-    switch (type) {
+-      case 'add': {
+-        newQty = currentQty + quantity;
+-        newPrice = currentQty === 0 ? unit_price : ((currentQty * currentPrice) + (quantity * (unit_price || 0))) / newQty;
+-        break;
+-      }
+-      case 'issue': {
+-        if (currentQty < quantity) return error('الكمية غير متوفرة');
+-        newQty = currentQty - quantity;
+-        const costAmount = quantity * currentPrice;
+-
+-        const { data: inventoryAccount } = await s.from('accounts')
+-          .select('id')
+-          .eq('company_id', auth.companyId)
+-          .eq('code', ACCOUNT_CODES.INVENTORY)
+-          .maybeSingle();
+-
+-        const { data: costAccount } = await s.from('accounts')
+-          .select('id')
+-          .eq('company_id', auth.companyId)
+-          .eq('code', ACCOUNT_CODES.DIRECT_COSTS)
+-          .maybeSingle();
+-
+-        if (inventoryAccount && costAccount) {
+-          // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+-          const nextNumber = await getNextJournalNumber(auth.companyId, date);
+-
+-          const { data: je, error: jeErr } = await s.from('journal_entries')
+-            .insert({
+-              company_id: auth.companyId,
+-              number: nextNumber,
+-              date,
+-              type: 'general',
+-              description: `صرف مخزون: ${item.name}`,
+-              created_by: auth.userId,
+-            })
+-            .select('*')
+-            .single();
+-
+-          if (!jeErr && je) {
+-            await s.from('journal_lines').insert([
+-              { journal_entry_id: je.id, account_id: costAccount.id, debit: costAmount, credit: 0 },
+-              { journal_entry_id: je.id, account_id: inventoryAccount.id, debit: 0, credit: costAmount },
+-            ]);
+-          }
+-        }
+-        break;
+-      }
+-      case 'adjust': {
+-        const diff = quantity - currentQty;
+-        newQty = quantity;
+-        const adjustAmount = Math.abs(diff) * currentPrice;
+-
+-        const { data: inventoryAccount } = await s.from('accounts')
+-          .select('id')
+-          .eq('company_id', auth.companyId)
+-          .eq('code', ACCOUNT_CODES.INVENTORY)
+-          .maybeSingle();
+-
+-        if (inventoryAccount && adjustAmount > 0) {
+-          // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
+-          const nextNumber = await getNextJournalNumber(auth.companyId, date);
+-
+-          const { data: je, error: jeErr } = await s.from('journal_entries')
+-            .insert({
+-              company_id: auth.companyId,
+-              number: nextNumber,
+-              date,
+-              type: 'general',
+-              description: `تسوية مخزون: ${item.name}`,
+-              created_by: auth.userId,
+-            })
+-            .select('*')
+-            .single();
+-
+-          if (!jeErr && je) {
+-            if (diff > 0) {
+-              await s.from('journal_lines').insert({
+-                journal_entry_id: je.id, account_id: inventoryAccount.id, debit: adjustAmount, credit: 0,
+-              });
+-            } else {
+-              await s.from('journal_lines').insert({
+-                journal_entry_id: je.id, account_id: inventoryAccount.id, debit: 0, credit: adjustAmount,
+-              });
+-            }
+-          }
+-        }
+-        break;
+-      }
+-      case 'transfer': {
+-        if (!to_warehouse_id) return error('المستودع الوجهة مطلوب');
+-        if (currentQty < quantity) return error('الكمية غير متوفرة');
+-        newQty = currentQty - quantity;
+-
+-        // Upsert item into target warehouse
+-        await s.from('inventory_items').upsert({
+-          company_id: auth.companyId,
+-          code: item.code,
+-          name: item.name,
+-          unit: item.unit,
+-          warehouse_id: to_warehouse_id,
+-          quantity,
+-          unit_price: currentPrice,
+-          category: item.category,
+-          is_active: true,
+-        }, { onConflict: 'company_id, code' });
+-
+-        effectiveWarehouse = to_warehouse_id;
+-        break;
+-      }
+-      case 'return': {
+-        newQty = currentQty + quantity;
+-        break;
+-      }
+-      default:
+-        return error('نوع العملية غير مدعوم');
+-    }
+-
+-    // Update item quantity
+-    await s.from('inventory_items')
+-      .update({ quantity: newQty, unit_price: newPrice, updated_at: new Date().toISOString() })
+-      .eq('id', item_id);
+-
+-    // Insert transaction
+-    const { data: txn, error: txnErr } = await s.from('inventory_transactions')
+-      .insert({
+-        company_id: auth.companyId,
+-        item_id,
+-        warehouse_id: effectiveWarehouse,
+-        type,
+-        quantity,
+-        unit_price: unit_price || currentPrice,
+-        total_value: quantity * (unit_price || currentPrice),
+-        date,
+-        notes,
+-        reference_type,
+-        reference_id,
+-        created_by: auth.userId,
+-      })
+-      .select('*')
+-      .single();
++    const result = await applyStockMovement(auth.companyId, auth.userId, parsed.data);
++    if (result.error) return error(result.error, result.status || 400);
+ 
+-    if (txnErr) throw txnErr;
+-    return success(txn, 201);
++    return success(result.transaction, 201);
+   } catch (err) {
+     return handleApiError(err);
+   }
+diff --git a/src/app/api/inventory/warehouses/route.ts b/src/app/api/inventory/warehouses/route.ts
+index f23fd19..7a7ab61 100644
+--- a/src/app/api/inventory/warehouses/route.ts
++++ b/src/app/api/inventory/warehouses/route.ts
+@@ -1,12 +1,13 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
++import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
++import { warehouseSchema } from '@/lib/validation';
+ import { getSupabase } from '@/lib/supabase-client';
+ 
+ const sb = () => getSupabase();
+ 
+ export async function GET(req: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(req);
++    const auth = await requireModulePermission(req, 'warehouses', 'read');
+     const s = sb();
+ 
+     const { data: warehouses } = await s.from('warehouses')
+@@ -22,11 +23,12 @@ export async function GET(req: NextRequest) {
+ 
+ export async function POST(req: NextRequest) {
+   try {
+-    const auth = await requireApiAuth(req);
++    const auth = await requireModulePermission(req, 'warehouses', 'create');
+     const data = await parseBody(req);
+-    const { name, location } = data;
+ 
+-    if (!name) return error('name is required');
++    const parsed = warehouseSchema.safeParse(data);
++    if (!parsed.success) return error(parsed.error.issues[0].message);
++    const { name, location } = parsed.data;
+ 
+     const s = sb();
+     const { data: result, error: insertError } = await s.from('warehouses')
+diff --git a/src/app/api/purchases/invoices/[id]/route.ts b/src/app/api/purchases/invoices/[id]/route.ts
+index b0c2be2..2f9d897 100644
+--- a/src/app/api/purchases/invoices/[id]/route.ts
++++ b/src/app/api/purchases/invoices/[id]/route.ts
+@@ -189,10 +189,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
+       return error('لا يمكن حذف فاتورة مُرحَّلة — استخدم الإلغاء لعكس القيد المحاسبي');
+     }
+ 
+-    if ((inv as Record<string, any>).purchase_order_id) {
+-      return error('لا يمكن حذف فاتورة مرتبطة بأمر شراء حدّث المخزون — استخدم الإلغاء');
+-    }
+-
+     await s.from('purchase_invoice_items').delete().eq('purchase_invoice_id', id);
+     await s.from('purchase_invoices')
+       .delete()
+diff --git a/src/app/api/purchases/invoices/route.ts b/src/app/api/purchases/invoices/route.ts
+index 206b64a..1d36d00 100644
+--- a/src/app/api/purchases/invoices/route.ts
++++ b/src/app/api/purchases/invoices/route.ts
+@@ -179,30 +179,10 @@ export async function POST(req: NextRequest) {
+         if (itemErr) throw itemErr;
+       }
+ 
+-      // تحديث المخزون بالمتوسط المرجح عند الارتباط بأمر شراء
+-      // (السلوك الحالي مبني على مطابقة code = description — قيد موثق،
+-      // التوحيد الكامل ضمن مراجعة قسم المخزون)
+-      if (purchase_order_id) {
+-        for (const item of computedItems) {
+-          const { data: invItem } = await s.from('inventory_items')
+-            .select('id, quantity, unit_price')
+-            .eq('company_id', auth.companyId)
+-            .eq('code', item.description)
+-            .maybeSingle();
+-          if (invItem) {
+-            const curQty = parseFloat(invItem.quantity) || 0;
+-            const curPrice = parseFloat(invItem.unit_price) || 0;
+-            const newQty = curQty + item.quantity;
+-            const newPrice = curQty === 0
+-              ? item.unit_price
+-              : ((curQty * curPrice) + (item.quantity * item.unit_price)) / newQty;
+-            await s.from('inventory_items')
+-              .update({ quantity: newQty, unit_price: newPrice })
+-              .eq('id', invItem.id)
+-              .eq('company_id', auth.companyId);
+-          }
+-        }
+-      }
++      // توحيد كاتب المخزون (القسم 7): المخزون يتحرك من «استلام أمر الشراء»
++      // فقط. سابقاً كانت الفاتورة المرتبطة بأمر شراء تضيف المخزون مرة أخرى —
++      // فلو استُلم الأمر ثم فُوتر تضاعفت الكمية. القيد المحاسبي أدناه يبقى هو
++      // الأثر المالي للفاتورة؛ الكمية أثرها في الاستلام.
+ 
+       // الترحيل المحاسبي — فشل صريح عند غياب الحسابات بدل التجاهل الصامت
+       const { data: invAcc } = await s.from('accounts').select('id')
+diff --git a/src/app/api/warehouses/[id]/route.ts b/src/app/api/warehouses/[id]/route.ts
+index a2998da..dcef11f 100644
+--- a/src/app/api/warehouses/[id]/route.ts
++++ b/src/app/api/warehouses/[id]/route.ts
+@@ -1,5 +1,5 @@
+ import { NextRequest } from 'next/server';
+-import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
++import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+ import { getSupabase } from '@/lib/supabase-client';
+ 
+ const sb = () => getSupabase();
+@@ -32,7 +32,7 @@ export async function PUT(
+   { params }: { params: Promise<{ id: string }> }
+ ) {
+   try {
+-    const auth = await requireManagerOrAbove(request);
++    const auth = await requireModulePermission(request, 'warehouses', 'update');
+     const { id } = await params;
+     const s = sb();
+     const body = await request.json();
+@@ -45,14 +45,18 @@ export async function PUT(
+ 
+     if (!existing) return notFound();
+ 
++    if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200)) {
++      return error('اسم المستودع غير صالح');
++    }
+     const updateData: any = {};
+-    if (body.name !== undefined) updateData.name = body.name;
++    if (body.name !== undefined) updateData.name = body.name.trim();
+     if (body.location !== undefined) updateData.location = body.location;
+     if (body.is_active !== undefined) updateData.is_active = body.is_active;
+ 
+     const { data: updated, error: updateErr } = await s.from('warehouses')
+       .update(updateData)
+       .eq('id', id)
++      .eq('company_id', auth.companyId)
+       .select('*')
+       .single();
+ 
+@@ -91,7 +95,7 @@ export async function DELETE(
+       return error('لا يمكن حذف المستودع لأنه يحتوي على أصناف');
+     }
+ 
+-    await s.from('warehouses').delete().eq('id', id);
++    await s.from('warehouses').delete().eq('id', id).eq('company_id', auth.companyId);
+ 
+     return success({ deleted: true });
+   } catch (err) {
+diff --git a/src/lib/stock-movements.ts b/src/lib/stock-movements.ts
+new file mode 100644
+index 0000000..25d77f6
+--- /dev/null
++++ b/src/lib/stock-movements.ts
+@@ -0,0 +1,277 @@
++/**
++ * محرك الحركات المخزنية الموحّد
++ *
++ * قبل هذا المحرك كان هناك مساران متباينان:
++ * - api/inventory-transactions: يسجل الحركة فقط دون تحديث رصيد الصنف
++ *   (الدفتر يفترق عن المخزون الفعلي — التسويات من الواجهة لم تفعل شيئاً)
++ * - api/inventory/transactions: يحدّث الرصيد + قيوداً خاماً بلا company_id
++ *   وبتسويات أحادية الطرف (غير متوازنة) وتحويلات تستبدل رصيد الوجهة
++ *
++ * القواعد المفروضة هنا:
++ * 1. الصنف والمستودعات تُحَلّ مقيدة بالشركة — لا حركة متقاطعة بين المستأجرين.
++ * 2. كل حركة مؤثرة محاسبياً تقيد بدخل/تكلفة متوازنة عبر insertJournalLines؛
++ *    غياب حساب المخزون (1170) يفشل العملية صراحةً لا صامتاً.
++ * 3. التحويل يجمع على رصيد الوجهة (لا يستبدله).
++ * 4. الرصيد لا يُعدَّل إلا من هنا (أو من استلام أمر الشراء) — لا PUT مباشر.
++ */
++
++import { getSupabase } from '@/lib/supabase-client';
++import { getNextJournalNumber } from '@/lib/numbering';
++import { insertJournalLines } from '@/lib/journal-utils';
++import { ACCOUNT_CODES } from '@/lib/constants';
++
++const sb = () => getSupabase();
++
++const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
++
++export interface MovementInput {
++  item_id: string;
++  warehouse_id: string;
++  type: 'add' | 'issue' | 'adjust' | 'adjustment' | 'transfer' | 'return';
++  quantity: number;
++  unit_price?: number;
++  date?: string;
++  notes?: string;
++  to_warehouse_id?: string | null;
++}
++
++export interface MovementResult {
++  error: string | null;
++  status?: number;
++  transaction?: any;
++}
++
++async function postBalancedJE(
++  companyId: string,
++  userId: string,
++  date: string,
++  description: string,
++  lines: Array<{ account_id: string; debit: number; credit: number; description?: string }>
++): Promise<{ journalEntryId: string | null; error: string | null }> {
++  const s = sb();
++  const number = await getNextJournalNumber(companyId, date);
++  const { data: je, error: jeErr } = await s.from('journal_entries')
++    .insert({
++      company_id: companyId,
++      number,
++      date,
++      type: 'general',
++      description,
++      reference_type: 'inventory_movement',
++      created_by: userId,
++    })
++    .select('id')
++    .single();
++  if (jeErr || !je) return { journalEntryId: null, error: 'فشل إنشاء قيد الحركة المخزنية' };
++
++  const { error: linesErr } = await insertJournalLines(
++    companyId,
++    lines.map((line) => ({ journal_entry_id: je.id, ...line }))
++  );
++  if (linesErr) return { journalEntryId: null, error: String(linesErr?.message || linesErr) };
++  return { journalEntryId: je.id, error: null };
++}
++
++export async function applyStockMovement(
++  companyId: string,
++  userId: string,
++  input: MovementInput
++): Promise<MovementResult> {
++  const s = sb();
++  const type = (input.type === 'adjustment' ? 'adjust' : input.type) as MovementInput['type'];
++  const qty = input.quantity;
++  const date = input.date || new Date().toISOString().split('T')[0];
++
++  // TENANT: الصنف ومصدر الحركة مقيدان بالشركة
++  const { data: item } = await s.from('inventory_items')
++    .select('*')
++    .eq('id', input.item_id)
++    .eq('company_id', companyId)
++    .maybeSingle();
++  if (!item) return { error: 'الصنف غير موجود', status: 404 };
++
++  const { data: warehouse } = await s.from('warehouses')
++    .select('id, name')
++    .eq('id', input.warehouse_id)
++    .eq('company_id', companyId)
++    .maybeSingle();
++  if (!warehouse) return { error: 'المستودع غير موجود', status: 404 };
++
++  const currentQty = parseFloat(item.quantity) || 0;
++  const currentPrice = parseFloat(item.unit_price) || 0;
++  let newQty = currentQty;
++  let newPrice = currentPrice;
++  let journalEntryId: string | null = null;
++  let effectiveWarehouseId = input.warehouse_id;
++  let movementNotes = input.notes || null;
++
++  // حسابات القيود — تُطلب فقط للأنواع المؤثرة محاسبياً وتفشل بوضوح عند غيابها
++  const needAccounts = type === 'issue' || type === 'adjust' || (type === 'return');
++  let inventoryAccountId: string | null = null;
++  let counterpartIncomeId: string | null = null;  // 4200 إيرادات أخرى (فائض جرد)
++  let counterpartCostId: string | null = null;    // 5100 تكاليف مباشرة (عجز/صرف/مرتجع)
++  if (needAccounts) {
++    const { data: invAcc } = await s.from('accounts').select('id')
++      .eq('company_id', companyId).eq('code', ACCOUNT_CODES.INVENTORY).maybeSingle();
++    const { data: revAcc } = await s.from('accounts').select('id')
++      .eq('company_id', companyId).eq('code', ACCOUNT_CODES.OTHER_REVENUE).maybeSingle();
++    const { data: costAcc } = await s.from('accounts').select('id')
++      .eq('company_id', companyId).eq('code', ACCOUNT_CODES.DIRECT_COSTS).maybeSingle();
++    inventoryAccountId = invAcc?.id || null;
++    counterpartIncomeId = revAcc?.id || null;
++    counterpartCostId = costAcc?.id || null;
++    if (!inventoryAccountId) {
++      return { error: 'حساب المخزون (1170) مفقود — فعّل دليل الحسابات أولاً', status: 400 };
++    }
++  }
++
++  switch (type) {
++    case 'add': {
++      const unitPrice = input.unit_price ?? currentPrice;
++      newQty = round2(currentQty + qty);
++      newPrice = currentQty === 0 ? unitPrice : round2(((currentQty * currentPrice) + (qty * unitPrice)) / newQty);
++      break;
++    }
++
++    case 'issue': {
++      if (currentQty < qty) return { error: 'الكمية غير متوفرة في المخزون', status: 400 };
++      newQty = round2(currentQty - qty);
++      const costAmount = round2(qty * currentPrice);
++      if (costAmount > 0) {
++        if (!counterpartCostId) return { error: 'حساب التكاليف المباشرة (5100) مفقود', status: 400 };
++        const je = await postBalancedJE(companyId, userId, date, `صرف مخزون: ${item.name}`, [
++          { account_id: counterpartCostId, debit: costAmount, credit: 0, description: `صرف ${item.name}` },
++          { account_id: inventoryAccountId!, debit: 0, credit: costAmount, description: `صرف ${item.name}` },
++        ]);
++        if (je.error) return { error: je.error, status: 500 };
++        journalEntryId = je.journalEntryId;
++      }
++      break;
++    }
++
++    case 'adjust': {
++      // الجرد: الكمية = الرصيد المستهدف المطلق، والفرق يقيد بطرفين متوازنين
++      const diff = round2(qty - currentQty);
++      if (diff === 0) return { error: 'لا فرق عن الرصيد الحالي — لا حاجة لتسوية', status: 400 };
++      newQty = qty;
++      const adjustAmount = round2(Math.abs(diff) * currentPrice);
++      if (adjustAmount > 0) {
++        const counterpartId = diff > 0 ? counterpartIncomeId : counterpartCostId;
++        if (!counterpartId) {
++          return { error: diff > 0 ? 'حساب الإيرادات الأخرى (4200) مفقود' : 'حساب التكاليف المباشرة (5100) مفقود', status: 400 };
++        }
++        const je = await postBalancedJE(companyId, userId, date, `تسوية جرد: ${item.name}`,
++          diff > 0
++            ? [
++                { account_id: inventoryAccountId!, debit: adjustAmount, credit: 0, description: `فائض جرد ${item.name}` },
++                { account_id: counterpartId, debit: 0, credit: adjustAmount, description: `فائض جرد ${item.name}` },
++              ]
++            : [
++                { account_id: counterpartId, debit: adjustAmount, credit: 0, description: `عجز جرد ${item.name}` },
++                { account_id: inventoryAccountId!, debit: 0, credit: adjustAmount, description: `عجز جرد ${item.name}` },
++              ]);
++        if (je.error) return { error: je.error, status: 500 };
++        journalEntryId = je.journalEntryId;
++      }
++      break;
++    }
++
++    case 'transfer': {
++      if (!input.to_warehouse_id) return { error: 'مستودع الوجهة مطلوب', status: 400 };
++      const { data: targetWarehouse } = await s.from('warehouses')
++        .select('id, name')
++        .eq('id', input.to_warehouse_id)
++        .eq('company_id', companyId)
++        .maybeSingle();
++      if (!targetWarehouse) return { error: 'مستودع الوجهة غير موجود', status: 404 };
++      if (currentQty < qty) return { error: 'الكمية غير متوفرة في المخزون', status: 400 };
++
++      newQty = round2(currentQty - qty);
++
++      // الوجهة: تجمع على الرصيد القائم — كانت تستبدله فتلغي التحويلات السابقة
++      const { data: targetItem } = await s.from('inventory_items')
++        .select('id, quantity, unit_price')
++        .eq('company_id', companyId)
++        .eq('warehouse_id', input.to_warehouse_id)
++        .eq('code', item.code)
++        .maybeSingle();
++
++      if (targetItem) {
++        const tgtQty = parseFloat(targetItem.quantity) || 0;
++        const tgtPrice = parseFloat(targetItem.unit_price) || 0;
++        const mergedQty = round2(tgtQty + qty);
++        const mergedPrice = tgtQty === 0 ? currentPrice : round2(((tgtQty * tgtPrice) + (qty * currentPrice)) / mergedQty);
++        const { error: tgtErr } = await s.from('inventory_items')
++          .update({ quantity: mergedQty, unit_price: mergedPrice, updated_at: new Date().toISOString() })
++          .eq('id', targetItem.id)
++          .eq('company_id', companyId);
++        if (tgtErr) return { error: 'فشل تحديث رصيد مستودع الوجهة', status: 500 };
++      } else {
++        const { error: tgtErr } = await s.from('inventory_items')
++          .insert({
++            company_id: companyId,
++            code: item.code,
++            name: item.name,
++            unit: item.unit,
++            warehouse_id: input.to_warehouse_id,
++            quantity: qty,
++            unit_price: currentPrice,
++            category: item.category || null,
++            is_active: true,
++          });
++        if (tgtErr) return { error: 'فشل إنشاء الصنف في مستودع الوجهة', status: 500 };
++      }
++
++      effectiveWarehouseId = input.to_warehouse_id;
++      movementNotes = `${movementNotes ? movementNotes + ' — ' : ''}تحويل من مستودع «${warehouse.name}» إلى «${targetWarehouse.name}»`;
++      break;
++    }
++
++    case 'return': {
++      // مرتجع للمخزون: كمية + بالقيمة الدافترية الحالية، مع عكس تكلفة الصرف دفترياً
++      newQty = round2(currentQty + qty);
++      const returnAmount = round2(qty * currentPrice);
++      if (returnAmount > 0) {
++        if (!counterpartCostId) return { error: 'حساب التكاليف المباشرة (5100) مفقود', status: 400 };
++        const je = await postBalancedJE(companyId, userId, date, `مرتجع مخزون: ${item.name}`, [
++          { account_id: inventoryAccountId!, debit: returnAmount, credit: 0, description: `مرتجع ${item.name}` },
++          { account_id: counterpartCostId, debit: 0, credit: returnAmount, description: `مرتجع ${item.name}` },
++        ]);
++        if (je.error) return { error: je.error, status: 500 };
++        journalEntryId = je.journalEntryId;
++      }
++      break;
++    }
++
++    default:
++      return { error: 'نوع العملية غير مدعوم', status: 400 };
++  }
++
++  // تحديث رصيد الصنف المصدر — مقيد بالشركة دائماً
++  const { error: updErr } = await s.from('inventory_items')
++    .update({ quantity: newQty, unit_price: newPrice, updated_at: new Date().toISOString() })
++    .eq('id', input.item_id)
++    .eq('company_id', companyId);
++  if (updErr) return { error: 'فشل تحديث رصيد الصنف', status: 500 };
++
++  const { data: txn, error: txnErr } = await s.from('inventory_transactions')
++    .insert({
++      company_id: companyId,
++      item_id: input.item_id,
++      warehouse_id: effectiveWarehouseId,
++      type,
++      quantity: qty,
++      unit_price: input.unit_price ?? currentPrice,
++      total_value: round2(qty * (input.unit_price ?? currentPrice)),
++      date,
++      notes: movementNotes,
++      reference_type: journalEntryId ? 'journal_entry' : null,
++      reference_id: journalEntryId,
++      created_by: userId,
++    })
++    .select('*')
++    .single();
++  if (txnErr) return { error: 'فشل تسجيل الحركة', status: 500 };
++
++  return { error: null, transaction: txn };
++}
+diff --git a/src/lib/validation.ts b/src/lib/validation.ts
+index 3a54763..8f209ea 100644
+--- a/src/lib/validation.ts
++++ b/src/lib/validation.ts
+@@ -271,6 +271,51 @@ export const voucherUpdateSchema = z.object({
+   reason: z.string().min(1).max(500).optional(),
+ }).strict();
+ 
++// --------------- Inventory ---------------
++
++// حركة مخزنية موحدة. ملاحظة: الواجهة ترسل 'adjustment' — تُطبَّع إلى 'adjust'
++// في المسار. كمية التسوية = الرصيد المستهدف المطلق (تقبل صفراً).
++export const inventoryMovementSchema = z.object({
++  item_id: z.string().uuid('رقم الصنف غير صالح'),
++  warehouse_id: z.string().uuid('رقم المستودع غير صالح'),
++  type: z.enum(['add', 'issue', 'adjust', 'adjustment', 'transfer', 'return'] as const, {
++    message: 'نوع العملية غير مدعوم',
++  }),
++  quantity: z.number().min(0, 'الكمية يجب أن لا تكون سالبة'),
++  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً').optional(),
++  date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
++  notes: z.string().max(500).optional(),
++  to_warehouse_id: z.string().uuid('مستودع الوجهة غير صالح').optional().nullable(),
++}).strict().refine(
++  (m) => m.type === 'adjust' || m.type === 'adjustment' ? true : m.quantity > 0,
++  { message: 'الكمية يجب أن تكون أكبر من صفر' }
++).refine(
++  (m) => m.type !== 'transfer' || (!!m.to_warehouse_id && m.to_warehouse_id !== m.warehouse_id),
++  { message: 'مستودع الوجهة مطلوب ويجب أن يخالف المصدر' }
++);
++
++export const inventoryItemSchema = z.object({
++  code: z.string().min(1, 'كود الصنف مطلوب').max(50),
++  name: z.string().min(1, 'اسم الصنف مطلوب').max(300),
++  unit: z.string().min(1, 'وحدة القياس مطلوبة').max(50),
++  warehouse_id: z.string().uuid('رقم المستودع غير صالح'),
++  category: z.string().max(100).optional().nullable(),
++}).strict();
++
++// تعديل صنف: لا كمية/سعر هنا أبداً — الرصيد يتحرك بالحركات المخزنية فقط
++export const inventoryItemUpdateSchema = z.object({
++  name: z.string().min(1).max(300).optional(),
++  unit: z.string().min(1).max(50).optional(),
++  category: z.string().max(100).nullable().optional(),
++  is_active: z.boolean().optional(),
++  warehouse_id: z.string().uuid().optional(),
++}).strict();
++
++export const warehouseSchema = z.object({
++  name: z.string().min(1, 'اسم المستودع مطلوب').max(200),
++  location: z.string().max(300).optional().nullable(),
++}).strict();
++
+ // --------------- Voucher Receipt ---------------
+ 
+ export const voucherReceiptSchema = z.object({
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index dc9d080..ee34d63 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -2,7 +2,7 @@ name: CI
+ 
+ on:
+   push:
+-    branches: [main]
++    branches: [main, "arena/**"]
+   pull_request:
+     branches: [main]
+ 
+@@ -36,9 +36,17 @@ jobs:
+           cache: npm
+       - name: Install dependencies
+         run: npm ci
+-      - name: Type check (strict)
++      - name: Dependency audit
++        run: npm audit
++      - name: Type check
+         run: npx tsc --noEmit
++      - name: Lint
++        run: npm run lint
+       - name: Build
+         run: npm run build
+       - name: Test
+         run: npm test
++      - name: Integration suite
++        run: npm run test:integration
++      - name: Regression suite
++        run: npm run test:regression

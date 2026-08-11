@@ -114,13 +114,6 @@ async function main() {
         randomUUID(), COMPANY_ID, jeId, byCode['1130'], total,
         randomUUID(), COMPANY_ID, jeId, byCode['4100'], subtotal,
         randomUUID(), COMPANY_ID, jeId, byCode['2120'], vat,
-        ($1,$2,$3,$4,'1130','Accounts Receivable',$5,0,NOW()),
-        ($6,$2,$3,$7,'4100','Contract Revenue',0,$8,NOW()),
-        ($9,$2,$3,$10,'2120','VAT Payable',0,$11,NOW())`,
-      [
-        randomUUID(), COMPANY_ID, jeId, byCode['1130'], total,
-        randomUUID(), byCode['4100'], subtotal,
-        randomUUID(), byCode['2120'], vat,
       ]
     );
     invNo++;
