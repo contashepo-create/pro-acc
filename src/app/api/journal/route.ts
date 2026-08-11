@@ -101,6 +101,17 @@ export async function POST(request: NextRequest) {
 
     const { date, type, description, reference, lines } = parsed.data;
 
+    // التوليد التلقائي لدليل الحسابات الافتراضي عند أول قيد إذا كانت الشركة بلا حسابات
+    const { data: existingAccs } = await s.from('accounts')
+      .select('id')
+      .eq('company_id', auth.companyId)
+      .limit(1);
+
+    if (!existingAccs || existingAccs.length === 0) {
+      const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
+      await createDefaultChartOfAccounts(s, auth.companyId);
+    }
+
     // SECURITY FIX: Try atomic RPC function first (validates balance BEFORE inserting)
     // This eliminates the need for manual rollback and prevents the race condition window
     // where an unbalanced entry could be read by another query.

@@ -194,13 +194,22 @@ export async function POST(request: NextRequest) {
         if (itemErr) throw itemErr;
       }
 
-      // 3. جلب الحسابات المحاسبية الأساسية للترحيل المزدوج
-      const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle();
-      const { data: revenueAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
-      const { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle();
+      // 3. جلب الحسابات المحاسبية الأساسية للترحيل المزدوج (مع التوليد التلقائي عند غيابها)
+      let { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle();
+      let { data: revenueAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
+      let { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle();
 
       if (!arAccount || !revenueAccount) {
-        throw new Error('الحسابات الأساسية للترحيل مفقودة. يرجى التأكد من تفعيل دليل الحسابات أولاً.');
+        const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
+        await createDefaultChartOfAccounts(s, auth.companyId);
+
+        arAccount = (await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle()).data;
+        revenueAccount = (await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle()).data;
+        vatAccount = (await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle()).data;
+      }
+
+      if (!arAccount || !revenueAccount) {
+        throw new Error('الحسابات الأساسية للترحيل مفقودة وتعذر إنشاء دليل الحسابات الافتراضي تلقائياً.');
       }
 
       // 4. إنشاء قيد اليومية العام للفاتورة
