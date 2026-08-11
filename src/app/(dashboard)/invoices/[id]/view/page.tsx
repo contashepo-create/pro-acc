@@ -3,9 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { 
-  ArrowRight, Printer, Settings, Check, ShieldCheck, Eye, EyeOff, 
-  Building2, User, Phone, Mail, Globe, MapPin, CreditCard, FileText,
-  Calendar, Layers, Save, RefreshCw, Info, HelpCircle
+  ArrowRight, Printer, Settings, ShieldCheck, Eye, EyeOff, 
+  MapPin, Phone, Mail, Layers, Save 
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { QRCode } from '@/components/ui/QRCode';
@@ -19,9 +18,145 @@ import {
   DEFAULT_INVOICE_SETTINGS, 
   resolveInvoiceTitle,
   type InvoiceTemplateSettings,
-  type InvoiceTypeSelection
 } from '@/lib/invoice-templates';
 
+// ==========================================
+// Standalone Top-Level Subcomponents (ESLint Safe)
+// ==========================================
+function CompanyBlock({ company, settings }: { company: any; settings: InvoiceTemplateSettings }) {
+  return (
+    <div className="space-y-1 text-right text-xs">
+      {settings.showCompanyName && (
+        <h2 className="text-base font-black text-slate-900 leading-snug">{company?.name || 'اسم المنشأة'}</h2>
+      )}
+      {settings.showCompanyTaxNumber && company?.tax_number && (
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <span className="font-semibold text-slate-500">الرقم الضريبي:</span>
+          <span className="font-mono font-bold text-slate-800" dir="ltr">{company.tax_number}</span>
+        </div>
+      )}
+      {settings.showCompanyCR && company?.commercial_registration && (
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <span className="font-semibold text-slate-500">السجل التجاري:</span>
+          <span className="font-mono text-slate-700" dir="ltr">{company.commercial_registration}</span>
+        </div>
+      )}
+      {settings.showCompanyAddress && company?.address && (
+        <div className="flex items-start gap-1.5 text-slate-600">
+          <MapPin size={13} className="text-slate-400 mt-0.5 shrink-0" />
+          <span>{company.address}</span>
+        </div>
+      )}
+      {settings.showCompanyPhone && company?.phone && (
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <Phone size={13} className="text-slate-400 shrink-0" />
+          <span className="font-semibold text-slate-500">الهاتف:</span>
+          <span className="font-mono font-medium text-slate-800" dir="ltr">{company.phone}</span>
+        </div>
+      )}
+      {settings.showCompanyEmail && company?.email && (
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <Mail size={13} className="text-slate-400 shrink-0" />
+          <span dir="ltr" className="font-mono text-slate-700">{company.email}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClientBlock({ invoice, settings }: { invoice: any; settings: InvoiceTemplateSettings }) {
+  return (
+    <div className="space-y-1 text-right text-xs">
+      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+        بيانات العميل (المشتري) / Buyer
+      </div>
+      {settings.showClientName && (
+        <p className="text-sm font-bold text-slate-900">{invoice.client_name || 'عميل نقدي'}</p>
+      )}
+      {settings.showClientTaxNumber && invoice.client_tax_number && (
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <span className="font-semibold text-slate-500">الرقم الضريبي:</span>
+          <span className="font-mono font-bold text-slate-800" dir="ltr">{invoice.client_tax_number}</span>
+        </div>
+      )}
+      {settings.showClientCR && invoice.client_commercial_registration && (
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <span className="font-semibold text-slate-500">السجل التجاري:</span>
+          <span className="font-mono text-slate-700" dir="ltr">{invoice.client_commercial_registration}</span>
+        </div>
+      )}
+      {settings.showClientAddress && invoice.client_address && (
+        <div className="flex items-start gap-1.5 text-slate-600">
+          <MapPin size={13} className="text-slate-400 mt-0.5 shrink-0" />
+          <span>{invoice.client_address}</span>
+        </div>
+      )}
+      {settings.showClientPhone && invoice.client_phone && (
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <Phone size={13} className="text-slate-400 shrink-0" />
+          <span className="font-semibold text-slate-500">الجوال:</span>
+          <span className="font-mono font-medium text-slate-800" dir="ltr">{invoice.client_phone}</span>
+        </div>
+      )}
+      {settings.showClientEmail && invoice.client_email && (
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <Mail size={13} className="text-slate-400 shrink-0" />
+          <span dir="ltr" className="font-mono text-slate-700">{invoice.client_email}</span>
+        </div>
+      )}
+      {settings.showProject && invoice.project_name && (
+        <div className="mt-1.5 pt-1.5 border-t border-slate-100 flex items-center gap-1.5 text-slate-700 font-medium">
+          <Layers size={13} className="text-accent" />
+          <span>المشروع:</span>
+          <span className="font-bold text-slate-900">{invoice.project_name}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LogoBlock({ company, settings, primaryColor, className = "w-14 h-14" }: { company: any; settings: InvoiceTemplateSettings; primaryColor: string; className?: string }) {
+  if (!settings.showLogo) return null;
+  return company?.logo_url ? (
+    <img src={company.logo_url} alt={company.name} className={`${className} rounded-xl object-contain border border-slate-100 shadow-sm bg-white p-1`} />
+  ) : (
+    <div 
+      className={`${className} rounded-xl flex items-center justify-center text-white text-2xl font-black shadow-sm`}
+      style={{ background: primaryColor }}
+    >
+      {(company?.name || 'ب')[0]}
+    </div>
+  );
+}
+
+function TitleBlock({ invoice, settings, titleInfo, primaryColor, status, align = 'left' }: { invoice: any; settings: InvoiceTemplateSettings; titleInfo: any; primaryColor: string; status: any; align?: 'left' | 'right' | 'center' }) {
+  return (
+    <div className={`text-${align}`}>
+      <h1 className="text-xl font-black tracking-tight" style={{ color: primaryColor }}>
+        {titleInfo.titleAr}
+      </h1>
+      <p className="text-xs font-semibold text-slate-400">{titleInfo.titleEn}</p>
+      <div className="inline-block mt-2 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-mono font-bold text-sm">
+        #{invoice.number}
+      </div>
+      <div className="mt-2 text-xs text-slate-500 space-y-0.5">
+        <p><span className="text-slate-400">تاريخ الإصدار:</span> <span className="font-medium text-slate-800">{formatDate(invoice.date)}</span></p>
+        {settings.showDueDate && invoice.due_date && (
+          <p><span className="text-slate-400">تاريخ الاستحقاق:</span> <span className="font-medium text-slate-800">{formatDate(invoice.due_date)}</span></p>
+        )}
+        {settings.showPaymentStatus && (
+          <div className="pt-1">
+            <Badge variant={status.variant}>{status.label}</Badge>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// Main Invoice View Page
+// ==========================================
 export default function InvoiceViewPage() {
   const params = useParams();
   const router = useRouter();
@@ -129,135 +264,6 @@ export default function InvoiceViewPage() {
     cancelled: { label: 'ملغاة', variant: 'danger' },
   };
   const status = statusMap[invoice.status] || { label: invoice.status, variant: 'warning' };
-
-  // ==========================================
-  // Helper Blocks for Consistent Formatted Info
-  // ==========================================
-  const CompanyBlock = () => (
-    <div className="space-y-1 text-right text-xs">
-      {settings.showCompanyName && (
-        <h2 className="text-base font-black text-slate-900 leading-snug">{company?.name || 'اسم المنشأة'}</h2>
-      )}
-      {settings.showCompanyTaxNumber && company?.tax_number && (
-        <div className="flex items-center gap-1.5 text-slate-600">
-          <span className="font-semibold text-slate-500">الرقم الضريبي:</span>
-          <span className="font-mono font-bold text-slate-800" dir="ltr">{company.tax_number}</span>
-        </div>
-      )}
-      {settings.showCompanyCR && company?.commercial_registration && (
-        <div className="flex items-center gap-1.5 text-slate-600">
-          <span className="font-semibold text-slate-500">السجل التجاري:</span>
-          <span className="font-mono text-slate-700" dir="ltr">{company.commercial_registration}</span>
-        </div>
-      )}
-      {settings.showCompanyAddress && company?.address && (
-        <div className="flex items-start gap-1.5 text-slate-600">
-          <MapPin size={13} className="text-slate-400 mt-0.5 shrink-0" />
-          <span>{company.address}</span>
-        </div>
-      )}
-      {settings.showCompanyPhone && company?.phone && (
-        <div className="flex items-center gap-1.5 text-slate-600">
-          <Phone size={13} className="text-slate-400 shrink-0" />
-          <span className="font-semibold text-slate-500">الهاتف:</span>
-          <span className="font-mono font-medium text-slate-800" dir="ltr">{company.phone}</span>
-        </div>
-      )}
-      {settings.showCompanyEmail && company?.email && (
-        <div className="flex items-center gap-1.5 text-slate-600">
-          <Mail size={13} className="text-slate-400 shrink-0" />
-          <span dir="ltr" className="font-mono text-slate-700">{company.email}</span>
-        </div>
-      )}
-    </div>
-  );
-
-  const ClientBlock = () => (
-    <div className="space-y-1 text-right text-xs">
-      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-        بيانات العميل (المشتري) / Buyer
-      </div>
-      {settings.showClientName && (
-        <p className="text-sm font-bold text-slate-900">{invoice.client_name || 'عميل نقدي'}</p>
-      )}
-      {settings.showClientTaxNumber && invoice.client_tax_number && (
-        <div className="flex items-center gap-1.5 text-slate-600">
-          <span className="font-semibold text-slate-500">الرقم الضريبي:</span>
-          <span className="font-mono font-bold text-slate-800" dir="ltr">{invoice.client_tax_number}</span>
-        </div>
-      )}
-      {settings.showClientCR && invoice.client_commercial_registration && (
-        <div className="flex items-center gap-1.5 text-slate-600">
-          <span className="font-semibold text-slate-500">السجل التجاري:</span>
-          <span className="font-mono text-slate-700" dir="ltr">{invoice.client_commercial_registration}</span>
-        </div>
-      )}
-      {settings.showClientAddress && invoice.client_address && (
-        <div className="flex items-start gap-1.5 text-slate-600">
-          <MapPin size={13} className="text-slate-400 mt-0.5 shrink-0" />
-          <span>{invoice.client_address}</span>
-        </div>
-      )}
-      {settings.showClientPhone && invoice.client_phone && (
-        <div className="flex items-center gap-1.5 text-slate-600">
-          <Phone size={13} className="text-slate-400 shrink-0" />
-          <span className="font-semibold text-slate-500">الجوال:</span>
-          <span className="font-mono font-medium text-slate-800" dir="ltr">{invoice.client_phone}</span>
-        </div>
-      )}
-      {settings.showClientEmail && invoice.client_email && (
-        <div className="flex items-center gap-1.5 text-slate-600">
-          <Mail size={13} className="text-slate-400 shrink-0" />
-          <span dir="ltr" className="font-mono text-slate-700">{invoice.client_email}</span>
-        </div>
-      )}
-      {settings.showProject && invoice.project_name && (
-        <div className="mt-1.5 pt-1.5 border-t border-slate-100 flex items-center gap-1.5 text-slate-700 font-medium">
-          <Layers size={13} className="text-accent" />
-          <span>المشروع:</span>
-          <span className="font-bold text-slate-900">{invoice.project_name}</span>
-        </div>
-      )}
-    </div>
-  );
-
-  const LogoBlock = ({ className = "w-14 h-14" }: { className?: string }) => (
-    settings.showLogo && (
-      company?.logo_url ? (
-        <img src={company.logo_url} alt={company.name} className={`${className} rounded-xl object-contain border border-slate-100 shadow-sm bg-white p-1`} />
-      ) : (
-        <div 
-          className={`${className} rounded-xl flex items-center justify-center text-white text-2xl font-black shadow-sm`}
-          style={{ background: currentTemplate.colors.primary }}
-        >
-          {(company?.name || 'ب')[0]}
-        </div>
-      )
-    )
-  );
-
-  const TitleBlock = ({ align = 'left' }: { align?: 'left' | 'right' | 'center' }) => (
-    <div className={`text-${align}`}>
-      <h1 className="text-xl font-black tracking-tight" style={{ color: currentTemplate.colors.primary }}>
-        {titleInfo.titleAr}
-      </h1>
-      <p className="text-xs font-semibold text-slate-400">{titleInfo.titleEn}</p>
-      <div className="inline-block mt-2 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 font-mono font-bold text-sm">
-        #{invoice.number}
-      </div>
-      <div className="mt-2 text-xs text-slate-500 space-y-0.5">
-        <p><span className="text-slate-400">تاريخ الإصدار:</span> <span className="font-medium text-slate-800">{formatDate(invoice.date)}</span></p>
-        {settings.showDueDate && invoice.due_date && (
-          <p><span className="text-slate-400">تاريخ الاستحقاق:</span> <span className="font-medium text-slate-800">{formatDate(invoice.due_date)}</span></p>
-        )}
-        {settings.showPaymentStatus && (
-          <div className="pt-1">
-            <Badge variant={status.variant}>{status.label}</Badge>
-          </div>
-        )}
-      </div>
-    </div>
-  );
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-bg-secondary pb-12">
@@ -467,24 +473,19 @@ export default function InvoiceViewPage() {
         {/* TEMPLATE 1: MODERN */}
         {template === 'modern' && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden invoice-document">
-            {/* Top Accent Strip */}
             <div className="h-2.5 w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-500" />
-
-            {/* Header */}
             <div className="p-8 pb-6 flex items-start justify-between gap-6 border-b border-slate-100">
               <div className="flex items-start gap-4">
-                <LogoBlock className="w-16 h-16" />
-                <CompanyBlock />
+                <LogoBlock company={company} settings={settings} primaryColor={currentTemplate.colors.primary} className="w-16 h-16" />
+                <CompanyBlock company={company} settings={settings} />
               </div>
-              <TitleBlock align="left" />
+              <TitleBlock invoice={invoice} settings={settings} titleInfo={titleInfo} primaryColor={currentTemplate.colors.primary} status={status} align="left" />
             </div>
 
-            {/* Client Card */}
             <div className="p-6 bg-slate-50/70 border-b border-slate-100">
-              <ClientBlock />
+              <ClientBlock invoice={invoice} settings={settings} />
             </div>
 
-            {/* Items Table */}
             <div className="p-6">
               <table className="w-full text-right">
                 <thead>
@@ -510,7 +511,6 @@ export default function InvoiceViewPage() {
               </table>
             </div>
 
-            {/* Totals & QR */}
             <div className="flex justify-between items-start p-6 bg-slate-50/80 border-t border-slate-100 gap-6">
               {settings.showQR && (
                 <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col items-center gap-1.5">
@@ -555,7 +555,6 @@ export default function InvoiceViewPage() {
               </div>
             </div>
 
-            {/* Bank details, Notes, and Signature */}
             <div className="p-6 bg-white border-t border-slate-100 space-y-4 text-xs">
               {settings.showNotes && invoice.notes && (
                 <div>
@@ -587,12 +586,11 @@ export default function InvoiceViewPage() {
         {/* TEMPLATE 2: CLASSIC */}
         {template === 'classic' && (
           <div className="bg-white p-8 shadow-sm border-2 border-slate-800 rounded-none invoice-document">
-            {/* Classic Framed Header */}
             <div className="border-b-2 border-slate-800 pb-6 mb-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <LogoBlock className="w-16 h-16 rounded-none border-2 border-slate-800" />
-                  <CompanyBlock />
+                  <LogoBlock company={company} settings={settings} primaryColor={currentTemplate.colors.primary} className="w-16 h-16 rounded-none border-2 border-slate-800" />
+                  <CompanyBlock company={company} settings={settings} />
                 </div>
                 <div className="text-left border-2 border-slate-800 p-4 bg-slate-50 min-w-[240px]">
                   <h1 className="text-lg font-black text-slate-900 text-center border-b border-slate-800 pb-1 mb-2">
@@ -605,12 +603,10 @@ export default function InvoiceViewPage() {
               </div>
             </div>
 
-            {/* Boxed Client Area */}
             <div className="border border-slate-800 p-4 mb-6 bg-slate-50/50">
-              <ClientBlock />
+              <ClientBlock invoice={invoice} settings={settings} />
             </div>
 
-            {/* Classic Grid Table */}
             <div className="mb-6 overflow-hidden border border-slate-800">
               <table className="w-full text-right text-xs">
                 <thead className="bg-slate-800 text-white font-bold">
@@ -636,7 +632,6 @@ export default function InvoiceViewPage() {
               </table>
             </div>
 
-            {/* Classic Boxed Totals & QR */}
             <div className="grid grid-cols-2 gap-6 items-start border border-slate-800 p-4 mb-6">
               <div>
                 {settings.showQR && (
@@ -665,7 +660,6 @@ export default function InvoiceViewPage() {
               </div>
             </div>
 
-            {/* Signatures */}
             {settings.showSignatureArea && (
               <div className="grid grid-cols-2 gap-12 text-center pt-8 border-t border-slate-800 text-xs">
                 <div>
@@ -684,10 +678,9 @@ export default function InvoiceViewPage() {
         {/* TEMPLATE 3: COMPACT */}
         {template === 'compact' && (
           <div className="bg-white p-6 shadow-sm border border-slate-200 rounded-lg text-xs invoice-document">
-            {/* Inline Compact Header */}
             <div className="flex justify-between items-center pb-4 border-b border-slate-200">
               <div className="flex items-center gap-3">
-                <LogoBlock className="w-10 h-10" />
+                <LogoBlock company={company} settings={settings} primaryColor={currentTemplate.colors.primary} className="w-10 h-10" />
                 <div>
                   <h2 className="font-bold text-sm text-slate-900">{company?.name}</h2>
                   <p className="text-[10px] text-slate-500 font-mono">الضريبي: {company?.tax_number} | هاتف: {company?.phone}</p>
@@ -699,7 +692,6 @@ export default function InvoiceViewPage() {
               </div>
             </div>
 
-            {/* Compact Client Row */}
             <div className="grid grid-cols-2 gap-4 py-3 border-b border-slate-200 text-[11px] bg-slate-50/50 px-2 my-2 rounded">
               <div>
                 <span className="text-slate-400">العميل: </span>
@@ -712,7 +704,6 @@ export default function InvoiceViewPage() {
               </div>
             </div>
 
-            {/* Compact Table */}
             <table className="w-full text-right mb-4">
               <thead className="bg-teal-50 text-teal-900 font-bold border-y border-teal-200">
                 <tr>
@@ -736,7 +727,6 @@ export default function InvoiceViewPage() {
               </tbody>
             </table>
 
-            {/* Compact Footer & Summary */}
             <div className="flex justify-between items-center pt-3 border-t border-slate-200">
               {settings.showQR && (
                 <div className="flex items-center gap-2">
@@ -765,10 +755,9 @@ export default function InvoiceViewPage() {
         {/* TEMPLATE 4: ELEGANT */}
         {template === 'elegant' && (
           <div className="bg-white p-8 shadow-md rounded-3xl border border-purple-100 invoice-document">
-            {/* Elegant Header */}
             <div className="text-center pb-6 border-b border-purple-100">
               <div className="flex justify-center mb-3">
-                <LogoBlock className="w-16 h-16 rounded-2xl" />
+                <LogoBlock company={company} settings={settings} primaryColor={currentTemplate.colors.primary} className="w-16 h-16 rounded-2xl" />
               </div>
               <h1 className="text-2xl font-black text-purple-900 mb-1">{titleInfo.titleAr}</h1>
               <p className="text-xs text-purple-600 font-semibold mb-3">{titleInfo.titleEn}</p>
@@ -779,17 +768,15 @@ export default function InvoiceViewPage() {
               </div>
             </div>
 
-            {/* 2 Elegant Floating Cards */}
             <div className="grid grid-cols-2 gap-4 my-6">
               <div className="p-4 rounded-2xl bg-purple-50/40 border border-purple-100">
-                <CompanyBlock />
+                <CompanyBlock company={company} settings={settings} />
               </div>
               <div className="p-4 rounded-2xl bg-purple-50/40 border border-purple-100">
-                <ClientBlock />
+                <ClientBlock invoice={invoice} settings={settings} />
               </div>
             </div>
 
-            {/* Table */}
             <div className="rounded-2xl border border-purple-100 overflow-hidden mb-6">
               <table className="w-full text-right text-xs">
                 <thead className="bg-purple-900 text-white font-bold">
@@ -815,7 +802,6 @@ export default function InvoiceViewPage() {
               </table>
             </div>
 
-            {/* Elegant Totals */}
             <div className="flex justify-between items-center p-6 rounded-2xl bg-purple-900 text-white">
               {settings.showQR ? (
                 <div className="p-2 bg-white rounded-xl">
@@ -843,10 +829,9 @@ export default function InvoiceViewPage() {
         {/* TEMPLATE 5: CONSTRUCTION (CONTRACTING / BOQ) */}
         {template === 'construction' && (
           <div className="bg-white p-6 shadow-sm border-t-8 border-amber-600 rounded-xl invoice-document text-xs">
-            {/* Header with Project Specs */}
             <div className="flex justify-between items-start pb-4 border-b-2 border-slate-200">
               <div className="flex gap-4 items-start">
-                <LogoBlock className="w-14 h-14" />
+                <LogoBlock company={company} settings={settings} primaryColor={currentTemplate.colors.primary} className="w-14 h-14" />
                 <div>
                   <h2 className="text-base font-bold text-slate-900">{company?.name}</h2>
                   <p className="text-slate-500 font-mono">الرقم الضريبي: {company?.tax_number} | السجل: {company?.commercial_registration}</p>
@@ -860,14 +845,12 @@ export default function InvoiceViewPage() {
               </div>
             </div>
 
-            {/* Project Details Banner */}
             <div className="grid grid-cols-3 gap-3 p-3 my-4 bg-slate-50 rounded-lg border border-slate-200 text-slate-700">
               <div><strong>العميل / المالك:</strong> {invoice.client_name}</div>
               <div><strong>المشروع:</strong> {invoice.project_name || 'مشروع إنشائي'}</div>
               <div><strong>حالة المستخلص:</strong> <Badge variant="success">معتمد</Badge></div>
             </div>
 
-            {/* Construction Items Table */}
             <table className="w-full text-right mb-4 border border-slate-200">
               <thead className="bg-slate-800 text-white font-bold">
                 <tr>
@@ -891,7 +874,6 @@ export default function InvoiceViewPage() {
               </tbody>
             </table>
 
-            {/* Construction Breakdown */}
             <div className="grid grid-cols-2 gap-6 items-start p-4 bg-slate-50 rounded-lg border border-slate-200">
               {settings.showQR && (
                 <div className="flex items-center gap-3">
