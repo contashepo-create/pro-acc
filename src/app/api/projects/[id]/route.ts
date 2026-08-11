@@ -59,6 +59,7 @@ export async function PUT(
     const { data: updated, error: updateErr } = await s.from('projects')
       .update(updateData)
       .eq('id', id)
+      .eq('company_id', auth.companyId)
       .select('*')
       .single();
 
@@ -91,13 +92,24 @@ export async function DELETE(
     const { data: invoices } = await s.from('invoices')
       .select('id')
       .eq('project_id', id)
+      .eq('company_id', auth.companyId)
       .limit(1);
 
     if (invoices && invoices.length > 0) {
       return error('لا يمكن حذف المشروع لأنه مرتبط بفواتير');
     }
 
-    await s.from('projects').delete().eq('id', id);
+    // قيود مرتبطة بالمشروع مباشرة — لا حذف ما دامت له آثار مالية
+    const { data: linkedJe } = await s.from('journal_entries')
+      .select('id').eq('project_id', id).eq('company_id', auth.companyId).limit(1);
+    if (linkedJe && linkedJe.length > 0) {
+      return error('لا يمكن حذف المشروع لأنه مرتبط بقيود محاسبية — ألغِه بدلاً من ذلك');
+    }
+
+    // بنود BOQ والمصروفات التابعة
+    await s.from('boq_items').delete().eq('project_id', id).eq('company_id', auth.companyId);
+
+    await s.from('projects').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ deleted: true });
   } catch (err) {
