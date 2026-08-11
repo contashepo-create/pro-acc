@@ -400,6 +400,7 @@ describe('POST /api/purchases/orders', () => {
     const itemInserts = insertsOf('purchase_order_items');
     expect(itemInserts[0].mut.payload.total).toBe(20);
     expect(itemInserts[1].mut.payload.total).toBe(5);
+    for (const ins of itemInserts) expect(ins.mut.payload.company_id).toBe(C1);
   });
 
   test('negative price rejected', async () => {

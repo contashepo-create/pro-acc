@@ -37,3 +37,12 @@ application path still omits them.
 
 Apply in the Supabase SQL editor (or `npx tsx src/migrations/run.ts`) after
 deploying the matching app code.
+
+## 023-fix-child-rows-company-id.sql
+Same class of bug as 022, on **line/item tables**: `invoice_items`,
+`quotation_items`, `purchase_invoice_items`, `purchase_order_items`, etc.
+`company_id` is `NOT NULL` but several inserts (including
+`create_invoice_with_journal`) omitted it.
+
+This migration rewrites the invoice RPC and adds a `BEFORE INSERT` trigger
+that copies `company_id` from the parent document if the app forgot it.

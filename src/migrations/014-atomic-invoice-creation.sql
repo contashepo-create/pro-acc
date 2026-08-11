@@ -70,8 +70,9 @@ BEGIN
   -- Insert invoice items
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
   LOOP
-    INSERT INTO invoice_items (invoice_id, description, quantity, unit_price, total)
+    INSERT INTO invoice_items (company_id, invoice_id, description, quantity, unit_price, total)
     VALUES (
+      p_company_id,
       v_invoice_id,
       v_item->>'description',
       COALESCE((v_item->>'quantity')::NUMERIC, 0),

@@ -245,6 +245,7 @@ describe('SQL journal RPCs write company_id', () => {
       '012-atomic-journal-entry-insert.sql',
       '014-atomic-invoice-creation.sql',
       '022-fix-journal-lines-company-id.sql',
+      '023-fix-child-rows-company-id.sql',
     ];
     for (const file of files) {
       const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');

@@ -92,9 +92,9 @@ async function main() {
       [invId, COMPANY_ID, invNo, cid, 30, subtotal, 0.15, vat, total]
     );
     await pool.query(
-      `INSERT INTO invoice_items (id, invoice_id, description, quantity, unit_price, total, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
-      [randomUUID(), invId, 'Service', qty, price, subtotal]
+      `INSERT INTO invoice_items (id, company_id, invoice_id, description, quantity, unit_price, total, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+      [randomUUID(), COMPANY_ID, invId, 'Service', qty, price, subtotal]
     );
 
     const jeId = randomUUID();

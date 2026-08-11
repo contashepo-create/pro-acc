@@ -137,7 +137,7 @@ export async function PUT(
 
       await s.from('invoice_items').delete().eq('invoice_id', id);
       for (const item of items) {
-        await s.from('invoice_items').insert({ invoice_id: id, ...item });
+        await s.from('invoice_items').insert({ company_id: auth.companyId, invoice_id: id, ...item });
       }
     }
 
