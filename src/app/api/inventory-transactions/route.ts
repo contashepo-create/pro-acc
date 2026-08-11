@@ -1,13 +1,17 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import { applyStockMovement } from '@/lib/stock-movements';
+import { inventoryMovementSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
+/**
+ * GET /api/inventory-transactions
+ */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'inventory_transactions', 'read');
     const s = sb();
     const url = new URL(request.url);
     const itemId = url.searchParams.get('itemId');
@@ -28,36 +32,24 @@ export async function GET(request: NextRequest) {
   }
 }
 
+/**
+ * POST /api/inventory-transactions
+ * سابقاً: كان يسجّل الحركة فقط دون تحديث رصيد الصنف إطلاقاً —
+ * الدفتر يفترق عن المخزون الفعلي مع كل حركة من الواجهة.
+ * الآن: يفوّض للمحرك الموحّد applyStockMovement (تحقق + عزل + رصيد + قيود).
+ */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
-    const s = sb();
+    const auth = await requireModulePermission(request, 'inventory_transactions', 'create');
     const body = await request.json();
 
-    if (!body.item_id || !body.warehouse_id || !body.type || !body.quantity) {
-      return error('الصنف والمستودع والنوع والكمية مطلوبة');
-    }
+    const parsed = inventoryMovementSchema.safeParse(body);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { data: transaction, error: insertErr } = await s.from('inventory_transactions')
-      .insert({
-        id: generateId(),
-        company_id: auth.companyId,
-        item_id: body.item_id,
-        warehouse_id: body.warehouse_id,
-        type: body.type,
-        quantity: body.quantity,
-        unit_price: body.unit_price || 0,
-        total_value: body.total_value || (body.quantity * (body.unit_price || 0)),
-        date: body.date || new Date().toISOString().split('T')[0],
-        notes: body.notes || null,
-        created_by: auth.userId,
-      })
-      .select('*')
-      .single();
+    const result = await applyStockMovement(auth.companyId, auth.userId, parsed.data);
+    if (result.error) return error(result.error, result.status || 400);
 
-    if (insertErr) throw insertErr;
-
-    return success(transaction, 201);
+    return success(result.transaction, 201);
   } catch (err) {
     return handleApiError(err);
   }

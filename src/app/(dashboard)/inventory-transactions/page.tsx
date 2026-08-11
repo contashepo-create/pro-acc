@@ -27,7 +27,7 @@ export default function InventoryTransactionsPage() {
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
     item_id: '', warehouse_id: '', type: 'add', quantity: 0, unit_price: 0,
-    date: new Date().toISOString().split('T')[0], notes: '',
+    date: new Date().toISOString().split('T')[0], notes: '', to_warehouse_id: '',
   });
 
   const fetchData = async () => {
@@ -63,13 +63,25 @@ export default function InventoryTransactionsPage() {
       const url = editingTransaction ? `/api/inventory-transactions/${editingTransaction.id}` : '/api/inventory-transactions';
       const method = editingTransaction ? 'PUT' : 'POST';
       
+      // التعديل: الملاحظات/التاريخ فقط (الكمية والسعر لا يُعدَّلان — حركة عكسية)
+      // الإنشاء: الحقول الجوهرية فقط — القيم يحسبها الخادم (total_value وغيرها)
+      const payload = editingTransaction
+        ? { date: form.date, notes: form.notes }
+        : {
+            item_id: form.item_id,
+            warehouse_id: form.warehouse_id,
+            type: form.type,
+            quantity: form.quantity,
+            unit_price: form.unit_price,
+            date: form.date,
+            notes: form.notes,
+            to_warehouse_id: form.to_warehouse_id || undefined,
+          };
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...form,
-          total_value: form.quantity * form.unit_price,
-        }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (json.success) {
@@ -77,7 +89,7 @@ export default function InventoryTransactionsPage() {
         setEditingTransaction(null);
         setForm({
           item_id: '', warehouse_id: '', type: 'add', quantity: 0, unit_price: 0,
-          date: new Date().toISOString().split('T')[0], notes: '',
+          date: new Date().toISOString().split('T')[0], notes: '', to_warehouse_id: '',
         });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -98,6 +110,7 @@ export default function InventoryTransactionsPage() {
           unit_price: json.data.unit_price,
           date: json.data.date,
           notes: json.data.notes || '',
+          to_warehouse_id: '',
         });
         setShowModal(true);
       }
@@ -125,6 +138,8 @@ export default function InventoryTransactionsPage() {
       add: { variant: 'success', label: 'إضافة' },
       issue: { variant: 'danger', label: 'صرف' },
       adjustment: { variant: 'warning', label: 'تسوية' },
+      adjust: { variant: 'warning', label: 'تسوية' },
+      return: { variant: 'success', label: 'مرتجع' },
       transfer: { variant: 'info', label: 'تحويل' },
     };
     const m = map[type] || { variant: 'info', label: type };
@@ -152,6 +167,8 @@ export default function InventoryTransactionsPage() {
     },
   ];
 
+  const isEdit = !!editingTransaction;
+
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
 
@@ -162,11 +179,14 @@ export default function InventoryTransactionsPage() {
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingTransaction(null); }} title={editingTransaction ? 'تعديل معاملة مخزون' : 'إضافة معاملة مخزون'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingTransaction(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <Select label="الصنف" value={form.item_id} onChange={(v) => setForm({...form, item_id: v})} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i: any) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
-            <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w: any) => ({ value: w.id, label: w.name }))]} />
-            <Select label="النوع" value={form.type} onChange={(v) => setForm({...form, type: v})} options={[{ value: 'add', label: 'إضافة' }, { value: 'issue', label: 'صرف' }, { value: 'adjustment', label: 'تسوية' }, { value: 'transfer', label: 'تحويل' }]} />
-            <Input label="الكمية" type="number" value={form.quantity} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
-            <Input label="سعر الوحدة" type="number" value={form.unit_price} onChange={(e) => setForm({...form, unit_price: parseFloat(e.target.value) || 0})} />
+            <Select label="الصنف" value={form.item_id} onChange={(v) => setForm({...form, item_id: v})} disabled={isEdit} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i: any) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
+            <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} disabled={isEdit} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w: any) => ({ value: w.id, label: w.name }))]} />
+            <Select label="النوع" value={form.type} onChange={(v) => setForm({...form, type: v})} disabled={isEdit} options={[{ value: 'add', label: 'إضافة' }, { value: 'issue', label: 'صرف' }, { value: 'adjustment', label: 'تسوية' }, { value: 'transfer', label: 'تحويل' }, { value: 'return', label: 'مرتجع' }]} />
+            {!isEdit && form.type === 'transfer' && (
+              <Select label="إلى مستودع" value={form.to_warehouse_id} onChange={(v) => setForm({...form, to_warehouse_id: v})} options={[{ value: '', label: 'اختر مستودع الوجهة' }, ...warehouses.filter((w: any) => w.id !== form.warehouse_id).map((w: any) => ({ value: w.id, label: w.name }))]} />
+            )}
+            <Input label="الكمية" type="number" value={form.quantity} disabled={isEdit} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
+            <Input label="سعر الوحدة" type="number" value={form.unit_price} disabled={isEdit} onChange={(e) => setForm({...form, unit_price: parseFloat(e.target.value) || 0})} />
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات المعاملة" />

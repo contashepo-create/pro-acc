@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -19,14 +19,21 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'banks', 'create');
     const s = sb();
     const { bankSafeId, date, closingBalance, items } = await parseBody(req);
     if (!bankSafeId || !date || closingBalance === undefined)
       return error('bankSafeId, date, closingBalance are required');
+    if (isNaN(parseFloat(closingBalance)))
+      return error('الرصيد الختامي يجب أن يكون رقماً');
+
+    // TENANT CHECK: الخزينة/البنك المطابَق يجب أن ينتمي لهذه الشركة
+    const { data: bankSafe } = await s.from('banks_safes')
+      .select('id').eq('id', bankSafeId).eq('company_id', auth.companyId).maybeSingle();
+    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
 
     const { data: rec, error: recErr } = await s.from('bank_reconciliation')
-      .insert({ company_id: auth.companyId, bank_safe_id: bankSafeId, date, closing_balance: closingBalance })
+      .insert({ company_id: auth.companyId, bank_safe_id: bankSafeId, date, closing_balance: parseFloat(closingBalance) })
       .select('*').single();
     if (recErr) throw recErr;
 

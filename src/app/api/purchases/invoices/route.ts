@@ -179,30 +179,10 @@ export async function POST(req: NextRequest) {
         if (itemErr) throw itemErr;
       }
 
-      // تحديث المخزون بالمتوسط المرجح عند الارتباط بأمر شراء
-      // (السلوك الحالي مبني على مطابقة code = description — قيد موثق،
-      // التوحيد الكامل ضمن مراجعة قسم المخزون)
-      if (purchase_order_id) {
-        for (const item of computedItems) {
-          const { data: invItem } = await s.from('inventory_items')
-            .select('id, quantity, unit_price')
-            .eq('company_id', auth.companyId)
-            .eq('code', item.description)
-            .maybeSingle();
-          if (invItem) {
-            const curQty = parseFloat(invItem.quantity) || 0;
-            const curPrice = parseFloat(invItem.unit_price) || 0;
-            const newQty = curQty + item.quantity;
-            const newPrice = curQty === 0
-              ? item.unit_price
-              : ((curQty * curPrice) + (item.quantity * item.unit_price)) / newQty;
-            await s.from('inventory_items')
-              .update({ quantity: newQty, unit_price: newPrice })
-              .eq('id', invItem.id)
-              .eq('company_id', auth.companyId);
-          }
-        }
-      }
+      // توحيد كاتب المخزون (القسم 7): المخزون يتحرك من «استلام أمر الشراء»
+      // فقط. سابقاً كانت الفاتورة المرتبطة بأمر شراء تضيف المخزون مرة أخرى —
+      // فلو استُلم الأمر ثم فُوتر تضاعفت الكمية. القيد المحاسبي أدناه يبقى هو
+      // الأثر المالي للفاتورة؛ الكمية أثرها في الاستلام.
 
       // الترحيل المحاسبي — فشل صريح عند غياب الحسابات بدل التجاهل الصامت
       const { data: invAcc } = await s.from('accounts').select('id')

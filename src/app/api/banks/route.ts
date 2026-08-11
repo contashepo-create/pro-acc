@@ -28,8 +28,8 @@ export async function GET(request: NextRequest) {
       let currentBalance = 0;
       
       if (bs.account_id) {
-        // حساب الرصيد الحالي من جميع القيود (يشمل الافتتاحي + العمليات)
-        currentBalance = await getAccountBalanceFromJournal(bs.account_id);
+        // حساب الرصيد الحالي من جميع القيود (يشمل الافتتاحي + العمليات) — مقيد بالشركة
+        currentBalance = await getAccountBalanceFromJournal(bs.account_id, auth.companyId);
       }
 
       return {
@@ -48,6 +48,27 @@ export async function GET(request: NextRequest) {
   }
 }
 
+/**
+ * توليد كود حساب فرعي فريد للخزينة/البنك.
+ * كان 4 أرقام من الطابع الزمني: بنكان خلال ~10 ثوانٍ بذات النوع يتشاركان
+ * الحساب المحاسبي نفسه وتندمج أرصدتهما صامتةً — الآن تسلسل تصاعدي مضمون.
+ */
+async function nextBankAccountCode(companyId: string, parentCode: string): Promise<string> {
+  const s = sb();
+  const { data: siblings } = await s.from('accounts')
+    .select('code')
+    .eq('company_id', companyId);
+  let maxSuffix = 0;
+  for (const row of siblings || []) {
+    const code = (row as any).code as string;
+    if (code && code.startsWith(`${parentCode}-`)) {
+      const suffix = parseInt(code.slice(parentCode.length + 1), 10);
+      if (!isNaN(suffix) && suffix > maxSuffix) maxSuffix = suffix;
+    }
+  }
+  return `${parentCode}-${String(maxSuffix + 1).padStart(4, '0')}`;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'banks', 'create');
@@ -56,13 +77,19 @@ export async function POST(request: NextRequest) {
     const { name, type, account_number, opening_balance } = data;
 
     if (!name || !type) return error('name, type are required');
+    if (typeof name !== 'string' || name.trim().length === 0 || name.length > 200) {
+      return error('اسم الخزينة/البنك غير صالح');
+    }
+    if (type !== 'bank' && type !== 'safe') {
+      return error('النوع يجب أن يكون bank أو safe');
+    }
 
     const parsedOpeningBalance = parseFloat(opening_balance) || 0;
 
-    // Create auto account in chart of accounts
-    const accountCode = `${type === 'bank' ? '1120' : '1110'}-${Date.now().toString().slice(-4)}`;
+    // Create auto account in chart of accounts — بكود فريد مضمون
     const parentCode = type === 'bank' ? '1120' : '1110';
-    
+    const accountCode = await nextBankAccountCode(auth.companyId, parentCode);
+
     console.log(`Creating auto account for bank/safe: ${name} with code ${accountCode}`);
     
     const newAccount = await createAutoAccount({

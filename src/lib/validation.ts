@@ -268,6 +268,105 @@ export const voucherDisbursementSchema = z.object({
   expenseAccountCode: z.string().optional(),
 }).strict();
 
+// --------------- Voucher updates & creates ---------------
+
+/**
+ * PUT /api/vouchers/receipt/[id] & /api/vouchers/disbursement/[id]
+ * تعديل سند: الحقول المسموح بتعديلها فقط. الكمية المالية (amount) تُمرَّر
+ * للقيد الجديد بعد عكس القيد القديم — لا يمكن تعديل النوع/الطرف المخفي.
+ */
+export const voucherUpdateSchema = z.object({
+  date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
+  contact_id: z.string().uuid('رقم الطرف غير صالح').optional().nullable(),
+  employee_id: z.string().uuid('رقم الموظف غير صالح').optional().nullable(),
+  amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر').optional(),
+  bank_safe_id: z.string().uuid('رقم الخزينة/البنك غير صالح').optional(),
+  reason: z.string().min(1).max(500).optional(),
+}).strict();
+
+/**
+ * POST /api/vouchers/receipt — سند قبض.
+ * الحقول بتنسيق snake_case بعد التطبيع في المسار. amount رقم موجب.
+ */
+export const receiptVoucherCreateSchema = z.object({
+  date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }),
+  receipt_type: z.enum(['client', 'supplier_refund', 'general'] as const, {
+    message: 'نوع سند القبض غير صالح',
+  }),
+  contact_id: z.string().uuid('رقم الطرف غير صالح').optional().nullable(),
+  amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
+  bank_safe_id: z.string().uuid('رقم الخزينة/البنك غير صالح'),
+  reason: z.string().min(1, 'السبب مطلوب').max(500),
+  invoice_items: z.array(z.object({
+    invoice_id: z.string().uuid(),
+    amount: z.number().positive(),
+  })).optional(),
+}).strict();
+
+/**
+ * POST /api/vouchers/disbursement — سند صرف.
+ */
+export const disbursementVoucherCreateSchema = z.object({
+  date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }),
+  disbursement_type: z.enum(['supplier', 'employee_advance', 'subcontractor', 'client_refund', 'other'] as const, {
+    message: 'نوع سند الصرف غير صالح',
+  }),
+  contact_id: z.string().uuid('رقم الطرف غير صالح').optional().nullable(),
+  employee_id: z.string().uuid('رقم الموظف غير صالح').optional().nullable(),
+  amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
+  bank_safe_id: z.string().uuid('رقم الخزينة/البنك غير صالح'),
+  reason: z.string().min(1, 'السبب مطلوب').max(500),
+  invoice_items: z.array(z.object({
+    invoice_id: z.string().uuid(),
+    amount: z.number().positive(),
+  })).optional(),
+}).strict();
+
+// --------------- Inventory ---------------
+
+// حركة مخزنية موحدة. ملاحظة: الواجهة ترسل 'adjustment' — تُطبَّع إلى 'adjust'
+// في المسار. كمية التسوية = الرصيد المستهدف المطلق (تقبل صفراً).
+export const inventoryMovementSchema = z.object({
+  item_id: z.string().uuid('رقم الصنف غير صالح'),
+  warehouse_id: z.string().uuid('رقم المستودع غير صالح'),
+  type: z.enum(['add', 'issue', 'adjust', 'adjustment', 'transfer', 'return'] as const, {
+    message: 'نوع العملية غير مدعوم',
+  }),
+  quantity: z.number().min(0, 'الكمية يجب أن لا تكون سالبة'),
+  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً').optional(),
+  date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
+  notes: z.string().max(500).optional(),
+  to_warehouse_id: z.string().uuid('مستودع الوجهة غير صالح').optional().nullable(),
+}).strict().refine(
+  (m) => m.type === 'adjust' || m.type === 'adjustment' ? true : m.quantity > 0,
+  { message: 'الكمية يجب أن تكون أكبر من صفر' }
+).refine(
+  (m) => m.type !== 'transfer' || (!!m.to_warehouse_id && m.to_warehouse_id !== m.warehouse_id),
+  { message: 'مستودع الوجهة مطلوب ويجب أن يخالف المصدر' }
+);
+
+export const inventoryItemSchema = z.object({
+  code: z.string().min(1, 'كود الصنف مطلوب').max(50),
+  name: z.string().min(1, 'اسم الصنف مطلوب').max(300),
+  unit: z.string().min(1, 'وحدة القياس مطلوبة').max(50),
+  warehouse_id: z.string().uuid('رقم المستودع غير صالح'),
+  category: z.string().max(100).optional().nullable(),
+}).strict();
+
+// تعديل صنف: لا كمية/سعر هنا أبداً — الرصيد يتحرك بالحركات المخزنية فقط
+export const inventoryItemUpdateSchema = z.object({
+  name: z.string().min(1).max(300).optional(),
+  unit: z.string().min(1).max(50).optional(),
+  category: z.string().max(100).nullable().optional(),
+  is_active: z.boolean().optional(),
+  warehouse_id: z.string().uuid().optional(),
+}).strict();
+
+export const warehouseSchema = z.object({
+  name: z.string().min(1, 'اسم المستودع مطلوب').max(200),
+  location: z.string().max(300).optional().nullable(),
+}).strict();
+
 // --------------- Project ---------------
 
 export const projectSchema = z.object({

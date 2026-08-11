@@ -189,10 +189,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       return error('لا يمكن حذف فاتورة مُرحَّلة — استخدم الإلغاء لعكس القيد المحاسبي');
     }
 
-    if ((inv as Record<string, any>).purchase_order_id) {
-      return error('لا يمكن حذف فاتورة مرتبطة بأمر شراء حدّث المخزون — استخدم الإلغاء');
-    }
-
     await s.from('purchase_invoice_items').delete().eq('purchase_invoice_id', id);
     await s.from('purchase_invoices')
       .delete()

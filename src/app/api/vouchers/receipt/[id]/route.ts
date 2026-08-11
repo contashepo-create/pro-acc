@@ -1,17 +1,28 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
+import { createJournalEntry } from '@/lib/journal-utils';
+import { resolveAccountId, postReversalEntry, revertInvoiceAllocations } from '@/lib/voucher-utils';
+import { voucherUpdateSchema } from '@/lib/validation';
+import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
+
+function receiptCounterpartCode(receiptType: string): string {
+  switch (receiptType) {
+    case 'client': return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
+    case 'supplier_refund': return ACCOUNT_CODES.ACCOUNTS_PAYABLE;
+    case 'general':
+    default: return ACCOUNT_CODES.OTHER_REVENUE;
+  }
+}
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { requireApiAuth, requireModulePermission } = await import('@/lib/api-helpers');
-    const ctx = await requireApiAuth(request);
+    const ctx = await requireModulePermission(request, 'receipts', 'read');
     const { id } = await params;
     const s = sb();
 
@@ -28,10 +39,10 @@ export async function GET(
       .eq('voucher_receipt_id', id);
 
     return success({
-      ...(voucher as any),
-      contact_name: (voucher as any).contacts?.name || null,
-      bank_safe_name: (voucher as any).banks_safes?.name || null,
-      journal_entry_number: (voucher as any).journal_entries?.number || null,
+      ...(voucher as Record<string, any>),
+      contact_name: (voucher as Record<string, any>).contacts?.name || null,
+      bank_safe_name: (voucher as Record<string, any>).banks_safes?.name || null,
+      journal_entry_number: (voucher as Record<string, any>).journal_entries?.number || null,
       invoice_items: (invoiceItems || []).map((ri: any) => ({
         ...ri,
         invoice_number: ri.invoices?.number || null,
@@ -42,18 +53,24 @@ export async function GET(
   }
 }
 
+/**
+ * PUT /api/vouchers/receipt/[id]
+ * تعديل سند = عكس القيد القديم (يبقى للتدقيق) + قيد جديد بالقيم الجديدة.
+ * لا قيد غير متوازن أبداً: الحساب المقابل إلزامي الحل قبل أي كتابة.
+ */
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { requireManagerOrAbove } = await import('@/lib/api-helpers');
     const ctx = await requireManagerOrAbove(request);
     const { id } = await params;
     const s = sb();
     const body = await request.json();
 
-    // جلب السند الحالي
+    const parsed = voucherUpdateSchema.safeParse(body);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+
     const { data: oldVoucher } = await s.from('voucher_receipts')
       .select('*')
       .eq('id', id)
@@ -61,115 +78,105 @@ export async function PUT(
       .maybeSingle();
 
     if (!oldVoucher) return notFound();
-
     const old = oldVoucher as any;
+    if (old.status === 'cancelled') return error('السند ملغى ولا يمكن تعديله');
 
-    // التحقق من أن السند ليس مرتبط بحركات نقدية
+    // لا تعديل لسند مربوط بحركات نقدية (حارس موجود — يبقى)
     const { data: depRes } = await s.from('cash_transactions')
-      .select('id')
-      .eq('voucher_receipt_id', id)
-      .limit(1);
-
+      .select('id').eq('voucher_receipt_id', id).limit(1);
     if (depRes && depRes.length > 0) {
       return error('لا يمكن تعديل سند القبض لأنه مرتبط بحركات نقدية');
     }
 
-    // حذف القيد القديم
-    if (old.journal_entry_id) {
-      await s.from('journal_lines').delete().eq('journal_entry_id', old.journal_entry_id);
-      await s.from('journal_entries').delete().eq('id', old.journal_entry_id);
+    // لا تعديل لسند عليه تخصيصات فواتير (تعقيد الاسترجاع) — أنشئ سنداً جديداً
+    const { data: allocRes } = await s.from('receipt_invoice_items')
+      .select('id').eq('voucher_receipt_id', id).limit(1);
+    if (allocRes && allocRes.length > 0) {
+      return error('لا يمكن تعديل سند مخصص على فواتير — ألغِ السند وأنشئ سنداً جديداً');
     }
 
-    // إنشاء قيد جديد
+    const newDate = parsed.data.date || old.date;
+    const newAmount = parsed.data.amount ?? parseFloat(old.amount);
+    const newBankSafeId = parsed.data.bank_safe_id || old.bank_safe_id;
+    const newReason = parsed.data.reason || old.reason;
+    const newContactId = parsed.data.contact_id !== undefined ? parsed.data.contact_id : old.contact_id;
+
+    // انتماء الخزينة والطرف للشركة
     const { data: bankAccount } = await s.from('banks_safes')
       .select('account_id')
-      .eq('id', body.bank_safe_id)
+      .eq('id', newBankSafeId)
+      .eq('company_id', ctx.companyId)
       .maybeSingle();
+    if (!bankAccount?.account_id) return error('البنك/الخزينة غير موجود', 404);
 
-    if (!bankAccount?.account_id) {
-      return error('الحساب البنكي غير موجود');
+    if (newContactId) {
+      const { data: contact } = await s.from('contacts')
+        .select('id').eq('id', newContactId).eq('company_id', ctx.companyId).maybeSingle();
+      if (!contact) return error('الطرف المحدد غير موجود', 404);
     }
 
-    const jeNum = await getNextJournalNumber(ctx.companyId, body.date || old.date);
-    const { data: je, error: jeErr } = await s.from('journal_entries')
-      .insert({
-        company_id: ctx.companyId,
-        number: jeNum,
-        date: body.date || old.date,
-        type: 'general',
-        description: `سند قبض: ${body.reason || old.reason}`,
-        reference_type: 'voucher_receipt',
-        reference_id: id,
-        created_by: ctx.userId,
-      })
-      .select('id')
-      .single();
+    const counterpartAccountId = await resolveAccountId(ctx.companyId, receiptCounterpartCode(old.receipt_type));
+    if (!counterpartAccountId) return error('الحساب المقابل غير موجود — راجع شجرة الحسابات', 400);
 
-    if (jeErr) throw jeErr;
-
-    // إنشاء سطور القيد
-    const jl: any[] = [
-      {
-        journal_entry_id: je.id,
-        account_id: bankAccount.account_id,
-        debit: body.amount || old.amount,
-        credit: 0,
-      }
-    ];
-
-    // الحساب المقابل
-    let counterpartAccountId = body.account_id || null;
-    if (!counterpartAccountId && old.contact_id) {
-      const { data: arAccount } = await s.from('accounts')
-        .select('id')
-        .eq('company_id', ctx.companyId)
-        .eq('code', '1130')
-        .maybeSingle();
-      counterpartAccountId = arAccount?.id || null;
-    }
-
-    if (counterpartAccountId) {
-      jl.push({
-        journal_entry_id: je.id,
-        account_id: counterpartAccountId,
-        debit: 0,
-        credit: body.amount || old.amount,
+    // 1. عكس القيد القديم (يبقى الأصل في الدفاتر)
+    if (old.journal_entry_id) {
+      const { error: revErr } = await postReversalEntry(ctx.companyId, {
+        journalEntryId: old.journal_entry_id,
+        referenceType: 'voucher_receipt_reversal',
+        referenceId: id,
+        description: `عكس سند قبض رقم ${old.number} (تعديل)`,
+        userId: ctx.userId,
       });
+      if (revErr) throw revErr;
     }
 
-    await s.from('journal_lines').insert(jl);
+    // 2. قيد جديد بالقيم المعدَّلة
+    const { journalId, error: journalError } = await createJournalEntry(ctx.companyId, {
+      date: newDate,
+      type: 'general',
+      description: `سند قبض رقم ${old.number}: ${newReason}`,
+      lines: [
+        { account_id: bankAccount.account_id, debit: newAmount, credit: 0 },
+        { account_id: counterpartAccountId, debit: 0, credit: newAmount },
+      ],
+      reference_type: 'voucher_receipt',
+      reference_id: id,
+      created_by: ctx.userId,
+    });
+    if (journalError) throw journalError;
 
-    // تحديث السند
     const { data: updated, error: updateErr } = await s.from('voucher_receipts')
       .update({
-        date: body.date || old.date,
-        receipt_type: body.receipt_type || old.receipt_type,
-        contact_id: body.contact_id || old.contact_id,
-        amount: body.amount || old.amount,
-        bank_safe_id: body.bank_safe_id || old.bank_safe_id,
-        reason: body.reason || old.reason,
-        journal_entry_id: je.id,
-        status: 'approved',
+        date: newDate,
+        contact_id: newContactId,
+        amount: newAmount,
+        bank_safe_id: newBankSafeId,
+        reason: newReason,
+        journal_entry_id: journalId,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
+      .eq('company_id', ctx.companyId)
       .select('*')
       .single();
 
     if (updateErr) throw updateErr;
-
     return success(updated);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
+/**
+ * DELETE /api/vouchers/receipt/[id]
+ * إلغاء ناعم: استرجاع التخصيصات + قيد عكسي + status='cancelled'.
+ * القيد الأصلي والسند يبقيان للتدقيق — لا حذف مادي لأثر مالي.
+ */
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { requireManagerOrAbove } = await import('@/lib/api-helpers');
     const ctx = await requireManagerOrAbove(request);
     const { id } = await params;
     const s = sb();
@@ -181,24 +188,34 @@ export async function DELETE(
       .maybeSingle();
 
     if (!voucher) return notFound();
+    if ((voucher as any).status === 'cancelled') return error('السند ملغى مسبقاً');
 
     const { data: depRes } = await s.from('cash_transactions')
-      .select('id')
-      .eq('voucher_receipt_id', id)
-      .limit(1);
-
+      .select('id').eq('voucher_receipt_id', id).limit(1);
     if (depRes && depRes.length > 0) {
-      return error('لا يمكن حذف سند القبض لأنه مرتبط بحركات نقدية');
+      return error('لا يمكن إلغاء سند القبض لأنه مرتبط بحركات نقدية');
     }
 
-    await s.from('receipt_invoice_items').delete().eq('voucher_receipt_id', id);
+    // استرجاع تخصيصات الفواتير (يعيد paid_amount/status كما كانت)
+    await revertInvoiceAllocations(ctx.companyId, 'receipt', id);
 
+    // قيد عكسي — الأصل يبقى
     if ((voucher as any).journal_entry_id) {
-      await s.from('journal_lines').delete().eq('journal_entry_id', (voucher as any).journal_entry_id);
-      await s.from('journal_entries').delete().eq('id', (voucher as any).journal_entry_id);
+      const { error: revErr } = await postReversalEntry(ctx.companyId, {
+        journalEntryId: (voucher as any).journal_entry_id,
+        referenceType: 'voucher_receipt_reversal',
+        referenceId: id,
+        description: `عكس سند قبض رقم ${(voucher as any).number} (إلغاء)`,
+        userId: ctx.userId,
+      });
+      if (revErr) throw revErr;
     }
 
-    await s.from('voucher_receipts').delete().eq('id', id);
+    const { error: updErr } = await s.from('voucher_receipts')
+      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('company_id', ctx.companyId);
+    if (updErr) throw updErr;
 
     return success({ deleted: true });
   } catch (err) {
