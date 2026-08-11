@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * GET /api/settings
@@ -36,7 +38,7 @@ export async function GET(request: NextRequest) {
     return success({ ...settingsMap, company: company || {} });
   } catch (err) {
     console.error('Failed to fetch settings:', err);
-    return error('فشل تحميل الإعدادات', 500);
+    return handleApiError(err);
   }
 }
 
@@ -47,11 +49,14 @@ export async function GET(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    // SECURITY: إعدادات الشركة يديرها المدير فأعلى. حقول الشركة الأساسية
+    // (الاسم/الرقم الضريبي/نسبة الضريبة) يتطلبها مدير نظام. سابقاً كان أي
+    // مستخدم مصادَق (حتى supervisor) يستطيع تغيير vat_rate/tax_number.
+    const auth = await requireManagerOrAbove(request);
     const body = await request.json();
     const s = sb();
 
-    // Save settings key-value pairs (no whitelist — save everything)
+    // Save settings key-value pairs (operational preferences — manager+)
     if (body.settings && typeof body.settings === 'object') {
       const updates = Object.entries(body.settings).map(([key, value]) => ({
         company_id: auth.companyId,
@@ -66,16 +71,30 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // Update company fields if provided
+    // Update company fields if provided — ADMIN ONLY (sensitive financial/identity)
     if (body.company && typeof body.company === 'object') {
+      if (auth.role !== 'admin') {
+        return error('تعديل البيانات الأساسية للشركة (الاسم، الرقم الضريبي، نسبة الضريبة، العنوان...) يتطلب صلاحيات مدير نظام', 403);
+      }
+
       const { getCountryConfig } = await import('@/lib/countries');
       const companyUpdate: any = {};
 
-      if (body.company.name !== undefined) companyUpdate.name = body.company.name;
+      if (body.company.name !== undefined) {
+        if (typeof body.company.name !== 'string' || !body.company.name.trim()) {
+          return error('اسم الشركة غير صالح', 400);
+        }
+        companyUpdate.name = body.company.name.trim();
+      }
       if (body.company.tax_number !== undefined) companyUpdate.tax_number = body.company.tax_number;
       if (body.company.commercial_registration !== undefined) companyUpdate.commercial_registration = body.company.commercial_registration;
       if (body.company.phone !== undefined) companyUpdate.phone = body.company.phone;
-      if (body.company.email !== undefined) companyUpdate.email = body.company.email;
+      if (body.company.email !== undefined) {
+        if (body.company.email !== '' && !EMAIL_RE.test(body.company.email)) {
+          return error('صيغة البريد الإلكتروني غير صحيحة', 400);
+        }
+        companyUpdate.email = body.company.email;
+      }
       if (body.company.address !== undefined) companyUpdate.address = body.company.address;
 
       // Country change updates currency/vat automatically
@@ -89,8 +108,15 @@ export async function PUT(request: NextRequest) {
         companyUpdate.vat_rate = cc.vatRate;
       }
 
-      // Allow manual override of vat_rate
-      if (body.company.vat_rate !== undefined) companyUpdate.vat_rate = body.company.vat_rate;
+      // Allow manual override of vat_rate — must be a valid fraction [0, 1]
+      // (تُخزَّن ككسر لأن فواتير المبيعات تضرب بها: subtotal × vat_rate)
+      if (body.company.vat_rate !== undefined) {
+        const v = Number(body.company.vat_rate);
+        if (!isFinite(v) || v < 0 || v > 1) {
+          return error('نسبة الضريبة غير صالحة — يجب أن تكون كسراً بين 0 و 1 (مثلاً 0.15 لـ 15%)', 400);
+        }
+        companyUpdate.vat_rate = v;
+      }
 
       if (Object.keys(companyUpdate).length > 0) {
         companyUpdate.updated_at = new Date().toISOString();
@@ -101,6 +127,6 @@ export async function PUT(request: NextRequest) {
     return success({ updated: true });
   } catch (err) {
     console.error('Failed to update settings:', err);
-    return error('فشل تحديث الإعدادات', 500);
+    return handleApiError(err);
   }
 }

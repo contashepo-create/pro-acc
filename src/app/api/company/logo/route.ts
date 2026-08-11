@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -27,11 +27,12 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    // تغيير شعار الشركة (هوية بصرية) — يقتصر على المدير فأعلى
+    const auth = await requireManagerOrAbove(request);
     const body = await request.json();
     const s = sb();
 
-    if (!body.logo_url) return error('logo_url is required');
+    if (!body.logo_url || typeof body.logo_url !== 'string') return error('logo_url is required');
 
     await s.from('companies').update({
       logo_url: body.logo_url,
