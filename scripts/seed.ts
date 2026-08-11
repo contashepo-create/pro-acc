@@ -107,9 +107,9 @@ async function main() {
     await pool.query(
       `INSERT INTO journal_lines (id, company_id, journal_entry_id, account_id, account_code, account_name, debit, credit, created_at)
        VALUES
-        ($1,$2,$3,$4,'1130','Accounts Receivable',$5,0,NOW()),
-        ($6,$2,$3,$7,'4100','Contract Revenue',0,$8,NOW()),
-        ($9,$2,$3,$10,'2120','VAT Payable',0,$11,NOW())`,
+        ($1, $2, $3, $4, '1130', 'Accounts Receivable', $5, 0, NOW()),
+        ($6, $7, $8, $9, '4100', 'Contract Revenue', 0, $10, NOW()),
+        ($11, $12, $13, $14, '2120', 'VAT Payable', 0, $15, NOW())`,
       [
         randomUUID(), COMPANY_ID, jeId, byCode['1130'], total,
         randomUUID(), COMPANY_ID, jeId, byCode['4100'], subtotal,
