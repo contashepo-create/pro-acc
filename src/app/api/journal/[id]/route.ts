@@ -37,6 +37,7 @@ export async function GET(
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     entryRes = primary.data;
     entryErr = primary.error;
+
     if (entryErr) {
       const fallback = await s.from('journal_entries')
         .select('id, company_id, number, date, type, description, created_by, created_at')
@@ -95,6 +96,8 @@ export async function PUT(
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const { date, type, description, lines } = parsed.data;
+    const resolved: Array<{ account_id: string; debit: number; credit: number; description: string | null }> = [];
+
 
     const resolved: Array<{ account_id: string; debit: number; credit: number; description: string | null }> = [];
     for (const line of lines) {

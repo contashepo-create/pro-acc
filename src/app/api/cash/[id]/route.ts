@@ -27,6 +27,13 @@ export async function GET(
       queryError = fallback.error;
     }
 
+    if (queryError) {
+      const fallback = await s.from('cash_transactions')
+        .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      data = fallback.data;
+      queryError = fallback.error;
+    }
+
     if (queryError || !data) {
       return notFound();
     }

@@ -11,39 +11,39 @@ export async function GET(req: NextRequest) {
     const type = req.nextUrl.searchParams.get('type') || 'project-costs';
     const s = sb();
 
-    if (type === 'project-costs' && projectId) {
+    if (type === 'project-costs') {
       // Material costs
-      const { data: materials } = await s.from('inventory_transactions')
+      let materialsQ = s.from('inventory_transactions')
         .select('total_value')
         .eq('company_id', auth.companyId)
-        .eq('project_id', projectId)
         .eq('type', 'issue');
-
+      if (projectId) materialsQ = materialsQ.eq('project_id', projectId);
+      const { data: materials } = await materialsQ;
       const materialTotal = (materials || []).reduce((sum: number, m: any) => sum + (parseFloat(m.total_value) || 0), 0);
 
       // Worker costs
-      const { data: workers } = await s.from('daily_worker_records')
+      let workersQ = s.from('daily_worker_records')
         .select('wage, days')
-        .eq('company_id', auth.companyId)
-        .eq('project_id', projectId);
-
+        .eq('company_id', auth.companyId);
+      if (projectId) workersQ = workersQ.eq('project_id', projectId);
+      const { data: workers } = await workersQ;
       const workerTotal = (workers || []).reduce((sum: number, w: any) => sum + ((parseFloat(w.wage) || 0) * (parseFloat(w.days) || 0)), 0);
 
       // Purchase costs
-      const { data: purchases } = await s.from('purchase_invoices')
+      let purchasesQ = s.from('purchase_invoices')
         .select('total')
         .eq('company_id', auth.companyId)
-        .eq('project_id', projectId)
         .neq('status', 'cancelled');
-
+      if (projectId) purchasesQ = purchasesQ.eq('project_id', projectId);
+      const { data: purchases } = await purchasesQ;
       const purchaseTotal = (purchases || []).reduce((sum: number, p: any) => sum + (parseFloat(p.total) || 0), 0);
 
       // Subcontractor costs
-      const { data: contracts } = await s.from('subcontractor_contracts')
+      let contractsQ = s.from('subcontractor_contracts')
         .select('id')
-        .eq('company_id', auth.companyId)
-        .eq('project_id', projectId);
-
+        .eq('company_id', auth.companyId);
+      if (projectId) contractsQ = contractsQ.eq('project_id', projectId);
+      const { data: contracts } = await contractsQ;
       const contractIds = (contracts || []).map((c: any) => c.id);
       let subTotal = 0;
 

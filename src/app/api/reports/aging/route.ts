@@ -5,127 +5,127 @@ import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 
+function bucketFor(days: number) {
+  if (days <= 30) return '0-30';
+  if (days <= 60) return '31-60';
+  if (days <= 90) return '61-90';
+  return '90+';
+}
+
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireApiAuth(req);
     const url = new URL(req.url);
     const type = url.searchParams.get('type') || 'ar';
-    const asOf = url.searchParams.get('asOf') || new Date().toISOString().split('T')[0];
+    const asOf = url.searchParams.get('asOf') || url.searchParams.get('to') || new Date().toISOString().split('T')[0];
     const s = sb();
+    const asOfTime = new Date(asOf).getTime();
 
     if (type === 'ar') {
-      const { data: account } = await s.from('accounts')
-        .select('id')
+      const { data: invoices } = await s.from('invoices')
+        .select('id, number, contact_id, date, due_date, total, paid_amount, status, contacts(name)')
         .eq('company_id', auth.companyId)
-        .eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE)
-        .maybeSingle();
+        .neq('status', 'cancelled')
+        .neq('status', 'paid');
 
-      if (!account) return success({ aging: [] });
+      const byContact = new Map<string, any>();
+      for (const inv of invoices || []) {
+        const total = parseFloat(inv.total) || 0;
+        const paid = parseFloat(inv.paid_amount) || 0;
+        const remaining = Math.max(0, total - paid);
+        if (remaining <= 0) continue;
 
-      // Get contacts with balances
-      const { data: jeIds } = await s.from('journal_entries')
-        .select('id')
-        .eq('company_id', auth.companyId);
+        const due = inv.due_date || inv.date || asOf;
+        const days = Math.max(0, Math.floor((asOfTime - new Date(due).getTime()) / 86400000));
+        const bucket = bucketFor(days);
+        const key = inv.contact_id || inv.id;
 
-      const jeIdList = (jeIds || []).map((je: any) => je.id);
-
-      const { data: contacts } = await s.from('contacts')
-        .select('id, name')
-        .eq('company_id', auth.companyId)
-        .in('type', ['client', 'both'])
-        .eq('is_active', true)
-        .order('name');
-
-      const aging: any[] = [];
-      for (const c of (contacts || [])) {
-        if (jeIdList.length === 0) continue;
-
-        const { data: lines } = await s.from('journal_lines')
-          .select('debit, credit')
-          .eq('contact_id', c.id)
-          .in('journal_entry_id', jeIdList);
-
-        const totalDebit = (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
-        const totalCredit = (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.credit) || 0), 0);
-        const balance = totalDebit - totalCredit;
-
-        if (balance <= 0) continue;
-
-        const { data: lastInvoice } = await s.from('invoices')
-          .select('date')
-          .eq('contact_id', c.id)
-          .order('date', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        const lastDate = lastInvoice?.date || asOf;
-        const daysDiff = Math.floor((new Date(asOf).getTime() - new Date(lastDate).getTime()) / (1000 * 60 * 60 * 24));
-        let bucket = '90+';
-        if (daysDiff <= 30) bucket = '0-30';
-        else if (daysDiff <= 60) bucket = '31-60';
-        else if (daysDiff <= 90) bucket = '61-90';
-
-        aging.push({ id: c.id, name: c.name, balance, last_invoice_date: lastDate, days_overdue: Math.max(0, daysDiff), bucket });
+        if (!byContact.has(key)) {
+          byContact.set(key, {
+            id: key,
+            name: (inv as any).contacts?.name || 'عميل',
+            balance: 0,
+            last_invoice_date: inv.date,
+            days_overdue: days,
+            bucket,
+            buckets: { '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 },
+          });
+        }
+        const row = byContact.get(key);
+        row.balance += remaining;
+        row.buckets[bucket] += remaining;
+        if (days > row.days_overdue) {
+          row.days_overdue = days;
+          row.bucket = bucket;
+        }
+        if (inv.date && (!row.last_invoice_date || inv.date > row.last_invoice_date)) {
+          row.last_invoice_date = inv.date;
+        }
       }
 
-      return success({ aging, type: 'ar', asOf });
+      const aging = [...byContact.values()].sort((a, b) => b.balance - a.balance);
+      const totals = aging.reduce((acc, r) => {
+        acc.balance += r.balance;
+        acc['0-30'] += r.buckets['0-30'];
+        acc['31-60'] += r.buckets['31-60'];
+        acc['61-90'] += r.buckets['61-90'];
+        acc['90+'] += r.buckets['90+'];
+        return acc;
+      }, { balance: 0, '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 });
+
+      return success({ aging, totals, type: 'ar', asOf });
     }
 
     if (type === 'ap') {
-      const { data: account } = await s.from('accounts')
-        .select('id')
+      const { data: invoices } = await s.from('purchase_invoices')
+        .select('id, number, supplier_id, date, due_date, total, paid_amount, status, contacts:supplier_id(name)')
         .eq('company_id', auth.companyId)
-        .eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE)
-        .maybeSingle();
+        .neq('status', 'cancelled')
+        .neq('status', 'paid');
 
-      if (!account) return success({ aging: [] });
+      const byContact = new Map<string, any>();
+      for (const inv of invoices || []) {
+        const total = parseFloat(inv.total) || 0;
+        const paid = parseFloat(inv.paid_amount) || 0;
+        const remaining = Math.max(0, total - paid);
+        if (remaining <= 0) continue;
 
-      const { data: jeIds } = await s.from('journal_entries')
-        .select('id')
-        .eq('company_id', auth.companyId);
+        const due = inv.due_date || inv.date || asOf;
+        const days = Math.max(0, Math.floor((asOfTime - new Date(due).getTime()) / 86400000));
+        const bucket = bucketFor(days);
+        const key = inv.supplier_id || inv.id;
 
-      const jeIdList = (jeIds || []).map((je: any) => je.id);
-
-      const { data: contacts } = await s.from('contacts')
-        .select('id, name')
-        .eq('company_id', auth.companyId)
-        .in('type', ['supplier', 'both'])
-        .eq('is_active', true)
-        .order('name');
-
-      const aging: any[] = [];
-      for (const c of (contacts || [])) {
-        if (jeIdList.length === 0) continue;
-
-        const { data: lines } = await s.from('journal_lines')
-          .select('debit, credit')
-          .eq('contact_id', c.id)
-          .in('journal_entry_id', jeIdList);
-
-        const totalDebit = (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
-        const totalCredit = (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.credit) || 0), 0);
-        const balance = totalCredit - totalDebit;
-
-        if (balance <= 0) continue;
-
-        const { data: lastInvoice } = await s.from('purchase_invoices')
-          .select('date')
-          .eq('supplier_id', c.id)
-          .order('date', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        const lastDate = lastInvoice?.date || asOf;
-        const daysDiff = Math.floor((new Date(asOf).getTime() - new Date(lastDate).getTime()) / (1000 * 60 * 60 * 24));
-        let bucket = '90+';
-        if (daysDiff <= 30) bucket = '0-30';
-        else if (daysDiff <= 60) bucket = '31-60';
-        else if (daysDiff <= 90) bucket = '61-90';
-
-        aging.push({ id: c.id, name: c.name, balance, last_invoice_date: lastDate, days_overdue: Math.max(0, daysDiff), bucket });
+        if (!byContact.has(key)) {
+          byContact.set(key, {
+            id: key,
+            name: (inv as any).contacts?.name || 'مورد',
+            balance: 0,
+            last_invoice_date: inv.date,
+            days_overdue: days,
+            bucket,
+            buckets: { '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 },
+          });
+        }
+        const row = byContact.get(key);
+        row.balance += remaining;
+        row.buckets[bucket] += remaining;
+        if (days > row.days_overdue) {
+          row.days_overdue = days;
+          row.bucket = bucket;
+        }
       }
 
-      return success({ aging, type: 'ap', asOf });
+      const aging = [...byContact.values()].sort((a, b) => b.balance - a.balance);
+      const totals = aging.reduce((acc, r) => {
+        acc.balance += r.balance;
+        acc['0-30'] += r.buckets['0-30'];
+        acc['31-60'] += r.buckets['31-60'];
+        acc['61-90'] += r.buckets['61-90'];
+        acc['90+'] += r.buckets['90+'];
+        return acc;
+      }, { balance: 0, '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 });
+
+      return success({ aging, totals, type: 'ap', asOf });
     }
 
     return error('Invalid aging type. Use "ar" or "ap"');

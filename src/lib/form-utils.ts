@@ -29,6 +29,7 @@ export async function fetchRecord(url: string): Promise<{ data: any | null; erro
   }
 }
 
+/** Normalize the listed date keys so <input type="date"> shows the saved value. */
 /** Normalize the listed date keys so `<input type="date">` shows the saved value. */
 export function applyDates<T extends Record<string, any>>(obj: T, keys: string[]): T {
   const out = { ...obj };

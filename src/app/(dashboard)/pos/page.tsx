@@ -11,7 +11,8 @@ import { Select } from '@/components/ui/Select';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { Badge } from '@/components/ui/Badge';
-import { formatCurrency } from '@/lib/utils';
+import { ActionButtons } from '@/components/ui/ActionButtons';
+import { formatCurrency, formatDate } from '@/lib/utils';
 
 export default function POSPage() {
   const [sales, setSales] = useState<any[]>([]);
@@ -64,10 +65,15 @@ export default function POSPage() {
 
   const columns = [
     { key: 'number', label: 'الرقم', sortable: true },
-    { key: 'date', label: 'التاريخ', sortable: true },
+    { key: 'date', label: 'التاريخ', sortable: true, render: (r:any) => formatDate(r.date) },
     { key: 'total', label: 'الإجمالي', render: (r:any) => formatCurrency(r.total) },
     { key: 'payment_method', label: 'طريقة الدفع', render: (r:any) => <Badge>{r.payment_method}</Badge> },
     { key: 'status', label: 'الحالة', render: (r:any) => <Badge variant={r.status === 'completed' ? 'success' : 'danger'}>{r.status}</Badge> },
+    {
+      key: 'actions',
+      label: 'إجراءات',
+      render: (row: any) => <ActionButtons item={row} />,
+    },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;

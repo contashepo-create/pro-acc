@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
@@ -25,6 +26,7 @@ export default function QuotationsPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingQuotation, setEditingQuotation] = useState<any>(null);
+  const [viewingQuotation, setViewingQuotation] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [showConvertModal, setShowConvertModal] = useState(false);
@@ -119,6 +121,7 @@ export default function QuotationsPage() {
         toast.error(json.message || 'تعذر تحميل عرض السعر');
       }
     } catch (e) {
+      console.error('Failed to load quotation:', e);
       toast.error('تعذر تحميل عرض السعر');
     }
   };
@@ -206,6 +209,14 @@ export default function QuotationsPage() {
           )}
           <ActionButtons
             item={row}
+            onView={async () => {
+              try {
+                const res = await fetch(`/api/quotations/${row.id}`);
+                const json = await res.json();
+                if (json.success) setViewingQuotation(json.data);
+                else toast.error(json.message || 'تعذر عرض عرض السعر');
+              } catch { toast.error('تعذر عرض عرض السعر'); }
+            }}
             onEdit={handleEdit}
             onDelete={handleDelete}
           />
@@ -282,6 +293,38 @@ export default function QuotationsPage() {
           {convertError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{convertError}</div>}
         </div>
       </Modal>
+      {/* Quotation Preview Modal */}
+      <RecordViewModal
+        isOpen={!!viewingQuotation}
+        onClose={() => setViewingQuotation(null)}
+        title={viewingQuotation ? `عرض سعر رقم #${viewingQuotation.number}` : 'معاينة عرض السعر'}
+        record={viewingQuotation}
+        extra={viewingQuotation?.items?.length ? (
+          <div className="border border-border rounded-xl overflow-hidden mt-3">
+            <div className="bg-bg-secondary p-2.5 font-bold text-xs border-b border-border">بنود عرض السعر</div>
+            <table className="w-full text-xs text-right">
+              <thead className="bg-bg-secondary/50 text-text-muted">
+                <tr>
+                  <th className="p-2">البيان</th>
+                  <th className="p-2 text-center">الكمية</th>
+                  <th className="p-2 text-center">سعر الوحدة</th>
+                  <th className="p-2 text-left">المجموع</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {viewingQuotation.items.map((it: any, idx: number) => (
+                  <tr key={idx}>
+                    <td className="p-2 font-medium">{it.description}</td>
+                    <td className="p-2 text-center font-mono">{it.quantity}</td>
+                    <td className="p-2 text-center font-mono">{formatCurrency(it.unit_price || 0)}</td>
+                    <td className="p-2 text-left font-bold font-mono">{formatCurrency(it.total || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      />
     </div>
   );
 }

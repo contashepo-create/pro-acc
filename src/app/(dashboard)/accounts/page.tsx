@@ -143,6 +143,7 @@ export default function AccountsPage() {
         <span style={{ paddingRight: `${(row.depth || 0) * 20}px` }} className="flex items-center gap-2">
           {row.depth > 0 && <FolderTree size={14} className="text-text-muted" />}
           {row.name}
+          {row.is_header && <Badge variant="info">رئيسي</Badge>}
         </span>
       ),
     },

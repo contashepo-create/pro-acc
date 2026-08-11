@@ -3,18 +3,25 @@
 import { useState, useEffect } from 'react';
 import {
   Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone,
-  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, Copy, ExternalLink, Trash2, Key, Globe, MessageSquare
+  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, Copy, ExternalLink, Trash2, Key, Globe, MessageSquare, FileText, Layers, ShieldCheck, Printer, HelpCircle
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { Textarea } from '@/components/ui/Textarea';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
+import { Badge } from '@/components/ui/Badge';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
 import { getCountriesList, getCountryConfig } from '@/lib/countries';
+import { 
+  INVOICE_TEMPLATES, 
+  DEFAULT_INVOICE_SETTINGS, 
+  type InvoiceTemplateSettings 
+} from '@/lib/invoice-templates';
 
 export default function SettingsPage() {
   const [tab, setTab] = useState('general');
@@ -30,6 +37,10 @@ export default function SettingsPage() {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
+
+  // Invoice & Print Settings State
+  const [invoiceSettings, setInvoiceSettings] = useState<InvoiceTemplateSettings>(DEFAULT_INVOICE_SETTINGS);
+  const [invoiceSettingsLoading, setInvoiceSettingsLoading] = useState(false);
 
   // Accounting settings
   const [fiscalStart, setFiscalStart] = useState('');
@@ -90,6 +101,12 @@ export default function SettingsPage() {
             setPhone(c.phone || '');
             setEmail(c.email || '');
             setAddress(c.address || '');
+          }
+          if (s.invoice_template_settings) {
+            const saved = typeof s.invoice_template_settings === 'string'
+              ? JSON.parse(s.invoice_template_settings)
+              : s.invoice_template_settings;
+            setInvoiceSettings({ ...DEFAULT_INVOICE_SETTINGS, ...saved });
           }
           if (s.fiscal_start) setFiscalStart(s.fiscal_start);
           if (s.decimal_places) setDecimalPlaces(s.decimal_places);
@@ -213,6 +230,31 @@ export default function SettingsPage() {
       }
     } catch {
       showToast('حدث خطأ في الاتصال');
+    }
+  };
+
+  const handleSaveInvoiceSettings = async () => {
+    setInvoiceSettingsLoading(true);
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: {
+            invoice_template_settings: invoiceSettings,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('تم حفظ إعدادات وقوالب الفواتير بنجاح لجميع الفواتير القادمة! 🎉');
+      } else {
+        showToast(data.message || 'فشل الحفظ');
+      }
+    } catch {
+      showToast('حدث خطأ في الاتصال');
+    } finally {
+      setInvoiceSettingsLoading(false);
     }
   };
 
@@ -414,6 +456,7 @@ export default function SettingsPage() {
 
       <Tabs items={[
         { id: 'general', label: 'عام' },
+        { id: 'invoices', label: 'الفواتير والطباعة 🧾' },
         { id: 'accounting', label: 'محاسبة' },
         { id: 'tax', label: 'ضرائب' },
         { id: 'subscription', label: 'الاشتراك' },
@@ -464,6 +507,218 @@ export default function SettingsPage() {
             <Button onClick={handleSaveCompany} leftIcon={<Save size={16} />}>حفظ الإعدادات</Button>
           </div>
         </Card>
+      )}
+
+      {/* Invoice Template & Print Customization Tab */}
+      {tab === 'invoices' && (
+        <div className="space-y-6 max-w-4xl">
+          {/* Default Template Chooser Card */}
+          <Card title="القالب الافتراضي للفواتير">
+            <p className="text-xs text-text-muted mb-4">
+              اختر القالب الافتراضي الذي سيتم استخدامه تلقائياً عند إنشاء وطباعة الفواتير لعملائك:
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {INVOICE_TEMPLATES.map((t) => {
+                const isSelected = invoiceSettings.defaultTemplate === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setInvoiceSettings({ ...invoiceSettings, defaultTemplate: t.id })}
+                    className={`p-4 rounded-2xl border-2 text-right transition-all flex flex-col justify-between ${
+                      isSelected 
+                        ? 'border-accent bg-accent/5 shadow-md ring-2 ring-accent/20' 
+                        : 'border-border bg-bg-primary hover:border-accent/40'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3.5 h-3.5 rounded-full" style={{ background: t.colors.primary }} />
+                          <span className="font-bold text-sm text-text-primary">{t.name}</span>
+                        </div>
+                        {isSelected && <Badge variant="accent">الافتراضي</Badge>}
+                      </div>
+                      <p className="text-xs text-text-muted leading-relaxed">{t.description}</p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
+
+          {/* Tax Invoice Type (ZATCA Compliance) */}
+          <Card title="نوع الفاتورة الضريبية وفق متطلبات هيئة الزكاة والضريبة والجمارك (ZATCA)">
+            <div className="space-y-3">
+              <p className="text-xs text-text-muted leading-relaxed">
+                حدد كيفية تسمية وتصنيف الفواتير الصادرة لعملائك:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setInvoiceSettings({ ...invoiceSettings, invoiceType: 'auto' })}
+                  className={`p-3 rounded-xl border text-right transition-all ${
+                    invoiceSettings.invoiceType === 'auto'
+                      ? 'border-accent bg-accent/5 font-bold text-accent'
+                      : 'border-border bg-bg-primary text-text-secondary'
+                  }`}
+                >
+                  <div className="font-bold text-xs mb-1">تحديد تلقائي ذكي (موصى به)</div>
+                  <div className="text-[11px] text-text-muted">إذا كان للعميل رقم ضريبي تصبح (فاتورة ضريبية B2B)، وإلا تصبح (فاتورة مبسطة B2C).</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setInvoiceSettings({ ...invoiceSettings, invoiceType: 'standard' })}
+                  className={`p-3 rounded-xl border text-right transition-all ${
+                    invoiceSettings.invoiceType === 'standard'
+                      ? 'border-accent bg-accent/5 font-bold text-accent'
+                      : 'border-border bg-bg-primary text-text-secondary'
+                  }`}
+                >
+                  <div className="font-bold text-xs mb-1">فاتورة ضريبية (Standard B2B)</div>
+                  <div className="text-[11px] text-text-muted">مخصصة للتعاملات مع الشركات والمؤسسات والجهات الحكومية المسجلة ضريبياً.</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setInvoiceSettings({ ...invoiceSettings, invoiceType: 'simplified' })}
+                  className={`p-3 rounded-xl border text-right transition-all ${
+                    invoiceSettings.invoiceType === 'simplified'
+                      ? 'border-accent bg-accent/5 font-bold text-accent'
+                      : 'border-border bg-bg-primary text-text-secondary'
+                  }`}
+                >
+                  <div className="font-bold text-xs mb-1">فاتورة ضريبية مبسطة (Simplified B2C)</div>
+                  <div className="text-[11px] text-text-muted">مخصصة للمستهلكين الأفراد والبيع النقدي المباشر.</div>
+                </button>
+              </div>
+            </div>
+          </Card>
+
+          {/* Visibility Controls for Company & Client */}
+          <Card title="التحكم في ظهور بيانات المنشأة والعميل على الفاتورة المطبوعة">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 text-xs">
+              {/* Company Info Checks */}
+              <div className="space-y-2.5">
+                <h4 className="font-bold text-sm text-text-primary pb-1 border-b border-border text-slate-800">بيانات منشأتك (البائع)</h4>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showLogo} onChange={e => setInvoiceSettings({ ...invoiceSettings, showLogo: e.target.checked })} />
+                  <span>إظهار شعار المنشأة (Logo)</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showCompanyName} onChange={e => setInvoiceSettings({ ...invoiceSettings, showCompanyName: e.target.checked })} />
+                  <span>إظهار اسم المنشأة الرسمي</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showCompanyTaxNumber} onChange={e => setInvoiceSettings({ ...invoiceSettings, showCompanyTaxNumber: e.target.checked })} />
+                  <span>إظهار الرقم الضريبي للمنشأة</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showCompanyCR} onChange={e => setInvoiceSettings({ ...invoiceSettings, showCompanyCR: e.target.checked })} />
+                  <span>إظهار رقم السجل التجاري</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showCompanyAddress} onChange={e => setInvoiceSettings({ ...invoiceSettings, showCompanyAddress: e.target.checked })} />
+                  <span>إظهار العنوان الوطني للمنشأة</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showCompanyPhone} onChange={e => setInvoiceSettings({ ...invoiceSettings, showCompanyPhone: e.target.checked })} />
+                  <span>إظهار رقم الهاتف / الجوال</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showCompanyEmail} onChange={e => setInvoiceSettings({ ...invoiceSettings, showCompanyEmail: e.target.checked })} />
+                  <span>إظهار البريد الإلكتروني للمنشأة</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showCompanyBankDetails} onChange={e => setInvoiceSettings({ ...invoiceSettings, showCompanyBankDetails: e.target.checked })} />
+                  <span>إظهار الحساب البنكي ورقم الآيبان (IBAN) في أسفل الفاتورة</span>
+                </label>
+              </div>
+
+              {/* Client Info Checks */}
+              <div className="space-y-2.5">
+                <h4 className="font-bold text-sm text-text-primary pb-1 border-b border-border text-slate-800">بيانات العميل (المشتري)</h4>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showClientName} onChange={e => setInvoiceSettings({ ...invoiceSettings, showClientName: e.target.checked })} />
+                  <span>إظهار اسم العميل</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showClientTaxNumber} onChange={e => setInvoiceSettings({ ...invoiceSettings, showClientTaxNumber: e.target.checked })} />
+                  <span>إظهار الرقم الضريبي للعميل (إن وُجد)</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showClientCR} onChange={e => setInvoiceSettings({ ...invoiceSettings, showClientCR: e.target.checked })} />
+                  <span>إظهار السجل التجاري للعميل</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showClientAddress} onChange={e => setInvoiceSettings({ ...invoiceSettings, showClientAddress: e.target.checked })} />
+                  <span>إظهار عنوان العميل</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showClientPhone} onChange={e => setInvoiceSettings({ ...invoiceSettings, showClientPhone: e.target.checked })} />
+                  <span>إظهار رقم جوال العميل</span>
+                </label>
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showClientEmail} onChange={e => setInvoiceSettings({ ...invoiceSettings, showClientEmail: e.target.checked })} />
+                  <span>إظهار البريد الإلكتروني للعميل</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Additional Elements */}
+            <div className="mt-6 pt-6 border-t border-border grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showProject} onChange={e => setInvoiceSettings({ ...invoiceSettings, showProject: e.target.checked })} />
+                <span>إظهار اسم المشروع المرتبط بالفاتورة</span>
+              </label>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showDueDate} onChange={e => setInvoiceSettings({ ...invoiceSettings, showDueDate: e.target.checked })} />
+                <span>إظهار تاريخ الاستحقاق</span>
+              </label>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showPaymentStatus} onChange={e => setInvoiceSettings({ ...invoiceSettings, showPaymentStatus: e.target.checked })} />
+                <span>إظهار وسم حالة السداد (مدفوعة / غير مدفوعة)</span>
+              </label>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showQR} onChange={e => setInvoiceSettings({ ...invoiceSettings, showQR: e.target.checked })} />
+                <span>إظهار رمز الاستجابة السريع (ZATCA QR Code)</span>
+              </label>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showSignatureArea} onChange={e => setInvoiceSettings({ ...invoiceSettings, showSignatureArea: e.target.checked })} />
+                <span>إظهار مساحة التوقيع والختم المعتمد في أسفل الفاتورة</span>
+              </label>
+            </div>
+          </Card>
+
+          {/* Footer & Notes */}
+          <Card title="نصوص التذييل والشروط والأحكام الافتراضية">
+            <div className="space-y-4">
+              <Textarea
+                label="الشروط والأحكام وسياسة الضمان الافتراضية"
+                value={invoiceSettings.termsAndConditions}
+                onChange={e => setInvoiceSettings({ ...invoiceSettings, termsAndConditions: e.target.value })}
+                placeholder="أدخل الشروط والأحكام التي تود ظهورها في أسفل جميع فواتيرك..."
+              />
+              <Input
+                label="نص التذييل الثابت (Footer Note)"
+                value={invoiceSettings.footerText}
+                onChange={(e: any) => setInvoiceSettings({ ...invoiceSettings, footerText: e.target.value })}
+                placeholder="مثال: شكراً لتعاملكم معنا • للإيداع البنكي: بنك الراجحي SA..."
+              />
+            </div>
+          </Card>
+
+          <div className="pt-2">
+            <Button 
+              onClick={handleSaveInvoiceSettings} 
+              disabled={invoiceSettingsLoading}
+              leftIcon={<Save size={16} />}
+            >
+              {invoiceSettingsLoading ? 'جاري حفظ الإعدادات...' : 'حفظ إعدادات وقوالب الفواتير'}
+            </Button>
+          </div>
+        </div>
       )}
 
       {/* Accounting */}

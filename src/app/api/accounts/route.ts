@@ -10,26 +10,46 @@ export async function GET(request: NextRequest) {
     const auth = await requireModulePermission(request, 'accounts', 'read');
     const s = sb();
 
+    const accountSelect = 'id, code, name, name_en, type, parent_id, is_active, is_header, created_at';
     let { data, error: queryError } = await s.from('accounts')
-      .select('id, code, name, name_en, type, parent_id, is_active, created_at')
+      .select(accountSelect)
       .eq('company_id', auth.companyId)
       .order('code');
+
+    if (queryError && /is_header|42703|Could not find/i.test(queryError.message || '')) {
+      const fallback = await s.from('accounts')
+        .select('id, code, name, name_en, type, parent_id, is_active, created_at')
+        .eq('company_id', auth.companyId)
+        .order('code');
+      data = fallback.data as any;
+      queryError = fallback.error;
+    }
 
     if (queryError) throw queryError;
 
     // AUTO-SEED: إذا لم تكن شجرة الحسابات موجودة للشركة، أنشئ الشجرة الافتراضية تلقائياً
-    if (!data || data.length === 0) {
-      const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
+    const { DEFAULT_CHART_OF_ACCOUNTS, createDefaultChartOfAccounts, ensureDefaultCashSafe } = await import('@/lib/default-accounts');
+    const existingCodes = new Set((data || []).map((a: any) => a.code));
+    const missingDefaults = DEFAULT_CHART_OF_ACCOUNTS.some((a) => !existingCodes.has(a.code));
+
+    if (!data || data.length === 0 || missingDefaults) {
       await createDefaultChartOfAccounts(s, auth.companyId);
 
       const refetch = await s.from('accounts')
-        .select('id, code, name, name_en, type, parent_id, is_active, created_at')
+        .select(accountSelect)
         .eq('company_id', auth.companyId)
         .order('code');
       data = refetch.data || [];
+    } else {
+      await ensureDefaultCashSafe(s, auth.companyId);
     }
 
-    const accounts: any[] = (data || []).map((a: any) => ({ ...a, children: [] as any[] }));
+    const { HEADER_ACCOUNT_CODES } = await import('@/lib/account-resolve');
+    const accounts: any[] = (data || []).map((a: any) => ({
+      ...a,
+      is_header: a.is_header === true || HEADER_ACCOUNT_CODES.has(a.code),
+      children: [] as any[],
+    }));
     const accountMap = new Map(accounts.map((a: any) => [a.id, a]));
     const roots: any[] = [];
 
@@ -39,6 +59,10 @@ export async function GET(request: NextRequest) {
       } else {
         roots.push(acc);
       }
+    }
+
+    for (const acc of accounts) {
+      if (acc.children.length > 0) acc.is_header = true;
     }
 
     return success({ accounts: roots }, 200, { cache: 'private', maxAge: 300, staleWhileRevalidate: 60 });

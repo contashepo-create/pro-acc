@@ -12,6 +12,8 @@
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { journalEntrySchema } from '@/lib/validation';
 import { createToken } from '@/lib/auth';
 import { insertJournalLines } from '@/lib/journal-utils';

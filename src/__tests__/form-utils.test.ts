@@ -1,3 +1,4 @@
+import { toDateInput, unwrapData } from '@/lib/form-utils';
 import { toDateInput, unwrapData, applyDates, recordOrRow } from '@/lib/form-utils';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -8,10 +9,12 @@ describe('toDateInput', () => {
   test('keeps YYYY-MM-DD', () => {
     expect(toDateInput('2026-08-01')).toBe('2026-08-01');
   });
+
   test('strips ISO timestamps so type=date inputs populate', () => {
     expect(toDateInput('2026-08-01T00:00:00.000Z')).toBe('2026-08-01');
     expect(toDateInput('2026-08-01 12:30:00')).toBe('2026-08-01');
   });
+
   test('empty / null stay empty', () => {
     expect(toDateInput(null)).toBe('');
     expect(toDateInput('')).toBe('');
@@ -31,6 +34,7 @@ describe('GET /api/journal/[id] does not select a phantom reference column', () 
     expect(src).toMatch(/reference_type, reference_id/);
     expect(src).not.toMatch(/description, reference, created_by/);
   });
+
   test('PUT handler exists for edit save', () => {
     expect(src).toMatch(/export async function PUT/);
   });

@@ -15,7 +15,7 @@ interface JournalLine { accountCode: string; debit: number; credit: number; desc
 
 function flatten(accounts: any[], depth = 0, out: any[] = []): any[] {
   for (const a of accounts || []) {
-    const isParent = Boolean(a.children && a.children.length > 0);
+    const isParent = Boolean(a.is_header) || Boolean(a.children && a.children.length > 0);
     out.push({
       code: a.code,
       name: a.name,

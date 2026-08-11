@@ -6,7 +6,7 @@ import { X } from 'lucide-react';
 interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
-  title?: string;
+  title?: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
   children: ReactNode;
   footer?: ReactNode;
@@ -67,7 +67,7 @@ export function Modal({
         className={`modal-content bg-bg-card border border-border shadow-modal w-full ${sizeClasses[size]} ${isFull ? 'flex flex-col' : ''} ${className}`}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-label={typeof title === 'string' ? title : undefined}
       >
         {(title || showClose) && (
           <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-border">

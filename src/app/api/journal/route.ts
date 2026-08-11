@@ -118,10 +118,14 @@ export async function POST(request: NextRequest) {
     try {
       // Resolve account IDs for all lines first
       const resolvedLines: Array<{accountId: string; accountCode: string; debit: number; credit: number; description: string | null; contactId: null; projectId: null}> = [];
+      const { isHeaderAccount, HEADER_ACCOUNT_CODES } = await import('@/lib/account-resolve');
       for (const line of lines) {
         const { data: account } = await s.from('accounts')
-          .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+          .select('id, code, is_header').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
         if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
+        if (isHeaderAccount(account) || HEADER_ACCOUNT_CODES.has(line.accountCode)) {
+          throw new Error(`الحساب ${line.accountCode} حساب رئيسي ولا يُرحَّل عليه — اختر حساباً فرعياً`);
+        }
         resolvedLines.push({
           accountId: account.id,
           accountCode: line.accountCode,

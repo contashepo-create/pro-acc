@@ -17,7 +17,7 @@ DECLARE
   v_number INT;
   v_year INT;
   v_total_debit NUMERIC := 0;
-  v_total_credit NUMERIC;
+  v_total_credit NUMERIC := 0;
   v_line JSONB;
   v_result JSONB;
 BEGIN

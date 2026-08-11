@@ -19,8 +19,10 @@ function getSupabaseOrigin(): string {
 
 const supabaseOrigin = getSupabaseOrigin();
 
+const isDev = process.env.NODE_ENV !== "production";
+
 const securityHeaders = [
-  { key: "X-Frame-Options", value: "DENY" },
+  ...(isDev ? [] : [{ key: "X-Frame-Options", value: "DENY" }]),
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-DNS-Prefetch-Control", value: "off" },
@@ -32,22 +34,22 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
-      "font-src 'self' data:",
-      `connect-src ${["'self'", supabaseOrigin, "https://api.moyasar.com"].filter(Boolean).join(" ")}`,
+      "font-src 'self' data: https:",
+      `connect-src ${["'self'", supabaseOrigin, "https://api.moyasar.com", "https:"].filter(Boolean).join(" ")}`,
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'",
-      "frame-ancestors 'none'",
+      isDev ? "frame-ancestors 'self' https: http:" : "frame-ancestors 'none'",
       "upgrade-insecure-requests",
     ].join("; "),
   },
 ];
 
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["127.0.0.1", "192.168.56.1", "localhost"],
+  allowedDevOrigins: ["127.0.0.1", "192.168.56.1", "localhost", "*.e2b.app"],
   async headers() {
     return [
       {

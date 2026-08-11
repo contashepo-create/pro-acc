@@ -14,6 +14,8 @@
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { createToken } from '@/lib/auth';
 import { generateUBLInvoice } from '@/lib/zatca';
 

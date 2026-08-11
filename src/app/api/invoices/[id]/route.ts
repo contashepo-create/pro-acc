@@ -25,6 +25,7 @@ export async function GET(
       `)
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     invRes = primary.data; invErr = primary.error;
+
     if (invErr) {
       const fallback = await s.from('invoices')
         .select('id, number, contact_id, project_id, date, due_date, subtotal, total, paid_amount, status, notes, journal_entry_id, created_by, created_at')
@@ -144,6 +145,7 @@ export async function PUT(
     const { data: updated, error: updErr } = await s.from('invoices')
       .update(header).eq('id', id).eq('company_id', auth.companyId).select('*').single();
     if (updErr) throw updErr;
+
     return success(updated);
   } catch (err) {
     return handleApiError(err);

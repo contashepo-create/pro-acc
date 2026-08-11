@@ -47,6 +47,7 @@ export async function PUT(
     const { data: updated, error: updErr } = await s.from('fixed_assets')
       .update(updateData).eq('id', id).eq('company_id', auth.companyId).select('*').single();
     if (updErr) throw updErr;
+
     return success(updated);
   } catch (err) {
     return handleApiError(err);
@@ -61,6 +62,14 @@ export async function DELETE(
     const auth = await requireModulePermission(request, 'fixed-assets', 'delete');
     const { id } = await params;
     const s = sb();
+
+    const { data: existing } = await s.from('fixed_assets')
+      .select('id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!existing) return notFound();
+
+    const { error: delErr } = await s.from('fixed_assets').delete().eq('id', id).eq('company_id', auth.companyId);
+    if (delErr) throw delErr;
+
     const { data: existing } = await s.from('fixed_assets')
       .select('id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return notFound();

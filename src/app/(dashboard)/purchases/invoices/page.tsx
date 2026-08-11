@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
@@ -40,6 +41,7 @@ export default function PurchaseInvoicesPage() {
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<any>(null);
+  const [viewingInvoice, setViewingInvoice] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
@@ -199,6 +201,14 @@ export default function PurchaseInvoicesPage() {
       render: (row: any) => (
         <ActionButtons
           item={row}
+          onView={async () => {
+            try {
+              const res = await fetch(`/api/purchases/invoices/${row.id}`);
+              const json = await res.json();
+              if (json.success) setViewingInvoice(json.data);
+              else toast.error(json.message || 'تعذر عرض الفاتورة');
+            } catch { toast.error('تعذر عرض الفاتورة'); }
+          }}
           onEdit={row.status !== 'cancelled' ? handleEdit : undefined}
           onDelete={handleDelete}
         />
@@ -294,6 +304,38 @@ export default function PurchaseInvoicesPage() {
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
+      {/* Purchase Invoice Preview Modal */}
+      <RecordViewModal
+        isOpen={!!viewingInvoice}
+        onClose={() => setViewingInvoice(null)}
+        title={viewingInvoice ? `فاتورة مشتريات رقم #${viewingInvoice.invoice_number}` : 'معاينة فاتورة الشراء'}
+        record={viewingInvoice}
+        extra={viewingInvoice?.items?.length ? (
+          <div className="border border-border rounded-xl overflow-hidden mt-3">
+            <div className="bg-bg-secondary p-2.5 font-bold text-xs border-b border-border">بنود فاتورة الشراء</div>
+            <table className="w-full text-xs text-right">
+              <thead className="bg-bg-secondary/50 text-text-muted">
+                <tr>
+                  <th className="p-2">البيان</th>
+                  <th className="p-2 text-center">الكمية</th>
+                  <th className="p-2 text-center">سعر الوحدة</th>
+                  <th className="p-2 text-left">المجموع</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {viewingInvoice.items.map((it: any, idx: number) => (
+                  <tr key={idx}>
+                    <td className="p-2 font-medium">{it.description}</td>
+                    <td className="p-2 text-center font-mono">{it.quantity}</td>
+                    <td className="p-2 text-center font-mono">{formatCurrency(it.unit_price || 0)}</td>
+                    <td className="p-2 text-left font-bold font-mono">{formatCurrency((Number(it.quantity) || 0) * (Number(it.unit_price) || 0))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      />
     </div>
   );
 }

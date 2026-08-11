@@ -236,6 +236,7 @@ export default function ProjectsPage() {
       }
     } catch (e) {
       console.error('Failed to load project:', e);
+      toast.error('تعذر تحميل المشروع');
     }
   };
 

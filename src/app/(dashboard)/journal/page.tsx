@@ -88,6 +88,7 @@ export default function JournalPage() {
       ) : (
         <DataTable columns={columns} data={entries} searchable searchKeys={['number', 'description']} />
       )}
+
       <RecordViewModal
         isOpen={!!viewing}
         onClose={() => setViewing(null)}

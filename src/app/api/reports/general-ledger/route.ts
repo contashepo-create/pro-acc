@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
 
     // Get journal entries for date range
     let entryQuery = s.from('journal_entries')
-      .select('id, number, date, description, reference, type')
+      .select('id, number, date, description, reference_type, reference_id, type')
       .eq('company_id', auth.companyId)
       .is('deleted_at', null)
       .order('date', { ascending: true })
