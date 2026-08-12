@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { initPayment, getPaymentStatus, refundPayment, mapPaymentStatus } from '@/lib/payments/moyasar';
 import { generateId } from '@/lib/utils';
@@ -11,7 +11,7 @@ const sb = () => getSupabase();
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'invoices', 'read');
     const s = sb();
     const url = new URL(request.url);
     const invoiceId = url.searchParams.get('invoice_id');
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'invoices', 'create');
     const s = sb();
     const body = await request.json();
     const { invoice_id, customer_name, customer_email, return_url } = body as {
@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'invoices', 'update');
     const s = sb();
     const url = new URL(request.url);
     const recordId = url.searchParams.get('id');
@@ -180,40 +180,39 @@ export async function PUT(request: NextRequest) {
       updated_at: new Date().toISOString(),
     }).eq('id', recordId);
 
-    // If paid, update invoice status
     if (finalStatus === 'paid') {
-      await s.from('invoices').update({ status: 'paid' }).eq('id', rec.invoice_id);
-
-      // Auto-create cash receipt journal entry
       try {
-        const { getNextJournalNumber } = await import('@/lib/numbering');
+        const { createJournalEntry } = await import('@/lib/journal-utils');
+        const { resolveAccountId } = await import('@/lib/voucher-utils');
         const today = new Date().toISOString().split('T')[0];
-        const jeNumber = await getNextJournalNumber(auth.companyId, today);
-        const jeId = generateId();
-
-        // Find AR account (1130) and cash/bank account
-        const { data: arAcc } = await s.from('accounts')
-          .select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle();
-        const { data: cashAcc } = await s.from('accounts')
-          .select('id').eq('company_id', auth.companyId).eq('code', '1100').maybeSingle();
-
-        if (arAcc && cashAcc) {
-          const ar = arAcc as { id: string };
-          const cash = cashAcc as { id: string };
-
-          await s.from('journal_entries').insert({
-            id: jeId, company_id: auth.companyId, number: jeNumber,
-            date: today, type: 'general',
-            description: `سداد إلكتروني — فاتورة`, created_by: auth.userId,
+        const arId = await resolveAccountId(auth.companyId, '1130');
+        const cashId = await resolveAccountId(auth.companyId, '1100');
+        if (arId && cashId) {
+          const { journalId, error: jeErr } = await createJournalEntry(auth.companyId, {
+            date: today,
+            type: 'general',
+            description: `سداد إلكتروني — فاتورة`,
+            lines: [
+              { account_id: cashId, debit: rec.amount, credit: 0, description: 'سداد إلكتروني' },
+              { account_id: arId, debit: 0, credit: rec.amount, description: 'سداد فاتورة' },
+            ],
+            reference_type: 'payment',
+            reference_id: recordId,
+            created_by: auth.userId,
           });
-          const { insertJournalLines } = await import('@/lib/journal-utils');
-          const { error: jlErr } = await insertJournalLines(auth.companyId, [
-            { journal_entry_id: jeId, account_id: cash.id, debit: rec.amount, credit: 0, description: 'سداد إلكتروني' },
-            { journal_entry_id: jeId, account_id: ar.id, debit: 0, credit: rec.amount, description: 'سداد فاتورة' },
-          ]);
-          if (jlErr) throw jlErr;
-
-          await s.from('payment_records').update({ journal_entry_id: jeId }).eq('id', recordId);
+          if (!jeErr && journalId) {
+            await s.from('payment_records').update({ journal_entry_id: journalId }).eq('id', recordId);
+            const { data: invRow } = await s.from('invoices')
+              .select('total, paid_amount, status')
+              .eq('id', rec.invoice_id).eq('company_id', auth.companyId).maybeSingle();
+            if (invRow && invRow.status !== 'cancelled') {
+              const total = parseFloat(String(invRow.total)) || 0;
+              const newPaid = Math.min(total, (parseFloat(String(invRow.paid_amount)) || 0) + rec.amount);
+              const newStatus = newPaid >= total - 0.005 ? 'paid' : (newPaid > 0 ? 'partial' : 'unpaid');
+              await s.from('invoices').update({ paid_amount: newPaid, status: newStatus })
+                .eq('id', rec.invoice_id).eq('company_id', auth.companyId);
+            }
+          }
         }
       } catch (journalErr) {
         console.warn('Failed to create auto journal entry for payment:', journalErr);

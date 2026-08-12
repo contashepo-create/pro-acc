@@ -1,11 +1,9 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
 import { getNextVoucherNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
-import { generateId } from '@/lib/utils';
 
 const sb = () => getSupabase();
 
@@ -226,116 +224,62 @@ export async function POST(request: NextRequest) {
         if (itemErr) throw itemErr;
       }
 
-      // 3. جلب الحسابات المحاسبية الأساسية للترحيل المزدوج (مع التوليد التلقائي عند غيابها)
-      let { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle();
-      let { data: revenueAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
-      let { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle();
-
-      if (!arAccount || !revenueAccount) {
-        const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
-        await createDefaultChartOfAccounts(s, auth.companyId);
-
-        arAccount = (await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1130').maybeSingle()).data;
-        revenueAccount = (await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle()).data;
-        vatAccount = (await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle()).data;
-      }
-
-      if (!arAccount || !revenueAccount) {
-        throw new Error('الحسابات الأساسية للترحيل مفقودة وتعذر إنشاء دليل الحسابات الافتراضي تلقائياً.');
-      }
-
-      // 4. إنشاء قيد اليومية العام للفاتورة
-      // Journal entries get their OWN sequence — previously the invoice
-      // number was reused, colliding with the manual journal sequence.
-      const { insertJournalHeader } = await import('@/lib/journal-utils');
-      const { data: jeRes, error: jeErr } = await insertJournalHeader(auth.companyId, {
+      // قيد الفاتورة دائماً كامل الذمة (Open Items). التحصيل = سند قبض منفصل.
+      const { postSalesInvoiceJournal } = await import('@/lib/invoice-accounting');
+      journalEntryId = await postSalesInvoiceJournal({
+        companyId: auth.companyId,
+        userId: auth.userId,
+        invoiceId,
+        invoiceNumber: number,
         date,
-        type: 'general',
-        description: `فاتورة مبيعات رقم ${number}`,
-        reference_type: 'invoice',
-        reference_id: invoiceId,
-        created_by: auth.userId,
+        contactId: clientId,
+        projectId: projectId || null,
+        subtotal,
+        vatAmount: computedVat,
+        total: computedTotal,
       });
-      if (jeErr || !jeRes) throw jeErr || new Error('فشل إنشاء قيد الفاتورة');
-      journalEntryId = jeRes.id;
 
-      // 5. بناء سطور القيد المحاسبي المتزن شامل البيع المباشر أو التحصيل الجزئي المسبق (Stripe & ERP Standard T-Account Entry)
-      const journalLines: any[] = [];
-
-      // إذا وُجد تحصيل نقدي فوري مسبق (تم التحقق من انتمائه للشركة قبل الإنشاء)
-      if (finalPaidAmount > 0 && bankSafeId && collectionBankSafe) {
-        if (collectionBankSafe.account_id) {
-          // مدين 1: البنك/الخزينة المودع بها المبلغ
-          journalLines.push({
-            journal_entry_id: journalEntryId,
-            account_id: collectionBankSafe.account_id,
-            debit: finalPaidAmount,
-            credit: 0,
-            description: `تحصيل مالي فوري للفاتورة رقم ${number}`
-          });
-
-          // إنشاء سند قبض (Voucher Receipt) رسمي مرتبط في السوبابيز
-          const nextVoucherNumber = await getNextVoucherNumber(auth.companyId, 'voucher_receipts');
-          const { data: recData, error: recErr } = await s.from('voucher_receipts').insert({
-            company_id: auth.companyId,
-            number: nextVoucherNumber,
-            date,
-            receipt_type: 'client',
-            contact_id: clientId,
-            amount: finalPaidAmount,
-            bank_safe_id: bankSafeId,
-            reason: `تحصيل فوري نقدية للفاتورة مبيعات رقم ${number}`,
-            journal_entry_id: journalEntryId,
-            created_by: auth.userId,
-            status: 'approved'
-          }).select('id').single();
-          
-          if (!recErr && recData) voucherReceiptId = recData.id;
-        }
-      }
-
-      // حساب المتبقي على ذمم العميل المدينة
-      const remainingReceivable = computedTotal - finalPaidAmount;
-      if (remainingReceivable > 0) {
-        // مدين 2: ذمم العملاء المدينة (المتبقي الآجل) — موسوم بـ contact_id
-        // ليدخل في رصيد العميل (الآجل المستحق عليه)
-        journalLines.push({
-          journal_entry_id: journalEntryId,
-          account_id: arAccount.id,
-          debit: remainingReceivable,
-          credit: 0,
+      if (finalPaidAmount > 0 && bankSafeId && collectionBankSafe?.account_id) {
+        const { createJournalEntry } = await import('@/lib/journal-utils');
+        const { applyInvoiceAllocations, resolveAccountId } = await import('@/lib/voucher-utils');
+        const arId = await resolveAccountId(auth.companyId, '1130');
+        if (!arId) throw new Error('حساب الذمم 1130 غير موجود');
+        const nextVoucherNumber = await getNextVoucherNumber(auth.companyId, 'voucher_receipts');
+        const { data: recData, error: recErr } = await s.from('voucher_receipts').insert({
+          company_id: auth.companyId,
+          number: nextVoucherNumber,
+          date,
+          receipt_type: 'client',
           contact_id: clientId,
-          description: `المتبقي الآجل للفاتورة رقم ${number}`
+          amount: finalPaidAmount,
+          bank_safe_id: bankSafeId,
+          reason: `تحصيل فوري لفاتورة مبيعات رقم ${number}`,
+          created_by: auth.userId,
+          status: 'approved',
+        }).select('id').single();
+        if (recErr || !recData) throw recErr || new Error('فشل سند القبض');
+        voucherReceiptId = recData.id;
+
+        const { journalId, error: recJeErr } = await createJournalEntry(auth.companyId, {
+          date,
+          type: 'general',
+          description: `سند قبض رقم ${nextVoucherNumber}: تحصيل فاتورة ${number}`,
+          lines: [
+            { account_id: collectionBankSafe.account_id, debit: finalPaidAmount, credit: 0 },
+            { account_id: arId, debit: 0, credit: finalPaidAmount, contact_id: clientId },
+          ],
+          reference_type: 'voucher_receipt',
+          reference_id: recData.id,
+          created_by: auth.userId,
         });
+        if (recJeErr || !journalId) throw recJeErr || new Error('فشل قيد التحصيل');
+        await s.from('voucher_receipts').update({ journal_entry_id: journalId }).eq('id', recData.id);
+        const { error: allocErr } = await applyInvoiceAllocations(
+          auth.companyId, 'receipt', recData.id, journalId, finalPaidAmount,
+          [{ invoice_id: invoiceId, amount: finalPaidAmount }], clientId
+        );
+        if (allocErr) throw new Error(allocErr);
       }
-
-      // دائن 1: إيرادات مقاولات (قيمة المبيعات قبل الضريبة)
-      journalLines.push({
-        journal_entry_id: journalEntryId,
-        account_id: revenueAccount.id,
-        debit: 0,
-        credit: subtotal,
-        description: `إيراد فاتورة مبيعات رقم ${number}`
-      });
-
-      // دائن 2: ضريبة المبيعات المضافة 15% (إن وُجدت)
-      if (computedVat > 0 && vatAccount) {
-        journalLines.push({
-          journal_entry_id: journalEntryId,
-          account_id: vatAccount.id,
-          debit: 0,
-          credit: computedVat,
-          description: `ضريبة فاتورة رقم ${number}`
-        });
-      }
-
-      // إدراج السطور وترحيل القيد للدفاتر — عبر insertJournalLines التي تفرض
-      // company_id للسطور وتحلّل كود/اسم الحساب ضمن الشركة نفسها فقط
-      const { error: linesErr } = await insertJournalLines(auth.companyId, journalLines);
-      if (linesErr) throw linesErr;
-
-      // ربط القيد والتحصيل بالفاتورة
-      await s.from('invoices').update({ journal_entry_id: journalEntryId }).eq('id', invoiceId);
 
       const { data: itemsRes } = await s.from('invoice_items')
         .select('id, description, quantity, unit_price, total').eq('invoice_id', invoiceId);

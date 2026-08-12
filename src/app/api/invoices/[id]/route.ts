@@ -111,10 +111,17 @@ export async function PUT(
     const body = await parseBody<any>(request);
 
     const { data: existing } = await s.from('invoices')
-      .select('id, status, journal_entry_id, number')
+      .select('id, status, journal_entry_id, number, paid_amount, contact_id, date, total')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return notFound();
-    if ((existing as any).status === 'cancelled') return error('لا يمكن تعديل فاتورة ملغاة');
+    const inv = existing as Record<string, any>;
+    if (inv.status === 'cancelled') return error('لا يمكن تعديل فاتورة ملغاة');
+
+    const paid = parseFloat(inv.paid_amount) || 0;
+    const wantsFinancial = Array.isArray(body.items) && body.items.length > 0;
+    if (wantsFinancial && paid > 0.005) {
+      return error('لا يمكن تعديل بنود فاتورة عليها تحصيل — اعكس سندات القبض أولاً');
+    }
 
     const header: any = {};
     if (body.notes !== undefined) header.notes = body.notes;
@@ -125,8 +132,7 @@ export async function PUT(
       header.project_id = body.projectId ?? body.project_id ?? null;
     }
 
-    // Financial rewrite only while unpaid (journal already posted otherwise).
-    if ((existing as any).status === 'unpaid' && Array.isArray(body.items) && body.items.length > 0) {
+    if (wantsFinancial) {
       const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
       const items = body.items.map((it: any) => {
         const qty = Number(it.quantity) || 0;
@@ -136,7 +142,7 @@ export async function PUT(
         const discount = Math.min(round2(disc), gross);
         return { description: it.description, quantity: qty, unit_price: price, total: round2(gross - discount) };
       });
-      const subtotal = round2(items.reduce((s: number, i: any) => s + i.total, 0));
+      const subtotal = round2(items.reduce((sum: number, i: any) => sum + i.total, 0));
       const vatRate = body.vatEnabled === false ? 0 : Number(body.vatRate ?? body.vat_rate ?? 0.15);
       const vatAmount = round2(subtotal * vatRate);
       header.subtotal = subtotal;
@@ -150,6 +156,33 @@ export async function PUT(
       for (const item of items) {
         await s.from('invoice_items').insert({ company_id: auth.companyId, invoice_id: id, ...item });
       }
+
+      if (inv.journal_entry_id) {
+        const { postReversalEntry } = await import('@/lib/voucher-utils');
+        const { error: revErr } = await postReversalEntry(auth.companyId, {
+          journalEntryId: inv.journal_entry_id,
+          referenceType: 'invoice_reversal',
+          referenceId: id,
+          description: `عكس قيد فاتورة رقم ${inv.number} قبل إعادة الترحيل`,
+          userId: auth.userId,
+        });
+        if (revErr) throw revErr;
+      }
+
+      const { postSalesInvoiceJournal } = await import('@/lib/invoice-accounting');
+      const newJe = await postSalesInvoiceJournal({
+        companyId: auth.companyId,
+        userId: auth.userId,
+        invoiceId: id,
+        invoiceNumber: inv.number,
+        date: header.date || inv.date,
+        contactId: header.contact_id || inv.contact_id,
+        projectId: header.project_id,
+        subtotal,
+        vatAmount,
+        total: header.total,
+      });
+      header.journal_entry_id = newJe;
     }
 
     const { data: updated, error: updErr } = await s.from('invoices')
@@ -173,7 +206,7 @@ export async function PATCH(
     const body = await parseBody<{ status: string; notes?: string }>(request);
 
     const { data: invRes } = await s.from('invoices')
-      .select('id, number, total, status, journal_entry_id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      .select('id, number, total, status, journal_entry_id, paid_amount').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!invRes) return notFound();
     const invoice = invRes as Record<string, any>;
 

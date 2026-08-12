@@ -34,6 +34,9 @@ export async function insertJournalHeader(
   },
 ): Promise<{ data: { id: string } | null; error: any | null }> {
   const s = sb();
+  const { assertOpenFiscalPeriod } = await import('@/lib/fiscal-guard');
+  await assertOpenFiscalPeriod(companyId, fields.date);
+
   let lastError: any = null;
   for (let attempt = 0; attempt < 8; attempt++) {
     const number = await getNextJournalNumber(companyId, fields.date);

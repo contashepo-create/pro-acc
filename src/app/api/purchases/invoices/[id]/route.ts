@@ -1,8 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
 import { purchaseInvoiceUpdateSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
@@ -102,40 +100,15 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
       // قيد عكسي كامل الحقول مع الإبقاء على القيد الأصلي
       if (inv.journal_entry_id) {
-        const { data: oldLines } = await s.from('journal_lines')
-          .select('account_id, debit, credit, description')
-          .eq('journal_entry_id', inv.journal_entry_id);
-
-        const today = new Date().toISOString().split('T')[0];
-        const revNumber = await getNextJournalNumber(auth.companyId, today);
-        const { data: revJe, error: revJeErr } = await s.from('journal_entries')
-          .insert({
-            company_id: auth.companyId,
-            number: revNumber,
-            date: today,
-            type: 'general',
-            description: `عكس فاتورة مشتريات رقم ${inv.number}`,
-            reference_type: 'purchase_invoice_reversal',
-            reference_id: id,
-            created_by: auth.userId,
-          })
-          .select('id')
-          .single();
-        if (revJeErr) throw revJeErr;
-
-        if (oldLines && oldLines.length > 0) {
-          const { error: revLinesErr } = await insertJournalLines(
-            auth.companyId,
-            oldLines.map((l: any) => ({
-              journal_entry_id: revJe.id,
-              account_id: l.account_id,
-              debit: parseFloat(l.credit) || 0,
-              credit: parseFloat(l.debit) || 0,
-              description: l.description,
-            }))
-          );
-          if (revLinesErr) throw revLinesErr;
-        }
+        const { postReversalEntry } = await import('@/lib/voucher-utils');
+        const { error: revErr } = await postReversalEntry(auth.companyId, {
+          journalEntryId: inv.journal_entry_id,
+          referenceType: 'purchase_invoice_reversal',
+          referenceId: id,
+          description: `عكس فاتورة مشتريات رقم ${inv.number}`,
+          userId: auth.userId,
+        });
+        if (revErr) throw revErr;
       }
     }
 

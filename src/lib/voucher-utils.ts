@@ -84,27 +84,22 @@ export async function postReversalEntry(
   const s = sb();
 
   const { data: oldLines } = await s.from('journal_lines')
-    .select('account_id, debit, credit, description')
+    .select('account_id, debit, credit, description, contact_id, project_id')
     .eq('journal_entry_id', opts.journalEntryId);
 
-  if (!oldLines || oldLines.length === 0) return { error: null }; // لا قيد فعلياً — لا شيء لعكسه
+  if (!oldLines || oldLines.length === 0) return { error: null };
 
   const today = new Date().toISOString().split('T')[0];
-  const revNumber = await getNextJournalNumber(companyId, today);
-  const { data: revJe, error: revErr } = await s.from('journal_entries')
-    .insert({
-      company_id: companyId,
-      number: revNumber,
-      date: today,
-      type: 'general',
-      description: opts.description,
-      reference_type: opts.referenceType,
-      reference_id: opts.referenceId,
-      created_by: opts.userId,
-    })
-    .select('id')
-    .single();
-  if (revErr) return { error: revErr };
+  const { insertJournalHeader } = await import('@/lib/journal-utils');
+  const { data: revJe, error: revErr } = await insertJournalHeader(companyId, {
+    date: today,
+    type: 'general',
+    description: opts.description,
+    reference_type: opts.referenceType,
+    reference_id: opts.referenceId,
+    created_by: opts.userId,
+  });
+  if (revErr || !revJe) return { error: revErr || new Error('فشل قيد عكسي') };
 
   const { error: linesErr } = await insertJournalLines(
     companyId,
