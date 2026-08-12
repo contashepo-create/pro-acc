@@ -40,13 +40,14 @@ export async function GET(request: NextRequest) {
       const { sumProjectsJournal } = await import('@/lib/project-costs');
       const journalMap = await sumProjectsJournal(auth.companyId, projectIds);
       const { data: billRes } = await s.from('invoices')
-        .select('project_id, total, status')
+        .select('project_id, total, subtotal, tax_amount, vat_amount, status')
         .eq('company_id', auth.companyId)
         .in('project_id', projectIds)
         .neq('status', 'cancelled');
       for (const id of projectIds) costsByProject[id] = journalMap[id]?.expenses || 0;
       for (const b of billRes || []) {
-        billedByProject[b.project_id] = (billedByProject[b.project_id] || 0) + parseFloat(String(b.total));
+        const net = parseFloat(String(b.subtotal)) || ((parseFloat(String(b.total)) || 0) - (parseFloat(String(b.tax_amount || b.vat_amount)) || 0));
+        billedByProject[b.project_id] = (billedByProject[b.project_id] || 0) + net;
       }
     }
 
@@ -58,7 +59,7 @@ export async function GET(request: NextRequest) {
       };
       const wip = computeWip(input);
       return {
-        project_id: p.id, project_name: p.name, client_name: p.clients?.name || null,
+        project_id: p.id, project_name: p.name, client_name: p.contacts?.name || null,
         contract_amount: input.contractAmount, costs_incurred: input.costsIncurred,
         billed_to_date: input.billedToDate, ...wip,
       };

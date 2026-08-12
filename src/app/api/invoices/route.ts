@@ -200,8 +200,8 @@ export async function POST(request: NextRequest) {
           vat_rate: vatRate, 
           vat_amount: computedVat,
           total: computedTotal, 
-          paid_amount: finalPaidAmount,
-          status: finalStatus, 
+          paid_amount: 0,
+          status: 'unpaid', 
           notes: notes || null, 
           created_by: auth.userId,
         })

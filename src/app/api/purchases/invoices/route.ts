@@ -171,6 +171,7 @@ export async function POST(req: NextRequest) {
       const piPayload: any = {
         company_id: auth.companyId,
         invoice_number: nextNum,
+        number: nextNum,
         date,
         supplier_id,
         purchase_order_id: purchase_order_id || null,

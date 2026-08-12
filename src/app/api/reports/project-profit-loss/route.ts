@@ -131,13 +131,15 @@ export async function GET(request: NextRequest) {
 
         // Get invoices revenue
         const { data: invoices } = await s.from('invoices')
-          .select('total')
+          .select('total, subtotal, tax_amount, vat_amount')
           .eq('company_id', auth.companyId)
           .eq('project_id', p.id)
-          .neq('status', 'cancelled')
-          .is('deleted_at', null);
+          .neq('status', 'cancelled');
 
-        const revenue = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
+        const revenue = (invoices || []).reduce((sum: number, inv: any) => {
+          const net = parseFloat(inv.subtotal) || ((parseFloat(inv.total) || 0) - (parseFloat(inv.tax_amount || inv.vat_amount) || 0));
+          return sum + net;
+        }, 0);
 
         const { sumProjectJournal } = await import('@/lib/project-costs');
         const journal = await sumProjectJournal(auth.companyId, p.id);

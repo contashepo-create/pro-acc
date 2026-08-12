@@ -40,8 +40,8 @@ export async function GET(req: NextRequest) {
     const billedByProject = new Map<string, number>();
     for (const inv of invoices || []) {
       if (!inv.project_id) continue;
-      const total = parseFloat(inv.total) || 0;
-      billedByProject.set(inv.project_id, (billedByProject.get(inv.project_id) || 0) + total);
+      const net = (parseFloat(inv.total) || 0) - (parseFloat(inv.tax_amount || inv.vat_amount) || 0);
+      billedByProject.set(inv.project_id, (billedByProject.get(inv.project_id) || 0) + net);
     }
 
     let linesQuery = s.from('journal_lines')

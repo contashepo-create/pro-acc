@@ -38,7 +38,7 @@ export async function GET(
       .eq('project_id', id).eq('company_id', auth.companyId)
       .neq('status', 'cancelled').order('date');
 
-    const invoicedAmount = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
+    const invoicedAmount = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.subtotal) || 0), 0);
     const paidAmount = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.paid_amount) || 0), 0);
 
     // Credit notes for this project
