@@ -167,11 +167,18 @@ export default function InvoicesPage() {
   };
 
   const handleDelete = async (invoice: any) => {
+    if (!confirm('سيتم إلغاء الفاتورة مع عكس قيدها المحاسبي. متابعة؟')) return;
     try {
-      const res = await fetch(`/api/invoices/${invoice.id}`, { method: 'DELETE' });
+      // الإلغاء (وليس الحذف المادي) — المسار الصحيح هو PATCH status=cancelled
+      // الذي يعكس القيد المحاسبي؛ لا يوجد DELETE في واجهة الفواتير.
+      const res = await fetch(`/api/invoices/${invoice.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'cancelled' }),
+      });
       const json = await res.json();
-      if (json.success) { toast.success('تم حذف الفاتورة بنجاح'); fetchData(); }
-      else { toast.error(json.message || 'فشل الحذف'); }
+      if (json.success) { toast.success('تم إلغاء الفاتورة بنجاح'); fetchData(); }
+      else { toast.error(json.message || 'فشل الإلغاء'); }
     } catch { toast.error('خطأ في الاتصال بالخادم'); }
   };
 
