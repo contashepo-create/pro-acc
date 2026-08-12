@@ -94,7 +94,7 @@ export async function GET(req: NextRequest) {
 
       for (const inv of invoices) {
         inv.items = itemsByInvoice.get(inv.id) || [];
-        inv.paid_amount = round2(paidByInvoice.get(inv.id) || 0);
+        inv.paid_amount = round2(Math.max(inv.paid_amount || 0, paidByInvoice.get(inv.id) || 0));
       }
     }
 
@@ -214,20 +214,36 @@ export async function POST(req: NextRequest) {
       // فلو استُلم الأمر ثم فُوتر تضاعفت الكمية. القيد المحاسبي أدناه يبقى هو
       // الأثر المالي للفاتورة؛ الكمية أثرها في الاستلام.
 
-      // الترحيل المحاسبي — فشل صريح عند غياب الحسابات بدل التجاهل الصامت
+      const { data: costAcc } = await s.from('accounts').select('id')
+        .eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.DIRECT_COSTS).maybeSingle();
       const { data: invAcc } = await s.from('accounts').select('id')
         .eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.INVENTORY).maybeSingle();
-      const { data: apAcc } = await s.from('accounts').select('id')
-        .eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
-      if (!invAcc || !apAcc) {
-        throw new Error('الحسابات الأساسية للمشتريات مفقودة (المخزون 1170 / ذمم الموردين 2110) — فعّل دليل الحسابات أولاً');
+      const debitAcc = costAcc || invAcc;
+      if (!debitAcc) throw new Error('حساب المصروف أو المخزون مفقود');
+
+      let creditAccId: string;
+      let creditContact: string | null = supplier_id;
+      if (custodyFile) {
+        const { resolveCustodyAccounts } = await import('@/lib/custody');
+        creditAccId = (await resolveCustodyAccounts(auth.companyId)).custodyId;
+        creditContact = null;
+        if (total > custodyFile.remaining_amount + 0.005) {
+          throw new Error(`مبلغ الفاتورة أكبر من المتبقي في ملف العهدة (${custodyFile.remaining_amount})`);
+        }
+      } else {
+        const { data: apAcc } = await s.from('accounts').select('id')
+          .eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_PAYABLE).maybeSingle();
+        if (!apAcc) throw new Error('حساب ذمم الموردين (2110) مفقود');
+        creditAccId = apAcc.id;
       }
 
       const { insertJournalHeader } = await import('@/lib/journal-utils');
       const { data: je, error: jeErr } = await insertJournalHeader(auth.companyId, {
         date,
         type: 'general',
-        description: `فاتورة مشتريات رقم ${nextNum}`,
+        description: custodyFile
+          ? `فاتورة مشتريات ${nextNum} من عهدة ${custodyFile.file_number || ''}`
+          : `فاتورة مشتريات رقم ${nextNum}`,
         reference_type: 'purchase_invoice',
         reference_id: invoiceId,
         created_by: auth.userId,
@@ -236,24 +252,48 @@ export async function POST(req: NextRequest) {
       journalEntryId = je.id;
 
       const journalLines: any[] = [
-        { journal_entry_id: journalEntryId, account_id: invAcc.id, debit: subtotal, credit: 0, description: `مشتريات فاتورة رقم ${nextNum}` },
+        { journal_entry_id: journalEntryId, account_id: debitAcc.id, debit: subtotal, credit: 0, description: `مشتريات فاتورة رقم ${nextNum}`, project_id: resolvedProjectId },
       ];
       if (taxAmount > 0) {
         const { data: vatAcc } = await s.from('accounts').select('id')
           .eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.VAT_PURCHASES).maybeSingle();
-        if (!vatAcc) throw new Error('حساب ضريبة المشتريات (1180) مفقود — فعّل دليل الحسابات أولاً');
-        journalLines.push({ journal_entry_id: journalEntryId, account_id: vatAcc.id, debit: taxAmount, credit: 0, description: `ضريبة مشتريات فاتورة رقم ${nextNum}` });
+        if (!vatAcc) throw new Error('حساب ضريبة المشتريات (1180) مفقود');
+        journalLines.push({ journal_entry_id: journalEntryId, account_id: vatAcc.id, debit: taxAmount, credit: 0, description: `ضريبة مشتريات ${nextNum}` });
       }
-      journalLines.push({ journal_entry_id: journalEntryId, account_id: apAcc.id, debit: 0, credit: total, contact_id: supplier_id, description: `ذمم موردين فاتورة رقم ${nextNum}` });
+      journalLines.push({
+        journal_entry_id: journalEntryId,
+        account_id: creditAccId,
+        debit: 0,
+        credit: total,
+        contact_id: creditContact,
+        project_id: resolvedProjectId,
+        description: custodyFile ? `سداد من عهدة ${custodyFile.file_number || ''}` : `ذمم موردين فاتورة رقم ${nextNum}`,
+      });
 
       const { error: linesErr } = await insertJournalLines(auth.companyId, journalLines);
       if (linesErr) throw linesErr;
 
-      await s.from('purchase_invoices')
-        .update({ journal_entry_id: journalEntryId })
-        .eq('id', invoiceId);
+      await s.from('purchase_invoices').update({ journal_entry_id: journalEntryId }).eq('id', invoiceId);
 
-      return success({ ...pi, journal_entry_id: journalEntryId, items: computedItems }, 201);
+      if (custodyFile) {
+        const { recordCustodyTx, syncCustodyTotals } = await import('@/lib/custody');
+        await recordCustodyTx(auth.companyId, custodyFile.id, 'expense', total, `فاتورة مشتريات ${nextNum}`, auth.userId, {
+          reference_type: 'purchase_invoice',
+          reference_id: invoiceId,
+        });
+        try {
+          await s.from('custody_invoices').insert({
+            company_id: auth.companyId,
+            custody_id: custodyFile.id,
+            purchase_invoice_id: invoiceId,
+            amount: total,
+            description: `فاتورة ${nextNum}`,
+          });
+        } catch { /* اختياري */ }
+        await syncCustodyTotals(auth.companyId, custodyFile.id);
+      }
+
+      return success({ ...pi, journal_entry_id: journalEntryId, items: computedItems, project_id: resolvedProjectId }, 201);
     } catch (txErr) {
       // تراجع آلي: لا فاتورة بدون قيد
       console.error('Purchase invoice creation failed, rolling back:', txErr);

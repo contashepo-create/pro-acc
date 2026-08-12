@@ -86,7 +86,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           date,
           type: 'custody_shortage',
           amount: shortage,
-          description: `عجز عهدة ${file.file_number || id}`,
+          remaining_amount: shortage,
+          reason: `عجز عهدة ${file.file_number || id}`,
           custody_id: id,
         });
       } catch { /* أعمدة اختيارية */ }
