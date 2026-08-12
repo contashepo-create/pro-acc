@@ -2,6 +2,17 @@ import { getSupabase } from '@/lib/supabase-client';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+export function accumulateProjectLine(
+  acc: { expenses: number; revenue: number },
+  line: { type?: string | null; debit?: number; credit?: number },
+) {
+  const debit = Number(line.debit) || 0;
+  const credit = Number(line.credit) || 0;
+  if (line.type === 'expense') acc.expenses += debit - credit;
+  if (line.type === 'revenue') acc.revenue += credit - debit;
+  return acc;
+}
+
 /**
  * تكلفة/إيراد المشروع = سطور القيد الموسومة بـ project_id فقط.
  * 1150/1130/2110 أصول وخصوم فلا تُحتسب تكلفة.
@@ -30,7 +41,7 @@ export async function sumProjectJournal(companyId: string, projectId: string) {
     byAccount[acc.code].debit += debit;
     byAccount[acc.code].credit += credit;
     if (acc.type === 'expense') expenses += debit - credit;
-    if (acc.type === 'revenue') revenue += credit - debit;
+    else if (acc.type === 'revenue') revenue += credit - debit;
   }
 
   return {

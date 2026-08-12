@@ -266,7 +266,7 @@ export async function POST(req: NextRequest) {
         debit: 0,
         credit: total,
         contact_id: creditContact,
-        project_id: resolvedProjectId,
+        // لا نوسُم 1150/2110 بالمشروع حتى لا يدخل الأصل/الذمة في تكلفة المشروع
         description: custodyFile ? `سداد من عهدة ${custodyFile.file_number || ''}` : `ذمم موردين فاتورة رقم ${nextNum}`,
       });
 

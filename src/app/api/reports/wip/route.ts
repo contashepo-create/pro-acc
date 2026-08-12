@@ -16,11 +16,21 @@ export async function GET(request: NextRequest) {
     const s = sb();
 
     // Active projects with their contract values.
-    const { data: projects, error: pErr } = await s.from('projects')
-      .select('id, name, contract_value, status, clients(name)')
+    let projects: any[] | null = null;
+    const primary = await s.from('projects')
+      .select('id, name, contract_value, status, contacts(name)')
       .eq('company_id', auth.companyId)
       .eq('status', 'active');
-    if (pErr) throw pErr;
+    if (primary.error) {
+      const fb = await s.from('projects')
+        .select('id, name, contract_value, status, client_id')
+        .eq('company_id', auth.companyId)
+        .eq('status', 'active');
+      if (fb.error) throw fb.error;
+      projects = fb.data;
+    } else {
+      projects = primary.data;
+    }
 
     const projectIds = (projects || []).map((p: any) => p.id);
     let costsByProject: Record<string, number> = {};
