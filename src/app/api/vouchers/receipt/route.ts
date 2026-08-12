@@ -3,7 +3,7 @@ import { success, error, requireModulePermission, handleApiError, getPaginationP
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber } from '@/lib/numbering';
 import { createJournalEntry } from '@/lib/journal-utils';
-import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations } from '@/lib/voucher-utils';
+import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations, hydratePartyNames } from '@/lib/voucher-utils';
 import { receiptVoucherCreateSchema } from '@/lib/validation';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
@@ -82,8 +82,10 @@ export async function GET(request: NextRequest) {
       count = fallbackResult.count || 0;
     }
 
+    const receipts = await hydratePartyNames(s, auth.companyId, data || [], { contacts: true });
+
     return success({
-      receipts: data || [],
+      receipts,
       total: count,
       page,
       pageSize,

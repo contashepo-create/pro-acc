@@ -20,6 +20,39 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export type VoucherKind = 'receipt' | 'disbursement';
 
+/** إن فشل embed الأسماء، املأها من جداول الأطراف. */
+export async function hydratePartyNames(
+  supabase: any,
+  companyId: string,
+  rows: any[],
+  opts: { contacts?: boolean; employees?: boolean } = {},
+): Promise<any[]> {
+  if (!rows.length) return rows;
+  if (opts.contacts) {
+    const ids = [...new Set(rows.map((r) => r.contact_id).filter(Boolean))];
+    if (ids.length) {
+      const { data } = await supabase.from('contacts').select('id, name').eq('company_id', companyId).in('id', ids);
+      const map = new Map((data || []).map((c: any) => [c.id, c.name]));
+      for (const r of rows) {
+        if (!r.contacts && r.contact_id) r.contacts = { name: map.get(r.contact_id) || '' };
+        r.contact_name = r.contacts?.name || map.get(r.contact_id) || '';
+      }
+    }
+  }
+  if (opts.employees) {
+    const ids = [...new Set(rows.map((r) => r.employee_id).filter(Boolean))];
+    if (ids.length) {
+      const { data } = await supabase.from('employees').select('id, name').eq('company_id', companyId).in('id', ids);
+      const map = new Map((data || []).map((e: any) => [e.id, e.name]));
+      for (const r of rows) {
+        if (!r.employees && r.employee_id) r.employees = { name: map.get(r.employee_id) || '' };
+        r.employee_name = r.employees?.name || map.get(r.employee_id) || '';
+      }
+    }
+  }
+  return rows;
+}
+
 /**
  * تحليل كود حساب ثابت إلى معرف الحساب الفعلي ضمن الشركة.
  * يعيد null إن لم يوجد — على المنادي أن يفشل صراحةً لا أن يكتب قيداً بلا مقابل.

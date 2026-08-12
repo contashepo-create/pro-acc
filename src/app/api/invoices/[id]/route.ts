@@ -69,7 +69,15 @@ export async function GET(
       journalLines = jl || [];
     }
 
-    const contact = inv.contacts as Record<string, any> | null;
+    let contact = (inv.contacts as Record<string, any> | null) || null;
+    if ((!contact || !contact.name) && inv.contact_id) {
+      const { data: cRow } = await s.from('contacts')
+        .select('id, name, tax_number, address, phone, email, commercial_registration, city, region, postal_code, national_id, contact_person')
+        .eq('id', inv.contact_id)
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
+      if (cRow) contact = cRow as Record<string, any>;
+    }
 
     return success({
       ...inv,
@@ -79,6 +87,8 @@ export async function GET(
       client_phone: contact?.phone || null,
       client_email: contact?.email || null,
       client_commercial_registration: contact?.commercial_registration || null,
+      client_city: contact?.city || null,
+      client_contact_person: contact?.contact_person || null,
       project_name: projectName,
       created_by_name: createdBy,
       items: itemsRes || [],

@@ -7,7 +7,7 @@ import { ACCOUNT_CODES } from '@/lib/constants';
 import { requireApproval } from '@/lib/notifications';
 import { checkTransactionBeforeSave } from '@/lib/approval-helpers';
 import { createJournalEntry, getAccountBalanceFromJournal } from '@/lib/journal-utils';
-import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations } from '@/lib/voucher-utils';
+import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations, hydratePartyNames } from '@/lib/voucher-utils';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
 const sb = () => getSupabase();
