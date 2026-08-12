@@ -187,7 +187,8 @@ export async function DELETE(
     // حذف سطور القيد أولاً
     const { error: lErr } = await s.from('journal_lines')
       .delete()
-      .eq('journal_entry_id', id);
+      .eq('journal_entry_id', id)
+      .eq('company_id', auth.companyId);
     
     if (lErr) {
       console.error('Error deleting journal lines:', lErr);

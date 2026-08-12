@@ -4,9 +4,9 @@ import { applyCacheHeaders, type CacheOptions } from '@/lib/cache';
 
 export function success<T>(data: T, status = 200, cacheOptions?: CacheOptions) {
   const response = NextResponse.json({ success: true, data }, { status });
-  if (cacheOptions) {
-    applyCacheHeaders(response, cacheOptions);
-  }
+  // Default no-store: tenant lists (accounts, journals, …) must not linger in
+  // the browser/CDN after a delete. Opt in only for truly static payloads.
+  applyCacheHeaders(response, cacheOptions ?? { cache: 'no-store' });
   return response;
 }
 

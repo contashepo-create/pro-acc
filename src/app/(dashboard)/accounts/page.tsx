@@ -12,6 +12,8 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { toast } from '@/components/ui/Toast';
+import { apiFetch } from '@/lib/api-client';
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -29,7 +31,7 @@ export default function AccountsPage() {
     try {
       setLoading(true);
       setError('');
-      const res = await fetch('/api/accounts');
+      const res = await apiFetch('/api/accounts');
       const json = await res.json();
       if (json.success) {
         setAccounts(json.data?.accounts || []);
@@ -70,15 +72,21 @@ export default function AccountsPage() {
 
   const handleDelete = async (account: any) => {
     try {
-      const res = await fetch(`/api/accounts/${account.id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/accounts/${account.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        fetchData();
+        setAccounts((prev) => removeAccountFromTree(prev, account.id));
+        toast.success('تم حذف الحساب');
+        await fetchData();
+      } else if (res.status === 404) {
+        setAccounts((prev) => removeAccountFromTree(prev, account.id));
+        toast.success('تم حذف الحساب مسبقاً');
+        await fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        toast.error(json.message || 'فشل الحذف');
       }
-    } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
+    } catch {
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
@@ -98,7 +106,7 @@ export default function AccountsPage() {
       const url = isEditing ? `/api/accounts/${editingAccount.id}` : '/api/accounts';
       const method = isEditing ? 'PUT' : 'POST';
       
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -124,6 +132,14 @@ export default function AccountsPage() {
       setSaving(false);
     }
   };
+
+  const removeAccountFromTree = (accs: any[], id: string): any[] =>
+    accs
+      .filter((a) => a.id !== id)
+      .map((a) => ({
+        ...a,
+        children: a.children ? removeAccountFromTree(a.children, id) : [],
+      }));
 
   const flattenAccounts = (accs: any[], depth = 0): any[] => {
     const result: any[] = [];

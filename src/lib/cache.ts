@@ -32,31 +32,17 @@ const DEFAULT_CACHE: CacheOptions = {
  * Maps route patterns to cache settings
  */
 export const ROUTE_CACHE_CONFIG: Record<string, CacheOptions> = {
-  // Chart of accounts - rarely changes, safe to cache longer
-  'GET:/api/accounts': { cache: 'public', maxAge: 300, staleWhileRevalidate: 60 },
-  
-  // Dashboard data - moderate cache
-  'GET:/api/dashboard': { cache: 'private', maxAge: 30, staleWhileRevalidate: 10 },
-  
-  // Categories - rarely change
-  'GET:/api/categories': { cache: 'public', maxAge: 600, staleWhileRevalidate: 120 },
-  
-  // Settings - rarely change
-  'GET:/api/settings': { cache: 'private', maxAge: 60, staleWhileRevalidate: 30 },
-  
-  // Reports - heavy queries, cache aggressively
-  'GET:/api/reports': { cache: 'private', maxAge: 120, staleWhileRevalidate: 60 },
-  
-  // Currencies - rarely change
-  'GET:/api/currencies': { cache: 'public', maxAge: 3600, staleWhileRevalidate: 600 },
-  
-  // Banks - rarely change
-  'GET:/api/banks': { cache: 'private', maxAge: 300, staleWhileRevalidate: 60 },
-
-  // Financial data - moderate cache for performance
-  'GET:/api/financial': { cache: 'private', maxAge: 60, staleWhileRevalidate: 30 },
-  
-  // Subscription plans - very rarely change
+  // Tenant data is company-scoped and mutates on every create/delete.
+  // Caching lists caused "deleted but still visible" then Not found on retry.
+  'GET:/api/accounts': { cache: 'no-store' },
+  'GET:/api/journal': { cache: 'no-store' },
+  'GET:/api/banks': { cache: 'no-store' },
+  'GET:/api/dashboard': { cache: 'no-store' },
+  'GET:/api/categories': { cache: 'no-store' },
+  'GET:/api/settings': { cache: 'no-store' },
+  'GET:/api/reports': { cache: 'private', maxAge: 30, staleWhileRevalidate: 10 },
+  'GET:/api/currencies': { cache: 'private', maxAge: 60, staleWhileRevalidate: 30 },
+  'GET:/api/financial': { cache: 'no-store' },
   'GET:/api/admin/subscription-plans': { cache: 'public', maxAge: 3600, staleWhileRevalidate: 600 },
 };
 

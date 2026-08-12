@@ -47,7 +47,7 @@ export default function NewJournalPage() {
   useEffect(() => {
     const p = new URLSearchParams(window.location.search).get('edit');
     setEditId(p);
-    fetch('/api/accounts')
+    fetch(`/api/accounts?_ts=${Date.now()}`, { cache: 'no-store', credentials: 'same-origin' })
       .then((r) => r.json())
       .then((j) => { if (j.success) setAccounts(flatten(j.data?.accounts || [])); });
 

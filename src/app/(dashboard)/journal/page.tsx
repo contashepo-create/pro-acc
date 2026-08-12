@@ -12,6 +12,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { apiFetch } from '@/lib/api-client';
 
 export default function JournalPage() {
   const router = useRouter();
@@ -23,7 +24,7 @@ export default function JournalPage() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/journal');
+      const res = await apiFetch('/api/journal');
       const json = await res.json();
       if (json.success) setEntries(json.data?.entries || []);
       else { setError(json.message || 'فشل'); toast.error(json.message || 'فشل تحميل القيود'); }
@@ -39,10 +40,13 @@ export default function JournalPage() {
   const handleDelete = async (entry: any) => {
     if (!confirm('هل تريد حذف هذا القيد؟')) return;
     try {
-      const res = await fetch(`/api/journal/${entry.id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/journal/${entry.id}`, { method: 'DELETE' });
       const json = await res.json();
-      if (json.success) { toast.success('تم حذف القيد'); fetchData(); }
-      else toast.error(json.message || 'فشل الحذف');
+      if (json.success || res.status === 404) {
+        setEntries((prev) => prev.filter((e) => e.id !== entry.id));
+        toast.success(json.success ? 'تم حذف القيد' : 'تم حذف القيد مسبقاً');
+        await fetchData();
+      } else toast.error(json.message || 'فشل الحذف');
     } catch { toast.error('خطأ في الاتصال'); }
   };
 
@@ -60,7 +64,7 @@ export default function JournalPage() {
           item={r}
           onView={async () => {
             try {
-              const res = await fetch(`/api/journal/${r.id}`, { credentials: 'same-origin' });
+              const res = await apiFetch(`/api/journal/${r.id}`);
               const json = await res.json();
               if (json.success) setViewing(json.data);
               else toast.error(json.message || 'تعذر عرض القيد');
