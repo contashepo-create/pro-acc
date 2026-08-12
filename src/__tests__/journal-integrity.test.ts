@@ -459,7 +459,7 @@ describe('DELETE /api/journal/[id]', () => {
 
   test('blocks delete when a reversal entry references it', async () => {
     const db = seedEntry(baseDb());
-    db.journal_entries.push({ id: 'je-rev', company_id: C1, reference: 'je-1' });
+    db.journal_entries.push({ id: 'je-rev', company_id: C1, reversal_of: 'je-1' });
     mockDb = makeDb(db);
     const res = await journalDELETE(authedRequest(), paramsOf('je-1'));
     expect(res.status).toBe(400);
