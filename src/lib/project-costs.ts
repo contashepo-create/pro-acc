@@ -102,8 +102,8 @@ export async function sumProjectsJournal(companyId: string, projectIds: string[]
     if (!accType) continue;
     const debit = parseFloat((l as any).debit) || 0;
     const credit = parseFloat((l as any).credit) || 0;
-    if (acc.type === 'expense') map[pid].expenses += debit - credit;
-    if (acc.type === 'revenue') map[pid].revenue += credit - debit;
+    if (accType === 'expense') map[pid].expenses += debit - credit;
+    if (accType === 'revenue') map[pid].revenue += credit - debit;
   }
   return map;
 }
