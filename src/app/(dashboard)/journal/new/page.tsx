@@ -28,6 +28,10 @@ function flatten(accounts: any[], depth = 0, out: any[] = []): any[] {
   return out;
 }
 
+function moneyInput(value: number) {
+  return value ? String(value) : '';
+}
+
 export default function NewJournalPage() {
   const router = useRouter();
   const [editId, setEditId] = useState<string | null>(null);
@@ -82,7 +86,6 @@ export default function NewJournalPage() {
     setForm((f: any) => {
       const lines = [...f.lines];
       const line: any = { ...lines[i], [field]: value };
-      // مدين ودائن متعاكسان: إدخال أحدهما يصفّر الآخر
       if (field === 'debit' && Number(value) > 0) line.credit = 0;
       if (field === 'credit' && Number(value) > 0) line.debit = 0;
       lines[i] = line;
@@ -99,6 +102,10 @@ export default function NewJournalPage() {
   const removeLine = (i: number) =>
     setForm((f: any) => ({ ...f, lines: f.lines.filter((_: any, idx: number) => idx !== i) }));
 
+  const totalDebit = form.lines.reduce((s: number, l: any) => s + (Number(l.debit) || 0), 0);
+  const totalCredit = form.lines.reduce((s: number, l: any) => s + (Number(l.credit) || 0), 0);
+  const balanced = Math.abs(totalDebit - totalCredit) < 0.01 && totalDebit > 0;
+
   const handleSave = async () => {
     if (!form.date) { setSaveError('يجب إدخال التاريخ'); return; }
     if (!form.description) { setSaveError('يجب إدخال البيان'); return; }
@@ -110,9 +117,7 @@ export default function NewJournalPage() {
     if (form.lines.some((l: any) => !(Number(l.debit) > 0 || Number(l.credit) > 0))) {
       setSaveError('كل سطر يجب أن يكون مديناً أو دائناً (قيمة أكبر من صفر)'); return;
     }
-    const totalDebit = form.lines.reduce((s: number, l: any) => s + (Number(l.debit) || 0), 0);
-    const totalCredit = form.lines.reduce((s: number, l: any) => s + (Number(l.credit) || 0), 0);
-    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+    if (!balanced) {
       setSaveError(`القيد غير متوازن: مدين ${totalDebit} ≠ دائن ${totalCredit}`); return;
     }
 
@@ -122,6 +127,7 @@ export default function NewJournalPage() {
       const method = editId ? 'PUT' : 'POST';
       const res = await fetch(url, {
         method,
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           date: form.date,
@@ -156,15 +162,32 @@ export default function NewJournalPage() {
     })),
   ];
 
+  const amountField = (i: number, field: 'debit' | 'credit', label: string) => (
+    <Input
+      label={label}
+      inputMode="decimal"
+      type="text"
+      autoComplete="off"
+      placeholder="0.00"
+      dir="ltr"
+      className="font-mono text-base"
+      value={moneyInput(form.lines[i][field])}
+      onChange={(e) => {
+        const raw = e.target.value.replace(/[^\d.]/g, '');
+        updateLine(i, field, raw === '' ? 0 : parseFloat(raw) || 0);
+      }}
+    />
+  );
+
   return (
-    <div className="max-w-5xl mx-auto p-4 sm:p-6">
+    <div className="w-full max-w-5xl mx-auto pb-28 sm:pb-8">
       <PageHeader
         title={editId ? 'تعديل قيد' : 'تسجيل قيد جديد'}
-        description="تسجيل الأطراف المدينة والدائنة مقيدة بالحسابات الفرعية وفق المعايير المحاسبية العالمية"
+        description="تسجيل الأطراف المدينة والدائنة على الحسابات الفرعية"
         actions={<Button variant="ghost" onClick={() => router.push('/journal')} leftIcon={<ArrowRight size={16} />}>رجوع للقيود</Button>}
       />
 
-      <div className="space-y-6 mt-4">
+      <div className="space-y-5 mt-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <Select label="النوع" value={form.type} onChange={(v) => setForm({ ...form, type: v })} options={[{ value: 'general', label: 'عام' }, { value: 'opening_balance', label: 'افتتاحي' }, { value: 'accrual', label: 'استحقاق' }]} />
@@ -172,94 +195,80 @@ export default function NewJournalPage() {
 
         <Textarea label="البيان العام للقيد" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
 
-        <div className="bg-bg-card border border-border rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between pb-2 border-b border-border">
-            <h3 className="font-bold text-sm text-text-primary">بنود وشروط القيد (مدين / دائن)</h3>
-            <span className="text-xs text-text-muted">ملاحظة: يُسمح بالترحيل المباشر على الحسابات الفرعية فقط</span>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-bold text-sm text-text-primary">بنود القيد</h3>
+            <span className="text-xs text-text-muted hidden sm:inline">حساب فرعي فقط — سطر مدين أو دائن</span>
           </div>
 
-          <div className="border border-border rounded-lg overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-bg-secondary text-text-muted">
-                <tr>
-                  <th className="p-3 text-right min-w-[280px]">الحساب الفرعي (Posting Account)</th>
-                  <th className="p-3 text-right">البيان الفرعي</th>
-                  <th className="p-3 text-right w-36">مدين (Debit)</th>
-                  <th className="p-3 text-right w-36">دائن (Credit)</th>
-                  <th className="p-3 w-12 text-center"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {form.lines.map((line: any, i: number) => (
-                  <tr key={i} className="hover:bg-bg-hover/50 align-middle">
-                    <td className="p-2.5">
-                      <Select
-                        searchable
-                        value={line.accountCode}
-                        onChange={(v) => updateLine(i, 'accountCode', v)}
-                        options={accountOptions}
-                        placeholder="بحث بالرمز أو اسم الحساب الفرعي..."
-                      />
-                    </td>
-                    <td className="p-2.5">
-                      <Input
-                        placeholder="بيان السطر (اختياري)"
-                        value={line.description}
-                        onChange={(e) => updateLine(i, 'description', e.target.value)}
-                      />
-                    </td>
-                    <td className="p-2.5">
-                      <Input
-                        type="number"
-                        min="0"
-                        step="any"
-                        placeholder="0.00"
-                        value={line.debit || ''}
-                        onChange={(e) => updateLine(i, 'debit', parseFloat(e.target.value) || 0)}
-                      />
-                    </td>
-                    <td className="p-2.5">
-                      <Input
-                        type="number"
-                        min="0"
-                        step="any"
-                        placeholder="0.00"
-                        value={line.credit || ''}
-                        onChange={(e) => updateLine(i, 'credit', parseFloat(e.target.value) || 0)}
-                      />
-                    </td>
-                    <td className="p-2.5 text-center">
-                      <button
-                        type="button"
-                        onClick={() => removeLine(i)}
-                        className="text-danger hover:text-danger/80 p-1.5 rounded-lg hover:bg-danger/10 transition-colors"
-                        title="حذف السطر"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="space-y-3">
+            {form.lines.map((line: any, i: number) => (
+              <div
+                key={i}
+                className="rounded-xl border border-border bg-bg-card p-3 sm:p-4 space-y-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-text-muted">سطر {i + 1}</span>
+                  {form.lines.length > 2 && (
+                    <button
+                      type="button"
+                      onClick={() => removeLine(i)}
+                      className="text-danger hover:bg-danger/10 p-2 rounded-lg min-h-11 min-w-11 inline-flex items-center justify-center"
+                      title="حذف السطر"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+                <Select
+                  label="الحساب"
+                  searchable
+                  value={line.accountCode}
+                  onChange={(v) => updateLine(i, 'accountCode', v)}
+                  options={accountOptions}
+                  placeholder="بحث بالرمز أو الاسم..."
+                />
+                <Input
+                  label="البيان (اختياري)"
+                  placeholder="بيان السطر"
+                  value={line.description}
+                  onChange={(e) => updateLine(i, 'description', e.target.value)}
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  {amountField(i, 'debit', 'مدين')}
+                  {amountField(i, 'credit', 'دائن')}
+                </div>
+              </div>
+            ))}
           </div>
 
-          <div className="flex items-center justify-between pt-2">
-            <Button variant="ghost" onClick={addLine} leftIcon={<Plus size={16} />}>
-              إضافة سطر جديد
-            </Button>
-            <div className="text-xs text-text-muted flex flex-wrap gap-x-4 gap-y-1 font-mono">
-              <span>إجمالي المدين: <strong className="text-text-primary">{form.lines.reduce((s: number, l: any) => s + (Number(l.debit) || 0), 0).toFixed(2)}</strong></span>
-              <span>إجمالي الدائن: <strong className="text-text-primary">{form.lines.reduce((s: number, l: any) => s + (Number(l.credit) || 0), 0).toFixed(2)}</strong></span>
-            </div>
-          </div>
+          <Button variant="ghost" onClick={addLine} leftIcon={<Plus size={16} />} className="w-full sm:w-auto">
+            إضافة سطر
+          </Button>
         </div>
 
         {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
 
-        <div className="flex gap-2">
+        <div className="hidden sm:flex gap-2">
           <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ القيد'}</Button>
           <Button variant="ghost" onClick={() => router.push('/journal')}>إلغاء</Button>
+        </div>
+      </div>
+
+      {/* شريط إجمالي ثابت أسفل الشاشة — لا يغطي الحقول لأن الصفحة لها padding-bottom */}
+      <div className="fixed bottom-0 inset-x-0 z-30 border-t border-border bg-bg-card/95 backdrop-blur-md px-4 py-3 sm:static sm:mt-4 sm:rounded-xl sm:border sm:bg-bg-card sm:backdrop-blur-none">
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="flex justify-between sm:justify-start gap-4 font-mono text-sm">
+            <span>مدين <strong className="text-text-primary">{totalDebit.toFixed(2)}</strong></span>
+            <span>دائن <strong className="text-text-primary">{totalCredit.toFixed(2)}</strong></span>
+            <span className={balanced ? 'text-success' : 'text-danger'}>
+              {balanced ? 'متوازن' : `فرق ${(totalDebit - totalCredit).toFixed(2)}`}
+            </span>
+          </div>
+          <div className="flex gap-2 sm:hidden">
+            <Button onClick={handleSave} disabled={saving} className="flex-1">{saving ? 'جاري الحفظ...' : 'حفظ القيد'}</Button>
+            <Button variant="ghost" onClick={() => router.push('/journal')}>إلغاء</Button>
+          </div>
         </div>
       </div>
     </div>

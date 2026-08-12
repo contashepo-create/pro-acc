@@ -54,21 +54,18 @@ export function Select({
     : options;
 
   const updateCoords = () => {
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      const width = Math.max(rect.width, 320); // minimum 320px for comfortable reading
-      let left = rect.left;
-      if (left + width > window.innerWidth - 16) {
-        left = window.innerWidth - width - 16;
-      }
-      if (left < 16) left = 16;
-
-      setCoords({
-        top: rect.bottom + window.scrollY + 4,
-        left,
-        width,
-      });
-    }
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const width = Math.min(Math.max(rect.width, 280), window.innerWidth - 24);
+    let left = rect.left;
+    if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12;
+    if (left < 12) left = 12;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const menuH = Math.min(320, window.innerHeight - 24);
+    const top = spaceBelow < 220 && rect.top > spaceBelow
+      ? Math.max(12, rect.top - menuH)
+      : Math.min(rect.bottom + 4, window.innerHeight - 80);
+    setCoords({ top, left, width });
   };
 
   useEffect(() => {
@@ -119,10 +116,11 @@ export function Select({
     <div
       ref={dropdownRef}
       style={{
-        position: 'absolute',
+        position: 'fixed',
         top: `${coords.top}px`,
         left: `${coords.left}px`,
         width: `${coords.width}px`,
+        maxHeight: 'min(320px, 70dvh)',
         zIndex: 99999,
       }}
       className="bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden animate-in fade-in duration-150"
