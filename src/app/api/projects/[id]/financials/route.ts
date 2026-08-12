@@ -95,7 +95,7 @@ export async function GET(
       },
       summary: {
         contract_value: contractValue,
-        invoiced: invoicedAmount,
+        invoiced: invoicedNet,
         credit_notes: creditNoteAmount,
         net_invoiced: netInvoiced,
         paid: paidAmount,

@@ -20,18 +20,19 @@ export function accumulateProjectLine(
  */
 export async function sumProjectJournal(companyId: string, projectId: string) {
   const s = getSupabase();
-  let res = await s.from('journal_lines')
+  const joined = await s.from('journal_lines')
     .select('debit, credit, account_id, accounts(code, name, type)')
     .eq('company_id', companyId)
     .eq('project_id', projectId);
-  if (res.error) {
-    res = await s.from('journal_lines')
+  let lines: any[] = joined.data || [];
+  if (joined.error) {
+    const fallback = await s.from('journal_lines')
       .select('debit, credit, account_id')
       .eq('company_id', companyId)
       .eq('project_id', projectId);
-    if (res.error) throw res.error;
+    if (fallback.error) throw fallback.error;
+    lines = fallback.data || [];
   }
-  const lines = res.data || [];
   const needTypes = lines.some((l: any) => !l.accounts);
   let typeById = new Map<string, { code: string; name: string; type: string }>();
   if (needTypes) {
@@ -74,18 +75,19 @@ export async function sumProjectsJournal(companyId: string, projectIds: string[]
   if (projectIds.length === 0) return map;
 
   const s = getSupabase();
-  let batch = await s.from('journal_lines')
+  const joined = await s.from('journal_lines')
     .select('project_id, account_id, debit, credit, accounts(type)')
     .eq('company_id', companyId)
     .in('project_id', projectIds);
-  if (batch.error) {
-    batch = await s.from('journal_lines')
+  let lines: any[] = joined.data || [];
+  if (joined.error) {
+    const fallback = await s.from('journal_lines')
       .select('project_id, account_id, debit, credit')
       .eq('company_id', companyId)
       .in('project_id', projectIds);
-    if (batch.error) throw batch.error;
+    if (fallback.error) throw fallback.error;
+    lines = fallback.data || [];
   }
-  const lines = batch.data || [];
   const typeById = new Map<string, string>();
   if (lines.some((l: any) => !l.accounts)) {
     const ids = [...new Set(lines.map((l: any) => l.account_id).filter(Boolean))];
