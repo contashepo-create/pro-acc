@@ -215,6 +215,18 @@ export default function InvoiceViewPage() {
     fetchData();
   }, [params.id]);
 
+  // الطباعة التلقائية عند فتح الرابط بمعامل ?print=1 (زر الطباعة من قائمة الفواتير)
+  useEffect(() => {
+    if (loading || !invoice) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('print') === '1') {
+      const t = setTimeout(() => window.print(), 400);
+      url.searchParams.delete('print');
+      window.history.replaceState({}, '', url.toString());
+      return () => clearTimeout(t);
+    }
+  }, [loading, invoice]);
+
   const handlePrint = () => window.print();
 
   // Save current view preferences permanently to company settings

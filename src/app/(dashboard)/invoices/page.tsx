@@ -226,6 +226,7 @@ export default function InvoicesPage() {
         <ActionButtons
           item={row}
           onView={() => { window.location.href = `/invoices/${row.id}/view`; }}
+          onPrint={() => { window.open(`/invoices/${row.id}/view?print=1`, '_blank', 'noopener,noreferrer'); }}
           onEdit={handleEdit}
           onDelete={handleDelete}
         />
