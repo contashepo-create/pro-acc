@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
       if (acc.children.length > 0) acc.is_header = true;
     }
 
-    return success({ accounts: roots }, 200, { cache: 'private', maxAge: 300, staleWhileRevalidate: 60 });
+    return success({ accounts: roots });
   } catch (err) {
     return handleApiError(err);
   }

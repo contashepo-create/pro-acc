@@ -64,6 +64,13 @@ describe('Invoice Numbering', () => {
     expect(num).toBe(100);
   });
 
+  test('uses company-wide MAX when yearly invoice sequence is behind', async () => {
+    mockRpc.mockResolvedValue({ data: 2, error: null });
+    mockChain.maybeSingle.mockResolvedValue({ data: { number: 88 } });
+    const num = await getNextInvoiceNumber(TEST_COMPANY_ID, 2026);
+    expect(num).toBe(89);
+  });
+
   test('should return 1 when fallback and no existing records', async () => {
     mockRpc.mockRejectedValue(new Error('function not found'));
     mockChain.maybeSingle.mockResolvedValue({ data: null });
@@ -106,6 +113,13 @@ describe('Journal Numbering', () => {
       p_year: 2025,
     });
     expect(num).toBe(15);
+  });
+
+  test('uses company-wide MAX when yearly sequence is behind existing journals', async () => {
+    mockRpc.mockResolvedValue({ data: 3, error: null });
+    mockChain.maybeSingle.mockResolvedValue({ data: { number: 40 } });
+    const num = await getNextJournalNumber(TEST_COMPANY_ID, 2026);
+    expect(num).toBe(41);
   });
 });
 

@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { insertJournalLines } from '@/lib/journal-utils';
 
@@ -34,7 +33,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'payroll', 'create');
     const s = sb();
     const data = await parseBody(req);
     const { date, employee_ids } = data;
@@ -45,17 +44,18 @@ export async function POST(req: NextRequest) {
     const { data: accrAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_SALARIES).maybeSingle();
     const { data: advAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_ADVANCES).maybeSingle();
 
-    const jeNum = await getNextJournalNumber(auth.companyId, date || new Date().toISOString());
-    const { data: je } = await s.from('journal_entries')
-      .insert({ company_id: auth.companyId, number: jeNum, date, type: 'general', description: `رواتب شهر ${date.substring(0, 7)}`, created_by: auth.userId })
-      .select('id').single();
+    const { insertJournalHeader } = await import('@/lib/journal-utils');
+    const { data: je, error: jeHdrErr } = await insertJournalHeader(auth.companyId, {
+      date, type: 'general', description: `رواتب شهر ${date.substring(0, 7)}`, created_by: auth.userId,
+    });
+    if (jeHdrErr || !je) throw jeHdrErr || new Error('فشل قيد الرواتب');
     const jeId = je.id;
 
     let totalSalary = 0, totalAdvance = 0;
     const created: any[] = [];
 
     for (const empId of employee_ids) {
-      const { data: emp } = await s.from('employees').select('*').eq('id', empId).maybeSingle();
+      const { data: emp } = await s.from('employees').select('*').eq('id', empId).eq('company_id', auth.companyId).maybeSingle();
       if (!emp) continue;
       const salary = parseFloat(emp.salary) || 0;
 

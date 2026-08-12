@@ -92,7 +92,7 @@ export const companySchema = z.object({
 // --------------- Accounts (Chart of Accounts) ---------------
 
 export const accountSchema = z.object({
-  code: z.string().regex(/^\d{4}$/, 'رمز الحساب يجب أن يكون 4 أرقام'),
+  code: z.string().regex(/^\d{4}(?:-\d{1,6})?$/, 'رمز الحساب يجب أن يكون 4 أرقام أو 1110-0001 (الأب ثم التسلسل)'),
   name: z.string().min(1, 'اسم الحساب مطلوب').max(200),
   nameEn: z.string().optional(),
   type: z.enum(['asset', 'liability', 'equity', 'revenue', 'expense'] as const, {
@@ -110,7 +110,7 @@ export const accountSchema = z.object({
  * parent reassignment goes through a dedicated flow to avoid cycles.
  */
 export const accountUpdateSchema = z.object({
-  code: z.string().regex(/^\d{4}$/, 'رمز الحساب يجب أن يكون 4 أرقام').optional(),
+  code: z.string().regex(/^\d{4}(?:-\d{1,6})?$/, 'رمز الحساب يجب أن يكون 4 أرقام أو 1110-0001').optional(),
   name: z.string().min(1, 'اسم الحساب مطلوب').max(200).optional(),
   nameEn: z.string().max(200).nullable().optional(),
   is_active: z.boolean().optional(),
@@ -221,6 +221,9 @@ export const purchaseInvoiceSchema = z.object({
   // Fraction (0.15 = 15%). Unbounded previously — negative/huge rates were accepted.
   tax_rate: z.number().min(0, 'نسبة الضريبة لا يمكن أن تكون سالبة').max(1, 'نسبة الضريبة غير صالحة').optional().default(0),
   notes: z.string().optional(),
+  project_id: z.string().uuid().optional().nullable(),
+  custody_id: z.string().uuid().optional().nullable(),
+  link_to_project: z.boolean().optional(),
 }).strict();
 
 export const purchaseInvoiceUpdateSchema = z.object({
@@ -419,7 +422,24 @@ export const contactUpdateSchema = z.object({
   tax_number: z.string().max(100).nullable().optional(),
   commercial_registration: z.string().max(100).nullable().optional(),
   credit_limit: z.number().min(0).nullable().optional(),
-}).strict();
+  contact_person: z.string().max(200).nullable().optional(),
+  contact_person_phone: z.string().max(50).nullable().optional(),
+  contact_person_email: z.string().max(254).nullable().optional(),
+  city: z.string().max(100).nullable().optional(),
+  region: z.string().max(100).nullable().optional(),
+  country: z.string().max(100).nullable().optional(),
+  postal_code: z.string().max(20).nullable().optional(),
+  website: z.string().max(300).nullable().optional(),
+  iban: z.string().max(50).nullable().optional(),
+  bank_name: z.string().max(200).nullable().optional(),
+  swift_code: z.string().max(20).nullable().optional(),
+  payment_terms: z.string().max(50).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  date_of_birth: z.string().nullable().optional(),
+  gender: z.string().max(20).nullable().optional(),
+  national_id: z.string().max(50).nullable().optional(),
+  category: z.string().max(100).nullable().optional(),
+});
 
 // --------------- Project ---------------
 

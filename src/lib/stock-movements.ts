@@ -16,8 +16,7 @@
  */
 
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
+import { createJournalEntry } from '@/lib/journal-utils';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
@@ -48,28 +47,16 @@ async function postBalancedJE(
   description: string,
   lines: Array<{ account_id: string; debit: number; credit: number; description?: string }>
 ): Promise<{ journalEntryId: string | null; error: string | null }> {
-  const s = sb();
-  const number = await getNextJournalNumber(companyId, date);
-  const { data: je, error: jeErr } = await s.from('journal_entries')
-    .insert({
-      company_id: companyId,
-      number,
-      date,
-      type: 'general',
-      description,
-      reference_type: 'inventory_movement',
-      created_by: userId,
-    })
-    .select('id')
-    .single();
-  if (jeErr || !je) return { journalEntryId: null, error: 'فشل إنشاء قيد الحركة المخزنية' };
-
-  const { error: linesErr } = await insertJournalLines(
-    companyId,
-    lines.map((line) => ({ journal_entry_id: je.id, ...line }))
-  );
-  if (linesErr) return { journalEntryId: null, error: String(linesErr?.message || linesErr) };
-  return { journalEntryId: je.id, error: null };
+  const { journalId, error: jeErr } = await createJournalEntry(companyId, {
+    date,
+    type: 'general',
+    description,
+    reference_type: 'inventory_movement',
+    created_by: userId,
+    lines,
+  });
+  if (jeErr || !journalId) return { journalEntryId: null, error: 'فشل إنشاء قيد الحركة المخزنية' };
+  return { journalEntryId: journalId, error: null };
 }
 
 export async function applyStockMovement(

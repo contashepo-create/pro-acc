@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { pickContactFields, writeContact } from '@/lib/contact-fields';
 import { getContactBalance } from '@/lib/contact-utils';
 
 const sb = () => getSupabase();
@@ -46,6 +47,11 @@ export async function PUT(
     const { id } = await params;
     const s = sb();
     const body = await request.json();
+    const picked = pickContactFields(body);
+    if (picked.error) return error(picked.error);
+    if (!picked.data || Object.keys(picked.data).length === 0) {
+      return error('لا توجد بيانات للتحديث');
+    }
 
     const { data: existing } = await s.from('contacts')
       .select('id')
@@ -55,21 +61,10 @@ export async function PUT(
 
     if (!existing) return notFound();
 
-    const updateData: any = {};
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.phone !== undefined) updateData.phone = body.phone;
-    if (body.email !== undefined) updateData.email = body.email;
-    if (body.tax_number !== undefined) updateData.tax_number = body.tax_number;
-    if (body.credit_limit !== undefined) updateData.credit_limit = body.credit_limit;
-    if (body.address !== undefined) updateData.address = body.address;
-
-    const { data: updated, error: updateErr } = await s.from('contacts')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
+    const { data: updated, error: updateErr } = await writeContact(s, 'update', picked.data, {
+      companyId: auth.companyId,
+      id,
+    });
     if (updateErr) throw updateErr;
 
     return success(updated);

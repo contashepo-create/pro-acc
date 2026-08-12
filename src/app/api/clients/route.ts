@@ -2,14 +2,11 @@ import { NextRequest } from 'next/server';
 import { success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getContactBalances, postContactOpeningBalance } from '@/lib/contact-utils';
+import { pickContactFields, writeContact } from '@/lib/contact-fields';
 
 const sb = () => getSupabase();
 
-const VALID_CLIENT_TYPES = new Set(['client', 'both']);
-
-function isValidEmail(v: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
-}
+const VALID_CLIENT_TYPES = new Set(['client', 'both', 'supplier']);
 
 export async function GET(req: NextRequest) {
   try {
@@ -41,13 +38,11 @@ export async function GET(req: NextRequest) {
       account_name: c.accounts?.name || null,
     }));
 
-    // أرصدة حقيقية من سطور القيد الموسومة بـ contact_id (دفعية، مقيدة بالشركة).
     const balanceMap = await getContactBalances(
       auth.companyId,
       clients.map((c: any) => c.id),
     );
     clients.forEach((c: any) => {
-      // موجب = العميل مدين لنا (ذمم مدينة مستحقة)
       c.balance = balanceMap[c.id] || 0;
     });
 
@@ -63,19 +58,13 @@ export async function POST(req: NextRequest) {
     const s = sb();
     const data = await parseBody(req);
 
-    // تحقق الحقول الجوهرية (الحقول الموسّعة تمرّر كما هي أدناه)
-    if (!data.name || typeof data.name !== 'string' || !data.name.trim()) {
-      return error('اسم العميل مطلوب');
-    }
-    const type = data.type || 'client';
+    const picked = pickContactFields(data, { requireName: true });
+    if (picked.error || !picked.data) return error(picked.error || 'اسم العميل مطلوب');
+    const type = picked.data.type || 'client';
     if (!VALID_CLIENT_TYPES.has(type)) {
       return error('نوع العميل غير صالح');
     }
-    if (data.email && !isValidEmail(data.email)) {
-      return error('البريد الإلكتروني غير صالح');
-    }
 
-    // Check plan limits
     try {
       const { checkPlanLimit } = await import('@/lib/plan-limits');
       const limitCheck = await checkPlanLimit(auth.companyId, 'clients');
@@ -86,43 +75,14 @@ export async function POST(req: NextRequest) {
       console.warn('Plan limit check failed:', e);
     }
 
-    const insertData: any = {
-      company_id: auth.companyId,
-      name: data.name.trim(),
+    const { data: result, error: insertError } = await writeContact(s, 'insert', {
+      ...picked.data,
       type,
-      phone: data.phone || null,
-      email: data.email || null,
-      address: data.address || null,
-      tax_number: data.tax_number || null,
-      commercial_registration: data.commercial_registration || null,
-      credit_limit: data.credit_limit || 0,
-      is_active: true,
       created_by: auth.userId,
-    };
+    }, { companyId: auth.companyId });
 
-    // Extended fields (safe — will be ignored if columns don't exist yet)
-    const extendedFields = [
-      'contact_person', 'contact_person_phone', 'contact_person_email',
-      'city', 'region', 'country', 'postal_code', 'website',
-      'iban', 'bank_name', 'swift_code',
-      'opening_balance', 'opening_balance_type', 'payment_terms',
-      'notes', 'date_of_birth', 'gender', 'national_id', 'category',
-    ];
+    if (insertError || !result) throw insertError || new Error('فشل حفظ العميل');
 
-    extendedFields.forEach(field => {
-      if (data[field] !== undefined) {
-        insertData[field] = data[field];
-      }
-    });
-
-    const { data: result, error: insertError } = await s.from('contacts')
-      .insert(insertData)
-      .select('*')
-      .single();
-
-    if (insertError) throw insertError;
-
-    // رصيد افتتاحي للعميل — قيد متوازن موسوم بـ contact_id
     const openingBalance = parseFloat(data.opening_balance) || 0;
     const openingBalanceType = data.opening_balance_type === 'credit' ? 'credit' : 'debit';
     if (openingBalance !== 0) {
@@ -131,7 +91,7 @@ export async function POST(req: NextRequest) {
         type,
         amount: openingBalance,
         balanceType: openingBalanceType,
-        name: data.name.trim(),
+        name: picked.data.name,
         userId: auth.userId,
       });
       if (obErr) {

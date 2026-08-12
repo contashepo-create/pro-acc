@@ -45,15 +45,29 @@ export async function GET(
       lineQuery = (lineQuery as any).eq('contact_id', id);
     }
 
-    if (from) lineQuery = (lineQuery as any).gte('journal_entries.date', from);
-    if (to) lineQuery = (lineQuery as any).lte('journal_entries.date', to);
-
-    const { data: lines, error: lineErr } = await lineQuery.order('journal_entries.date', { ascending: true });
+    // PostgREST cannot parse order/filter as `journal_entries.date` on an embed.
+    // Fetch lines, then filter and sort by the joined entry date in memory.
+    const { data: rawLines, error: lineErr } = await lineQuery;
     if (lineErr) throw lineErr;
+
+    const lines = (rawLines || [])
+      .filter((l: any) => {
+        const d = l.journal_entries?.date as string | undefined;
+        if (!d) return !from && !to;
+        if (from && d < from) return false;
+        if (to && d > to) return false;
+        return true;
+      })
+      .sort((a: any, b: any) => {
+        const da = a.journal_entries?.date || '';
+        const db = b.journal_entries?.date || '';
+        if (da !== db) return da.localeCompare(db);
+        return String(a.journal_entries?.number || '').localeCompare(String(b.journal_entries?.number || ''), undefined, { numeric: true });
+      });
 
     // Build statement entries
     let runningBalance = 0;
-    const entries = (lines || []).map((l: any) => {
+    const entries = lines.map((l: any) => {
       const je = l.journal_entries;
       const debit = parseFloat(l.debit) || 0;
       const credit = parseFloat(l.credit) || 0;

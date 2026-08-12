@@ -1,6 +1,12 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import {
+  loadReportAccounts,
+  loadReportJournalEntries,
+  loadReportJournalLines,
+  resolveLineAccountId,
+} from '@/lib/report-journal';
 
 const sb = () => getSupabase();
 
@@ -21,51 +27,32 @@ export async function GET(req: NextRequest) {
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
 
-    // 1. Fetch all active accounts for company
-    const { data: accounts } = await s.from('accounts')
-      .select('id, code, name, type, is_header')
-      .eq('company_id', auth.companyId)
-      .eq('is_active', true)
-      .order('code');
-      
+    const accounts = await loadReportAccounts(s, auth.companyId);
     if (!accounts || accounts.length === 0) {
       return success({ accounts: [], total_debit: 0, total_credit: 0 });
     }
 
-    // 2. Fetch journal entries
-    // For Balance Sheet, we need cumulative up to `to` date (or all if `to` omitted).
-    // For Income Statement, we need period between `from` and `to`.
-    // For Trial Balance, we calculate opening (< from) and period (from .. to) and total (<= to).
-    
-    // Total entries up to `to`
-    let totalJeQuery = s.from('journal_entries')
-      .select('id, date')
-      .eq('company_id', auth.companyId)
-      .is('deleted_at', null);
-    if (to) totalJeQuery = totalJeQuery.lte('date', to);
+    const byId = new Set(accounts.map((a) => a.id));
+    const byCode = new Map(accounts.map((a) => [a.code, a.id]));
 
-    const { data: totalJes } = await totalJeQuery;
-    const totalJeIds = (totalJes || []).map((je: any) => je.id);
+    // Cumulative up to `to`. Period vs opening is split below using `from`.
+    const totalJes = await loadReportJournalEntries(s, auth.companyId, { to });
+    const totalJeIds = totalJes.map((je) => je.id);
 
     const periodJeIdSet = new Set<string>();
     const priorJeIdSet = new Set<string>();
-
-    for (const je of totalJes || []) {
-      if (from && je.date < from) {
-        priorJeIdSet.add(je.id);
-      } else {
-        periodJeIdSet.add(je.id);
-      }
+    for (const je of totalJes) {
+      if (from && je.date < from) priorJeIdSet.add(je.id);
+      else periodJeIdSet.add(je.id);
     }
 
-    let allLines: any[] = [];
-    if (totalJeIds.length > 0) {
-      const { data: lines } = await s.from('journal_lines')
-        .select('journal_entry_id, account_id, debit, credit')
-        .eq('company_id', auth.companyId)
-        .in('journal_entry_id', totalJeIds);
-      allLines = lines || [];
-    }
+    const rawLines = totalJeIds.length > 0
+      ? await loadReportJournalLines(s, auth.companyId, totalJeIds)
+      : [];
+    const allLines = rawLines.map((l) => ({
+      ...l,
+      account_id: resolveLineAccountId(l, byId, byCode),
+    }));
 
     // Accumulate balances
     const openingMap: Record<string, { debit: number; credit: number }> = {};
@@ -74,6 +61,7 @@ export async function GET(req: NextRequest) {
 
     for (const l of allLines) {
       const accId = l.account_id;
+      if (!accId) continue;
       const debit = parseFloat(l.debit) || 0;
       const credit = parseFloat(l.credit) || 0;
 

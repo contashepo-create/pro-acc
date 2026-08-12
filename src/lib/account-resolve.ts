@@ -33,7 +33,11 @@ export function isCashOrBankCode(code: string | null | undefined): boolean {
     code === '1110' ||
     code === '1120' ||
     code.startsWith('1110-') ||
-    code.startsWith('1120-')
+    code.startsWith('1120-') ||
+    code.endsWith('-1110') ||
+    code.endsWith('-1120') ||
+    /^1110\d{4}$/.test(code) ||
+    /^1120\d{4}$/.test(code)
   );
 }
 

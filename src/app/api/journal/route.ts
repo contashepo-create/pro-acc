@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { journalEntrySchema } from '@/lib/validation';
-import { getNextJournalNumber } from '@/lib/numbering';
+
 
 const sb = () => getSupabase();
 
@@ -119,16 +119,16 @@ export async function POST(request: NextRequest) {
       // Resolve account IDs for all lines first
       const resolvedLines: Array<{accountId: string; accountCode: string; debit: number; credit: number; description: string | null; contactId: null; projectId: null}> = [];
       const { isHeaderAccount, HEADER_ACCOUNT_CODES } = await import('@/lib/account-resolve');
+      const { findAccountByCode } = await import('@/lib/account-code');
       for (const line of lines) {
-        const { data: account } = await s.from('accounts')
-          .select('id, code, is_header').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+        const account = await findAccountByCode(s, auth.companyId, line.accountCode);
         if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
-        if (isHeaderAccount(account) || HEADER_ACCOUNT_CODES.has(line.accountCode)) {
-          throw new Error(`الحساب ${line.accountCode} حساب رئيسي ولا يُرحَّل عليه — اختر حساباً فرعياً`);
+        if (isHeaderAccount(account) || HEADER_ACCOUNT_CODES.has(account.code)) {
+          throw new Error(`الحساب ${account.code} حساب رئيسي ولا يُرحَّل عليه — اختر حساباً فرعياً`);
         }
         resolvedLines.push({
           accountId: account.id,
-          accountCode: line.accountCode,
+          accountCode: account.code,
           debit: line.debit,
           credit: line.credit,
           description: line.description || null,
@@ -180,44 +180,19 @@ export async function POST(request: NextRequest) {
       if (rpcErr.message?.includes('الموازنة') || rpcErr.code === 'P0001') {
         return error(rpcErr.message || 'خطأ في الموازنة');
       }
+      const uniqueJe = rpcErr.code === '23505' || /duplicate key|unique constraint/i.test(rpcErr.message || '');
       // RPC function not found OR the live function still omits journal_lines.company_id
       // (23502 not-null) — fall through to the legacy path that writes company_id.
       const rpcMsg = rpcErr.message || '';
       const missingFn = rpcMsg.includes('function') || rpcMsg.includes('does not exist') || rpcMsg.includes('Could not find');
       const missingCompanyId = rpcErr.code === '23502' || /null value in column ["']?company_id["']?/i.test(rpcMsg) || /violates not-null constraint/i.test(rpcMsg);
-      if (!missingFn && !missingCompanyId) {
+      if (!missingFn && !missingCompanyId && !uniqueJe) {
         throw rpcAttempt;
       }
     }
 
     // LEGACY FALLBACK: Used only when create_journal_entry RPC function doesn't exist yet
     // This has the known issue of manual rollback - will be removed after migration 012 is applied
-    const year = date.substring(0, 4);
-
-    let number: number;
-    try {
-      const { data: rpcData, error: rpcError } = await s.rpc('next_journal_number', {
-        p_company_id: auth.companyId,
-        p_year: parseInt(year),
-      });
-      if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
-      number = rpcData as number;
-    } catch {
-      const { data: seqExisting } = await s.from('journal_sequences')
-        .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
-      if (seqExisting) {
-        number = seqExisting.last_number + 1;
-        const { error: seqErr } = await s.from('journal_sequences')
-          .update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
-        if (seqErr) throw seqErr;
-      } else {
-        number = 1;
-        const { error: seqErr } = await s.from('journal_sequences')
-          .insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
-        if (seqErr) throw seqErr;
-      }
-    }
-
     // SECURITY NOTE: Pre-validate balance BEFORE inserting to avoid manual rollback window
     let preCheckDebit = 0;
     let preCheckCredit = 0;
@@ -229,67 +204,28 @@ export async function POST(request: NextRequest) {
       return error(`خطأ في الموازنة: مجموع الديون (${preCheckDebit}) لا يساوي مجموع الدائنين (${preCheckCredit})`);
     }
 
-    const { data: entryRes, error: entryErr } = await s.from('journal_entries')
-      .insert({
-        company_id: auth.companyId, number, date, type,
-        description: description || null, created_by: auth.userId,
-      })
-      .select('id, number, date, type, description, created_at')
-      .single();
+    const { insertJournalHeader } = await import('@/lib/journal-utils');
+    const { data: header, error: entryErr } = await insertJournalHeader(auth.companyId, {
+      date, type, description: description || null, created_by: auth.userId,
+    });
+    const entryRes = header
+      ? (await s.from('journal_entries').select('id, number, date, type, description, created_at').eq('id', header.id).single()).data
+      : null;
 
-    if (entryErr) {
-      try {
-        const { data: fallback } = await s.from('journal_entries')
-          .insert({
-            company_id: auth.companyId, number, date, type,
-            description: description || null,
-          })
-          .select('id, number, date, type, description, created_at')
-          .single();
-        if (fallback) {
-          const entryId = fallback.id;
-          let totalDebit = 0;
-          let totalCredit = 0;
-          for (const line of lines) {
-            const { data: account } = await s.from('accounts')
-              .select('id, name').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
-            if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
-            const { error: lineErr } = await s.from('journal_lines').insert({
-              journal_entry_id: entryId, account_id: account.id, account_code: line.accountCode,
-              account_name: account.name || null,
-              company_id: auth.companyId,
-              debit: line.debit, credit: line.credit, description: line.description || null,
-            });
-            if (lineErr) throw lineErr;
-            totalDebit += line.debit;
-            totalCredit += line.credit;
-          }
-          const { data: linesRes } = await s.from('journal_lines')
-            .select('id, account_code, accounts(name, type), debit, credit, description')
-            .eq('journal_entry_id', entryId).order('id');
-          const formattedLines = (linesRes || []).map((l: Record<string, any>) => ({
-            id: l.id, account_code: l.account_code, account_name: (l.accounts)?.name || null,
-            account_type: (l.accounts)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
-          }));
-          return success({ ...fallback, totalDebit, totalCredit, lines: formattedLines }, 201);
-        }
-      } catch {}
-      throw entryErr;
-    }
+    if (entryErr || !entryRes) throw entryErr || new Error('فشل إنشاء رأس القيد');
 
     const entryId = entryRes.id;
     let totalDebit = 0;
     let totalCredit = 0;
     for (const line of lines) {
-      const { data: account } = await s.from('accounts')
-        .select('id, name').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+      const { findAccountByCode } = await import('@/lib/account-code');
+      const account = await findAccountByCode(s, auth.companyId, line.accountCode);
       if (!account) {
-        // Rollback on account not found
         await s.from('journal_entries').delete().eq('id', entryId).eq('company_id', auth.companyId);
         throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
       }
       const { error: lineErr } = await s.from('journal_lines').insert({
-        journal_entry_id: entryId, account_id: account.id, account_code: line.accountCode,
+        journal_entry_id: entryId, account_id: account.id, account_code: account.code,
         account_name: account.name || null,
         company_id: auth.companyId,
         debit: line.debit, credit: line.credit, description: line.description || null,

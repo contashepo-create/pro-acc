@@ -98,8 +98,8 @@ export async function PUT(
     const { date, type, description, lines } = parsed.data;
     const resolved: Array<{ account_id: string; debit: number; credit: number; description: string | null }> = [];
     for (const line of lines) {
-      const { data: account } = await s.from('accounts')
-        .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+      const { findAccountByCode } = await import('@/lib/account-code');
+      const account = await findAccountByCode(s, auth.companyId, line.accountCode);
       if (!account) return error(`الحساب برمز ${line.accountCode} غير موجود`);
       resolved.push({
         account_id: account.id,
@@ -187,7 +187,8 @@ export async function DELETE(
     // حذف سطور القيد أولاً
     const { error: lErr } = await s.from('journal_lines')
       .delete()
-      .eq('journal_entry_id', id);
+      .eq('journal_entry_id', id)
+      .eq('company_id', auth.companyId);
     
     if (lErr) {
       console.error('Error deleting journal lines:', lErr);
@@ -197,7 +198,8 @@ export async function DELETE(
     // حذف القيد نفسه
     const { error: jeErr } = await s.from('journal_entries')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .eq('company_id', auth.companyId);
     
     if (jeErr) {
       console.error('Error deleting journal entry:', jeErr);

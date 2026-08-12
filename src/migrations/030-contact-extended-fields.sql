@@ -1,0 +1,19 @@
+-- حقول نموذج العميل/المورد التي كانت تُعرض في الواجهة ولا تُحفظ
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS contact_person TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS contact_person_phone TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS contact_person_email TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS city TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS region TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS country TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS postal_code TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS website TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS iban TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS bank_name TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS swift_code TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS payment_terms TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS date_of_birth DATE;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS gender TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS national_id TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS commercial_registration TEXT;

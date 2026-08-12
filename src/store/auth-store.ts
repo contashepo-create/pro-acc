@@ -56,7 +56,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   checkSession: async () => {
     try {
-      const res = await fetch('/api/auth/me');
+      const res = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
 
       if (!res.ok) {
         set({ user: null, company: null, isAuthenticated: false, isLoading: false });

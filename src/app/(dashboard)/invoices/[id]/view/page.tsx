@@ -168,7 +168,7 @@ export default function InvoiceViewPage() {
   
   const [template, setTemplate] = useState('modern');
   const [settings, setSettings] = useState<InvoiceTemplateSettings>(DEFAULT_INVOICE_SETTINGS);
-  const [showSettings, setShowSettings] = useState(false);
+  const [companyDefaultTemplate, setCompanyDefaultTemplate] = useState('modern');
   const [savingSettings, setSavingSettings] = useState(false);
   const [showInternalJournal, setShowInternalJournal] = useState(false);
 
@@ -197,8 +197,11 @@ export default function InvoiceViewPage() {
             const saved = typeof setJson.data.invoice_template_settings === 'string'
               ? JSON.parse(setJson.data.invoice_template_settings)
               : setJson.data.invoice_template_settings;
-            setSettings({ ...DEFAULT_INVOICE_SETTINGS, ...saved });
-            if (saved.defaultTemplate) setTemplate(saved.defaultTemplate);
+            const merged = { ...DEFAULT_INVOICE_SETTINGS, ...saved };
+            setSettings(merged);
+            const def = merged.defaultTemplate || 'modern';
+            setCompanyDefaultTemplate(def);
+            setTemplate(def);
           }
         } catch (e) {
           console.warn('Failed to fetch invoice settings:', e);
@@ -230,7 +233,9 @@ export default function InvoiceViewPage() {
       });
       const json = await res.json();
       if (json.success) {
-        toast.success('تم حفظ إعدادات وتخصيص الفاتورة كقالب افتراضي لجميع الفواتير المستقبلية! 🎉');
+        setCompanyDefaultTemplate(template);
+        setSettings((s) => ({ ...s, defaultTemplate: template }));
+        toast.success('تم اعتماد هذا القالب كافتراضي للشركة');
       } else {
         toast.error(json.message || 'فشل حفظ الإعدادات');
       }
@@ -332,25 +337,41 @@ export default function InvoiceViewPage() {
             </button>
           </div>
 
-          {/* Settings Drawer Toggle */}
           <Button
-            variant={showSettings ? 'primary' : 'outline'}
+            variant="outline"
             size="sm"
-            onClick={() => setShowSettings(!showSettings)}
+            onClick={() => router.push('/settings?tab=invoices')}
             leftIcon={<Settings size={15} />}
           >
-            تخصيص البيانات
+            إعدادات الطباعة
           </Button>
 
-          {/* Print Button */}
+          {template !== companyDefaultTemplate && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSaveAsDefaultSettings}
+              disabled={savingSettings}
+              leftIcon={<Save size={14} />}
+            >
+              {savingSettings ? 'جاري الحفظ...' : 'اعتماد هذا القالب كافتراضي'}
+            </Button>
+          )}
+
           <Button variant="secondary" size="sm" onClick={handlePrint} leftIcon={<Printer size={16} />}>
             طباعة الفاتورة
           </Button>
         </div>
       </div>
 
-      {/* Interactive Customization Settings Drawer */}
-      {showSettings && (
+      <p className="max-w-4xl mx-auto mt-3 px-4 no-print text-xs text-text-muted">
+        الحقول الظاهرة تُضبط من{' '}
+        <button type="button" className="text-accent underline" onClick={() => router.push('/settings?tab=invoices')}>
+          الإعدادات → الفواتير والطباعة
+        </button>
+        . أزرار القوالب أعلاه للمعاينة فقط.
+      </p>
+      {false && (
         <div className="max-w-4xl mx-auto mt-4 p-5 bg-bg-primary border border-border rounded-2xl shadow-sm no-print space-y-4">
           <div className="flex items-center justify-between border-b border-border pb-3">
             <div className="flex items-center gap-2">

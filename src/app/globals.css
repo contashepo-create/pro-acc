@@ -349,10 +349,14 @@ h1, h2, h3, h4, h5, h6 {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
-  font-size: 0.875rem;
+  /* 16px on phones: iOS will not zoom the page when focusing an input */
+  font-size: 1rem;
   line-height: 1.5;
   transition: all 0.15s ease;
   outline: none;
+}
+@media (min-width: 640px) {
+  .input-base { font-size: 0.875rem; }
 }
 .input-base::placeholder { color: var(--color-text-muted); }
 .input-base:focus {

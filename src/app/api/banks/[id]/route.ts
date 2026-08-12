@@ -1,9 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
+import { getAccountBalanceFromJournal, insertJournalHeader, insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -138,19 +136,13 @@ export async function PUT(
 
         if (!openingEntryId && newOpeningBalance !== 0) {
           // لا قيد افتتاحي لهذا البنك — ننشئ واحداً جديداً
-          const jeNum = await getNextJournalNumber(auth.companyId, new Date().toISOString());
-          const { data: newEntry, error: newEntryErr } = await s.from('journal_entries')
-            .insert({
-              company_id: auth.companyId,
-              number: jeNum,
-              date: new Date().toISOString().split('T')[0],
-              type: 'opening_balance',
-              description: `رصيد افتتاحي - ${bankName}`,
-              created_by: auth.userId,
-            })
-            .select('id')
-            .single();
-          if (newEntryErr) throw newEntryErr;
+          const { data: newEntry, error: newEntryErr } = await insertJournalHeader(auth.companyId, {
+            date: new Date().toISOString().split('T')[0],
+            type: 'opening_balance',
+            description: `رصيد افتتاحي - ${bankName}`,
+            created_by: auth.userId,
+          });
+          if (newEntryErr || !newEntry) throw newEntryErr || new Error('فشل قيد الافتتاح');
           openingEntryId = newEntry.id;
         }
 

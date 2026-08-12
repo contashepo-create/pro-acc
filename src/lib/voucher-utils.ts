@@ -11,7 +11,6 @@
  */
 
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
 import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
@@ -19,6 +18,39 @@ const sb = () => getSupabase();
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export type VoucherKind = 'receipt' | 'disbursement';
+
+/** إن فشل embed الأسماء، املأها من جداول الأطراف. */
+export async function hydratePartyNames(
+  supabase: any,
+  companyId: string,
+  rows: any[],
+  opts: { contacts?: boolean; employees?: boolean } = {},
+): Promise<any[]> {
+  if (!rows.length) return rows;
+  if (opts.contacts) {
+    const ids = [...new Set(rows.map((r) => r.contact_id).filter(Boolean))];
+    if (ids.length) {
+      const { data } = await supabase.from('contacts').select('id, name').eq('company_id', companyId).in('id', ids);
+      const map = new Map((data || []).map((c: any) => [c.id, c.name]));
+      for (const r of rows) {
+        if (!r.contacts && r.contact_id) r.contacts = { name: map.get(r.contact_id) || '' };
+        r.contact_name = r.contacts?.name || map.get(r.contact_id) || '';
+      }
+    }
+  }
+  if (opts.employees) {
+    const ids = [...new Set(rows.map((r) => r.employee_id).filter(Boolean))];
+    if (ids.length) {
+      const { data } = await supabase.from('employees').select('id, name').eq('company_id', companyId).in('id', ids);
+      const map = new Map((data || []).map((e: any) => [e.id, e.name]));
+      for (const r of rows) {
+        if (!r.employees && r.employee_id) r.employees = { name: map.get(r.employee_id) || '' };
+        r.employee_name = r.employees?.name || map.get(r.employee_id) || '';
+      }
+    }
+  }
+  return rows;
+}
 
 /**
  * تحليل كود حساب ثابت إلى معرف الحساب الفعلي ضمن الشركة.
@@ -51,27 +83,22 @@ export async function postReversalEntry(
   const s = sb();
 
   const { data: oldLines } = await s.from('journal_lines')
-    .select('account_id, debit, credit, description')
+    .select('account_id, debit, credit, description, contact_id, project_id')
     .eq('journal_entry_id', opts.journalEntryId);
 
-  if (!oldLines || oldLines.length === 0) return { error: null }; // لا قيد فعلياً — لا شيء لعكسه
+  if (!oldLines || oldLines.length === 0) return { error: null };
 
   const today = new Date().toISOString().split('T')[0];
-  const revNumber = await getNextJournalNumber(companyId, today);
-  const { data: revJe, error: revErr } = await s.from('journal_entries')
-    .insert({
-      company_id: companyId,
-      number: revNumber,
-      date: today,
-      type: 'general',
-      description: opts.description,
-      reference_type: opts.referenceType,
-      reference_id: opts.referenceId,
-      created_by: opts.userId,
-    })
-    .select('id')
-    .single();
-  if (revErr) return { error: revErr };
+  const { insertJournalHeader } = await import('@/lib/journal-utils');
+  const { data: revJe, error: revErr } = await insertJournalHeader(companyId, {
+    date: today,
+    type: 'general',
+    description: opts.description,
+    reference_type: opts.referenceType,
+    reference_id: opts.referenceId,
+    created_by: opts.userId,
+  });
+  if (revErr || !revJe) return { error: revErr || new Error('فشل قيد عكسي') };
 
   const { error: linesErr } = await insertJournalLines(
     companyId,
@@ -208,4 +235,41 @@ export async function revertInvoiceAllocations(
   }
 
   await s.from(linkTable).delete().eq(linkVoucherCol, voucherId);
+}
+
+/**
+ * تخصيص FIFO: أقدم فاتورة غير مسددة أولاً.
+ * لا يغيّر رصيد 1130 — يحدّث فقط paid_amount/status.
+ */
+export async function allocateOldestUnpaidInvoices(
+  companyId: string,
+  voucherId: string,
+  journalEntryId: string | null,
+  amount: number,
+  contactId: string
+): Promise<{ error: string | null; applied: number }> {
+  const s = sb();
+  const { data: invoices } = await s.from('invoices')
+    .select('id, total, paid_amount, status, date, number')
+    .eq('company_id', companyId)
+    .eq('contact_id', contactId)
+    .neq('status', 'cancelled')
+    .neq('status', 'paid')
+    .order('date', { ascending: true })
+    .order('number', { ascending: true });
+
+  const allocations: AllocationInput[] = [];
+  let remaining = round2(amount);
+  for (const inv of invoices || []) {
+    if (remaining <= 0.005) break;
+    const total = round2(parseFloat(inv.total) || 0);
+    const paid = round2(parseFloat(inv.paid_amount) || 0);
+    const due = round2(total - paid);
+    if (due <= 0) continue;
+    const take = round2(Math.min(remaining, due));
+    allocations.push({ invoice_id: inv.id, amount: take });
+    remaining = round2(remaining - take);
+  }
+  if (allocations.length === 0) return { error: null, applied: 0 };
+  return applyInvoiceAllocations(companyId, 'receipt', voucherId, journalEntryId, amount, allocations, contactId);
 }

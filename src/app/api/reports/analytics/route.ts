@@ -163,7 +163,7 @@ export async function GET(request: NextRequest) {
         outstandingInvoices,
         avgPaymentDays: Math.round(avgPaymentDays),
       },
-    }, 200, { cache: 'private', maxAge: 120, staleWhileRevalidate: 60 });
+    });
   } catch (err) {
     return handleApiError(err);
   }

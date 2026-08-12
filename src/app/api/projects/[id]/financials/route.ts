@@ -38,7 +38,8 @@ export async function GET(
       .eq('project_id', id).eq('company_id', auth.companyId)
       .neq('status', 'cancelled').order('date');
 
-    const invoicedAmount = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
+    const invoicedNet = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.subtotal) || 0), 0);
+    const invoicedGross = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
     const paidAmount = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.paid_amount) || 0), 0);
 
     // Credit notes for this project
@@ -55,13 +56,16 @@ export async function GET(
       .eq('company_id', auth.companyId)
       .order('date');
 
-    // Project expenses
+    const { sumProjectJournal } = await import('@/lib/project-costs');
+    const journal = await sumProjectJournal(auth.companyId, id);
+
     const { data: expenses } = await s.from('project_expenses')
       .select('id, expense_type, amount, date, description, tax_amount')
       .eq('project_id', id).eq('company_id', auth.companyId)
       .order('date');
 
-    const totalExpenses = (expenses || []).reduce((sum: number, e: any) => sum + (parseFloat(e.amount) || 0), 0);
+    // المصدر المعتمد: قيود المشروع (تشمل فواتير العهدة والمشتريات الموسومة).
+    const totalExpenses = journal.expenses;
 
     // Progress billing
     const { data: progressBilling } = await s.from('progress_billing')
@@ -72,10 +76,10 @@ export async function GET(
     const progressTotal = (progressBilling || []).reduce((sum: number, pb: any) => sum + (parseFloat(pb.gross_amount) || 0), 0);
 
     // Calculations
-    const netInvoiced = invoicedAmount - creditNoteAmount;
+    const netInvoiced = invoicedNet - creditNoteAmount;
     const remaining = contractValue - netInvoiced;
-    const outstanding = invoicedAmount - paidAmount - creditNoteAmount;
-    const actualProfit = netInvoiced - totalExpenses;
+    const outstanding = Math.max(0, invoicedGross - paidAmount);
+    const actualProfit = journal.revenue > 0 ? journal.profit : (netInvoiced - totalExpenses);
     const profitMargin = netInvoiced > 0 ? (actualProfit / netInvoiced) * 100 : 0;
     const completionPercent = contractValue > 0 ? (netInvoiced / contractValue) * 100 : 0;
 
@@ -91,13 +95,14 @@ export async function GET(
       },
       summary: {
         contract_value: contractValue,
-        invoiced: invoicedAmount,
+        invoiced: invoicedNet,
         credit_notes: creditNoteAmount,
         net_invoiced: netInvoiced,
         paid: paidAmount,
         outstanding: outstanding,
         remaining_contract: remaining,
         expenses: totalExpenses,
+        journal_revenue: journal.revenue,
         progress_billing: progressTotal,
         actual_profit: actualProfit,
         profit_margin: profitMargin,

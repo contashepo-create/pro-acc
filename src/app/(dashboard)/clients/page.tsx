@@ -39,7 +39,7 @@ export default function ClientsPage() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/clients');
+      const res = await fetch(`/api/clients?_ts=${Date.now()}`, { cache: 'no-store', credentials: 'same-origin' });
       const json = await res.json();
       if (json.success) setClients(json.data?.clients || []);
       else { setError(json.message || 'فشل'); toast.error(json.message || 'فشل تحميل البيانات'); }
