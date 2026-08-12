@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowRight, Plus, Receipt, Lock } from 'lucide-react';
+import { ArrowRight, Plus, Receipt, Lock, Wallet } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -10,8 +10,28 @@ import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { Checkbox } from '@/components/ui/Checkbox';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
+
+// حسابات مصروف شائعة من شجرة الحسابات الافتراضية:
+// 5100–5140 تكلفة مشروع، 5200/5300/5400 مصروفات تشغيلية/عمومية للشركة.
+const EXPENSE_ACCOUNT_OPTIONS = [
+  { value: '5100', label: 'تكلفة مباشرة (مشروع)' },
+  { value: '5110', label: 'مواد خام' },
+  { value: '5120', label: 'أجور عمالة مباشرة' },
+  { value: '5130', label: 'تكاليف مقاولي باطن' },
+  { value: '5140', label: 'إيجار معدات' },
+  { value: '5210', label: 'رواتب وأجور' },
+  { value: '5220', label: 'إيجارات' },
+  { value: '5230', label: 'كهرباء ومياه' },
+  { value: '5240', label: 'اتصالات وانترنت' },
+  { value: '5250', label: 'صيانة' },
+  { value: '5270', label: 'محروقات' },
+  { value: '5280', label: 'قرطاسية ومطبوعات' },
+  { value: '5290', label: 'مصروفات بنكية' },
+  { value: '5400', label: 'مصروفات إدارية وعمومية' },
+];
 
 export default function CustodyFilePage() {
   const { id } = useParams<{ id: string }>();
@@ -22,9 +42,10 @@ export default function CustodyFilePage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [modal, setModal] = useState<'add' | 'expense' | 'close' | null>(null);
+  const [modal, setModal] = useState<'add' | 'expense' | 'general' | 'close' | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<any>({ amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: '', description: '', allow_excess: false, returned_cash: 0 });
+  const [expenseForm, setExpenseForm] = useState<any>({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', expense_account_code: '5100', project_mode: 'none', project_id: '', allow_excess: false });
 
   const load = async () => {
     setLoading(true);
@@ -97,6 +118,7 @@ export default function CustodyFilePage() {
         <div className="flex flex-wrap gap-2">
           <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => { setForm({ amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: file.bank_safe_id || '', description: 'تعزيز' }); setModal('add'); }}>تعزيز</Button>
           <Button size="sm" variant="secondary" leftIcon={<Receipt size={14} />} onClick={() => { setForm({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', supplier_id: '', project_mode: file.project_id ? 'custody' : 'none', project_id: file.project_id || '', allow_excess: false }); setModal('expense'); }}>فاتورة مدفوعة من العهدة</Button>
+          <Button size="sm" variant="secondary" leftIcon={<Wallet size={14} />} onClick={() => { setExpenseForm({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', expense_account_code: '5100', project_mode: file.project_id ? 'custody' : 'none', project_id: file.project_id || '', allow_excess: false }); setModal('general'); }}>مصروف / مصروف تشغيلي</Button>
           <Button size="sm" variant="outline" leftIcon={<Lock size={14} />} onClick={() => { setForm({ returned_cash: file.remaining_amount, date: new Date().toISOString().split('T')[0], bank_safe_id: file.bank_safe_id || '', description: '' }); setModal('close'); }}>إغلاق الملف</Button>
         </div>
       )}
@@ -174,6 +196,44 @@ export default function CustodyFilePage() {
             <Select label="المشروع" value={form.project_id || ''} onChange={(v) => setForm({ ...form, project_id: v })}
               options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} />
           )}
+        </div>
+      </Modal>
+
+      <Modal isOpen={modal === 'general'} onClose={() => setModal(null)} title="مصروف من العهدة (عام / تشغيلي)" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>إلغاء</Button><Button disabled={saving} onClick={() => {
+        if (!expenseForm.amount || !expenseForm.description.trim()) { toast.error('المبلغ والبيان مطلوبان'); return; }
+        post(`/api/custodies/${id}/expense`, {
+          amount: expenseForm.amount,
+          date: expenseForm.date,
+          description: expenseForm.description,
+          expense_account_code: expenseForm.expense_account_code,
+          link_to_project: expenseForm.project_mode !== 'none',
+          project_id: expenseForm.project_mode === 'other' ? expenseForm.project_id : undefined,
+          allow_excess: expenseForm.allow_excess,
+        });
+      }}>ترحيل وخصم من الملف</Button></div>}>
+        <div className="space-y-3">
+          <p className="text-xs text-text-muted">مصروف بلا فاتورة مورد: مدين حساب المصروف / دائن 1150. حسابات 5100–5140 تكلفة مشروع، و5200/5300/5400 مصروفات تشغيلية/عمومية للشركة.</p>
+          <Select label="حساب المصروف" value={expenseForm.expense_account_code} onChange={(v) => setExpenseForm({ ...expenseForm, expense_account_code: v })}
+            options={EXPENSE_ACCOUNT_OPTIONS} />
+          <Input label="المبلغ" type="number" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: parseFloat(e.target.value) || 0 })} />
+          <Input label="التاريخ" type="date" value={expenseForm.date} onChange={(e) => setExpenseForm({ ...expenseForm, date: e.target.value })} />
+          <Input label="البيان" value={expenseForm.description || ''} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} />
+          <Select
+            label="ربط المشروع"
+            value={expenseForm.project_mode || (file.project_id ? 'custody' : 'none')}
+            onChange={(v) => setExpenseForm({ ...expenseForm, project_mode: v })}
+            options={[
+              { value: 'custody', label: file.project_name ? `مشروع الملف (${file.project_name})` : 'مشروع الملف (غير محدد)' },
+              { value: 'none', label: 'بدون مشروع (مصروف عام للشركة)' },
+              { value: 'other', label: 'مشروع آخر…' },
+            ]}
+          />
+          {expenseForm.project_mode === 'other' && (
+            <Select label="المشروع" value={expenseForm.project_id || ''} onChange={(v) => setExpenseForm({ ...expenseForm, project_id: v })}
+              options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} />
+          )}
+          <Checkbox checked={expenseForm.allow_excess} onChange={(v) => setExpenseForm({ ...expenseForm, allow_excess: v })}
+            label="السماح بالزيادة (أنفق الموظف من ماله الخاص)" />
         </div>
       </Modal>
 
