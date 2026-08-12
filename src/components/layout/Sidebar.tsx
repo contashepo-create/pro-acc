@@ -54,6 +54,8 @@ const navGroups: NavGroup[] = [
       { id: 'boq', label: 'بنود الكميات' },
       { id: 'progress-billing', label: 'الفواتير المرحلية' },
       { id: 'quotations', label: 'عروض الأسعار' },
+      { id: 'change-orders', label: 'أوامر التغيير' },
+      { id: 'equipment', label: 'تكاليف المعدات' },
     ],
   },
   {
@@ -101,7 +103,11 @@ const navGroups: NavGroup[] = [
   {
     label: 'التقارير',
     icon: BarChart3,
-    items: [{ id: 'reports', label: 'التقارير' }],
+    items: [
+      { id: 'reports', label: 'التقارير' },
+      { id: 'reports/wip', label: 'العمل تحت التنفيذ (WIP)' },
+      { id: 'reports/anomalies', label: 'كشف الشذوذ' },
+    ],
   },
   {
     label: 'النظام',
@@ -115,6 +121,7 @@ const navGroups: NavGroup[] = [
       { id: 'complaints', label: 'الشكاوي والاقتراحات' },
       { id: 'fiscal', label: 'السنوات المالية' },
       { id: 'notifications', label: 'الإشعارات' },
+      { id: 'financial-audit', label: 'سجل التدقيق المالي' },
     ],
   },
 ];
