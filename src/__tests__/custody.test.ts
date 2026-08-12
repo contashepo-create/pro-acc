@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -14,14 +14,14 @@ function computeFile(txs: Array<{ type: string; amount: number }>, headerAmount 
 }
 
 describe('custody file balances', () => {
-  it('opening only equals remaining', () => {
+  test('opening only equals remaining', () => {
     const f = computeFile([{ type: 'addition', amount: 5000 }], 5000);
     expect(f.totalReceived).toBe(5000);
     expect(f.remaining).toBe(5000);
     expect(f.status).toBe('open');
   });
 
-  it('expense deducts without changing received', () => {
+  test('expense deducts without changing received', () => {
     const f = computeFile([
       { type: 'addition', amount: 5000 },
       { type: 'expense', amount: 1200 },
@@ -32,7 +32,7 @@ describe('custody file balances', () => {
     expect(f.status).toBe('partially_settled');
   });
 
-  it('top-up then invoice', () => {
+  test('top-up then invoice', () => {
     const f = computeFile([
       { type: 'addition', amount: 1000 },
       { type: 'addition', amount: 4000 },
@@ -42,7 +42,7 @@ describe('custody file balances', () => {
     expect(f.remaining).toBe(2500);
   });
 
-  it('full spend remaining is zero but not auto-closed', () => {
+  test('full spend remaining is zero but not auto-closed', () => {
     const f = computeFile([
       { type: 'addition', amount: 800 },
       { type: 'expense', amount: 800 },
@@ -51,7 +51,7 @@ describe('custody file balances', () => {
     expect(f.status).toBe('partially_settled');
   });
 
-  it('return and shortage do not inflate received', () => {
+  test('return and shortage do not inflate received', () => {
     const f = computeFile([
       { type: 'addition', amount: 1000 },
       { type: 'expense', amount: 400 },

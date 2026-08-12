@@ -258,18 +258,23 @@ describe('POST /api/invoices — journal posting', () => {
     expect(res.status).toBe(201);
 
     const inv = insertsOf('invoices')[0].mut.payload;
-    expect(inv.status).toBe('paid');
-    expect(inv.paid_amount).toBe(402.5);
+    // Open items: الفاتورة تُنشأ غير مدفوعة ثم يخصص سند القبض الحالة
+    expect(inv.status).toBe('unpaid');
+    expect(inv.paid_amount).toBe(0);
 
-    const jl = insertsOf('journal_lines')[0].mut.payload as Row[];
-    const bankLine = jl.find((l) => l.account_id === BANK_ACC);
-    expect(bankLine.account_code).toBe('1121');  // real code — not hardcoded 1120
-    expect(bankLine.debit).toBeCloseTo(402.5);
-    expect(jl.find((l) => l.account_code === '1130')).toBeUndefined(); // nothing left on AR
+    const invoiceJl = insertsOf('journal_lines')[0].mut.payload as Row[];
+    const arLine = invoiceJl.find((l) => l.account_code === '1130');
+    expect(arLine.debit).toBeCloseTo(402.5);
+    expect(invoiceJl.find((l) => l.account_id === BANK_ACC)).toBeUndefined();
 
     const voucher = insertsOf('voucher_receipts')[0].mut.payload;
     expect(voucher.company_id).toBe(C1);
     expect(voucher.amount).toBe(402.5);
+
+    const receiptJl = insertsOf('journal_lines').map((c) => c.mut.payload).flat() as Row[];
+    const bankLine = receiptJl.find((l) => l.account_id === BANK_ACC);
+    expect(bankLine).toBeTruthy();
+    expect(bankLine.debit).toBeCloseTo(402.5);
   });
 });
 
@@ -299,16 +304,16 @@ describe('POST /api/invoices — tenant isolation', () => {
 });
 
 describe('PATCH /api/invoices/[id]', () => {
-  test('marking paid sets paid_amount = total (trio stays consistent)', async () => {
+  test('refuses to mark paid without a receipt allocation', async () => {
     const db = baseDb();
     db.invoices.push({ id: 'inv-1', company_id: C1, number: 3, total: 1150, paid_amount: 0, status: 'unpaid', journal_entry_id: null });
     mockDb = makeDb(db);
     const res = await invoicePATCH(authedRequest({ status: 'paid' }), paramsOf('inv-1'));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.message).toMatch(/سند قبض|مدفوعة/);
     const upd = mockDb.calls.find((c) => c.mut.kind === 'update' && c.table === 'invoices');
-    expect(upd!.mut.payload.status).toBe('paid');
-    expect(upd!.mut.payload.paid_amount).toBe(1150);
-    expect(upd!.ops.some((o) => o.col === 'company_id' && o.val === C1)).toBe(true);
+    expect(upd).toBeUndefined();
   });
 
   test('cancelling creates a reversal entry with swapped debit/credit', async () => {

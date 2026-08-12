@@ -1,4 +1,3 @@
-import { describe, it, expect } from 'vitest';
 const accumulateProjectLine = (
   acc: { expenses: number; revenue: number },
   line: { type?: string | null; debit?: number; credit?: number },
@@ -51,6 +50,24 @@ describe('project job cost from journal types', () => {
     const r = run([]);
     expect(r.expenses).toBe(0);
     expect(r.revenue).toBe(0);
+  });
+
+  it('VAT on sales is not job revenue', () => {
+    const r = run([
+      { type: 'asset', debit: 1150, credit: 0 },
+      { type: 'revenue', debit: 0, credit: 1000 },
+      { type: 'liability', debit: 0, credit: 150 },
+    ]);
+    expect(r.revenue).toBe(1000);
+  });
+
+  it('input VAT on purchase is not job cost', () => {
+    const r = run([
+      { type: 'expense', debit: 1000, credit: 0 },
+      { type: 'asset', debit: 150, credit: 0 },
+      { type: 'asset', debit: 0, credit: 1150 },
+    ]);
+    expect(r.expenses).toBe(1000);
   });
 
   it('reversal of expense reduces cost', () => {
