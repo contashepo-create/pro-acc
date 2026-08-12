@@ -186,34 +186,16 @@ export async function PATCH(
         .update({ status: 'cancelled', notes: body.notes || null, updated_at: new Date().toISOString() }).eq('id', id).eq('company_id', auth.companyId);
 
       if (invoice.journal_entry_id) {
-        const year = new Date().getFullYear().toString();
-        let reversalNumber: number;
-        try {
-          const { data: rpcData, error: rpcError } = await s.rpc('next_journal_number', {
-            p_company_id: auth.companyId,
-            p_year: parseInt(year),
-          });
-          if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
-          reversalNumber = rpcData as number;
-        } catch {
-          const { data: seqExisting } = await s.from('journal_sequences')
-            .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
-          if (seqExisting) {
-            reversalNumber = seqExisting.last_number + 1;
-            await s.from('journal_sequences').update({ last_number: reversalNumber }).eq('company_id', auth.companyId).eq('year', year);
-          } else {
-            reversalNumber = 1;
-            await s.from('journal_sequences').insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
-          }
-        }
-
-        const { data: reversalRes, error: revErr } = await s.from('journal_entries')
-          .insert({
-            company_id: auth.companyId, number: reversalNumber, date: new Date().toISOString().split('T')[0],
-            type: 'general', description: `قيد عكسي لفاتورة رقم ${invoice.number}`,
-            reference_type: 'invoice_reversal', reference_id: id, created_by: auth.userId,
-          }).select('id').single();
-        if (revErr) throw revErr;
+        const { insertJournalHeader } = await import('@/lib/journal-utils');
+        const { data: reversalRes, error: revErr } = await insertJournalHeader(auth.companyId, {
+          date: new Date().toISOString().split('T')[0],
+          type: 'general',
+          description: `قيد عكسي لفاتورة رقم ${invoice.number}`,
+          reference_type: 'invoice_reversal',
+          reference_id: id,
+          created_by: auth.userId,
+        });
+        if (revErr || !reversalRes) throw revErr || new Error('فشل قيد الإلغاء');
         const reversalEntryId = reversalRes.id;
 
         const { data: origLines } = await s.from('journal_lines')

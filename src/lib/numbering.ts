@@ -41,28 +41,45 @@ export async function getNextInvoiceNumber(companyId: string, year: number): Pro
 export async function getNextJournalNumber(companyId: string, dateOrYear: string | number): Promise<number> {
   const s = sb();
   const year = typeof dateOrYear === 'string' ? parseInt(dateOrYear.substring(0, 4)) : dateOrYear;
+  let candidate = 0;
   try {
     const { data, error } = await s.rpc('next_journal_number', {
       p_company_id: companyId,
       p_year: year,
     });
     if (error || data == null) throw error || new Error('RPC failed');
-    return data as number;
+    candidate = data as number;
   } catch {
-    // Fallback: per-year sequence table — matches the RPC semantics and the
-    // journal route's own legacy fallback (the old MAX(number)+1 fallback
-    // ignored the year, so sequences diverged after a year roll-over).
     const { data: seq } = await s.from('journal_sequences')
       .select('last_number').eq('company_id', companyId).eq('year', year).maybeSingle();
     if (seq) {
       const row = seq as unknown as SequenceRow;
-      const next = row.last_number + 1;
-      await s.from('journal_sequences').update({ last_number: next }).eq('company_id', companyId).eq('year', year);
-      return next;
+      candidate = row.last_number + 1;
+      await s.from('journal_sequences').update({ last_number: candidate }).eq('company_id', companyId).eq('year', year);
+    } else {
+      await s.from('journal_sequences').insert({ company_id: companyId, year, last_number: 1 });
+      candidate = 1;
     }
-    await s.from('journal_sequences').insert({ company_id: companyId, year, last_number: 1 });
-    return 1;
   }
+
+  // UNIQUE is (company_id, number) — not per year. A yearly sequence of 1
+  // collides with last year's journal #1 (and with leftover invoice numbers
+  // that were historically reused as journal numbers). Always take the
+  // company-wide max + 1 when it is higher.
+  const { data: maxRow } = await s.from('journal_entries')
+    .select('number')
+    .eq('company_id', companyId)
+    .order('number', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const maxExisting = Number((maxRow as NumberRow | null)?.number) || 0;
+  return Math.max(candidate || 1, maxExisting + 1);
+}
+
+export function isUniqueViolation(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null;
+  const msg = `${e?.code || ''} ${e?.message || ''}`;
+  return e?.code === '23505' || /duplicate key|unique constraint/i.test(msg);
 }
 
 export async function getNextVoucherNumber(companyId: string, table: 'voucher_receipts' | 'voucher_disbursements'): Promise<number> {

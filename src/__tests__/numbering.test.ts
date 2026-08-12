@@ -107,6 +107,13 @@ describe('Journal Numbering', () => {
     });
     expect(num).toBe(15);
   });
+
+  test('uses company-wide MAX when yearly sequence is behind existing journals', async () => {
+    mockRpc.mockResolvedValue({ data: 3, error: null });
+    mockChain.maybeSingle.mockResolvedValue({ data: { number: 40 } });
+    const num = await getNextJournalNumber(TEST_COMPANY_ID, 2026);
+    expect(num).toBe(41);
+  });
 });
 
 describe('Voucher Numbering', () => {

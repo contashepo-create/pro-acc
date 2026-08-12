@@ -3,7 +3,7 @@ import { success, error, parseBody, requireApiAuth, requireModulePermission, han
 import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
-import { getNextVoucherNumber, getNextJournalNumber } from '@/lib/numbering';
+import { getNextVoucherNumber } from '@/lib/numbering';
 import { insertJournalLines } from '@/lib/journal-utils';
 import { generateId } from '@/lib/utils';
 
@@ -247,20 +247,16 @@ export async function POST(request: NextRequest) {
       // 4. إنشاء قيد اليومية العام للفاتورة
       // Journal entries get their OWN sequence — previously the invoice
       // number was reused, colliding with the manual journal sequence.
-      const journalNumber = await getNextJournalNumber(auth.companyId, date);
-      const { data: jeRes, error: jeErr } = await s.from('journal_entries')
-        .insert({
-          company_id: auth.companyId,
-          number: journalNumber,
-          date, 
-          type: 'general',
-          description: `فاتورة مبيعات رقم ${number}`, 
-          reference_type: 'invoice',
-          reference_id: invoiceId,
-          created_by: auth.userId,
-        }).select('id').single();
-        
-      if (jeErr) throw jeErr;
+      const { insertJournalHeader } = await import('@/lib/journal-utils');
+      const { data: jeRes, error: jeErr } = await insertJournalHeader(auth.companyId, {
+        date,
+        type: 'general',
+        description: `فاتورة مبيعات رقم ${number}`,
+        reference_type: 'invoice',
+        reference_id: invoiceId,
+        created_by: auth.userId,
+      });
+      if (jeErr || !jeRes) throw jeErr || new Error('فشل إنشاء قيد الفاتورة');
       journalEntryId = jeRes.id;
 
       // 5. بناء سطور القيد المحاسبي المتزن شامل البيع المباشر أو التحصيل الجزئي المسبق (Stripe & ERP Standard T-Account Entry)
