@@ -1,9 +1,8 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
-import { insertJournalLines } from '@/lib/journal-utils';
+import { insertJournalHeader, insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -107,18 +106,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (custAcc && bankAccountId) {
-      const jeNum = await getNextJournalNumber(companyId, date || new Date().toISOString());
-      const { data: je, error: jeErr } = await s.from('journal_entries')
-        .insert({ 
-          company_id: companyId, 
-          number: jeNum, 
-          date, 
-          type: 'general', 
-          description: `عهدة موظف: ${reason || ''}`, 
-          created_by: userId 
-        })
-        .select('id')
-        .single();
+      const { data: je, error: jeErr } = await insertJournalHeader(companyId, {
+        date,
+        type: 'general',
+        description: `عهدة موظف: ${reason || ''}`,
+        created_by: userId,
+      });
 
       if (jeErr) {
         console.error('Journal entry error for custody:', jeErr);

@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber, getNextPurchaseInvoiceNumber } from '@/lib/numbering';
+import { getNextPurchaseInvoiceNumber } from '@/lib/numbering';
 import { insertJournalLines } from '@/lib/journal-utils';
 import { purchaseInvoiceSchema } from '@/lib/validation';
 import { ACCOUNT_CODES } from '@/lib/constants';
@@ -194,20 +194,16 @@ export async function POST(req: NextRequest) {
         throw new Error('الحسابات الأساسية للمشتريات مفقودة (المخزون 1170 / ذمم الموردين 2110) — فعّل دليل الحسابات أولاً');
       }
 
-      const jeNum = await getNextJournalNumber(auth.companyId, date);
-      const { data: je, error: jeErr } = await s.from('journal_entries')
-        .insert({
-          company_id: auth.companyId,
-          number: jeNum,
-          date,
-          type: 'general',
-          description: `فاتورة مشتريات رقم ${nextNum}`,
-          reference_type: 'purchase_invoice',
-          reference_id: invoiceId,
-          created_by: auth.userId,
-        })
-        .select('id').single();
-      if (jeErr) throw jeErr;
+      const { insertJournalHeader } = await import('@/lib/journal-utils');
+      const { data: je, error: jeErr } = await insertJournalHeader(auth.companyId, {
+        date,
+        type: 'general',
+        description: `فاتورة مشتريات رقم ${nextNum}`,
+        reference_type: 'purchase_invoice',
+        reference_id: invoiceId,
+        created_by: auth.userId,
+      });
+      if (jeErr || !je) throw jeErr || new Error('فشل قيد المشتريات');
       journalEntryId = je.id;
 
       const journalLines: any[] = [

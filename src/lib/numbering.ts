@@ -13,29 +13,47 @@ interface PONumberRow { po_number: number }
  * Uses SQL functions with advisory locks
  */
 
+async function maxExisting(table: string, companyId: string, columns: string[]): Promise<number> {
+  const s = sb();
+  let max = 0;
+  for (const col of columns) {
+    const { data } = await s.from(table)
+      .select(col)
+      .eq('company_id', companyId)
+      .order(col, { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const n = Number((data as Record<string, number> | null)?.[col]) || 0;
+    if (n > max) max = n;
+  }
+  return max;
+}
+
 export async function getNextInvoiceNumber(companyId: string, year: number): Promise<number> {
   const s = sb();
+  let candidate = 0;
   try {
     const { data, error } = await s.rpc('next_invoice_number', {
       p_company_id: companyId,
       p_year: year,
     });
     if (error || data == null) throw error || new Error('RPC failed');
-    return data as number;
+    candidate = data as number;
   } catch {
-    // Fallback: old logic using sequence table
     const { data: seq } = await s.from('invoice_sequences')
       .select('last_number').eq('company_id', companyId).eq('year', year).maybeSingle();
     if (seq) {
       const row = seq as unknown as SequenceRow;
-      const next = row.last_number + 1;
-      await s.from('invoice_sequences').update({ last_number: next }).eq('company_id', companyId).eq('year', year);
-      return next;
+      candidate = row.last_number + 1;
+      await s.from('invoice_sequences').update({ last_number: candidate }).eq('company_id', companyId).eq('year', year);
     } else {
       await s.from('invoice_sequences').insert({ company_id: companyId, year, last_number: 1 });
-      return 1;
+      candidate = 1;
     }
   }
+  // UNIQUE(company_id, number) is company-wide, not per year.
+  const maxExistingNum = await maxExisting('invoices', companyId, ['number']);
+  return Math.max(candidate || 1, maxExistingNum + 1);
 }
 
 export async function getNextJournalNumber(companyId: string, dateOrYear: string | number): Promise<number> {
@@ -108,10 +126,7 @@ export async function getNextPurchaseInvoiceNumber(companyId: string): Promise<n
     if (error || data == null) throw error || new Error('RPC failed');
     return data as number;
   } catch {
-    const { data: max } = await s.from('purchase_invoices')
-      .select('invoice_number').eq('company_id', companyId).order('invoice_number', { ascending: false }).limit(1).maybeSingle();
-    const row = (max as unknown as InvoiceNumberRow | null);
-    return ((row?.invoice_number) || 0) + 1;
+    return (await maxExisting('purchase_invoices', companyId, ['invoice_number', 'number'])) + 1;
   }
 }
 
@@ -124,10 +139,7 @@ export async function getNextPurchaseOrderNumber(companyId: string): Promise<num
     if (error || data == null) throw error || new Error('RPC failed');
     return data as number;
   } catch {
-    const { data: max } = await s.from('purchase_orders')
-      .select('po_number').eq('company_id', companyId).order('po_number', { ascending: false }).limit(1).maybeSingle();
-    const row = (max as unknown as PONumberRow | null);
-    return ((row?.po_number) || 0) + 1;
+    return (await maxExisting('purchase_orders', companyId, ['po_number', 'number'])) + 1;
   }
 }
 

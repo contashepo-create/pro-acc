@@ -26,3 +26,31 @@ BEGIN
   RETURN next_num;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Same collision: UNIQUE(company_id, number) vs yearly invoice_sequences.
+CREATE OR REPLACE FUNCTION next_invoice_number(p_company_id UUID, p_year INT)
+RETURNS INT AS $$
+DECLARE next_num INT;
+DECLARE max_existing INT;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext(p_company_id::text || 'invoices'));
+
+  INSERT INTO invoice_sequences(company_id, year, last_number)
+  VALUES (p_company_id, p_year, 1)
+  ON CONFLICT (company_id, year)
+  DO UPDATE SET last_number = invoice_sequences.last_number + 1
+  RETURNING last_number INTO next_num;
+
+  SELECT COALESCE(MAX(number), 0) INTO max_existing
+  FROM invoices WHERE company_id = p_company_id;
+
+  IF next_num <= max_existing THEN
+    next_num := max_existing + 1;
+    UPDATE invoice_sequences
+      SET last_number = next_num
+      WHERE company_id = p_company_id AND year = p_year;
+  END IF;
+
+  RETURN next_num;
+END;
+$$ LANGUAGE plpgsql;
