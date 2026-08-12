@@ -24,12 +24,16 @@ export async function GET(request: NextRequest) {
     const s = sb();
 
     const { data: user, error: userErr } = await s.from('users')
-      .select('id, name, email, role, is_active, last_login, company_id, created_at')
+      .select('id, name, email, role, is_active, last_login, company_id, created_at, token_version')
       .eq('id', payload.userId).single();
 
     if (userErr || !user) return notFound();
     const u = user as Record<string, any>;
     if (!u.is_active) return error('هذا الحساب غير نشط', 403);
+
+    // SECURITY: Reject stale tokens (issued before logout / password change).
+    const storedVersion = Number(u.token_version) || 0;
+    if (payload.ver !== storedVersion) return unauthorized();
 
     const { data: company } = await s.from('companies')
       .select('id, name, commercial_registration, tax_number, address, phone, email, is_active')

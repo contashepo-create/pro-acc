@@ -220,21 +220,40 @@ export async function POST(request: NextRequest) {
     }
     if (!user) return error('فشل إنشاء المستخدم', 500);
 
-    // Create trial subscription - FIXED: 7 days not 30
+    // Create trial subscription - FIXED: 7 days not 30.
+    // The flow must NOT silently skip creating a subscription when the
+    // `trial` plan row is missing: ensure the plan row exists (upsert), then
+    // always create the trial subscription so login's expiry check works.
     try {
+      const DEFAULT_TRIAL_DAYS = 7;
+      let trialPlanId: string | null = null;
+      let trialDays = DEFAULT_TRIAL_DAYS;
+
       const { data: plan } = await s.from('subscription_plans').select('id, trial_days').eq('code', 'trial').eq('is_active', true).limit(1).single();
-      const p = plan as Record<string, any>;
-      if (p) {
-        const trialDays = p.trial_days || 7;
-        await s.from('subscriptions').upsert({
-          company_id: co.id, plan_id: p.id, plan_code: 'trial', status: 'trial',
-          start_date: new Date().toISOString().split('T')[0],
-          end_date: new Date(Date.now() + trialDays * 86400000).toISOString().split('T')[0],
-          trial_end_date: new Date(Date.now() + trialDays * 86400000).toISOString().split('T')[0],
-          auto_renew: false,
-        }, { onConflict: 'company_id' });
+      if (plan) {
+        const p = plan as Record<string, any>;
+        trialPlanId = p.id;
+        trialDays = Number(p.trial_days) > 0 ? Number(p.trial_days) : DEFAULT_TRIAL_DAYS;
+      } else {
+        // Ensure the trial plan exists so future lookups succeed.
+        const { data: insertedPlan } = await s.from('subscription_plans')
+          .insert({ code: 'trial', name: 'تجريبي', description_ar: 'باقة تجريبية', price_monthly: 0, price_yearly: 0, trial_days: DEFAULT_TRIAL_DAYS, is_active: true, sort_order: 0 })
+          .select('id').maybeSingle();
+        if (insertedPlan) trialPlanId = (insertedPlan as Record<string, any>).id;
       }
-    } catch {}
+
+      await s.from('subscriptions').upsert({
+        company_id: co.id, plan_id: trialPlanId, plan_code: 'trial', status: 'trial',
+        start_date: new Date().toISOString().split('T')[0],
+        end_date: new Date(Date.now() + trialDays * 86400000).toISOString().split('T')[0],
+        trial_end_date: new Date(Date.now() + trialDays * 86400000).toISOString().split('T')[0],
+        auto_renew: false,
+      }, { onConflict: 'company_id' });
+    } catch (e) {
+      // Log but don't fail registration — subscription status is enforced
+      // at login only when a subscription row exists.
+      console.warn('[register] failed to create trial subscription:', e);
+    }
 
     // Send verification email (if SMTP configured) - FIXED XSS
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://pro-acc.vercel.app';

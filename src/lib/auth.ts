@@ -35,7 +35,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   }
 }
 
-export function createToken(userId: string, role: string): string {
+export function createToken(userId: string, role: string, version: number = 0): string {
   const TOKEN_SECRET = getTokenSecret();
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const now = Math.floor(Date.now() / 1000);
@@ -43,6 +43,7 @@ export function createToken(userId: string, role: string): string {
     JSON.stringify({
       sub: userId,
       role,
+      ver: version,
       iat: now,
       exp: now + 86400 * 7,
     })
@@ -53,7 +54,13 @@ export function createToken(userId: string, role: string): string {
   return `${header}.${payload}.${signature}`;
 }
 
-export function verifyToken(token: string): { userId: string; role: string } | null {
+export interface TokenPayload {
+  userId: string;
+  role: string;
+  ver: number;
+}
+
+export function verifyToken(token: string): TokenPayload | null {
   try {
     const TOKEN_SECRET = getTokenSecret();
     const parts = token.split('.');
@@ -76,7 +83,8 @@ export function verifyToken(token: string): { userId: string; role: string } | n
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
     if (data.exp && data.exp < Math.floor(Date.now() / 1000)) return null;
 
-    return { userId: data.sub, role: data.role };
+    // Legacy tokens (issued before token_version) carry no `ver` — treat as 0.
+    return { userId: data.sub, role: data.role, ver: typeof data.ver === 'number' ? data.ver : 0 };
   } catch {
     return null;
   }
@@ -96,8 +104,12 @@ export async function getCompanyContext(
     if (!payload) return null;
 
     const { query } = await import('@/lib/db');
-    const res = await query('SELECT company_id FROM users WHERE id = $1', [payload.userId]);
+    const res = await query('SELECT company_id, token_version FROM users WHERE id = $1', [payload.userId]);
     if (res.rows.length === 0) return null;
+
+    // SECURITY: Reject stale tokens after logout / password change.
+    const storedVersion = Number(res.rows[0].token_version) || 0;
+    if (payload.ver !== storedVersion) return null;
 
     return {
       companyId: res.rows[0].company_id,

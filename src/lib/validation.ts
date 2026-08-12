@@ -54,6 +54,10 @@ export const forgotPasswordSchema = z.object({
   email: z.string().email('البريد الإلكتروني غير صالح'),
 });
 
+export const resendVerificationSchema = z.object({
+  email: z.string().email('البريد الإلكتروني غير صالح').max(254),
+});
+
 export const resetPasswordSchema = z.object({
   token: z.string().min(1, 'الرمز مطلوب'),
   password: passwordPolicy,

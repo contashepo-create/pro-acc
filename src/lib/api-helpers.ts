@@ -65,13 +65,17 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
   // SECURITY FIX: Fetch role from database (source of truth) instead of JWT token.
   // The JWT role could be stale or manipulated. The DB role is authoritative.
   const { data: user, error: userErr } = await s.from('users')
-    .select('company_id, is_active, role')
+    .select('company_id, is_active, role, token_version')
     .eq('id', payload.userId)
     .single();
 
   if (userErr || !user) throw new AuthError('المستخدم غير موجود');
   const u = user;
   if (!u.is_active) throw new AuthError('المستخدم غير نشط');
+
+  // SECURITY: Reject stale tokens (issued before logout / password change).
+  const storedVersion = Number(u.token_version) || 0;
+  if (payload.ver !== storedVersion) throw new AuthError('غير مصرح به');
 
   // Check company is active
   try {

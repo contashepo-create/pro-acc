@@ -11,6 +11,37 @@ function VerifyEmailContent() {
   const token = searchParams.get('token');
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [message, setMessage] = useState('');
+  // إعادة إرسال رابط التأكيد في حالة انتهاء/فقدان الرابط
+  const [resendEmail, setResendEmail] = useState('');
+  const [resending, setResending] = useState(false);
+  const [resendMsg, setResendMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const handleResend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResendMsg(null);
+    if (!resendEmail.trim()) {
+      setResendMsg({ ok: false, text: 'يرجى إدخال بريدك الإلكتروني' });
+      return;
+    }
+    setResending(true);
+    try {
+      const res = await fetch('/api/auth/resend-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: resendEmail.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok || data.success) {
+        setResendMsg({ ok: true, text: data.data?.resetUrl ? data.data.resetUrl : (data.data?.message || 'تم إرسال رابط التأكيد') });
+      } else {
+        setResendMsg({ ok: false, text: data.message || 'حدث خطأ' });
+      }
+    } catch {
+      setResendMsg({ ok: false, text: 'حدث خطأ في الاتصال' });
+    } finally {
+      setResending(false);
+    }
+  };
 
   useEffect(() => {
     if (!token) {
@@ -66,6 +97,27 @@ function VerifyEmailContent() {
             <XCircle size={48} className="text-danger mx-auto mb-4" />
             <h1 className="text-xl font-bold text-text-primary">فشل التحقق</h1>
             <p className="text-text-muted text-sm mt-2">{message}</p>
+            <p className="text-text-muted text-xs mt-2">
+              إذا انتهى الرابط أو ضاع، يمكنك إعادة إرسال رابط التأكيد باستخدام بريدك الإلكتروني
+            </p>
+            <form onSubmit={handleResend} className="mt-4 space-y-3 text-right">
+              <input
+                type="email"
+                dir="ltr"
+                value={resendEmail}
+                onChange={(e) => setResendEmail(e.target.value)}
+                placeholder="your@email.com"
+                className="input-base text-center"
+              />
+              <button type="submit" disabled={resending} className="btn btn-secondary w-full">
+                {resending ? 'جاري الإرسال...' : 'إعادة إرسال رابط التأكيد'}
+              </button>
+              {resendMsg && (
+                <p className={`text-xs ${resendMsg.ok ? 'text-success break-all' : 'text-danger'}`}>
+                  {resendMsg.text}
+                </p>
+              )}
+            </form>
             <Link href="/register" className="btn btn-primary mt-6 inline-block">
               العودة للتسجيل
             </Link>
