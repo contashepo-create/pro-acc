@@ -16,6 +16,17 @@ export async function POST(request: NextRequest) {
     const { email } = parsed.data;
     const s = sb();
 
+    // Rate limiting: prevent attackers from flooding a target's inbox with
+    // password-reset emails (email bombing / abuse).
+    try {
+      const { checkRateLimit } = await import('@/lib/rate-limit');
+      const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || 'unknown';
+      const rateLimit = await checkRateLimit(email.toLowerCase(), ip);
+      if (!rateLimit.allowed) {
+        return error(`عدد الطلبات كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
+      }
+    } catch {}
+
     const { data: user, error: queryError } = await s.from('users')
       .select('id, name, email')
       .eq('email', email.toLowerCase())

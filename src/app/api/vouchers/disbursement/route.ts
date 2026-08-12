@@ -41,6 +41,12 @@ export async function GET(request: NextRequest) {
     const { from, to } = getDateRangeParams(url);
     const disbType = url.searchParams.get('disbursementType');
 
+    // SECURITY: Validate disbursementType against an allowlist before
+    // interpolating into the PostgREST `.or()` filter to prevent filter
+    // injection (cross-company data leak).
+    const DISBURSEMENT_TYPE_WHITELIST = new Set(['supplier', 'employee_advance', 'subcontractor', 'client_refund', 'other']);
+    const safeDisbType = disbType && DISBURSEMENT_TYPE_WHITELIST.has(disbType) ? disbType : null;
+
     const offset = (page - 1) * pageSize;
 
     const result = await s.from('voucher_disbursements')
@@ -49,7 +55,7 @@ export async function GET(request: NextRequest) {
       .neq('status', 'cancelled')
       .gte('date', from || '1970-01-01')
       .lte('date', to || '2999-12-31')
-      .or(disbType ? `disbursement_type.eq.${disbType}` : 'disbursement_type.neq.null')
+      .or(safeDisbType ? `disbursement_type.eq.${safeDisbType}` : 'disbursement_type.neq.null')
       .order('date', { ascending: false })
       .order('number', { ascending: false })
       .range(offset, offset + pageSize - 1);
@@ -65,7 +71,7 @@ export async function GET(request: NextRequest) {
         .neq('status', 'cancelled')
         .gte('date', from || '1970-01-01')
         .lte('date', to || '2999-12-31')
-        .or(disbType ? `disbursement_type.eq.${disbType}` : 'disbursement_type.neq.null')
+        .or(safeDisbType ? `disbursement_type.eq.${safeDisbType}` : 'disbursement_type.neq.null')
         .order('date', { ascending: false })
         .order('number', { ascending: false })
         .range(offset, offset + pageSize - 1);

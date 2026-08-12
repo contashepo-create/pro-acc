@@ -35,6 +35,13 @@ export async function GET(request: NextRequest) {
     const { from, to } = getDateRangeParams(url);
     const receiptType = url.searchParams.get('receiptType');
 
+    // SECURITY: Validate receiptType against an allowlist before interpolating
+    // it into the PostgREST `.or()` filter. Unvalidated user input here is a
+    // PostgREST filter-injection vector that could widen the filter to other
+    // companies' rows.
+    const RECEIPT_TYPE_WHITELIST = new Set(['client', 'supplier_refund', 'general']);
+    const safeReceiptType = receiptType && RECEIPT_TYPE_WHITELIST.has(receiptType) ? receiptType : null;
+
     const offset = (page - 1) * pageSize;
 
     // الملغاة لا تظهر في القوائم — عكس قيدها محفوظ في الدفاتر
@@ -49,7 +56,7 @@ export async function GET(request: NextRequest) {
       .neq('status', 'cancelled')
       .gte('date', from || '1970-01-01')
       .lte('date', to || '2999-12-31')
-      .or(receiptType ? `receipt_type.eq.${receiptType}` : 'receipt_type.neq.null')
+      .or(safeReceiptType ? `receipt_type.eq.${safeReceiptType}` : 'receipt_type.neq.null')
       .order('date', { ascending: false })
       .order('number', { ascending: false })
       .range(offset, offset + pageSize - 1);
@@ -65,7 +72,7 @@ export async function GET(request: NextRequest) {
         .neq('status', 'cancelled')
         .gte('date', from || '1970-01-01')
         .lte('date', to || '2999-12-31')
-        .or(receiptType ? `receipt_type.eq.${receiptType}` : 'receipt_type.neq.null')
+        .or(safeReceiptType ? `receipt_type.eq.${safeReceiptType}` : 'receipt_type.neq.null')
         .order('date', { ascending: false })
         .order('number', { ascending: false })
         .range(offset, offset + pageSize - 1);

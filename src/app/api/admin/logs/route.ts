@@ -15,8 +15,13 @@ export async function GET(request: NextRequest) {
 
     const { page, pageSize } = getPaginationParams(request.url);
     const { from, to } = getDateRangeParams(request.url);
-    const search = request.nextUrl.searchParams.get('search') || '';
+    const rawSearch = request.nextUrl.searchParams.get('search') || '';
     const action = request.nextUrl.searchParams.get('action') || '';
+
+    // SECURITY: The search term is interpolated into a PostgREST `.or()`
+    // filter. Strip characters PostgREST treats as filter syntax (commas,
+    // parentheses, quotes, colons, operators) to neutralize filter injection.
+    const search = rawSearch.replace(/[()",.:;]/g, ' ').trim().slice(0, 100);
 
     const s = sb();
 
