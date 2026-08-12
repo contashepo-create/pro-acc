@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -19,7 +19,7 @@ interface SmartNotification {
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'notifications', 'read');
     const s = sb();
     const notifications: SmartNotification[] = [];
     const now = new Date();

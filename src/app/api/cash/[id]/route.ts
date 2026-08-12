@@ -11,7 +11,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'cash', 'read');
     const { id } = await params;
     const s = sb();
 

@@ -5,7 +5,7 @@ const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'pos', 'read');
     const s = sb();
     const { data, error: err } = await s.from('pos_terminals').select('*').eq('company_id', auth.companyId).order('code');
     if (err) throw err;

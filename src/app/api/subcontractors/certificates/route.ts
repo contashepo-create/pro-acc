@@ -9,7 +9,7 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'subcontractors', 'read');
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
     const contractId = url.searchParams.get('contractId');

@@ -9,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'fiscal', 'read');
     const { id } = await params;
     const { data, error: qErr } = await sb().from('fiscal_years')
       .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();

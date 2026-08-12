@@ -6,7 +6,7 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'salary_sheets', 'read');
     const s = sb();
     const { data, error: queryError } = await s.from('salary_sheets')
       .select('*').eq('company_id', auth.companyId).order('year', { ascending: false }).order('month', { ascending: false });

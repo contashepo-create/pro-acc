@@ -6,7 +6,7 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'cost_centers', 'read');
     const s = sb();
     const { page, pageSize } = getPaginationParams(req.url);
 

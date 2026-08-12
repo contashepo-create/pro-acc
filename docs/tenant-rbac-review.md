@@ -70,6 +70,28 @@
 - `docs/tenant-rbac-review.md` — هذا التقرير.
 
 ## 6) توصيات مستقبلية
-1. **تقوية RLS** في قاعدة البيانات (سياسات `USING company_id = ...`) كطبقة دفاع ثانية.
-2. ترقية معالجات القراءة (GET) إلى `requireModulePermission(..., 'read')` لدقة أتم (تفرض `read` على كل وحدة).
+1. **تقوية RLS** في قاعدة البيانات (سياسات `USING company_id = ...`) كطبقة دفاع ثانية. — ✅ **تم تنفيذه (migration 027)**
+2. ترقية معالجات القراءة (GET) إلى `requireModulePermission(..., 'read')` لدقة أتم (تفرض `read` على كل وحدة). — ✅ **تم تنفيذه**
 3. إضافة مراجعة دورية عند إضافة أي مسار API جديد: قاعدة «لا مسار كتابة إلا عبر `requireModulePermission`».
+
+---
+
+## 7) التنفيذ التكميلي (طبقة دفاع ثانية + دقة القراءة)
+
+### 7.1 RLS — migration 027
+- إضافة دالة مساعدة `tenant_company_id()` تقرأ `company_id` من JWT الطالب.
+- تفعيل RLS وفرض سياسات معزولة على **أكثر من 60 جدول tenant** يملك `company_id`:
+  - حذف السياسات القديمة التساهلية `USING(true)`.
+  - إنشاء سياسة `tenant_isolation_<table>`: `USING (company_id = tenant_company_id())` + `WITH CHECK (...)`.
+- `service_role` ما زال يتجاوز RLS (لا أثر على التطبيق)؛ والطبقة الثانية تفعّل على أي وصول خارج service_role.
+- إعادة تأكيد RLS على جدولي `invoices` و `journal_entries` اللذين كانا بـ `USING(true)`.
+
+### 7.2 ترقية القراءة (GET) إلى `requireModulePermission(..., 'read')`
+- حوّلت **78 مسار GET** للبيانات من `requireApiAuth` (أي مستخدم) إلى `requireModulePermission(request, module, 'read')`.
+- مع إضافة وحدات القراءة المناسبة لكل مسار (financial_reports للميزانيات/القوائم المالية، receipts/disbursements للسندات، إلخ).
+- النتيجة: القراءة الآن تفرض صلاحية `read` على الوحدة، فمثلاً supervisor لا يستطيع قراءة `/users` أو `/settings` (صلاحياته فارغة لهذه الوحدات).
+
+### التحقق
+- `npx tsc --noEmit` نظيف.
+- `npx jest` → **400 اختباراً ناجحاً** عبر 31 مجموعة.
+

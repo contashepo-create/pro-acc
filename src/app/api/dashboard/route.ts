@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth } from '@/lib/api-helpers';
+import { success, error, serverError, requireApiAuth, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'reports', 'read');
     const s = sb();
     
     // Parallelize all queries for better performance

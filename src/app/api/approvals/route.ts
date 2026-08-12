@@ -11,7 +11,7 @@ const sb = () => getSupabase();
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'approvals', 'read');
     const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);

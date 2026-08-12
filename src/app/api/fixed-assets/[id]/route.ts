@@ -9,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'fixed_assets', 'read');
     const { id } = await params;
     const { data, error: qErr } = await sb().from('fixed_assets')
       .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
@@ -30,7 +30,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireModulePermission(request, 'fixed-assets', 'update');
+    const auth = await requireModulePermission(request, 'fixed_assets', 'update');
     const { id } = await params;
     const s = sb();
     const body = await request.json();
@@ -59,7 +59,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireModulePermission(request, 'fixed-assets', 'delete');
+    const auth = await requireModulePermission(request, 'fixed_assets', 'delete');
     const { id } = await params;
     const s = sb();
 

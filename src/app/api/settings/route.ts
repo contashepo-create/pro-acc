@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -12,7 +12,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'settings', 'read');
     const s = sb();
 
     // Fetch all settings for this company (no whitelist filtering)

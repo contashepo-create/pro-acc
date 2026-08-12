@@ -6,7 +6,7 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'notifications', 'read');
     const s = sb();
     const limit = parseInt(req.nextUrl.searchParams.get('limit') || '50');
     const { data, error: queryError } = await s.from('notifications')

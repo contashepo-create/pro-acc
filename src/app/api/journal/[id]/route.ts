@@ -24,7 +24,7 @@ export async function GET(
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'journal', 'read');
     const { id } = await paramsPromise;
     const s = sb();
 

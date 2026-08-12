@@ -7,7 +7,7 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'salary_sheets', 'read');
     const { id } = await params;
     const s = sb();
 
