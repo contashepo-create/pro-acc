@@ -63,7 +63,10 @@ export async function POST(request: NextRequest) {
       return success({ message: 'تعذر إرسال البريد الإلكتروني. تواصل مع مدير النظام' });
     }
 
-    return success({ message: 'تم إرسال رابط إعادة التعيين إلى بريدك الإلكتروني' });
+    // SECURITY (anti-enumeration): return the exact same generic message as
+    // the account-not-found path, so an attacker cannot distinguish a valid
+    // account by the differing response text.
+    return success({ message: 'إذا كان البريد الإلكتروني مسجلاً، ستتلقى رابط إعادة التعيين' });
   } catch (err) {
     return serverError(err);
   }
