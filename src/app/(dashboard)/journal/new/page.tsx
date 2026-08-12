@@ -157,7 +157,7 @@ export default function NewJournalPage() {
   ];
 
   return (
-    <div className="max-w-5xl mx-auto p-6">
+    <div className="max-w-5xl mx-auto p-4 sm:p-6">
       <PageHeader
         title={editId ? 'تعديل قيد' : 'تسجيل قيد جديد'}
         description="تسجيل الأطراف المدينة والدائنة مقيدة بالحسابات الفرعية وفق المعايير المحاسبية العالمية"
@@ -178,7 +178,7 @@ export default function NewJournalPage() {
             <span className="text-xs text-text-muted">ملاحظة: يُسمح بالترحيل المباشر على الحسابات الفرعية فقط</span>
           </div>
 
-          <div className="border border-border rounded-lg overflow-hidden">
+          <div className="border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-bg-secondary text-text-muted">
                 <tr>
@@ -248,7 +248,7 @@ export default function NewJournalPage() {
             <Button variant="ghost" onClick={addLine} leftIcon={<Plus size={16} />}>
               إضافة سطر جديد
             </Button>
-            <div className="text-xs text-text-muted flex gap-4 font-mono">
+            <div className="text-xs text-text-muted flex flex-wrap gap-x-4 gap-y-1 font-mono">
               <span>إجمالي المدين: <strong className="text-text-primary">{form.lines.reduce((s: number, l: any) => s + (Number(l.debit) || 0), 0).toFixed(2)}</strong></span>
               <span>إجمالي الدائن: <strong className="text-text-primary">{form.lines.reduce((s: number, l: any) => s + (Number(l.credit) || 0), 0).toFixed(2)}</strong></span>
             </div>

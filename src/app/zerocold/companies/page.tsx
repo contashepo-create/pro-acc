@@ -216,7 +216,7 @@ export default function ZerocoldCompaniesPage() {
             <p className="text-amber-600/50 text-sm">لا توجد شركات</p>
           </div>
         ) : (
-          <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
+          <div className="bg-bg-card border border-border rounded-xl overflow-x-auto">
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -296,7 +296,7 @@ export default function ZerocoldCompaniesPage() {
                     <p className="text-xs text-text-secondary/50 mb-1">رقم المشترك</p>
                     <p className="text-2xl font-bold text-amber-300 font-mono">#{detailData.subscription?.subscriber_number || '—'}</p>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                     <div className="bg-bg-primary rounded-lg p-3"><p className="text-xs text-text-secondary/50">البريد</p><p className="text-amber-200" dir="ltr">{detailData.company?.email || '—'}</p></div>
                     <div className="bg-bg-primary rounded-lg p-3"><p className="text-xs text-text-secondary/50">الهاتف</p><p className="text-amber-200" dir="ltr">{detailData.company?.phone || '—'}</p></div>
                     <div className="bg-bg-primary rounded-lg p-3"><p className="text-xs text-text-secondary/50">العنوان</p><p className="text-amber-200">{detailData.company?.address || '—'}</p></div>
@@ -304,7 +304,7 @@ export default function ZerocoldCompaniesPage() {
                     <div className="bg-bg-primary rounded-lg p-3"><p className="text-xs text-text-secondary/50">الباقة</p><p className="text-amber-200">{detailData.subscription?.subscription_plans?.name || '—'}</p></div>
                     <div className="bg-bg-primary rounded-lg p-3"><p className="text-xs text-text-secondary/50">انتهاء الاشتراك</p><p className="text-amber-200" dir="ltr">{detailData.subscription?.end_date || '—'}</p></div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="bg-bg-primary rounded-lg p-3 text-center"><p className="text-xs text-text-secondary/50">المستخدمين</p><p className="text-xl font-bold text-amber-300">{detailData.stats?.user_count || 0}</p></div>
                     <div className="bg-bg-primary rounded-lg p-3 text-center"><p className="text-xs text-text-secondary/50">المشاريع</p><p className="text-xl font-bold text-amber-300">{detailData.stats?.project_count || 0}</p></div>
                   </div>

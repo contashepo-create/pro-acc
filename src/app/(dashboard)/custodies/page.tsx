@@ -148,7 +148,7 @@ export default function CustodiesPage() {
       {custodies.length === 0 ? <EmptyState title="لا توجد عهد" actionLabel="إضافة عهدة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={custodies} searchable searchKeys={['employee_name']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingCustody(null); }} title={editingCustody ? 'تعديل عهدة' : 'إضافة عهدة'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingCustody(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select label="الموظف" value={form.employee_id} onChange={(v) => setForm({...form, employee_id: v})} options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e: any) => ({ value: e.id, label: e.name }))]} className="col-span-2" />
             <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />

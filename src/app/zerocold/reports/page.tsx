@@ -240,7 +240,7 @@ export default function ReportsPage() {
       <div className="glass rounded-lg p-4">
         <div className="flex items-center gap-4">
           <Calendar size={20} className="text-text-muted" />
-          <div className="flex-1 grid grid-cols-2 gap-4">
+          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-text-secondary mb-1">من تاريخ</label>
               <input

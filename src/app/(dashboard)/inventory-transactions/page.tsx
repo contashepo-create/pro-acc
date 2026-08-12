@@ -180,7 +180,7 @@ export default function InventoryTransactionsPage() {
       {transactions.length === 0 ? <EmptyState title="لا توجد معاملات" actionLabel="إضافة معاملة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={transactions} searchable searchKeys={['item_name', 'warehouse_name']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingTransaction(null); }} title={editingTransaction ? 'تعديل معاملة مخزون' : 'إضافة معاملة مخزون'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingTransaction(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select label="الصنف" value={form.item_id} onChange={(v) => setForm({...form, item_id: v})} disabled={isEdit} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i: any) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
             <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} disabled={isEdit} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w: any) => ({ value: w.id, label: w.name }))]} />
             <Select label="النوع" value={form.type} onChange={(v) => setForm({...form, type: v})} disabled={isEdit} options={[{ value: 'add', label: 'إضافة' }, { value: 'issue', label: 'صرف' }, { value: 'adjustment', label: 'تسوية' }, { value: 'transfer', label: 'تحويل' }, { value: 'return', label: 'مرتجع' }]} />

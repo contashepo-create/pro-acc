@@ -79,7 +79,7 @@ export default function AppSettingsPage() {
           <Building2 size={20} className="text-accent" />
           <h2 className="text-lg font-bold text-text-primary">العلامة التجارية</h2>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="اسم البرنامج (عربي)" value={form.app_name || ''} onChange={(e: any) => set('app_name', e.target.value)} />
           <Input label="اسم البرنامج (إنجليزي)" value={form.app_name_en || ''} onChange={(e: any) => set('app_name_en', e.target.value)} />
           <Input label="إصدار البرنامج" value={form.app_version || ''} onChange={(e: any) => set('app_version', e.target.value)} />
@@ -93,7 +93,7 @@ export default function AppSettingsPage() {
           <Mail size={20} className="text-accent" />
           <h2 className="text-lg font-bold text-text-primary">معلومات التواصل</h2>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="البريد الإلكتروني" type="email" value={form.support_email || ''} onChange={(e: any) => set('support_email', e.target.value)} />
           <Input label="رقم الهاتف" value={form.support_phone || ''} onChange={(e: any) => set('support_phone', e.target.value)} dir="ltr" />
           <Input label="واتساب" value={form.support_whatsapp || ''} onChange={(e: any) => set('support_whatsapp', e.target.value)} dir="ltr" />
@@ -108,7 +108,7 @@ export default function AppSettingsPage() {
           <CreditCard size={20} className="text-accent" />
           <h2 className="text-lg font-bold text-text-primary">معلومات الدفع</h2>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="اسم البنك" value={form.payment_bank_name || ''} onChange={(e: any) => set('payment_bank_name', e.target.value)} />
           <Input label="رقم الآيبان (IBAN)" value={form.payment_iban || ''} onChange={(e: any) => set('payment_iban', e.target.value)} dir="ltr" />
           <Input label="STC Pay" value={form.payment_stc_pay || ''} onChange={(e: any) => set('payment_stc_pay', e.target.value)} dir="ltr" />

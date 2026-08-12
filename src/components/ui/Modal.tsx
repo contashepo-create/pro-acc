@@ -70,8 +70,8 @@ export function Modal({
         aria-label={typeof title === 'string' ? title : undefined}
       >
         {(title || showClose) && (
-          <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-border">
-            {title && <h2 className="text-lg font-bold text-text-primary">{title}</h2>}
+          <div className="flex items-center justify-between gap-3 px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-border">
+            {title && <h2 className="text-base sm:text-lg font-bold text-text-primary break-words">{title}</h2>}
             {showClose && (
               <button
                 onClick={onClose}
@@ -83,9 +83,9 @@ export function Modal({
             )}
           </div>
         )}
-        <div className={`px-6 py-4 overflow-y-auto ${isFull ? 'flex-1' : 'max-h-[70vh]'}`}>{children}</div>
+        <div className={`px-4 sm:px-6 py-4 overflow-y-auto ${isFull ? 'flex-1' : 'max-h-[75vh]'}`}>{children}</div>
         {footer && (
-          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border">
+          <div className="flex items-center justify-end gap-3 px-4 sm:px-6 py-4 border-t border-border">
             {footer}
           </div>
         )}

@@ -105,7 +105,7 @@ export default function UpgradeRequestsPage() {
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-3 text-sm bg-bg-primary rounded-xl p-3">
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm bg-bg-primary rounded-xl p-3">
                 <div>تاريخ التحويل: {req.payment_date} {req.payment_time}</div>
                 <div>المبلغ: {req.payment_amount}</div>
                 <div className="col-span-2">ملاحظات: {req.notes || 'لا يوجد'}</div>

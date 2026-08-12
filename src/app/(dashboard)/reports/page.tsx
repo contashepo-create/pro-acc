@@ -258,7 +258,7 @@ export default function ReportsPage() {
       {/* 1. Trial Balance */}
       {!loading && !error && tab === 'trial_balance' && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <StatCard title="إجمالي المدين" value={formatCurrency(trialBalance?.total_debit || 0)} accentColor="var(--color-info)" />
             <StatCard title="إجمالي الدائن" value={formatCurrency(trialBalance?.total_credit || 0)} accentColor="var(--color-accent)" />
           </div>
@@ -275,7 +275,7 @@ export default function ReportsPage() {
         <div className="space-y-6">
           {incomeStatement ? (
             <>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <StatCard title="إجمالي الإيرادات" value={formatCurrency(incomeStatement.total_revenue || 0)} accentColor="var(--color-success)" />
                 <StatCard title="إجمالي المصروفات" value={formatCurrency(incomeStatement.total_expenses || 0)} accentColor="var(--color-danger)" />
                 <StatCard title="صافي الدخل (الربح / الخسارة)" value={formatCurrency(incomeStatement.net_income || 0)} accentColor="var(--color-accent)" />
@@ -294,7 +294,7 @@ export default function ReportsPage() {
         <div className="space-y-6">
           {balanceSheet ? (
             <>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <StatCard title="إجمالي الأصول" value={formatCurrency(balanceSheet.total_assets || 0)} accentColor="var(--color-info)" />
                 <StatCard title="إجمالي الخصوم" value={formatCurrency(balanceSheet.total_liabilities || 0)} accentColor="var(--color-warning)" />
                 <StatCard title="حقوق الملكية" value={formatCurrency(balanceSheet.total_equity || 0)} accentColor="var(--color-accent)" />

@@ -228,7 +228,7 @@ export default function PurchaseInvoicesPage() {
       {invoices.length === 0 ? <EmptyState title="لا توجد فواتير" actionLabel="إضافة فاتورة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={invoices} searchable searchKeys={['supplier_name', 'invoice_number']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingInvoice(null); }} title={isEdit ? 'تعديل فاتورة شراء' : 'إضافة فاتورة شراء'} size="xl" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingInvoice(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} disabled={isEdit} />
             {isEdit ? (
               <Select
@@ -258,7 +258,7 @@ export default function PurchaseInvoicesPage() {
                 <span className="text-sm font-medium">البنود</span>
                 <Button variant="ghost" size="sm" onClick={addItem} leftIcon={<Plus size={16} />}>إضافة بند</Button>
               </div>
-              <div className="border border-border rounded-lg overflow-hidden">
+              <div className="border border-border rounded-lg overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-surface-hover/50">
                     <tr>
@@ -311,7 +311,7 @@ export default function PurchaseInvoicesPage() {
         title={viewingInvoice ? `فاتورة مشتريات رقم #${viewingInvoice.invoice_number}` : 'معاينة فاتورة الشراء'}
         record={viewingInvoice}
         extra={viewingInvoice?.items?.length ? (
-          <div className="border border-border rounded-xl overflow-hidden mt-3">
+          <div className="border border-border rounded-xl overflow-x-auto mt-3">
             <div className="bg-bg-secondary p-2.5 font-bold text-xs border-b border-border">بنود فاتورة الشراء</div>
             <table className="w-full text-xs text-right">
               <thead className="bg-bg-secondary/50 text-text-muted">
