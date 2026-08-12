@@ -27,16 +27,17 @@ export async function GET(request: NextRequest) {
     let billedByProject: Record<string, number> = {};
 
     if (projectIds.length > 0) {
-      // Costs: project expenses + equipment costs assigned to the project.
-      const [expRes, equipRes, billRes] = await Promise.all([
-        s.from('project_expenses').select('project_id, amount').in('project_id', projectIds),
-        s.from('equipment_costs').select('project_id, amount').in('project_id', projectIds),
-        s.from('invoices').select('project_id, total').eq('company_id', auth.companyId).in('project_id', projectIds),
-      ]);
-
-      for (const e of expRes.data || []) costsByProject[e.project_id] = (costsByProject[e.project_id] || 0) + parseFloat(String(e.amount));
-      for (const e of equipRes.data || []) costsByProject[e.project_id] = (costsByProject[e.project_id] || 0) + parseFloat(String(e.amount));
-      for (const b of billRes.data || []) billedByProject[b.project_id] = (billedByProject[b.project_id] || 0) + parseFloat(String(b.total));
+      const { sumProjectsJournal } = await import('@/lib/project-costs');
+      const journalMap = await sumProjectsJournal(auth.companyId, projectIds);
+      const { data: billRes } = await s.from('invoices')
+        .select('project_id, total, status')
+        .eq('company_id', auth.companyId)
+        .in('project_id', projectIds)
+        .neq('status', 'cancelled');
+      for (const id of projectIds) costsByProject[id] = journalMap[id]?.expenses || 0;
+      for (const b of billRes || []) {
+        billedByProject[b.project_id] = (billedByProject[b.project_id] || 0) + parseFloat(String(b.total));
+      }
     }
 
     const rows = (projects || []).map((p: any) => {

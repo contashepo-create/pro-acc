@@ -55,13 +55,16 @@ export async function GET(
       .eq('company_id', auth.companyId)
       .order('date');
 
-    // Project expenses
+    const { sumProjectJournal } = await import('@/lib/project-costs');
+    const journal = await sumProjectJournal(auth.companyId, id);
+
     const { data: expenses } = await s.from('project_expenses')
       .select('id, expense_type, amount, date, description, tax_amount')
       .eq('project_id', id).eq('company_id', auth.companyId)
       .order('date');
 
-    const totalExpenses = (expenses || []).reduce((sum: number, e: any) => sum + (parseFloat(e.amount) || 0), 0);
+    // المصدر المعتمد: قيود المشروع (تشمل فواتير العهدة والمشتريات الموسومة).
+    const totalExpenses = journal.expenses;
 
     // Progress billing
     const { data: progressBilling } = await s.from('progress_billing')
@@ -75,7 +78,7 @@ export async function GET(
     const netInvoiced = invoicedAmount - creditNoteAmount;
     const remaining = contractValue - netInvoiced;
     const outstanding = invoicedAmount - paidAmount - creditNoteAmount;
-    const actualProfit = netInvoiced - totalExpenses;
+    const actualProfit = journal.revenue > 0 ? journal.profit : (netInvoiced - totalExpenses);
     const profitMargin = netInvoiced > 0 ? (actualProfit / netInvoiced) * 100 : 0;
     const completionPercent = contractValue > 0 ? (netInvoiced / contractValue) * 100 : 0;
 
@@ -98,6 +101,7 @@ export async function GET(
         outstanding: outstanding,
         remaining_contract: remaining,
         expenses: totalExpenses,
+        journal_revenue: journal.revenue,
         progress_billing: progressTotal,
         actual_profit: actualProfit,
         profit_margin: profitMargin,
