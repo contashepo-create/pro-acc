@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, parseBody, requireApiAuth, handleApiError, getPaginationParams } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
 
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'branches', 'create');
     const s = sb();
     const body = await parseBody(req);
     const { code, name, address, phone, manager_id, is_main } = body;

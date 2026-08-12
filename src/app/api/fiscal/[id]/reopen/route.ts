@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireApiAuth(req);
+    await requireModulePermission(req, 'fiscal', 'approve');
     const { id } = await params;
     const s = sb();
 

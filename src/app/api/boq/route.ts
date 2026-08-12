@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'boq', 'create');
     const s = sb();
     const data = await parseBody(req);
     const { project_id, item_code, code, description, unit, quantity, unit_price } = data;

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError, success } from '@/lib/api-helpers';
+import { requireApiAuth, handleApiError, success, requireModulePermission } from '@/lib/api-helpers';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { insertJournalLines } from '@/lib/journal-utils';
 
@@ -9,7 +9,7 @@ const sb = () => getSupabase() as any;
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'fixed_assets', 'update');
     const s = sb();
 
     const { data: assets, error: assetsErr } = await s.from('fixed_assets')
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
 // GET to check what would be depreciated
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'fixed_assets', 'update');
     const s = sb();
 
     const { data: assets } = await s.from('fixed_assets')

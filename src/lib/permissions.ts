@@ -72,6 +72,22 @@ export const MODULES = {
   DAILY_WORKERS: 'daily_workers',
   FISCAL: 'fiscal',
   QUOTATIONS: 'quotations',
+  CREDIT_NOTES: 'credit_notes',
+  CONTRACTS: 'contracts',
+  TENDERS: 'tenders',
+  BONDS: 'bonds',
+  EQUIPMENT: 'equipment',
+  TIMESHEETS: 'timesheets',
+  PETTY_CASH: 'petty_cash',
+  BUDGETS: 'budgets',
+  BRANCHES: 'branches',
+  COST_CENTERS: 'cost_centers',
+  CRM: 'crm',
+  GANTT: 'gantt',
+  POS: 'pos',
+  APPROVALS: 'approvals',
+  TAX_RETURNS: 'tax_returns',
+  MESSAGES: 'messages',
 } as const;
 
 export type Module = typeof MODULES[keyof typeof MODULES];

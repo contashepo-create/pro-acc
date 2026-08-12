@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, serverError, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, serverError, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const { companyId } = await requireApiAuth(request);
+    const { companyId } = await requireModulePermission(request, 'messages', 'update');
     const { id } = await params;
     const s = sb();
 

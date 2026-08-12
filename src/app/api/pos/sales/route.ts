@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError, success, error, parseBody } from '@/lib/api-helpers';
+import { requireApiAuth, handleApiError, success, error, parseBody, requireModulePermission } from '@/lib/api-helpers';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { insertJournalLines } from '@/lib/journal-utils';
 const sb = () => getSupabase() as any;
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'pos', 'create');
     const s = sb();
     const body = await parseBody(req);
     const { terminal_id, total, payment_method } = body;

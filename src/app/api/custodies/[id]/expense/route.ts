@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
@@ -14,7 +14,7 @@ const sb = () => getSupabase();
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'custodies', 'update');
     const { id } = await params;
     const body = await parseBody(request);
     const { amount, description, invoice_id, purchase_invoice_id, expense_account_code } = body;

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { getNextJournalNumber } from '@/lib/numbering';
@@ -9,7 +9,7 @@ const sb = () => getSupabase();
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'subcontractors', 'create');
     const data = await parseBody(req);
     const { contract_id, certificate_id, amount, date, bank_safe_id, notes } = data;
 

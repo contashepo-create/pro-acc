@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, serverError, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { checkModuleAccess } from '@/lib/usage-limits';
 
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'telegram', 'create');
     const s = sb();
 
     // 1. التحقق من تمكين الميزة للباقة
