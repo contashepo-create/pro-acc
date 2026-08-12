@@ -125,7 +125,7 @@ export default function BanksPage() {
       <PageHeader title="البنوك والخزائن" description="إدارة الحسابات البنكية والخزائن النقدية" actions={<Button onClick={() => { setEditingBank(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة بنك/خزينة</Button>} />
       {banks.length === 0 ? <EmptyState title="لا توجد بنوك أو خزائن" actionLabel="إضافة بنك/خزينة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={banks} searchable searchKeys={['name', 'account_number']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingBank(null); }} title={editingBank ? `تعديل: ${editingBank.name}` : 'إضافة بنك/خزينة'} size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingBank(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e:any)=>setForm({...form, name: e.target.value})} placeholder="مثلاً: البنك الأهلي - حساب رئيسي" />
           <Select label="النوع" value={form.type} onChange={(value)=>setForm({...form, type: value})} options={[{ value: 'bank', label: 'بنك' }, { value: 'safe', label: 'صندوق' }]} />
           <Input label="رقم الحساب" value={form.account_number} onChange={(e:any)=>setForm({...form, account_number: e.target.value})} placeholder="1234567890" />

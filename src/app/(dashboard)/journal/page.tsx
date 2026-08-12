@@ -95,7 +95,7 @@ export default function JournalPage() {
         title={viewing ? `قيد رقم ${viewing.number}` : 'عرض القيد'}
         record={viewing}
         extra={viewing?.lines?.length ? (
-          <div className="border border-border rounded-lg overflow-hidden">
+          <div className="border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-bg-secondary text-text-muted">
                 <tr>

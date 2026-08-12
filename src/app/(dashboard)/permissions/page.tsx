@@ -730,7 +730,7 @@ export default function PermissionsPage() {
         <div className="space-y-4">
           {addError && <div className="bg-red-50 border border-red-200 rounded p-2 text-red-600 text-sm">{addError}</div>}
           <Input label="اسم القسم *" value={newModule.name} onChange={(e) => setNewModule(p => ({...p, name: e.target.value}))} placeholder="مثال: العقود، التأمين، الجودة..." />
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="الأيقونة (إيموجي)" value={newModule.icon} onChange={(e) => setNewModule(p => ({...p, icon: e.target.value}))} placeholder="📁" />
             <Input label="المجموعة" value={newModule.group_name} onChange={(e) => setNewModule(p => ({...p, group_name: e.target.value}))} placeholder="custom" />
           </div>
@@ -758,7 +758,7 @@ export default function PermissionsPage() {
         <div className="space-y-4">
           {addError && <div className="bg-red-50 border border-red-200 rounded p-2 text-red-600 text-sm">{addError}</div>}
           <Input label="اسم العملية *" value={newAction.name} onChange={(e) => setNewAction(p => ({...p, name: e.target.value}))} placeholder="مثال: موافقة استرداد، اعتماد نقل..." />
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="الكود (إنجليزي) *" value={newAction.code} onChange={(e) => setNewAction(p => ({...p, code: e.target.value}))} placeholder="مثال: approve_refund" />
             <Input label="الأيقونة (إيموجي)" value={newAction.icon} onChange={(e) => setNewAction(p => ({...p, icon: e.target.value}))} placeholder="⚡" />
           </div>

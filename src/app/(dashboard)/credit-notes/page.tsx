@@ -119,7 +119,7 @@ export default function CreditNotesPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إشعار دائن جديد" size="xl"
         footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
             <Select label="الفاتورة (اختياري)" value={form.invoice_id} onChange={(v) => setForm({ ...form, invoice_id: v })}
               options={[{ value: '', label: '— بدون —' }, ...invoices.map((inv: any) => ({ value: inv.id, label: `#${inv.number} - ${formatCurrency(inv.total) }` }))]} />
@@ -130,7 +130,7 @@ export default function CreditNotesPage() {
           </div>
           <Textarea label="السبب" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="سبب الإشعار الدائن..." />
 
-          <div className="border border-border rounded-lg overflow-hidden">
+          <div className="border border-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-bg-secondary">
                 <tr>

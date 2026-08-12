@@ -122,7 +122,7 @@ export default function SubcontractorsPage() {
       {subcontractors.length === 0 ? <EmptyState title="لا يوجد مقاولون" actionLabel="إضافة مقاول" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={subcontractors} searchable searchKeys={['name', 'specialty']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingSubcontractor(null); }} title={editingSubcontractor ? `تعديل: ${editingSubcontractor.name}` : 'إضافة مقاول باطن'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingSubcontractor(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
             <Input label="شخص الاتصال" value={form.contact_person} onChange={(e) => setForm({...form, contact_person: e.target.value})} />
             <Input label="التخصص" value={form.specialty} onChange={(e) => setForm({...form, specialty: e.target.value})} />

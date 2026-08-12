@@ -6,7 +6,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const { companyId } = await requireApiAuth(request);
+    const { companyId } = await requireModulePermission(request, 'messages', 'read');
     const { searchParams } = new URL(request.url);
     const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
     const limit = 50;

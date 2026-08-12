@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { deleteJournalEntry } from '@/lib/journal-utils';
 import { ACCOUNT_CODES, PROJECT_EXPENSE_CODES } from '@/lib/constants';
@@ -11,7 +11,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'projects', 'read');
     const { id } = await params;
     const s = sb();
 
@@ -39,7 +39,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'projects', 'update');
     const { id } = await params;
     const s = sb();
     const body = await parseBody(req);
@@ -141,7 +141,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'projects', 'delete');
     const { id } = await params;
     const s = sb();
 

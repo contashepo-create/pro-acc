@@ -43,8 +43,8 @@ const mockRequest = {} as Request;
 
 function setupMocks(role: string, companyId = 'company-123') {
   mockExtractToken.mockReturnValue('valid-token');
-  mockVerifyToken.mockReturnValue({ userId: 'user-123', role: 'admin' });
-  mockUsersData = { company_id: companyId, is_active: true, role };
+  mockVerifyToken.mockReturnValue({ userId: 'user-123', role: 'admin', ver: 0 });
+  mockUsersData = { company_id: companyId, is_active: true, role, token_version: 0 };
   mockCompanyData = { is_active: true };
 }
 
@@ -182,17 +182,17 @@ describe('Edge Cases', () => {
 
   test('should reject when user is not active', async () => {
     mockExtractToken.mockReturnValue('valid-token');
-    mockVerifyToken.mockReturnValue({ userId: 'user-123', role: 'admin' });
-    mockUsersData = { company_id: 'company-123', is_active: false, role: 'admin' };
+    mockVerifyToken.mockReturnValue({ userId: 'user-123', role: 'admin', ver: 0 });
+    mockUsersData = { company_id: 'company-123', is_active: false, role: 'admin', token_version: 0 };
     mockCompanyData = { is_active: true };
     await expect(requireAdmin(mockRequest)).rejects.toThrow('المستخدم غير نشط');
   });
 
   test('should use database role, not JWT role', async () => {
     mockExtractToken.mockReturnValue('valid-token');
-    mockVerifyToken.mockReturnValue({ userId: 'user-123', role: 'admin' });
+    mockVerifyToken.mockReturnValue({ userId: 'user-123', role: 'admin', ver: 0 });
     // DB says supervisor despite JWT saying admin
-    mockUsersData = { company_id: 'company-123', is_active: true, role: 'supervisor' };
+    mockUsersData = { company_id: 'company-123', is_active: true, role: 'supervisor', token_version: 0 };
     mockCompanyData = { is_active: true };
     
     await expect(requireAdmin(mockRequest)).rejects.toThrow(AuthError);

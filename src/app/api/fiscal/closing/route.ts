@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
   const s = sb();
 
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'fiscal', 'approve');
     const body = await request.json();
     const { fiscalYearId, closingDate } = body;
 

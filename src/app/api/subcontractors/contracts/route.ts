@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'subcontractors', 'read');
     const s = sb();
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'subcontractors', 'create');
     const s = sb();
     const data = await parseBody(req);
     const { subcontractor_id, contract_number, description, contract_value, start_date, end_date, retention_rate } = data;

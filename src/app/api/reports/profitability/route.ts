@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'financial_reports', 'read');
     const s = sb();
     const url = new URL(req.url);
     const from = url.searchParams.get('from');

@@ -156,7 +156,7 @@ export default function ProgressBillingPage() {
       {claims.length === 0 ? <EmptyState title="لا توجد فواتير مرحلية" actionLabel="إضافة فاتورة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={claims} searchable searchKeys={['project_name', 'claim_number']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingClaim(null); }} title={editingClaim ? 'تعديل فاتورة مرحلية' : 'إضافة فاتورة مرحلية'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingClaim(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select label="المشروع" value={form.project_id} onChange={(v) => setForm({...form, project_id: v})} options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} className="col-span-2" />
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
             <Input label="المبلغ الإجمالي" type="number" value={form.gross_amount} onChange={(e) => setForm({...form, gross_amount: parseFloat(e.target.value) || 0})} />

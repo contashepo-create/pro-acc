@@ -6,7 +6,7 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'banks', 'read');
     const s = sb();
     const { data, error: queryError } = await s.from('bank_reconciliation')
       .select('*, banks_safes(name)').eq('company_id', auth.companyId).order('date', { ascending: false });

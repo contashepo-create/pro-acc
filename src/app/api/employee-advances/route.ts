@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -7,7 +7,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'employee_advances', 'read');
     const s = sb();
 
     const { data: advances } = await s.from('employee_advances')
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'employee_advances', 'create');
     const s = sb();
     const body = await request.json();
 

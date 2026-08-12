@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getContactBalance } from '@/lib/contact-utils';
 
@@ -7,7 +7,7 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'receipts', 'read');
     const url = new URL(request.url);
     const contactId = url.searchParams.get('contactId');
 

@@ -166,7 +166,7 @@ export default function ClientsPage() {
               <User size={18} className="text-accent" />
               <h3 className="font-bold text-text-primary">البيانات الأساسية</h3>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="col-span-2" />
               <Select label="النوع" value={form.type} onChange={(v) => setForm({ ...form, type: v })}
                 options={[{ value: 'client', label: 'عميل' }, { value: 'supplier', label: 'مورد' }, { value: 'both', label: 'عميل ومورد' }]} />
@@ -180,7 +180,7 @@ export default function ClientsPage() {
               <Phone size={18} className="text-accent" />
               <h3 className="font-bold text-text-primary">معلومات التواصل</h3>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="رقم الهاتف" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} dir="ltr" />
               <Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} dir="ltr" />
               <Input label="الموقع الإلكتروني" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} dir="ltr" />
@@ -193,7 +193,7 @@ export default function ClientsPage() {
               <MapPin size={18} className="text-accent" />
               <h3 className="font-bold text-text-primary">العنوان</h3>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="الدولة" value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} />
               <Input label="المدينة" value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
               <Input label="المنطقة" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} />
@@ -208,7 +208,7 @@ export default function ClientsPage() {
               <Building2 size={18} className="text-accent" />
               <h3 className="font-bold text-text-primary">البيانات القانونية والضريبية</h3>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="الرقم الضريبي" value={form.tax_number} onChange={(e) => setForm({ ...form, tax_number: e.target.value })} dir="ltr" />
               <Input label="السجل التجاري" value={form.commercial_registration} onChange={(e) => setForm({ ...form, commercial_registration: e.target.value })} dir="ltr" />
               <Input label="رقم الهوية" value={form.national_id} onChange={(e) => setForm({ ...form, national_id: e.target.value })} dir="ltr" />
@@ -224,7 +224,7 @@ export default function ClientsPage() {
               <User size={18} className="text-accent" />
               <h3 className="font-bold text-text-primary">الشخص المسؤول للتواصل</h3>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="اسم المسؤول" value={form.contact_person} onChange={(e) => setForm({ ...form, contact_person: e.target.value })} />
               <Input label="هاتف المسؤول" value={form.contact_person_phone} onChange={(e) => setForm({ ...form, contact_person_phone: e.target.value })} dir="ltr" />
               <Input label="بريد المسؤول" type="email" value={form.contact_person_email} onChange={(e) => setForm({ ...form, contact_person_email: e.target.value })} dir="ltr" />
@@ -237,7 +237,7 @@ export default function ClientsPage() {
               <CreditCard size={18} className="text-accent" />
               <h3 className="font-bold text-text-primary">البيانات البنكية</h3>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="اسم البنك" value={form.bank_name} onChange={(e) => setForm({ ...form, bank_name: e.target.value })} />
               <Input label="رقم الآيبان (IBAN)" value={form.iban} onChange={(e) => setForm({ ...form, iban: e.target.value })} dir="ltr" />
               <Input label="رمز السويفت (SWIFT)" value={form.swift_code} onChange={(e) => setForm({ ...form, swift_code: e.target.value })} dir="ltr" />
@@ -250,7 +250,7 @@ export default function ClientsPage() {
               <CreditCard size={18} className="text-accent" />
               <h3 className="font-bold text-text-primary">البيانات المالية</h3>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="الحد الائتماني" type="number" value={form.credit_limit} onChange={(e) => setForm({ ...form, credit_limit: parseFloat(e.target.value) || 0 })} />
               <Select label="شروط الدفع" value={form.payment_terms} onChange={(v) => setForm({ ...form, payment_terms: v })}
                 options={[

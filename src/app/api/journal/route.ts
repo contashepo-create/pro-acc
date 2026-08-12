@@ -319,6 +319,17 @@ export async function POST(request: NextRequest) {
       account_type: (l.accounts)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
     }));
 
+    // Financial audit trail — record the created journal entry.
+    try {
+      const { logAudit } = await import('@/lib/audit');
+      await logAudit({
+        company_id: auth.companyId, user_id: auth.userId,
+        entity_type: 'journal_entry', entity_id: entryId, action: 'create',
+        after: { id: entryId, date: entryRes.date, description: entryRes.description, totalDebit, totalCredit },
+        summary: `إنشاء قيد يومي (مدين ${totalDebit} / دائن ${totalCredit})`,
+      });
+    } catch {}
+
     return success({ ...entryRes, totalDebit, totalCredit, lines: formattedLines }, 201);
   } catch (err) {
     const errorObj = err as { message?: string };

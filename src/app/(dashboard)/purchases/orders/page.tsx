@@ -230,7 +230,7 @@ export default function PurchaseOrdersPage() {
       {orders.length === 0 ? <EmptyState title="لا توجد أوامر شراء" actionLabel="إضافة أمر شراء" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={orders} searchable searchKeys={['supplier_name', 'po_number']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingOrder(null); }} title={editingOrder ? 'تعديل أمر شراء' : 'إضافة أمر شراء'} size="xl" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingOrder(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
             <Select label="المورد" value={form.supplier_id} onChange={(v) => setForm({ ...form, supplier_id: v })} options={[{ value: '', label: 'اختر مورداً' }, ...suppliers.map((s: any) => ({ value: s.id, label: s.name }))]} />
           </div>
@@ -240,7 +240,7 @@ export default function PurchaseOrdersPage() {
               <span className="text-sm font-medium">البنود</span>
               <Button variant="ghost" size="sm" onClick={addItem} leftIcon={<Plus size={16} />}>إضافة بند</Button>
             </div>
-            <div className="border border-border rounded-lg overflow-hidden">
+            <div className="border border-border rounded-lg overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-surface-hover/50">
                   <tr>
@@ -290,7 +290,7 @@ export default function PurchaseOrdersPage() {
         title={viewingOrder ? `أمر شراء رقم #${viewingOrder.po_number}` : 'معاينة أمر الشراء'}
         record={viewingOrder}
         extra={viewingOrder?.items?.length ? (
-          <div className="border border-border rounded-xl overflow-hidden mt-3">
+          <div className="border border-border rounded-xl overflow-x-auto mt-3">
             <div className="bg-bg-secondary p-2.5 font-bold text-xs border-b border-border">بنود أمر الشراء</div>
             <table className="w-full text-xs text-right">
               <thead className="bg-bg-secondary/50 text-text-muted">

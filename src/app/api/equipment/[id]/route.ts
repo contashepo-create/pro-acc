@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -10,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'equipment', 'read');
     const { id } = await params;
     const s = sb();
 
@@ -54,7 +54,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'equipment', 'update');
     const { id } = await params;
     const s = sb();
     const body = await request.json();
@@ -91,7 +91,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'equipment', 'delete');
     const { id } = await params;
     const s = sb();
 
@@ -113,7 +113,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'equipment', 'create');
     const { id } = await params;
     const s = sb();
     const body = await request.json();

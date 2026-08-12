@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, parseBody, getPaginationParams } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -10,7 +10,7 @@ const sb = () => getSupabase();
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'contracts', 'read');
     const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'contracts', 'create');
     const s = sb();
     const body = await parseBody<{
       title: string;

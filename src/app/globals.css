@@ -290,12 +290,34 @@
   scrollbar-color: var(--color-border) transparent;
 }
 
+html {
+  /* منع التمرير الأفقي على مستوى الصفحة في الجوال حتى لا "ترقص" الصفحة كاملة
+     عند ظهور أي عنصر عريض (جداول، بطاقات، إعلانات). */
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   direction: rtl;
+  overflow-x: hidden;
+  min-height: 100dvh;
   transition: background 0.3s ease, color 0.3s ease;
+}
+
+/* قاعدة عامة لمنع أي صورة أو عنصر وسائط من تجاوز عرض الشاشة في الجوال */
+img, video, canvas, iframe {
+  max-width: 100%;
+}
+
+/* تحسين حجم زر اللمس في الشاشات الصغيرة */
+@media (max-width: 640px) {
+  .btn, .btn-icon {
+    -webkit-tap-highlight-color: transparent;
+  }
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }

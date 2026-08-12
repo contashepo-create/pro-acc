@@ -234,7 +234,7 @@ export default function QuotationsPage() {
       {quotations.length === 0 ? <EmptyState title="لا توجد عروض" actionLabel="إضافة عرض" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={quotations} searchable searchKeys={['contact_name', 'number']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingQuotation(null); }} title={editingQuotation ? 'تعديل عرض سعر' : 'إضافة عرض سعر'} size="full" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingQuotation(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
             <Input label="صالح حتى" type="date" value={form.valid_until} onChange={(e) => setForm({...form, valid_until: e.target.value})} />
             <Select label="العميل" value={form.contact_id} onChange={(v) => setForm({...form, contact_id: v})} options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]} className="col-span-2" />
@@ -285,7 +285,7 @@ export default function QuotationsPage() {
           </div>
           <div className="grid grid-cols-1 gap-4">
             <Input label="اسم المشروع" value={convertForm.name} onChange={(e) => setConvertForm({ ...convertForm, name: e.target.value })} />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="تاريخ البدء" type="date" value={convertForm.start_date} onChange={(e) => setConvertForm({ ...convertForm, start_date: e.target.value })} />
               <Input label="تاريخ الانتهاء (اختياري)" type="date" value={convertForm.end_date} onChange={(e) => setConvertForm({ ...convertForm, end_date: e.target.value })} />
             </div>
@@ -300,7 +300,7 @@ export default function QuotationsPage() {
         title={viewingQuotation ? `عرض سعر رقم #${viewingQuotation.number}` : 'معاينة عرض السعر'}
         record={viewingQuotation}
         extra={viewingQuotation?.items?.length ? (
-          <div className="border border-border rounded-xl overflow-hidden mt-3">
+          <div className="border border-border rounded-xl overflow-x-auto mt-3">
             <div className="bg-bg-secondary p-2.5 font-bold text-xs border-b border-border">بنود عرض السعر</div>
             <table className="w-full text-xs text-right">
               <thead className="bg-bg-secondary/50 text-text-muted">

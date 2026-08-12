@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { data: users, error: userErr } = await s.from('users')
-      .select('id, name, email, password_hash, role, is_active, company_id')
+      .select('id, name, email, password_hash, role, is_active, company_id, token_version')
       .eq('email', normalizedEmail).limit(2);
 
     if (userErr) {
@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
 
     if (subscriptionExpired) return error(subscriptionMessage || 'انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول', 403);
 
-    const token = createToken(u.id, u.role);
+    const token = createToken(u.id, u.role, Number((u as any).token_version) || 0);
     const { password_hash: _, ...safeUser } = u;
 
     const response = success({

@@ -54,6 +54,10 @@ export const forgotPasswordSchema = z.object({
   email: z.string().email('البريد الإلكتروني غير صالح'),
 });
 
+export const resendVerificationSchema = z.object({
+  email: z.string().email('البريد الإلكتروني غير صالح').max(254),
+});
+
 export const resetPasswordSchema = z.object({
   token: z.string().min(1, 'الرمز مطلوب'),
   password: passwordPolicy,
@@ -428,6 +432,35 @@ export const projectSchema = z.object({
   status: z.enum(['active', 'completed', 'cancelled', 'on_hold']).optional().default('active'),
   description: z.string().optional(),
   location: z.string().optional(),
+}).strict();
+
+// --------------- Change Orders ---------------
+
+export const changeOrderSchema = z.object({
+  project_id: z.string().uuid('رقم المشروع غير صالح'),
+  title: z.string().min(1, 'العنوان مطلوب').max(300),
+  description: z.string().max(1000).optional(),
+  change_amount: z.number('المبلغ يجب أن يكون رقمًا'),
+  status: z.enum(['draft', 'submitted', 'approved', 'rejected', 'invoiced']).optional().default('draft'),
+}).strict();
+
+export const changeOrderUpdateSchema = z.object({
+  title: z.string().min(1).max(300).optional(),
+  description: z.string().max(1000).nullable().optional(),
+  change_amount: z.number().optional(),
+  status: z.enum(['draft', 'submitted', 'approved', 'rejected', 'invoiced']).optional(),
+}).strict();
+
+// --------------- Equipment Costs ---------------
+
+export const equipmentCostSchema = z.object({
+  equipment_id: z.string().uuid().nullable().optional(),
+  project_id: z.string().uuid('رقم المشروع غير صالح').nullable().optional(),
+  date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
+  cost_type: z.enum(['rental', 'fuel', 'maintenance', 'labour', 'depreciation', 'other']).default('other'),
+  amount: z.number().min(0, 'المبلغ لا يمكن أن يكون سالبًا'),
+  usage_hours: z.number().min(0).optional().default(0),
+  notes: z.string().max(500).nullable().optional(),
 }).strict();
 
 // --------------- Pagination ---------------

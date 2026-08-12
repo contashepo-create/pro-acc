@@ -481,7 +481,7 @@ export default function SettingsPage() {
           {/* Country & Currency Section */}
           <div className="mt-6 pt-6 border-t border-border">
             <h4 className="text-sm font-bold text-text-primary mb-3">البلد والعملة</h4>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Select
                 label="الدولة"
                 value={countryCode}

@@ -52,8 +52,20 @@ export async function POST(request: NextRequest) {
 
     const passwordHash = await hashPassword(password);
 
+    // SECURITY: Bump token_version so every previously-issued JWT for this
+    // user (old sessions on any device) becomes invalid immediately.
+    const { data: cur } = await s.from('users')
+      .select('token_version')
+      .eq('id', tokenData.user_id)
+      .maybeSingle();
+    const nextVersion = (Number((cur as Record<string, any>)?.token_version) || 0) + 1;
+
     await s.from('users')
-      .update({ password_hash: passwordHash, updated_at: new Date().toISOString() })
+      .update({
+        password_hash: passwordHash,
+        token_version: nextVersion,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', tokenData.user_id);
 
     await s.from('password_reset_tokens')

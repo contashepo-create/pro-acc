@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -9,7 +9,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'progress_billing', 'read');
     const { id } = await params;
     const s = sb();
 
@@ -36,7 +36,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'progress_billing', 'update');
     const { id } = await params;
     const s = sb();
     const body = await parseBody(req);
@@ -79,7 +79,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'progress_billing', 'delete');
     const { id } = await params;
     const s = sb();
 

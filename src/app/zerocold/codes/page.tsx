@@ -134,7 +134,7 @@ export default function CodesPage() {
           </div>
         )}
 
-        <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
+        <div className="bg-bg-card border border-border rounded-xl overflow-x-auto">
           {codes.length === 0 ? (
             <div className="p-8 text-center">
               <Key size={32} className="text-amber-600/30 mx-auto mb-2" />

@@ -238,14 +238,14 @@ export default function InvoicesPage() {
     return (
       <div className="min-h-[calc(100vh-4rem)] flex flex-col">
         {/* Editor Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-bg-secondary">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-border bg-bg-secondary">
+          <div className="flex items-center gap-3 min-w-0">
             <Button variant="ghost" size="sm" onClick={() => { setShowEditor(false); setEditingInvoice(null); }}>
               <ArrowRight size={20} />
             </Button>
-            <div className="flex items-center gap-2">
-              <FileText size={24} className="text-accent" />
-              <h1 className="text-xl font-bold text-text-primary">
+            <div className="flex items-center gap-2 min-w-0">
+              <FileText size={24} className="text-accent shrink-0" />
+              <h1 className="text-lg sm:text-xl font-bold text-text-primary truncate">
                 {editingInvoice ? `تعديل فاتورة #${editingInvoice.number}` : 'فاتورة جديدة'}
               </h1>
             </div>
@@ -260,12 +260,12 @@ export default function InvoicesPage() {
           </div>
         </div>
 
-        <div className="flex-1 flex gap-6 p-6 overflow-y-auto">
+        <div className="flex-1 flex flex-col lg:flex-row gap-6 p-4 sm:p-6 overflow-y-auto">
           {/* Main Content - Left Side */}
           <div className="flex-1 space-y-6">
             {/* Invoice Header Card */}
             <div className="bg-bg-primary border border-border rounded-xl p-6 shadow-sm">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-4">
                   <Select
                     label="العميل"
@@ -281,7 +281,7 @@ export default function InvoicesPage() {
                   />
                 </div>
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Input label="تاريخ الفاتورة" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
                     <Input label="تاريخ الاستحقاق" type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
                   </div>
@@ -424,7 +424,7 @@ export default function InvoicesPage() {
           </div>
 
           {/* Sidebar - Totals (Right Side) */}
-          <div className="w-80 shrink-0 space-y-4">
+          <div className="w-full lg:w-80 shrink-0 space-y-4">
             <div className="bg-bg-primary border border-border rounded-xl shadow-sm sticky top-0">
               <div className="px-6 py-4 border-b border-border">
                 <h2 className="text-lg font-bold text-text-primary">ملخص الفاتورة</h2>

@@ -248,7 +248,7 @@ export default function ZerocoldLogsPage() {
             <p className="text-amber-600/50 text-sm">لا توجد أحداث مسجلة</p>
           </div>
         ) : (
-          <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
+          <div className="bg-bg-card border border-border rounded-xl overflow-x-auto">
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>

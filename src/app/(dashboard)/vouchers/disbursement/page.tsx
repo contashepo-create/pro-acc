@@ -226,7 +226,7 @@ export default function DisbursementPage() {
         }
       >
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
             <Select
               label="نوع السند"

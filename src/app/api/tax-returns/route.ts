@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -11,7 +11,7 @@ const sb = () => getSupabase();
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'tax_returns', 'read');
     const s = sb();
     const url = new URL(request.url);
 
@@ -142,7 +142,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'tax_returns', 'create');
     const s = sb();
     const body = await request.json();
 

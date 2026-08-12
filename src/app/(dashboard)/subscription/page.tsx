@@ -315,7 +315,7 @@ export default function SubscriptionPageEnhanced() {
               ))}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-text-muted">طريقة الدفع</label>
                 <select value={form.payment_method} onChange={(e) => setForm({...form, payment_method: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-lg text-sm">

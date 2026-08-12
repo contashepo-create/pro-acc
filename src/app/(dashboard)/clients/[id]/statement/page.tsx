@@ -123,7 +123,7 @@ export default function ClientStatementPage() {
           </div>
 
           {/* Summary Cards */}
-          <div className="grid grid-cols-3 gap-4 p-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-6">
             <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
               <p className="text-xs text-gray-500 mb-1">إجمالي مدين</p>
               <p className="text-xl font-bold text-green-700">{formatCurrency(total_debit)}</p>

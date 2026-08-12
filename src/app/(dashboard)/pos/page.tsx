@@ -84,7 +84,7 @@ export default function POSPage() {
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>}
       {sales.length === 0 ? <EmptyState title="لا توجد مبيعات" description="ابدأ بعملية بيع جديدة" actionLabel="بيع جديد" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={sales} searchable searchKeys={['number']} />}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="بيع جديد - نقطة بيع" size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ البيع'}</Button></div>}>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Select label="نقطة البيع" value={form.terminal_id} onChange={(v)=>setForm({...form, terminal_id: v})} options={[{ value: '', label: 'بدون' }, ...terminals.map((t:any)=>({ value: t.id, label: t.name }))]} />
           <Input label="الإجمالي *" type="number" value={form.total} onChange={(e:any)=>setForm({...form, total: e.target.value})} placeholder="0" />
           <Select label="طريقة الدفع" value={form.payment_method} onChange={(v)=>setForm({...form, payment_method: v})} options={[{value:'cash',label:'نقدي'},{value:'card',label:'بطاقة'},{value:'transfer',label:'تحويل'}]} />

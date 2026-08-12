@@ -134,7 +134,7 @@ export default function FixedAssetsPage() {
       {assets.length === 0 ? <EmptyState title="لا توجد أصول" actionLabel="إضافة أصل" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={assets} searchable searchKeys={['name', 'code', 'category']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingAsset(null); }} title={editingAsset ? `تعديل أصل: ${editingAsset.name}` : 'إضافة أصل ثابت'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingAsset(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
             <Input label="الرمز" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
             <Input label="الفئة" value={form.category} onChange={(e) => setForm({...form, category: e.target.value})} />

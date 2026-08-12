@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError, success, error, parseBody } from '@/lib/api-helpers';
+import { requireApiAuth, handleApiError, success, error, parseBody, requireModulePermission } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
 
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'subscription', 'create');
     const s = sb();
     const body = await parseBody(request);
 

@@ -6,7 +6,7 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'boq', 'read');
     const s = sb();
     const projectId = req.nextUrl.searchParams.get('projectId');
     const { page, pageSize } = getPaginationParams(req.url);
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'boq', 'create');
     const s = sb();
     const data = await parseBody(req);
     const { project_id, item_code, code, description, unit, quantity, unit_price } = data;

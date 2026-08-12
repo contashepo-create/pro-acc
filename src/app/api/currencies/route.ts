@@ -6,7 +6,7 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'currencies', 'read');
     const s = sb();
     const { data, error: queryError } = await s.from('currencies')
       .select('*').eq('company_id', auth.companyId).order('is_base', { ascending: false }).order('code');

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
 
@@ -14,7 +14,7 @@ function bucketFor(days: number) {
 
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'financial_reports', 'read');
     const url = new URL(req.url);
     const type = url.searchParams.get('type') || 'ar';
     const asOf = url.searchParams.get('asOf') || url.searchParams.get('to') || new Date().toISOString().split('T')[0];
