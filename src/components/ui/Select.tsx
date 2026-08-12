@@ -90,9 +90,11 @@ export function Select({
       updateCoords();
       window.addEventListener('resize', updateCoords);
       window.addEventListener('scroll', updateCoords, true);
+      window.visualViewport?.addEventListener('resize', updateCoords);
       return () => {
         window.removeEventListener('resize', updateCoords);
         window.removeEventListener('scroll', updateCoords, true);
+        window.visualViewport?.removeEventListener('resize', updateCoords);
       };
     }
   }, [isOpen]);
