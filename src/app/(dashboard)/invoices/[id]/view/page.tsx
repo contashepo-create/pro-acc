@@ -364,8 +364,14 @@ export default function InvoiceViewPage() {
         </div>
       </div>
 
-      {/* Interactive Customization Settings Drawer */}
-      {showSettings && (
+      <p className="max-w-4xl mx-auto mt-3 px-4 no-print text-xs text-text-muted">
+        الحقول الظاهرة تُضبط من{' '}
+        <button type="button" className="text-accent underline" onClick={() => router.push('/settings?tab=invoices')}>
+          الإعدادات → الفواتير والطباعة
+        </button>
+        . أزرار القوالب أعلاه للمعاينة فقط.
+      </p>
+      {false && (
         <div className="max-w-4xl mx-auto mt-4 p-5 bg-bg-primary border border-border rounded-2xl shadow-sm no-print space-y-4">
           <div className="flex items-center justify-between border-b border-border pb-3">
             <div className="flex items-center gap-2">

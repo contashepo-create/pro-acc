@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { pickContactFields, writeContact } from '@/lib/contact-fields';
+import { getContactBalance } from '@/lib/contact-utils';
 
 const sb = () => getSupabase();
 

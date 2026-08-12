@@ -23,7 +23,7 @@ async function maxExisting(table: string, companyId: string, columns: string[]):
       .order(col, { ascending: false })
       .limit(1)
       .maybeSingle();
-    const n = Number((data as Record<string, number> | null)?.[col]) || 0;
+    const n = Number((data as unknown as Record<string, number> | null)?.[col]) || 0;
     if (n > max) max = n;
   }
   return max;
