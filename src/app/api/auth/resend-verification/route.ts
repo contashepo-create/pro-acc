@@ -16,16 +16,24 @@ export async function POST(request: NextRequest) {
     const { email } = parsed.data;
     const normalizedEmail = email.toLowerCase().trim();
     const s = sb();
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || 'unknown';
 
     // Rate limiting: prevent attackers from flooding inboxes with
-    // verification emails (email bombing).
+    // verification emails (email bombing). Counts real requests via the
+    // password_reset_requests table so repeated resends are throttled.
     try {
-      const { checkRateLimit } = await import('@/lib/rate-limit');
-      const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || 'unknown';
-      const rateLimit = await checkRateLimit(normalizedEmail, ip);
+      const { checkPasswordResetRateLimit } = await import('@/lib/rate-limit');
+      const rateLimit = await checkPasswordResetRateLimit(normalizedEmail, ip);
       if (!rateLimit.allowed) {
         return error(`عدد الطلبات كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
       }
+    } catch {}
+
+    // Record the request for throttling + delivery diagnostics.
+    let requestId: string | null = null;
+    try {
+      const { recordPasswordResetRequest } = await import('@/lib/rate-limit');
+      requestId = await recordPasswordResetRequest(normalizedEmail, ip);
     } catch {}
 
     const { data: user } = await s.from('users')
@@ -74,11 +82,18 @@ export async function POST(request: NextRequest) {
       </div>`
     );
 
+    // Record delivery outcome for diagnostics.
+    try {
+      const { markPasswordResetRequest } = await import('@/lib/rate-limit');
+      if (emailSent) await markPasswordResetRequest(requestId, 'delivered');
+      else await markPasswordResetRequest(requestId, 'failed', 'SMTP not configured or send failed');
+    } catch {}
+
     if (!emailSent && process.env.NODE_ENV !== 'production') {
       return success({ message: 'لم يتم تكوين خادم البريد. استخدم الرابط أدناه', resetUrl: verifyUrl });
     }
     if (!emailSent) {
-      return success({ message: 'تعذر إرسال البريد الإلكتروني. تواصل مع مدير النظام' });
+      return success({ message: 'تعذر إرسال رابط التأكيد حالياً. يرجى المحاولة لاحقاً أو التواصل مع مدير النظام' });
     }
 
     return success({ message: 'تم إرسال رابط التأكيد إلى بريدك الإلكتروني' });

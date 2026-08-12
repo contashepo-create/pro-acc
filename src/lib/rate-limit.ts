@@ -57,13 +57,14 @@ export async function checkRateLimit(
   ipAddress: string
 ): Promise<{ allowed: boolean; remainingMinutes: number }> {
   const s = sb();
-  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60000).toISOString();
 
   // SECURITY FIX: Sanitize IP address to prevent PostgREST filter injection
   const safeIp = sanitizeIpAddress(ipAddress);
   // SECURITY FIX: Sanitize email too — it is user-controlled and previously
   // interpolated raw into the `.or()` filter (PostgREST injection vector).
   const safeEmail = sanitizeEmailForFilter(email);
+
+  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60000).toISOString();
 
   const { data: attempts, error } = await s.from('login_attempts')
     .select('attempted_at')
@@ -91,4 +92,85 @@ export async function checkRateLimit(
   }
 
   return { allowed: true, remainingMinutes: 0 };
+}
+
+/**
+ * Rate-limit for password-reset / resend-verification endpoints.
+ *
+ * Unlike checkRateLimit (which counts login_attempts), this counts rows in the
+ * dedicated `password_reset_requests` table that these endpoints DO write to,
+ * so repeated resets are actually throttled. Limit is per (email OR IP) within
+ * the window.
+ */
+export async function checkPasswordResetRateLimit(
+  email: string,
+  ipAddress: string,
+  opts: { maxRequests?: number; windowMinutes?: number } = {}
+): Promise<{ allowed: boolean; remainingMinutes: number }> {
+  const s = sb();
+  const maxRequests = opts.maxRequests ?? 3;
+  const windowMinutes = opts.windowMinutes ?? 15;
+  const since = new Date(Date.now() - windowMinutes * 60000).toISOString();
+  const safeIp = sanitizeIpAddress(ipAddress);
+  const safeEmail = sanitizeEmailForFilter(email);
+
+  const { data, error } = await s.from('password_reset_requests')
+    .select('created_at')
+    .or(`email.eq.${safeEmail},ip_address.eq.${safeIp}`)
+    .gte('created_at', since)
+    .order('created_at');
+
+  if (error) {
+    console.error('Password-reset rate limit check error:', error);
+    return { allowed: true, remainingMinutes: 0 };
+  }
+
+  const count = (data || []).length;
+  if (count >= maxRequests) {
+    const oldest = data?.[0]?.created_at;
+    const elapsedMs = oldest ? Date.now() - new Date(oldest).getTime() : 0;
+    const remainingMs = windowMinutes * 60000 - elapsedMs;
+    const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+    return { allowed: false, remainingMinutes };
+  }
+
+  return { allowed: true, remainingMinutes: 0 };
+}
+
+/**
+ * Record a password-reset / resend request so the throttle above has rows to
+ * count. Returns the inserted row id (for updating delivery status).
+ */
+export async function recordPasswordResetRequest(
+  email: string,
+  ipAddress: string
+): Promise<string | null> {
+  try {
+    const safeIp = sanitizeIpAddress(ipAddress);
+    const { data, error } = await sb().from('password_reset_requests')
+      .insert({ email: email.toLowerCase().trim(), ip_address: safeIp, status: 'requested' })
+      .select('id').single();
+    if (error) throw error;
+    return data?.id || null;
+  } catch (err) {
+    // Recording must never break the request it observes.
+    console.error('Failed to record password-reset request:', err);
+    return null;
+  }
+}
+
+/** Update a recorded request's delivery outcome for diagnostics. */
+export async function markPasswordResetRequest(
+  id: string | null,
+  status: 'delivered' | 'failed',
+  errorText?: string
+): Promise<void> {
+  if (!id) return;
+  try {
+    await sb().from('password_reset_requests')
+      .update({ status, error: errorText || null })
+      .eq('id', id);
+  } catch (err) {
+    console.error('Failed to update password-reset request status:', err);
+  }
 }
