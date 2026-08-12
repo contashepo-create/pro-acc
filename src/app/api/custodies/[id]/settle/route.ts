@@ -79,15 +79,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
     if (shortage > 0) {
       await recordCustodyTx(auth.companyId, id, 'shortage', shortage, 'عجز يُخصم من الراتب', auth.userId);
-      await s.from('employee_advances').insert({
-        company_id: auth.companyId,
-        employee_id: file.employee_id,
-        date,
-        type: 'custody_shortage',
-        amount: shortage,
-        description: `عجز عهدة ${file.file_number || id}`,
-        custody_id: id,
-      });
+      try {
+        await s.from('employee_advances').insert({
+          company_id: auth.companyId,
+          employee_id: file.employee_id,
+          date,
+          type: 'custody_shortage',
+          amount: shortage,
+          description: `عجز عهدة ${file.file_number || id}`,
+          custody_id: id,
+        });
+      } catch { /* أعمدة اختيارية */ }
     }
 
     await s.from('custodies').update({

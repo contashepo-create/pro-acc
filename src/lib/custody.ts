@@ -30,10 +30,17 @@ export async function resolveCustodyAccounts(companyId: string) {
 
 export async function loadCustodyFile(companyId: string, id: string) {
   const s = sb();
-  const { data: row, error } = await s.from('custodies')
+  let row: any = null;
+  const primary = await s.from('custodies')
     .select('*, employees(name), projects(name), banks_safes(name)')
     .eq('id', id).eq('company_id', companyId).maybeSingle();
-  if (error) throw error;
+  if (primary.error) {
+    const fb = await s.from('custodies').select('*').eq('id', id).eq('company_id', companyId).maybeSingle();
+    if (fb.error) throw fb.error;
+    row = fb.data;
+  } else {
+    row = primary.data;
+  }
   if (!row) return null;
 
   let txs: any[] = [];
@@ -114,7 +121,8 @@ export async function recordCustodyTx(
 export async function syncCustodyTotals(companyId: string, custodyId: string) {
   const file = await loadCustodyFile(companyId, custodyId);
   if (!file) return null;
-  const status = file.is_closed ? 'settled' : file.computed_status;
+  // عمود status في بعض القواعد لا يقبل partially_settled
+  const status = file.is_closed ? 'settled' : 'open';
   await sb().from('custodies').update({
     amount: file.total_received,
     total_received: file.total_received,

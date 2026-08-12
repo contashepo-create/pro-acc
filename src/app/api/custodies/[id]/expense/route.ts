@@ -85,7 +85,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       });
     }
     if (excess > 0) {
-      await recordCustodyTx(auth.companyId, id, 'surplus', excess, `زيادة: ${description}`, auth.userId);
+      await recordCustodyTx(auth.companyId, id, 'adjustment', excess, `زيادة: ${description}`, auth.userId);
       try {
         await s.from('employee_advances').insert({
           company_id: auth.companyId,

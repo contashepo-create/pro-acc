@@ -24,10 +24,15 @@ export async function GET(req: NextRequest) {
     if (status) query = query.eq('status', status);
 
     const offset = (page - 1) * pageSize;
-    const { data, error: qErr, count } = await query
+    let { data, error: qErr, count } = await query
       .order('date', { ascending: false })
       .range(offset, offset + pageSize - 1);
-    if (qErr) throw qErr;
+    if (qErr) {
+      const fb = await s.from('custodies').select('*', { count: 'exact' }).eq('company_id', auth.companyId)
+        .order('date', { ascending: false }).range(offset, offset + pageSize - 1);
+      if (fb.error) throw fb.error;
+      data = fb.data; count = fb.count; qErr = null;
+    }
 
     const custodies = (data || []).map((c: any) => ({
       ...c,
@@ -69,7 +74,7 @@ export async function POST(req: NextRequest) {
     const acc = await resolveCustodyAccounts(auth.companyId);
     const fileNumber = await nextFileNumber(auth.companyId);
 
-    const { data: custody, error: cErr } = await s.from('custodies').insert({
+    const payload: any = {
       company_id: auth.companyId,
       employee_id,
       date,
@@ -84,8 +89,19 @@ export async function POST(req: NextRequest) {
       file_number: fileNumber,
       status: 'open',
       created_by: auth.userId,
-    }).select('*').single();
-    if (cErr) throw cErr;
+    };
+    let { data: custody, error: cErr } = await s.from('custodies').insert(payload).select('*').single();
+    if (cErr && /column|schema|PGRST|42703/i.test(`${cErr.message} ${cErr.code}`)) {
+      delete payload.file_number;
+      delete payload.description;
+      delete payload.project_id;
+      delete payload.total_received;
+      delete payload.total_expenses;
+      delete payload.created_by;
+      const retry = await s.from('custodies').insert(payload).select('*').single();
+      custody = retry.data; cErr = retry.error;
+    }
+    if (cErr || !custody) throw cErr || new Error('فشل إنشاء الملف');
 
     const { journalId, error: jeErr } = await createJournalEntry(auth.companyId, {
       date,

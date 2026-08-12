@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
       supplier_name: pi.contacts?.name || null,
       po_number: pi.purchase_orders?.po_number || null,
       items: [] as any[],
-      paid_amount: 0,
+      paid_amount: round2(parseFloat(pi.paid_amount) || 0),
     }));
 
     // Batch-load items + payments for the page (was an N+1 loop per invoice)
@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
     const parsed = purchaseInvoiceSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { date, supplier_id, purchase_order_id, items, tax_rate, notes } = parsed.data;
+    const { date, supplier_id, purchase_order_id, items, tax_rate, notes, project_id, custody_id, link_to_project } = parsed.data;
 
     // TENANT CHECKS: المورد وأمر الشراء (إن وُجد) يجب أن ينتميا لهذه الشركة —
     // قبل أي عملية كتابة حتى لا يُستهلك الترقيم أو تُنشأ سجلات يتيمة

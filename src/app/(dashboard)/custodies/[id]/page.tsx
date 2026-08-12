@@ -138,16 +138,42 @@ export default function CustodyFilePage() {
         </div>
       </Modal>
 
-      <Modal isOpen={modal === 'expense'} onClose={() => setModal(null)} title="إثبات مصروف من العهدة" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>إلغاء</Button><Button disabled={saving} onClick={() => post(`/api/custodies/${id}/expense`, form)}>خصم من الملف</Button></div>}>
+      <Modal isOpen={modal === 'expense'} onClose={() => setModal(null)} title="فاتورة مشتريات مدفوعة من العهدة" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>إلغاء</Button><Button disabled={saving} onClick={() => {
+        if (!form.supplier_id || !form.amount) { toast.error('المورد والمبلغ مطلوبان'); return; }
+        const link_to_project = form.project_mode !== 'none';
+        const project_id = form.project_mode === 'other' ? form.project_id : (form.project_mode === 'custody' ? file.project_id : null);
+        post('/api/purchases/invoices', {
+          date: form.date,
+          supplier_id: form.supplier_id,
+          items: [{ description: form.description || 'مشتريات من عهدة', quantity: 1, unit_price: form.amount }],
+          tax_rate: 0,
+          notes: `مدفوعة من ملف ${file.file_number || ''}`,
+          custody_id: id,
+          project_id: project_id || null,
+          link_to_project,
+        });
+      }}>إنشاء وخصم من الملف</Button></div>}>
         <div className="space-y-3">
-          <p className="text-xs text-text-muted">مدين المصروف / دائن عهدة الموظف. لا يُنشأ سند صرف نقدي إضافي.</p>
+          <p className="text-xs text-text-muted">فاتورة رسمية مدفوعة: مدين مصروف / دائن 1150. المشروع افتراضي من الملف ويمكن فكه أو تغييره.</p>
+          <Select label="المورد" value={form.supplier_id || ''} onChange={(v) => setForm({ ...form, supplier_id: v })}
+            options={[{ value: '', label: 'اختر المورد' }, ...suppliers.map((s: any) => ({ value: s.id, label: s.name }))]} />
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
-          <Input label="البيان (الفاتورة / جهة الشراء)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={!!form.allow_excess} onChange={(e) => setForm({ ...form, allow_excess: e.target.checked })} />
-            السماح بزيادة عن المتبقي (مستحق للموظف على الراتب)
-          </label>
+          <Input label="بيان الفاتورة" value={form.description || ''} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+          <Select
+            label="ربط المشروع"
+            value={form.project_mode || (file.project_id ? 'custody' : 'none')}
+            onChange={(v) => setForm({ ...form, project_mode: v })}
+            options={[
+              { value: 'custody', label: file.project_name ? `مشروع الملف (${file.project_name})` : 'مشروع الملف (غير محدد)' },
+              { value: 'none', label: 'بدون مشروع' },
+              { value: 'other', label: 'مشروع آخر…' },
+            ]}
+          />
+          {form.project_mode === 'other' && (
+            <Select label="المشروع" value={form.project_id || ''} onChange={(v) => setForm({ ...form, project_id: v })}
+              options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} />
+          )}
         </div>
       </Modal>
 
