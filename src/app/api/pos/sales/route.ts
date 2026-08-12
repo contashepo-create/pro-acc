@@ -1,8 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireApiAuth, handleApiError, success, error, parseBody, requireModulePermission } from '@/lib/api-helpers';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
+import { createJournalEntry } from '@/lib/journal-utils';
 const sb = () => getSupabase() as any;
 
 export async function GET(req: NextRequest) {
@@ -44,31 +43,28 @@ export async function POST(req: NextRequest) {
 
     if (err) throw err;
 
-    // Create journal entry for POS sale
-    try {
-      const jeNum = await getNextJournalNumber(auth.companyId, new Date().toISOString());
-      const { data: je } = await s.from('journal_entries').insert({
-        company_id: auth.companyId,
-        number: jeNum,
-        date: new Date().toISOString().split('T')[0],
-        type: 'general',
-        description: `مبيعات POS #${number}`,
-        created_by: auth.userId,
-      }).select('id').single();
-
-      // Get cash account and revenue account
-      const { data: cashAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1110').maybeSingle();
-      const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
-
-      if (cashAcc && revAcc && je) {
-        const { error: jlErr } = await insertJournalLines(auth.companyId, [
-          { journal_entry_id: je.id, account_id: cashAcc.id, debit: total, credit: 0, description: `مبيعات POS ${number}` },
-          { journal_entry_id: je.id, account_id: revAcc.id, debit: 0, credit: total, description: `إيراد POS ${number}` },
-        ]);
-        if (jlErr) throw jlErr;
-      }
-    } catch (jeErr) {
-      console.warn('POS journal creation failed:', jeErr);
+    const { data: cashAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1110').maybeSingle();
+    const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
+    if (!cashAcc || !revAcc) {
+      await s.from('pos_sales').delete().eq('id', data.id).eq('company_id', auth.companyId);
+      return error('حسابات الصندوق أو الإيراد مفقودة — راجع دليل الحسابات', 400);
+    }
+    const saleDate = new Date().toISOString().split('T')[0];
+    const { journalId, error: jeErr } = await createJournalEntry(auth.companyId, {
+      date: saleDate,
+      type: 'general',
+      description: `مبيعات POS #${number}`,
+      reference_type: 'pos_sale',
+      reference_id: data.id,
+      created_by: auth.userId,
+      lines: [
+        { account_id: cashAcc.id, debit: total, credit: 0, description: `مبيعات POS ${number}` },
+        { account_id: revAcc.id, debit: 0, credit: total, description: `إيراد POS ${number}` },
+      ],
+    });
+    if (jeErr || !journalId) {
+      await s.from('pos_sales').delete().eq('id', data.id).eq('company_id', auth.companyId);
+      throw jeErr || new Error('فشل قيد مبيعات نقطة البيع');
     }
 
     return success(data, 201);

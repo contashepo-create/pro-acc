@@ -3,7 +3,7 @@ import { success, error, requireModulePermission, handleApiError, getPaginationP
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber } from '@/lib/numbering';
 import { createJournalEntry } from '@/lib/journal-utils';
-import { resolveAccountId, applyInvoiceAllocations, revertInvoiceAllocations, hydratePartyNames } from '@/lib/voucher-utils';
+import { resolveAccountId, applyInvoiceAllocations, allocateOldestUnpaidInvoices, revertInvoiceAllocations, hydratePartyNames } from '@/lib/voucher-utils';
 import { receiptVoucherCreateSchema } from '@/lib/validation';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
@@ -207,15 +207,37 @@ export async function POST(request: NextRequest) {
         .update({ journal_entry_id: journalEntryId })
         .eq('id', receiptId);
 
-      // تخصيص اختياري على فواتير العميل غير المسددة
+      // Open Items: الفاتورة لا تتغير إلا بتخصيص صريح.
+      // سند بلا invoice_items = دفعة مقدمة / رصيد غير مخصص — الفواتير تبقى كما هي.
+      let applied = 0;
       if (invoice_items && invoice_items.length > 0) {
-        const { error: allocErr } = await applyInvoiceAllocations(
+        const alloc = await applyInvoiceAllocations(
           auth.companyId, 'receipt', receiptId, journalEntryId, amount, invoice_items, contact_id || null
         );
-        if (allocErr) throw new Error(allocErr);
+        if (alloc.error) throw new Error(alloc.error);
+        applied = alloc.applied;
+      } else if (receipt_type === 'client' && contact_id) {
+        const { data: fifoSetting } = await s.from('settings')
+          .select('value')
+          .eq('company_id', auth.companyId)
+          .eq('key', 'auto_allocate_receipts_fifo')
+          .maybeSingle();
+        const fifoOn = fifoSetting && ['true', '1', 'yes'].includes(String(fifoSetting.value).toLowerCase());
+        if (fifoOn) {
+          const alloc = await allocateOldestUnpaidInvoices(
+            auth.companyId, receiptId, journalEntryId, amount, contact_id
+          );
+          if (alloc.error) throw new Error(alloc.error);
+          applied = alloc.applied;
+        }
       }
 
-      return success({ ...receipt, journal_entry_id: journalEntryId }, 201);
+      return success({
+        ...receipt,
+        journal_entry_id: journalEntryId,
+        allocated_amount: applied,
+        unapplied_amount: Math.round((amount - applied + Number.EPSILON) * 100) / 100,
+      }, 201);
     } catch (txErr) {
       console.error('Receipt creation failed, rolling back:', txErr);
       try {

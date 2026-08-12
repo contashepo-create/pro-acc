@@ -1,9 +1,8 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
-import { insertJournalLines } from '@/lib/journal-utils';
+import { createJournalEntry } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 

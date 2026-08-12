@@ -237,3 +237,40 @@ export async function revertInvoiceAllocations(
 
   await s.from(linkTable).delete().eq(linkVoucherCol, voucherId);
 }
+
+/**
+ * تخصيص FIFO: أقدم فاتورة غير مسددة أولاً.
+ * لا يغيّر رصيد 1130 — يحدّث فقط paid_amount/status.
+ */
+export async function allocateOldestUnpaidInvoices(
+  companyId: string,
+  voucherId: string,
+  journalEntryId: string | null,
+  amount: number,
+  contactId: string
+): Promise<{ error: string | null; applied: number }> {
+  const s = sb();
+  const { data: invoices } = await s.from('invoices')
+    .select('id, total, paid_amount, status, date, number')
+    .eq('company_id', companyId)
+    .eq('contact_id', contactId)
+    .neq('status', 'cancelled')
+    .neq('status', 'paid')
+    .order('date', { ascending: true })
+    .order('number', { ascending: true });
+
+  const allocations: AllocationInput[] = [];
+  let remaining = round2(amount);
+  for (const inv of invoices || []) {
+    if (remaining <= 0.005) break;
+    const total = round2(parseFloat(inv.total) || 0);
+    const paid = round2(parseFloat(inv.paid_amount) || 0);
+    const due = round2(total - paid);
+    if (due <= 0) continue;
+    const take = round2(Math.min(remaining, due));
+    allocations.push({ invoice_id: inv.id, amount: take });
+    remaining = round2(remaining - take);
+  }
+  if (allocations.length === 0) return { error: null, applied: 0 };
+  return applyInvoiceAllocations(companyId, 'receipt', voucherId, journalEntryId, amount, allocations, contactId);
+}

@@ -211,54 +211,31 @@ export async function PATCH(
     const invoice = invRes as Record<string, any>;
 
     if (body.status === 'paid') {
-      if (invoice.status === 'paid') return error('الفاتورة مدفوعة مسبقاً');
-      if (invoice.status === 'cancelled') return error('لا يمكن دفع فاتورة ملغية');
-      // Keep the trio consistent: a paid invoice must show full paid_amount
-      // (previously only the flag changed, leaving paid_amount=0 rows).
-      const { error: updErr } = await s.from('invoices')
-        .update({ status: 'paid', paid_amount: invoice.total, updated_at: new Date().toISOString() })
-        .eq('id', id).eq('company_id', auth.companyId);
-      if (updErr) throw updErr;
-      return success({ message: 'تم تسجيل الفاتورة كمدفوعة' });
+      return error('لا يمكن تعليم الفاتورة مدفوعة يدوياً. سجّل سند قبض وخصّصه على الفاتورة');
     }
 
     if (body.status === 'cancelled') {
       if (invoice.status === 'cancelled') return error('الفاتورة ملغية مسبقاً');
-
-      await s.from('invoices')
-        .update({ status: 'cancelled', notes: body.notes || null, updated_at: new Date().toISOString() }).eq('id', id).eq('company_id', auth.companyId);
+      const paidAmt = parseFloat(invoice.paid_amount || '0') || 0;
+      if (paidAmt > 0.005 || invoice.status === 'paid' || invoice.status === 'partial') {
+        return error('لا يمكن إلغاء فاتورة عليها تحصيل — اعكس سندات القبض أولاً');
+      }
 
       if (invoice.journal_entry_id) {
-        const { insertJournalHeader } = await import('@/lib/journal-utils');
-        const { data: reversalRes, error: revErr } = await insertJournalHeader(auth.companyId, {
-          date: new Date().toISOString().split('T')[0],
-          type: 'general',
+        const { postReversalEntry } = await import('@/lib/voucher-utils');
+        const { error: revErr } = await postReversalEntry(auth.companyId, {
+          journalEntryId: invoice.journal_entry_id,
+          referenceType: 'invoice_reversal',
+          referenceId: id,
           description: `قيد عكسي لفاتورة رقم ${invoice.number}`,
-          reference_type: 'invoice_reversal',
-          reference_id: id,
-          created_by: auth.userId,
+          userId: auth.userId,
         });
-        if (revErr || !reversalRes) throw revErr || new Error('فشل قيد الإلغاء');
-        const reversalEntryId = reversalRes.id;
-
-        const { data: origLines } = await s.from('journal_lines')
-          .select('account_id, account_code, account_name, debit, credit, description')
-          .eq('journal_entry_id', invoice.journal_entry_id);
-
-        const reversedLines = (origLines || []).map((l: any) => ({
-          company_id: auth.companyId,
-          journal_entry_id: reversalEntryId,
-          account_id: l.account_id,
-          account_code: l.account_code,
-          account_name: l.account_name,
-          debit: l.credit,
-          credit: l.debit,
-          description: `عكس: ${l.description || ''}`,
-        }));
-        if (reversedLines.length > 0) {
-          await s.from('journal_lines').insert(reversedLines);
-        }
+        if (revErr) throw revErr;
       }
+
+      await s.from('invoices')
+        .update({ status: 'cancelled', notes: body.notes || null, updated_at: new Date().toISOString() })
+        .eq('id', id).eq('company_id', auth.companyId);
       return success({ message: 'تم إلغاء الفاتورة بنجاح' });
     }
 

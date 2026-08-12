@@ -1,9 +1,8 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
-import { insertJournalLines } from '@/lib/journal-utils';
+import { createJournalEntry } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -46,33 +45,24 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     // Journal: debit custody, credit bank
     const { data: custAcc } = await s.from('accounts').select('id, code, name').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_CUSTODIES).maybeSingle();
-    const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).maybeSingle();
+    const { data: bankAcc } = await s.from('banks_safes').select('account_id').eq('id', bank_safe_id).eq('company_id', auth.companyId).maybeSingle();
 
-    if (custAcc && bankAcc?.account_id) {
-      const jeNum = await getNextJournalNumber(auth.companyId, new Date().toISOString());
-      const { data: je, error: jeErr } = await s.from('journal_entries')
-        .insert({
-          company_id: auth.companyId,
-          number: jeNum,
-          date: new Date().toISOString().split('T')[0],
-          type: 'general',
-          description: `إضافة عهدة: ${description || ''}`,
-          created_by: auth.userId,
-        })
-        .select('id')
-        .single();
-
-      if (jeErr) {
-        console.error('Journal entry error for custody add:', jeErr);
-      } else if (je) {
-        // استخدام الدالة المساعدة لإدراج سطور القيد بجميع الحقول المطلوبة
-        const { error: jlErr } = await insertJournalLines(auth.companyId, [
-          { journal_entry_id: je.id, account_id: custAcc.id, debit: amount, credit: 0, description: `إضافة عهدة ${id}` },
-          { journal_entry_id: je.id, account_id: bankAcc.account_id, debit: 0, credit: amount, description: `صرف عهدة ${id}` },
-        ]);
-        if (jlErr) console.error('Journal lines error:', jlErr);
-      }
+    if (!custAcc || !bankAcc?.account_id) {
+      return error('حساب العهدة أو حساب الخزينة غير مكتمل', 400);
     }
+    const { error: jeErr } = await createJournalEntry(auth.companyId, {
+      date: new Date().toISOString().split('T')[0],
+      type: 'general',
+      description: `إضافة عهدة: ${description || ''}`,
+      reference_type: 'custody_add',
+      reference_id: id,
+      created_by: auth.userId,
+      lines: [
+        { account_id: custAcc.id, debit: amount, credit: 0, description: `إضافة عهدة ${id}` },
+        { account_id: bankAcc.account_id, debit: 0, credit: amount, description: `صرف عهدة ${id}` },
+      ],
+    });
+    if (jeErr) throw jeErr;
 
     // Update remaining amount
     const currentRemaining = parseFloat(custody.remaining_amount) || parseFloat(custody.amount) || 0;

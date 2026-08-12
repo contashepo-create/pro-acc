@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 
@@ -10,6 +9,32 @@ function bucketFor(days: number) {
   if (days <= 60) return '31-60';
   if (days <= 90) return '61-90';
   return '90+';
+}
+
+async function unappliedReceiptsByContact(s: any, companyId: string): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  const { data: receipts } = await s.from('voucher_receipts')
+    .select('id, contact_id, amount')
+    .eq('company_id', companyId)
+    .eq('receipt_type', 'client')
+    .neq('status', 'cancelled');
+  const receiptIds = (receipts || []).map((r: any) => r.id);
+  const allocated = new Map<string, number>();
+  if (receiptIds.length > 0) {
+    const { data: links } = await s.from('receipt_invoice_items')
+      .select('voucher_receipt_id, amount')
+      .in('voucher_receipt_id', receiptIds);
+    for (const l of links || []) {
+      const rid = (l as any).voucher_receipt_id;
+      allocated.set(rid, (allocated.get(rid) || 0) + (parseFloat((l as any).amount) || 0));
+    }
+  }
+  for (const r of receipts || []) {
+    if (!r.contact_id) continue;
+    const leftover = Math.max(0, (parseFloat(r.amount) || 0) - (allocated.get(r.id) || 0));
+    if (leftover > 0) map.set(r.contact_id, (map.get(r.contact_id) || 0) + leftover);
+  }
+  return map;
 }
 
 export async function GET(req: NextRequest) {
@@ -28,6 +53,8 @@ export async function GET(req: NextRequest) {
         .neq('status', 'cancelled')
         .neq('status', 'paid');
 
+      const unappliedByContact = await unappliedReceiptsByContact(s, auth.companyId);
+
       const byContact = new Map<string, any>();
       for (const inv of invoices || []) {
         const total = parseFloat(inv.total) || 0;
@@ -44,6 +71,8 @@ export async function GET(req: NextRequest) {
           byContact.set(key, {
             id: key,
             name: (inv as any).contacts?.name || 'عميل',
+            open_invoices: 0,
+            unapplied: 0,
             balance: 0,
             last_invoice_date: inv.date,
             days_overdue: days,
@@ -52,7 +81,7 @@ export async function GET(req: NextRequest) {
           });
         }
         const row = byContact.get(key);
-        row.balance += remaining;
+        row.open_invoices += remaining;
         row.buckets[bucket] += remaining;
         if (days > row.days_overdue) {
           row.days_overdue = days;
@@ -63,15 +92,39 @@ export async function GET(req: NextRequest) {
         }
       }
 
+      for (const [cid, amt] of unappliedByContact) {
+        if (!byContact.has(cid)) {
+          const { data: c } = await s.from('contacts').select('name').eq('id', cid).eq('company_id', auth.companyId).maybeSingle();
+          byContact.set(cid, {
+            id: cid,
+            name: (c as any)?.name || 'عميل',
+            open_invoices: 0,
+            unapplied: 0,
+            balance: 0,
+            last_invoice_date: null,
+            days_overdue: 0,
+            bucket: '0-30',
+            buckets: { '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 },
+          });
+        }
+        byContact.get(cid).unapplied += amt;
+      }
+
+      for (const row of byContact.values()) {
+        row.balance = row.open_invoices - row.unapplied;
+      }
+
       const aging = [...byContact.values()].sort((a, b) => b.balance - a.balance);
       const totals = aging.reduce((acc, r) => {
+        acc.open_invoices += r.open_invoices;
+        acc.unapplied += r.unapplied;
         acc.balance += r.balance;
         acc['0-30'] += r.buckets['0-30'];
         acc['31-60'] += r.buckets['31-60'];
         acc['61-90'] += r.buckets['61-90'];
         acc['90+'] += r.buckets['90+'];
         return acc;
-      }, { balance: 0, '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 });
+      }, { open_invoices: 0, unapplied: 0, balance: 0, '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 });
 
       return success({ aging, totals, type: 'ar', asOf });
     }

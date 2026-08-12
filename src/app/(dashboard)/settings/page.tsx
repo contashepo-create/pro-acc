@@ -45,6 +45,7 @@ export default function SettingsPage() {
   // Accounting settings
   const [fiscalStart, setFiscalStart] = useState('');
   const [decimalPlaces, setDecimalPlaces] = useState('2');
+  const [autoAllocateFifo, setAutoAllocateFifo] = useState(false);
   const [vatRate, setVatRate] = useState('15');
   const [countryCode, setCountryCode] = useState('SA');
   const [currencySymbol, setCurrencySymbol] = useState('ر.س');
@@ -112,6 +113,10 @@ export default function SettingsPage() {
           }
           if (s.fiscal_start) setFiscalStart(s.fiscal_start);
           if (s.decimal_places) setDecimalPlaces(s.decimal_places);
+          if (s.auto_allocate_receipts_fifo !== undefined) {
+            const v = s.auto_allocate_receipts_fifo;
+            setAutoAllocateFifo(v === true || v === 'true' || v === '1');
+          }
           if (c?.country_code) setCountryCode(c.country_code);
           if (c?.currency_symbol) setCurrencySymbol(c.currency_symbol);
           if (c?.currency_code) setCurrencyCode(c.currency_code);
@@ -269,6 +274,7 @@ export default function SettingsPage() {
           settings: {
             fiscal_start: fiscalStart,
             decimal_places: decimalPlaces,
+            auto_allocate_receipts_fifo: String(autoAllocateFifo),
           }
         }),
       });
@@ -730,6 +736,20 @@ export default function SettingsPage() {
             <Input label="بداية السنة المالية" type="date" value={fiscalStart} onChange={(e:any)=>setFiscalStart(e.target.value)} />
             <Input label="عدد المنازل العشرية" type="number" value={decimalPlaces} onChange={(e:any)=>setDecimalPlaces(e.target.value)} />
           </div>
+          <label className="flex items-start gap-3 mt-5 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-1 w-4 h-4 rounded border-border accent-accent"
+              checked={autoAllocateFifo}
+              onChange={(e) => setAutoAllocateFifo(e.target.checked)}
+            />
+            <span className="text-sm">
+              <span className="font-semibold block">تخصيص سند القبض تلقائيًا على أقدم الفواتير</span>
+              <span className="text-text-muted text-xs leading-relaxed block mt-0.5">
+                إن أنشأت سند قبض لعميل دون اختيار فواتير، يُسدَّد الأقدم فالأقدم. رصيد العميل في الدفاتر لا يتغير — تتغير حالة الفواتير فقط. الزيادة تبقى مقدمًا غير مخصص. إن اخترت فواتير في السند يُحترم اختيارك.
+              </span>
+            </span>
+          </label>
           <div className="mt-4">
             <Button onClick={handleSaveAccounting} leftIcon={<Save size={16} />}>حفظ</Button>
           </div>
