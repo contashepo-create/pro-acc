@@ -19,7 +19,7 @@ function flatten(accounts: any[], depth = 0, out: any[] = []): any[] {
     out.push({
       code: a.code,
       name: a.name,
-      label: `${'  '.repeat(depth)}${a.code} — ${a.name}${isParent ? ' (حساب رئيسي — غير قابل للترحيل)' : ''}`,
+      label: `${'  '.repeat(depth)}\u202A${a.code}\u202C — ${a.name}${isParent ? ' (حساب رئيسي — غير قابل للترحيل)' : ''}`,
       depth,
       isParent,
     });

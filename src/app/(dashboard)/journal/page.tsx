@@ -107,7 +107,7 @@ export default function JournalPage() {
               <tbody className="divide-y divide-border">
                 {viewing.lines.map((l: any) => (
                   <tr key={l.id}>
-                    <td className="p-2">{l.account_code} — {l.account_name || ''}</td>
+                    <td className="p-2"><span dir="ltr" className="font-mono" style={{ unicodeBidi: 'isolate' }}>{l.account_code}</span> — {l.account_name || ''}</td>
                     <td className="p-2 font-mono">{formatCurrency(l.debit || 0)}</td>
                     <td className="p-2 font-mono">{formatCurrency(l.credit || 0)}</td>
                   </tr>

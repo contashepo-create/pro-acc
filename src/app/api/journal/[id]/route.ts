@@ -98,8 +98,8 @@ export async function PUT(
     const { date, type, description, lines } = parsed.data;
     const resolved: Array<{ account_id: string; debit: number; credit: number; description: string | null }> = [];
     for (const line of lines) {
-      const { data: account } = await s.from('accounts')
-        .select('id').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+      const { findAccountByCode } = await import('@/lib/account-code');
+      const account = await findAccountByCode(s, auth.companyId, line.accountCode);
       if (!account) return error(`الحساب برمز ${line.accountCode} غير موجود`);
       resolved.push({
         account_id: account.id,

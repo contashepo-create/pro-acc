@@ -3,6 +3,7 @@ import { success, error, parseBody, getPaginationParams, requireApiAuth, require
 import { getSupabase } from '@/lib/supabase-client';
 import { createAutoAccount } from '@/lib/auto-account';
 import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
+import { nextChildAccountCode } from '@/lib/account-code';
 
 const sb = () => getSupabase();
 
@@ -58,15 +59,7 @@ async function nextBankAccountCode(companyId: string, parentCode: string): Promi
   const { data: siblings } = await s.from('accounts')
     .select('code')
     .eq('company_id', companyId);
-  let maxSuffix = 0;
-  for (const row of siblings || []) {
-    const code = (row as any).code as string;
-    if (code && code.startsWith(`${parentCode}-`)) {
-      const suffix = parseInt(code.slice(parentCode.length + 1), 10);
-      if (!isNaN(suffix) && suffix > maxSuffix) maxSuffix = suffix;
-    }
-  }
-  return `${parentCode}-${String(maxSuffix + 1).padStart(4, '0')}`;
+  return nextChildAccountCode(parentCode, (siblings || []).map((r: any) => r.code));
 }
 
 export async function POST(request: NextRequest) {

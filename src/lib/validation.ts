@@ -92,7 +92,7 @@ export const companySchema = z.object({
 // --------------- Accounts (Chart of Accounts) ---------------
 
 export const accountSchema = z.object({
-  code: z.string().regex(/^\d{4}$/, 'رمز الحساب يجب أن يكون 4 أرقام'),
+  code: z.string().regex(/^\d{4}(?:-\d{1,6})?$/, 'رمز الحساب يجب أن يكون 4 أرقام أو 1110-0001 (الأب ثم التسلسل)'),
   name: z.string().min(1, 'اسم الحساب مطلوب').max(200),
   nameEn: z.string().optional(),
   type: z.enum(['asset', 'liability', 'equity', 'revenue', 'expense'] as const, {
@@ -110,7 +110,7 @@ export const accountSchema = z.object({
  * parent reassignment goes through a dedicated flow to avoid cycles.
  */
 export const accountUpdateSchema = z.object({
-  code: z.string().regex(/^\d{4}$/, 'رمز الحساب يجب أن يكون 4 أرقام').optional(),
+  code: z.string().regex(/^\d{4}(?:-\d{1,6})?$/, 'رمز الحساب يجب أن يكون 4 أرقام أو 1110-0001').optional(),
   name: z.string().min(1, 'اسم الحساب مطلوب').max(200).optional(),
   nameEn: z.string().max(200).nullable().optional(),
   is_active: z.boolean().optional(),

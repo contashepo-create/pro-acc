@@ -87,8 +87,8 @@ export default function AccountsPage() {
       setSaveError('رمز واسم الحساب مطلوبان');
       return;
     }
-    if (!/^\d{4}$/.test(form.code)) {
-      setSaveError('رمز الحساب يجب أن يكون 4 أرقام');
+    if (!/^\d{4}(?:-\d{1,6})?$/.test(form.code.trim())) {
+      setSaveError('رمز الحساب: 4 أرقام للحساب الأب، أو الأب ثم التسلسل مثل 1110-0001');
       return;
     }
     setSaving(true);
@@ -137,7 +137,16 @@ export default function AccountsPage() {
   const flatData = flattenAccounts(accounts);
 
   const columns = [
-    { key: 'code', label: 'الرمز', sortable: true },
+    {
+      key: 'code',
+      label: 'الرمز',
+      sortable: true,
+      render: (row: any) => (
+        <span dir="ltr" className="font-mono inline-block" style={{ unicodeBidi: 'isolate' }}>
+          {row.code}
+        </span>
+      ),
+    },
     { key: 'name', label: 'اسم الحساب', sortable: true,
       render: (row: any) => (
         <span style={{ paddingRight: `${(row.depth || 0) * 20}px` }} className="flex items-center gap-2">
@@ -187,7 +196,7 @@ export default function AccountsPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editingAccount ? `تعديل حساب ${editingAccount.code}` : "إضافة حساب جديد"} size="lg"
         footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving} leftIcon={<Save size={16} />}>{saving ? 'جاري الحفظ...' : (editingAccount ? 'تحديث' : 'حفظ')}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input label="رمز الحساب (4 أرقام)" placeholder="مثال: 1130" value={form.code} onChange={(e:any)=>setForm({...form, code: e.target.value})} />
+          <Input label="رمز الحساب" placeholder="مثال: 1130 أو 1110-0001 (الأب ثم الرقم)" value={form.code} onChange={(e:any)=>setForm({...form, code: e.target.value})} dir="ltr" />
           <Select label="النوع" value={form.type} onChange={(value)=>setForm({...form, type: value})} options={[
             { value: 'asset', label: 'أصل' }, { value: 'liability', label: 'خصم' },
             { value: 'equity', label: 'حق ملكية' }, { value: 'revenue', label: 'إيراد' },
@@ -195,7 +204,7 @@ export default function AccountsPage() {
           ]} />
           <Input label="اسم الحساب" placeholder="اسم الحساب بالعربية" className="col-span-2" value={form.name} onChange={(e:any)=>setForm({...form, name: e.target.value})} />
           <Input label="الاسم الإنجليزي (اختياري)" placeholder="Account name in English" className="col-span-2" value={form.nameEn} onChange={(e:any)=>setForm({...form, nameEn: e.target.value})} />
-          <Select label="الحساب الأب" value={form.parentId} onChange={(value)=>setForm({...form, parentId: value})} options={[{ value: '', label: 'بدون - حساب رئيسي' }, ...flatData.map((a:any)=>({ value: a.id, label: `${a.code} - ${a.name}` }))]} className="col-span-2" />
+          <Select label="الحساب الأب" value={form.parentId} onChange={(value)=>setForm({...form, parentId: value})} options={[{ value: '', label: 'بدون - حساب رئيسي' }, ...flatData.map((a:any)=>({ value: a.id, label: `\u202A${a.code}\u202C — ${a.name}` }))]} className="col-span-2" />
           {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

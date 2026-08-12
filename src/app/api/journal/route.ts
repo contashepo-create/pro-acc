@@ -119,16 +119,16 @@ export async function POST(request: NextRequest) {
       // Resolve account IDs for all lines first
       const resolvedLines: Array<{accountId: string; accountCode: string; debit: number; credit: number; description: string | null; contactId: null; projectId: null}> = [];
       const { isHeaderAccount, HEADER_ACCOUNT_CODES } = await import('@/lib/account-resolve');
+      const { findAccountByCode } = await import('@/lib/account-code');
       for (const line of lines) {
-        const { data: account } = await s.from('accounts')
-          .select('id, code, is_header').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+        const account = await findAccountByCode(s, auth.companyId, line.accountCode);
         if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
-        if (isHeaderAccount(account) || HEADER_ACCOUNT_CODES.has(line.accountCode)) {
-          throw new Error(`الحساب ${line.accountCode} حساب رئيسي ولا يُرحَّل عليه — اختر حساباً فرعياً`);
+        if (isHeaderAccount(account) || HEADER_ACCOUNT_CODES.has(account.code)) {
+          throw new Error(`الحساب ${account.code} حساب رئيسي ولا يُرحَّل عليه — اختر حساباً فرعياً`);
         }
         resolvedLines.push({
           accountId: account.id,
-          accountCode: line.accountCode,
+          accountCode: account.code,
           debit: line.debit,
           credit: line.credit,
           description: line.description || null,
@@ -251,11 +251,11 @@ export async function POST(request: NextRequest) {
           let totalDebit = 0;
           let totalCredit = 0;
           for (const line of lines) {
-            const { data: account } = await s.from('accounts')
-              .select('id, name').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+            const { findAccountByCode } = await import('@/lib/account-code');
+            const account = await findAccountByCode(s, auth.companyId, line.accountCode);
             if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
             const { error: lineErr } = await s.from('journal_lines').insert({
-              journal_entry_id: entryId, account_id: account.id, account_code: line.accountCode,
+              journal_entry_id: entryId, account_id: account.id, account_code: account.code,
               account_name: account.name || null,
               company_id: auth.companyId,
               debit: line.debit, credit: line.credit, description: line.description || null,
@@ -281,15 +281,14 @@ export async function POST(request: NextRequest) {
     let totalDebit = 0;
     let totalCredit = 0;
     for (const line of lines) {
-      const { data: account } = await s.from('accounts')
-        .select('id, name').eq('company_id', auth.companyId).eq('code', line.accountCode).maybeSingle();
+      const { findAccountByCode } = await import('@/lib/account-code');
+      const account = await findAccountByCode(s, auth.companyId, line.accountCode);
       if (!account) {
-        // Rollback on account not found
         await s.from('journal_entries').delete().eq('id', entryId).eq('company_id', auth.companyId);
         throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
       }
       const { error: lineErr } = await s.from('journal_lines').insert({
-        journal_entry_id: entryId, account_id: account.id, account_code: line.accountCode,
+        journal_entry_id: entryId, account_id: account.id, account_code: account.code,
         account_name: account.name || null,
         company_id: auth.companyId,
         debit: line.debit, credit: line.credit, description: line.description || null,
