@@ -82,9 +82,11 @@ export async function GET(request: NextRequest) {
       count = fallbackResult.count || 0;
     }
 
+    const disbursements = await hydratePartyNames(s, auth.companyId, data || [], { contacts: true, employees: true });
+
     return success({
-      disbursements: data || [],
-      vouchers: data || [],
+      disbursements,
+      vouchers: disbursements,
       total: count,
       page,
       pageSize,
