@@ -11,7 +11,6 @@
  */
 
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
 import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();

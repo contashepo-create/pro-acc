@@ -57,7 +57,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (fromCustody > 0) {
       lines.push({
         account_id: acc.custodyId, debit: 0, credit: fromCustody,
-        description: `خصم من ملف ${file.file_number || id}`, project_id: file.project_id,
+        description: `خصم من ملف ${file.file_number || id}`,
       });
     }
     if (excess > 0) {

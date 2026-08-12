@@ -48,7 +48,7 @@ export async function GET(
     const inv = invRes as Record<string, any>;
     if (inv.project_id) {
       const { data: proj } = await s.from('projects')
-        .select('name').eq('id', inv.project_id).maybeSingle();
+        .select('name').eq('id', inv.project_id).eq('company_id', auth.companyId).maybeSingle();
       projectName = (proj as any)?.name || null;
     }
 
@@ -188,6 +188,14 @@ export async function PUT(
     const { data: updated, error: updErr } = await s.from('invoices')
       .update(header).eq('id', id).eq('company_id', auth.companyId).select('*').single();
     if (updErr) throw updErr;
+
+    // تغيير المشروع فقط: انقل وسم السطور دون إعادة ترحيل المبالغ
+    if (!wantsFinancial && header.project_id !== undefined && inv.journal_entry_id) {
+      await s.from('journal_lines')
+        .update({ project_id: header.project_id })
+        .eq('journal_entry_id', inv.journal_entry_id)
+        .eq('company_id', auth.companyId);
+    }
 
     return success(updated);
   } catch (err) {
