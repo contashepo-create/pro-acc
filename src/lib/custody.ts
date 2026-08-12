@@ -57,11 +57,12 @@ export async function loadCustodyFile(companyId: string, id: string) {
     || parseFloat(row.total_received) || parseFloat(row.amount) || 0,
   );
   const totalExpenses = round2(expenses.reduce((sum, x) => sum + (parseFloat(x.amount) || 0), 0));
-  const remaining = round2(Math.max(0, totalReceived - totalExpenses));
-
   const status = row.status === 'settled' || row.status === 'closed'
     ? 'settled'
     : totalExpenses > 0 ? 'partially_settled' : 'open';
+  const remaining = status === 'settled'
+    ? 0
+    : round2(Math.max(0, totalReceived - totalExpenses));
 
   return {
     ...row,

@@ -47,7 +47,7 @@ export async function sumProjectJournal(companyId: string, projectId: string) {
   const byAccount: Record<string, { code: string; name: string; type: string; debit: number; credit: number }> = {};
 
   for (const l of lines || []) {
-    const acc = (l as any).accounts;
+    const acc = (l as any).accounts || typeById.get((l as any).account_id);
     if (!acc) continue;
     const debit = parseFloat((l as any).debit) || 0;
     const credit = parseFloat((l as any).credit) || 0;

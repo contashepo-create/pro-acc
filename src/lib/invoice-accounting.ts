@@ -66,7 +66,6 @@ export async function postSalesInvoiceJournal(opts: {
       credit: 0,
       description: `ذمم فاتورة رقم ${opts.invoiceNumber}`,
       contact_id: opts.contactId,
-      project_id: opts.projectId || null,
     },
     {
       journal_entry_id: header.id,
