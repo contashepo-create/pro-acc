@@ -6,12 +6,20 @@ import { DataTable } from '@/components/ui/DataTable';
 import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { Modal } from '@/components/ui/Modal';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import { Select } from '@/components/ui/Select';
+import { Button } from '@/components/ui/Button';
 import { formatDate } from '@/lib/utils';
 
 export default function ComplaintsPage() {
   const [complaints, setComplaints] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [editing, setEditing] = useState<any>(null);
+  const [form, setForm] = useState<any>({ subject: '', body: '', status: 'pending' });
+  const [saving, setSaving] = useState(false);
 
   const fetchData = async () => {
     try {
@@ -26,8 +34,24 @@ export default function ComplaintsPage() {
 
   useEffect(() => { fetchData(); }, []);
 
-  const handleEdit = async (complaint: any) => {
-    alert('تعديل الشكوى - سيتم فتح نافذة التعديل');
+  const handleEdit = (complaint: any) => {
+    setEditing(complaint);
+    setForm({ subject: complaint.subject || '', body: complaint.body || '', status: complaint.status || 'pending' });
+  };
+
+  const handleSave = async () => {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/complaints/${editing.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const json = await res.json();
+      if (json.success) { setEditing(null); fetchData(); }
+      else alert(json.message || 'فشل الحفظ');
+    } catch { alert('خطأ في الاتصال بالخادم'); } finally { setSaving(false); }
   };
 
   const handleDelete = async (complaint: any) => {
@@ -39,7 +63,7 @@ export default function ComplaintsPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -94,6 +118,31 @@ export default function ComplaintsPage() {
       ) : (
         <DataTable columns={columns} data={complaints} searchable searchKeys={['subject', 'user_name']} />
       )}
+
+      <Modal
+        isOpen={!!editing}
+        onClose={() => setEditing(null)}
+        title={editing ? `تعديل: ${editing.subject}` : ''}
+        footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setEditing(null)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}
+      >
+        <div className="space-y-3">
+          <Input label="الموضوع" value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
+          <Textarea label="النص" value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
+          <Select label="الحالة" value={form.status} onChange={(v) => setForm({ ...form, status: v })}
+            options={[
+              { value: 'pending', label: 'قيد الانتظار' },
+              { value: 'read', label: 'مقروءة' },
+              { value: 'replied', label: 'تم الرد' },
+              { value: 'closed', label: 'مغلقة' },
+            ]} />
+          {editing?.admin_reply && (
+            <div className="rounded-lg bg-bg-secondary/50 border border-border p-3 text-xs">
+              <p className="font-bold text-text-primary mb-1">رد الإدارة:</p>
+              <p className="text-text-secondary whitespace-pre-wrap">{editing.admin_reply}</p>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

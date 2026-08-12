@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -31,13 +31,21 @@ export async function GET(request: NextRequest) {
 
     // الحالة 2: جلب شكاوى الشركة المسجلة (يتطلب مصادقة)
     const { companyId } = await requireApiAuth(request);
-    const { data: complaints } = await s.from('complaints')
-      .select('id, type, subject, body, status, admin_reply, created_at, updated_at')
+    const { data: complaints, error: listErr } = await s.from('complaints')
+      .select('id, type, subject, body, status, admin_reply, created_at, updated_at, users(name)')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(50);
 
-    return success(complaints || []);
+    if (listErr) throw listErr;
+
+    // مواءمة شكل الاستجابة مع واجهة لوحة التحكم (complaints[]) + اسم المستخدم
+    const rows = (complaints || []).map((c: any) => ({
+      ...c,
+      user_name: c.users?.name || null,
+    }));
+
+    return success({ complaints: rows });
   } catch (err) {
     if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
     return serverError(err);
@@ -76,7 +84,10 @@ export async function POST(request: NextRequest) {
     }
 
     // موائمة بيانات الواجهة الأمامية العامة مع حقول قاعدة البيانات
-    const type = body.type || 'complaint';
+    const rawType = body.type || 'complaint';
+    // أنواع البلاغات الداخلية (أخطاء كشوف الحساب، بلاغات أخرى) تُطبَّع إلى
+    // 'complaint' لأن عمود type مقيد بـ (complaint, suggestion) في القاعدة.
+    const type = ['complaint', 'suggestion'].includes(rawType) ? rawType : 'complaint';
     const subject = body.subject || '';
     let detailBody = body.body || '';
 
@@ -88,7 +99,6 @@ export async function POST(request: NextRequest) {
       detailBody = `اسم المرسل: ${body.name || 'غير معروف'}\nبريد المرسل: ${body.email || 'غير معروف'}\n\nالرسالة:\n${detailBody}`;
     }
 
-    if (!['complaint', 'suggestion'].includes(type)) return error('نوع غير صالح');
     if (!subject.trim()) return error('العنوان مطلوب');
     if (!detailBody.trim()) return error('نص الشكوى أو الاقتراح مطلوب');
 
