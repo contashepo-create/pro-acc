@@ -198,7 +198,8 @@ export async function DELETE(
     // حذف القيد نفسه
     const { error: jeErr } = await s.from('journal_entries')
       .delete()
-      .eq('id', id);
+      .eq('id', id)
+      .eq('company_id', auth.companyId);
     
     if (jeErr) {
       console.error('Error deleting journal entry:', jeErr);
