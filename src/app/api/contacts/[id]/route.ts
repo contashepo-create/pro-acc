@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { contactUpdateSchema } from '@/lib/validation';
+import { pickContactFields, writeContact } from '@/lib/contact-fields';
 import { getContactBalance } from '@/lib/contact-utils';
 
 const sb = () => getSupabase();
@@ -54,8 +54,8 @@ export async function PUT(
     const s = sb();
     const body = await request.json();
 
-    const parsed = contactUpdateSchema.safeParse(body);
-    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const picked = pickContactFields(body);
+    if (picked.error) return error(picked.error);
 
     const { data: contactRes } = await s.from('contacts')
       .select('*')
@@ -69,21 +69,11 @@ export async function PUT(
 
     const contact = contactRes as Record<string, any>;
 
-    const updateData: Record<string, any> = {};
-    if (parsed.data.name !== undefined) updateData.name = parsed.data.name;
-    if (parsed.data.type !== undefined) updateData.type = parsed.data.type;
-    if (parsed.data.phone !== undefined) updateData.phone = parsed.data.phone;
-    if (parsed.data.email !== undefined) updateData.email = parsed.data.email;
-    if (parsed.data.tax_number !== undefined) updateData.tax_number = parsed.data.tax_number;
-    if (parsed.data.address !== undefined) updateData.address = parsed.data.address;
-    if (parsed.data.commercial_registration !== undefined) updateData.commercial_registration = parsed.data.commercial_registration;
-    if (parsed.data.credit_limit !== undefined) updateData.credit_limit = parsed.data.credit_limit;
-
-    if (Object.keys(updateData).length > 0) {
-      const { error: updateError } = await s.from('contacts')
-        .update(updateData)
-        .eq('id', id)
-        .eq('company_id', auth.companyId);
+    if (picked.data && Object.keys(picked.data).length > 0) {
+      const { error: updateError } = await writeContact(s, 'update', picked.data, {
+        companyId: auth.companyId,
+        id,
+      });
       if (updateError) throw updateError;
     }
 

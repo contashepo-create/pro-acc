@@ -419,7 +419,24 @@ export const contactUpdateSchema = z.object({
   tax_number: z.string().max(100).nullable().optional(),
   commercial_registration: z.string().max(100).nullable().optional(),
   credit_limit: z.number().min(0).nullable().optional(),
-}).strict();
+  contact_person: z.string().max(200).nullable().optional(),
+  contact_person_phone: z.string().max(50).nullable().optional(),
+  contact_person_email: z.string().max(254).nullable().optional(),
+  city: z.string().max(100).nullable().optional(),
+  region: z.string().max(100).nullable().optional(),
+  country: z.string().max(100).nullable().optional(),
+  postal_code: z.string().max(20).nullable().optional(),
+  website: z.string().max(300).nullable().optional(),
+  iban: z.string().max(50).nullable().optional(),
+  bank_name: z.string().max(200).nullable().optional(),
+  swift_code: z.string().max(20).nullable().optional(),
+  payment_terms: z.string().max(50).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  date_of_birth: z.string().nullable().optional(),
+  gender: z.string().max(20).nullable().optional(),
+  national_id: z.string().max(50).nullable().optional(),
+  category: z.string().max(100).nullable().optional(),
+});
 
 // --------------- Project ---------------
 
