@@ -133,6 +133,26 @@ export async function POST(req: NextRequest) {
       if (!po) return error('أمر الشراء غير موجود', 404);
     }
 
+    let resolvedProjectId: string | null = null;
+    if (link_to_project === false) {
+      resolvedProjectId = null;
+    } else if (project_id) {
+      const { data: proj } = await s.from('projects').select('id').eq('id', project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!proj) return error('المشروع غير موجود', 404);
+      resolvedProjectId = proj.id;
+    }
+
+    let custodyFile: any = null;
+    if (custody_id) {
+      const { loadCustodyFile, assertFileOpen } = await import('@/lib/custody');
+      custodyFile = await loadCustodyFile(auth.companyId, custody_id);
+      if (!custodyFile) return error('ملف العهدة غير موجود', 404);
+      assertFileOpen(custodyFile);
+      if (link_to_project !== false && !project_id && custodyFile.project_id) {
+        resolvedProjectId = custodyFile.project_id;
+      }
+    }
+
     // ACCOUNTING INTEGRITY: كل المبالغ تُحسب خادمياً — قيم العميل تُتجاهل
     const computedItems = items.map((it) => ({
       ...it,
@@ -148,23 +168,32 @@ export async function POST(req: NextRequest) {
     let journalEntryId: string | null = null;
 
     try {
-      const { data: pi, error: piErr } = await s.from('purchase_invoices')
-        .insert({
-          company_id: auth.companyId,
-          invoice_number: nextNum,
-          date,
-          supplier_id,
-          purchase_order_id: purchase_order_id || null,
-          subtotal,
-          tax_amount: taxAmount,
-          tax_rate,
-          total,
-          paid_amount: 0,
-          status: 'unpaid',
-          notes: notes || null,
-          created_by: auth.userId,
-        })
-        .select('*').single();
+      const piPayload: any = {
+        company_id: auth.companyId,
+        invoice_number: nextNum,
+        date,
+        supplier_id,
+        purchase_order_id: purchase_order_id || null,
+        project_id: resolvedProjectId,
+        custody_id: custody_id || null,
+        payment_source: custodyFile ? 'custody' : 'ap',
+        subtotal,
+        tax_amount: taxAmount,
+        tax_rate,
+        total,
+        paid_amount: custodyFile ? total : 0,
+        status: custodyFile ? 'paid' : 'unpaid',
+        notes: notes || null,
+        created_by: auth.userId,
+      };
+      let { data: pi, error: piErr } = await s.from('purchase_invoices').insert(piPayload).select('*').single();
+      if (piErr && /column|schema|PGRST|42703/i.test(`${piErr.message} ${piErr.code}`)) {
+        delete piPayload.project_id;
+        delete piPayload.custody_id;
+        delete piPayload.payment_source;
+        const retry = await s.from('purchase_invoices').insert(piPayload).select('*').single();
+        pi = retry.data; piErr = retry.error;
+      }
       if (piErr) throw piErr;
       invoiceId = pi.id;
 

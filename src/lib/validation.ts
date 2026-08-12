@@ -221,6 +221,9 @@ export const purchaseInvoiceSchema = z.object({
   // Fraction (0.15 = 15%). Unbounded previously — negative/huge rates were accepted.
   tax_rate: z.number().min(0, 'نسبة الضريبة لا يمكن أن تكون سالبة').max(1, 'نسبة الضريبة غير صالحة').optional().default(0),
   notes: z.string().optional(),
+  project_id: z.string().uuid().optional().nullable(),
+  custody_id: z.string().uuid().optional().nullable(),
+  link_to_project: z.boolean().optional(),
 }).strict();
 
 export const purchaseInvoiceUpdateSchema = z.object({

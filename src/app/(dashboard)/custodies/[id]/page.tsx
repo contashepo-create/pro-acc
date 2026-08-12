@@ -18,6 +18,8 @@ export default function CustodyFilePage() {
   const router = useRouter();
   const [file, setFile] = useState<any>(null);
   const [banks, setBanks] = useState<any[]>([]);
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [modal, setModal] = useState<'add' | 'expense' | 'close' | null>(null);
@@ -27,11 +29,15 @@ export default function CustodyFilePage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [fRes, bRes] = await Promise.all([fetch(`/api/custodies/${id}`), fetch('/api/banks')]);
-      const [fJson, bJson] = await Promise.all([fRes.json(), bRes.json()]);
+      const [fRes, bRes, sRes, pRes] = await Promise.all([
+        fetch(`/api/custodies/${id}`), fetch('/api/banks'), fetch('/api/contacts?type=supplier'), fetch('/api/projects'),
+      ]);
+      const [fJson, bJson, sJson, pJson] = await Promise.all([fRes.json(), bRes.json(), sRes.json(), pRes.json()]);
       if (!fJson.success) setError(fJson.message || 'تعذر التحميل');
       else setFile(fJson.data);
       if (bJson.success) setBanks(bJson.data?.banks || []);
+      if (sJson.success) setSuppliers(sJson.data?.suppliers || sJson.data?.contacts || []);
+      if (pJson.success) setProjects(pJson.data?.projects || pJson.data || []);
     } catch { setError('خطأ في الاتصال'); }
     finally { setLoading(false); }
   };
@@ -90,7 +96,7 @@ export default function CustodyFilePage() {
       {!closed && (
         <div className="flex flex-wrap gap-2">
           <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => { setForm({ amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: file.bank_safe_id || '', description: 'تعزيز' }); setModal('add'); }}>تعزيز</Button>
-          <Button size="sm" variant="secondary" leftIcon={<Receipt size={14} />} onClick={() => { setForm({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', allow_excess: false }); setModal('expense'); }}>إثبات مصروف / فاتورة</Button>
+          <Button size="sm" variant="secondary" leftIcon={<Receipt size={14} />} onClick={() => { setForm({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', supplier_id: '', project_mode: file.project_id ? 'custody' : 'none', project_id: file.project_id || '', allow_excess: false }); setModal('expense'); }}>فاتورة مدفوعة من العهدة</Button>
           <Button size="sm" variant="outline" leftIcon={<Lock size={14} />} onClick={() => { setForm({ returned_cash: file.remaining_amount, date: new Date().toISOString().split('T')[0], bank_safe_id: file.bank_safe_id || '', description: '' }); setModal('close'); }}>إغلاق الملف</Button>
         </div>
       )}
