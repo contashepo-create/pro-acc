@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -13,127 +14,108 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 
 export default function CustodiesPage() {
+  const router = useRouter();
   const [custodies, setCustodies] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [banks, setBanks] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingCustody, setEditingCustody] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: '', description: '' });
+  const [form, setForm] = useState<any>({
+    employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0],
+    bank_safe_id: '', project_id: '', description: '',
+  });
 
   const fetchData = async () => {
     try {
-      setLoading(true);
-      setError('');
-      const [custRes, empRes, bankRes] = await Promise.all([
-        fetch('/api/custodies'),
-        fetch('/api/employees'),
-        fetch('/api/banks'),
+      setLoading(true); setError('');
+      const [custRes, empRes, bankRes, projRes] = await Promise.all([
+        fetch('/api/custodies'), fetch('/api/employees'), fetch('/api/banks'), fetch('/api/projects'),
       ]);
-      const [custJson, empJson, bankJson] = await Promise.all([
-        custRes.json(),
-        empRes.json(),
-        bankRes.json(),
+      const [custJson, empJson, bankJson, projJson] = await Promise.all([
+        custRes.json(), empRes.json(), bankRes.json(), projRes.json(),
       ]);
       if (custJson.success) setCustodies(custJson.data?.custodies || []);
       else setError(custJson.message || 'فشل');
       if (empJson.success) setEmployees(empJson.data?.employees || []);
       if (bankJson.success) setBanks(bankJson.data?.banks || []);
-    } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
+      if (projJson.success) setProjects(projJson.data?.projects || projJson.data || []);
+    } catch { setError('فشل تحميل البيانات'); }
+    finally { setLoading(false); }
   };
 
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
-    if (!form.employee_id || !form.amount || form.amount <= 0) {
-      setSaveError('الموظف والمبلغ مطلوبان');
+    if (!form.employee_id || !form.amount || form.amount <= 0 || !form.bank_safe_id) {
+      setSaveError('الموظف والمبلغ والخزينة مطلوبة');
       return;
     }
     setSaving(true); setSaveError('');
     try {
-      const url = editingCustody ? `/api/custodies/${editingCustody.id}` : '/api/custodies';
-      const method = editingCustody ? 'PUT' : 'POST';
-      
-      const res = await fetch(url, {
-        method,
+      const res = await fetch('/api/custodies', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          employee_id: form.employee_id,
+          amount: form.amount,
+          date: form.date,
+          bank_safe_id: form.bank_safe_id,
+          project_id: form.project_id || null,
+          reason: form.description,
+        }),
       });
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setEditingCustody(null);
-        setForm({ employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: '', description: '' });
+        setForm({ employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: '', project_id: '', description: '' });
+        toast.success('تم فتح ملف العهدة وترحيل القيد');
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
-  };
-
-  const handleEdit = async (custody: any) => {
-    try {
-      const res = await fetch(`/api/custodies/${custody.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingCustody(custody);
-        setForm({
-          employee_id: json.data.employee_id,
-          amount: json.data.amount,
-          date: json.data.date,
-          bank_safe_id: json.data.bank_safe_id || '',
-          description: json.data.description || '',
-        });
-        setShowModal(true);
-      }
-    } catch (e) {
-      console.error('Failed to load custody:', e);
-    }
-  };
-
-  const handleDelete = async (custody: any) => {
-    try {
-      const res = await fetch(`/api/custodies/${custody.id}`, { method: 'DELETE' });
-      const json = await res.json();
-      if (json.success) {
-        fetchData();
-      } else {
-        alert(json.message || 'فشل الحذف');
-      }
-    } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
-    }
+    } catch { setSaveError('خطأ في الاتصال'); }
+    finally { setSaving(false); }
   };
 
   const statusBadge = (status: string) => {
-    const map: Record<string, { variant: 'success' | 'warning' | 'danger'; label: string }> = {
+    const map: Record<string, { variant: 'success' | 'warning' | 'info' | 'danger'; label: string }> = {
       open: { variant: 'warning', label: 'مفتوحة' },
-      settled: { variant: 'success', label: 'مسوّاة' },
-      shortage: { variant: 'danger', label: 'عجز' },
+      partially_settled: { variant: 'info', label: 'مسوّاة جزئياً' },
+      settled: { variant: 'success', label: 'مغلقة' },
+      closed: { variant: 'success', label: 'مغلقة' },
     };
     const m = map[status] || { variant: 'warning', label: status };
     return <Badge variant={m.variant}>{m.label}</Badge>;
   };
 
   const columns = [
+    { key: 'file_number', label: 'رقم الملف', render: (r: any) => r.file_number || r.id?.slice(0, 8) },
     { key: 'employee_name', label: 'الموظف', sortable: true },
-    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: any) => formatCurrency(row.amount) },
-    { key: 'remaining_amount', label: 'المتبقي', render: (row: any) => formatCurrency(row.remaining_amount) },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
-    { key: 'status', label: 'الحالة', render: (row: any) => statusBadge(row.status) },
+    { key: 'project_name', label: 'المشروع', render: (r: any) => r.project_name || '—' },
+    { key: 'amount', label: 'المستلم', render: (r: any) => formatCurrency(r.total_received || r.amount) },
+    { key: 'total_expenses', label: 'المصروف', render: (r: any) => formatCurrency(r.total_expenses || 0) },
+    { key: 'remaining_amount', label: 'المتبقي', render: (r: any) => formatCurrency(r.remaining_amount) },
+    { key: 'date', label: 'التاريخ', render: (r: any) => formatDate(r.date) },
+    { key: 'status', label: 'الحالة', render: (r: any) => statusBadge(r.status) },
     {
       key: 'actions',
       label: 'إجراءات',
       render: (row: any) => (
         <ActionButtons
           item={row}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
+          onView={() => router.push(`/custodies/${row.id}`)}
+          onDelete={row.status === 'settled' || row.status === 'closed' ? undefined : async () => {
+            if (!confirm('إلغاء الملف يعكس قيد الافتتاح. متابعة؟')) return;
+            const res = await fetch(`/api/custodies/${row.id}`, { method: 'DELETE' });
+            const json = await res.json();
+            if (json.success) { toast.success('أُلغي الملف'); fetchData(); }
+            else toast.error(json.message || 'فشل');
+          }}
         />
       ),
     },
@@ -144,16 +126,29 @@ export default function CustodiesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="عهد الموظفين" description="إدارة العهد النقدية" actions={<Button onClick={() => { setEditingCustody(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة عهدة</Button>} />
-      {custodies.length === 0 ? <EmptyState title="لا توجد عهد" actionLabel="إضافة عهدة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={custodies} searchable searchKeys={['employee_name']} />}
-      <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingCustody(null); }} title={editingCustody ? 'تعديل عهدة' : 'إضافة عهدة'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingCustody(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
+      <PageHeader
+        title="ملفات عهد الموظفين"
+        description="أكثر من ملف لنفس الموظف — التعزيز والمصروف لكل ملف على حدة دون تكرار الصرف"
+        actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>فتح ملف عهدة</Button>}
+      />
+      {custodies.length === 0
+        ? <EmptyState title="لا توجد ملفات عهد" actionLabel="فتح ملف" onAction={() => setShowModal(true)} />
+        : <DataTable columns={columns} data={custodies} searchable searchKeys={['employee_name', 'file_number']} />}
+
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="فتح ملف عهدة جديد" size="lg"
+        footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'صرف وترحيل'}</Button></div>}>
         <div className="space-y-4">
+          <p className="text-xs text-text-muted">يُنشأ قيد: مدين عُهد الموظفين 1150 / دائن الخزينة. يمكن فتح أكثر من ملف لنفس الموظف.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select label="الموظف" value={form.employee_id} onChange={(v) => setForm({...form, employee_id: v})} options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e: any) => ({ value: e.id, label: e.name }))]} className="col-span-2" />
-            <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
-            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
-            <Select label="الخزينة/البنك (اختياري)" value={form.bank_safe_id} onChange={(v) => setForm({...form, bank_safe_id: v})} options={[{ value: '', label: 'بدون' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]} />
-            <Input label="الوصف" className="col-span-2" value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} />
+            <Select label="الموظف" value={form.employee_id} onChange={(v) => setForm({ ...form, employee_id: v })}
+              options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e: any) => ({ value: e.id, label: e.name }))]} className="col-span-2" />
+            <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
+            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+            <Select label="الخزينة / البنك" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}
+              options={[{ value: '', label: 'اختر المصدر' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]} />
+            <Select label="المشروع (اختياري)" value={form.project_id} onChange={(v) => setForm({ ...form, project_id: v })}
+              options={[{ value: '', label: 'بدون مشروع' }, ...(Array.isArray(projects) ? projects : []).map((p: any) => ({ value: p.id, label: p.name }))]} />
+            <Input label="الغرض" className="col-span-2" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

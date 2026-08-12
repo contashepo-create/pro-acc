@@ -1,131 +1,125 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { ACCOUNT_CODES } from '@/lib/constants';
 import { createJournalEntry } from '@/lib/journal-utils';
-
-const sb = () => getSupabase();
+import { ACCOUNT_CODES } from '@/lib/constants';
+import {
+  loadCustodyFile, assertFileOpen, resolveCustodyAccounts, recordCustodyTx, syncCustodyTotals, round2,
+} from '@/lib/custody';
 
 /**
- * Record invoice/expense and deduct from custody WITHOUT duplication
- * This prevents double counting: invoice amount is not recorded as separate expense,
- * but transferred from custody account to expense account
+ * إثبات مصروف من ملف العهدة:
+ * مدين المصروف / دائن 1150 حتى رصيد الملف.
+ * الزيادة (إن allow_excess) دائن 2140 مستحق للموظف — لا يُصرف نقداً مرة ثانية.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'custodies', 'update');
     const { id } = await params;
     const body = await parseBody(request);
-    const { amount, description, invoice_id, purchase_invoice_id, expense_account_code } = body;
+    const amount = round2(parseFloat(body.amount));
+    const description = String(body.description || '').trim();
+    const date = body.date || new Date().toISOString().split('T')[0];
+    const expenseCode = body.expense_account_code || ACCOUNT_CODES.DIRECT_COSTS;
+    const allowExcess = body.allow_excess === true;
+    const invoiceId = body.invoice_id || body.purchase_invoice_id || null;
 
-    if (!amount) return error('المبلغ مطلوب');
-    if (!description) return error('الوصف مطلوب');
+    if (!amount || amount <= 0) return error('المبلغ يجب أن يكون موجباً');
+    if (!description) return error('بيان المصروف مطلوب');
 
-    const s = sb();
+    const file = await loadCustodyFile(auth.companyId, id);
+    if (!file) return error('ملف العهدة غير موجود', 404);
+    assertFileOpen(file);
 
-    const { data: custody, error: custErr } = await s.from('custodies')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (custErr || !custody) return error('ملف العهدة غير موجود', 404);
-    if (custody.status !== 'open') return error('ملف العهدة مقفل', 400);
-
-    const remaining = parseFloat(custody.remaining_amount) || parseFloat(custody.amount) || 0;
-    if (parseFloat(amount) > remaining) {
-      return error(`المبلغ المطلوب ${amount} أكبر من المتبقي في العهدة ${remaining}`, 400);
+    const remaining = file.remaining_amount;
+    if (amount > remaining + 0.005 && !allowExcess) {
+      return error(`المبلغ أكبر من المتبقي في الملف (${remaining}). فعّل السماح بالزيادة إن أنفق الموظف من ماله`);
     }
 
-    // Check if invoice already linked to avoid duplication
-    if (invoice_id) {
-      const { data: existing } = await s.from('custody_invoices')
-        .select('id')
-        .eq('custody_id', id)
-        .eq('invoice_id', invoice_id)
-        .maybeSingle();
-      if (existing) return error('هذه الفاتورة مرتبطة بالفعل بهذه العهدة', 400);
+    const fromCustody = round2(Math.min(amount, remaining));
+    const excess = round2(Math.max(0, amount - remaining));
+
+    const s = getSupabase();
+    const acc = await resolveCustodyAccounts(auth.companyId);
+    const { data: expAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', expenseCode).maybeSingle();
+    const expenseAccountId = expAcc?.id || acc.defaultExpenseId;
+    if (!expenseAccountId) return error('حساب المصروف غير موجود');
+
+    if (invoiceId) {
+      const { data: linked } = await s.from('custody_invoices')
+        .select('id').eq('custody_id', id).or(`invoice_id.eq.${invoiceId},purchase_invoice_id.eq.${invoiceId}`).maybeSingle();
+      if (linked) return error('هذا المستند مربوط بهذا الملف مسبقاً');
     }
 
-    // Create transaction - expense from custody
-    const { data: transaction, error: txErr } = await s.from('custody_transactions')
-      .insert({
-        company_id: auth.companyId,
-        custody_id: id,
-        type: 'expense',
-        amount,
-        description,
-        reference_type: invoice_id ? 'invoice' : purchase_invoice_id ? 'purchase_invoice' : 'general',
-        reference_id: invoice_id || purchase_invoice_id || null,
-        created_by: auth.userId,
-      })
-      .select()
-      .single();
-
-    if (txErr) throw txErr;
-
-    // If invoice linked, create link to prevent duplication
-    if (invoice_id || purchase_invoice_id) {
-      await s.from('custody_invoices').insert({
-        company_id: auth.companyId,
-        custody_id: id,
-        invoice_id: invoice_id || null,
-        purchase_invoice_id: purchase_invoice_id || null,
-        amount,
-        description,
+    const lines: Array<{ account_id: string; debit: number; credit: number; description: string; project_id?: string | null }> = [
+      { account_id: expenseAccountId, debit: amount, credit: 0, description, project_id: file.project_id },
+    ];
+    if (fromCustody > 0) {
+      lines.push({
+        account_id: acc.custodyId, debit: 0, credit: fromCustody,
+        description: `خصم من ملف ${file.file_number || id}`, project_id: file.project_id,
+      });
+    }
+    if (excess > 0) {
+      if (!acc.accruedId) return error('حساب الرواتب المستحقة (2140) مطلوب لتسجيل زيادة العهدة');
+      lines.push({
+        account_id: acc.accruedId, debit: 0, credit: excess,
+        description: `زيادة عهدة — مستحق للموظف`,
       });
     }
 
-    // Journal: The key to avoid duplication
-    // Instead of: debit expense / credit supplier (which would duplicate)
-    // We do: debit expense / credit custody account
-    // So expense is recorded, but custody is reduced, not creating new liability
-    const expenseCode = expense_account_code || ACCOUNT_CODES.DIRECT_COSTS || '5100';
-    const { data: expenseAcc } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', expenseCode)
-      .maybeSingle();
+    const { journalId, error: jeErr } = await createJournalEntry(auth.companyId, {
+      date, type: 'general',
+      description: `مصروف من عهدة ${file.file_number || ''}: ${description}`,
+      reference_type: 'custody_expense',
+      reference_id: id,
+      created_by: auth.userId,
+      lines,
+    });
+    if (jeErr || !journalId) throw jeErr || new Error('فشل قيد المصروف');
 
-    const { data: custodyAcc } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.EMPLOYEE_CUSTODIES)
-      .maybeSingle();
-
-    if (expenseAcc && custodyAcc) {
-      const jeNum = await getNextJournalNumber(auth.companyId, new Date().toISOString());
-      const { data: je } = await s.from('journal_entries')
-        .insert({
+    if (fromCustody > 0) {
+      await recordCustodyTx(auth.companyId, id, 'expense', fromCustody, description, auth.userId, {
+        reference_type: invoiceId ? 'invoice' : 'general',
+        reference_id: invoiceId,
+      });
+    }
+    if (excess > 0) {
+      await recordCustodyTx(auth.companyId, id, 'surplus', excess, `زيادة: ${description}`, auth.userId);
+      try {
+        await s.from('employee_advances').insert({
           company_id: auth.companyId,
-          number: jeNum,
-          date: new Date().toISOString().split('T')[0],
-          type: 'general',
-          description: `مصروف من عهدة: ${description} - ملف ${id}`,
-          created_by: auth.userId,
-        })
-        .select('id')
-        .single();
-
-      // استخدام الدالة المساعدة لإدراج سطور القيد بجميع الحقول المطلوبة
-      const { error: jlErr } = await insertJournalLines(auth.companyId, [
-        { journal_entry_id: je.id, account_id: expenseAcc.id, debit: amount, credit: 0, description },
-        { journal_entry_id: je.id, account_id: custodyAcc.id, debit: 0, credit: amount, description: `خصم من عهدة ${custody.employee_id}` },
-      ]);
-      if (jlErr) console.error('Journal lines error:', jlErr);
+          employee_id: file.employee_id,
+          date,
+          type: 'custody_surplus',
+          amount: excess,
+          description: `زيادة عهدة ${file.file_number || id}`,
+          custody_id: id,
+        });
+      } catch { /* أعمدة اختيارية */ }
+    }
+    if (invoiceId) {
+      try {
+        await s.from('custody_invoices').insert({
+          company_id: auth.companyId,
+          custody_id: id,
+          invoice_id: body.invoice_id || null,
+          purchase_invoice_id: body.purchase_invoice_id || null,
+          amount,
+          description,
+        });
+      } catch { /* اختياري */ }
     }
 
-    // Update remaining via trigger will happen, but also update manually for immediate feedback
-    const newRemaining = remaining - parseFloat(amount);
-    await s.from('custodies').update({
-      remaining_amount: newRemaining,
-      total_expenses: (parseFloat(custody.total_expenses) || 0) + parseFloat(amount),
-    }).eq('id', id);
-
+    const updated = await syncCustodyTotals(auth.companyId, id);
     return success({
-      transaction,
-      remaining: newRemaining,
-      message: `تم خصم ${amount} من العهدة بدون تكرار. المتبقي: ${newRemaining}`,
+      ...updated,
+      journal_entry_id: journalId,
+      applied_from_custody: fromCustody,
+      excess,
+      message: excess > 0
+        ? `خُصم ${fromCustody} من الملف وسُجّل ${excess} مستحقاً للموظف`
+        : `خُصم ${fromCustody} من الملف دون تكرار الصرف`,
     }, 201);
   } catch (err) {
     return handleApiError(err);

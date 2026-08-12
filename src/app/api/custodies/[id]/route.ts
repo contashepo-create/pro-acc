@@ -1,32 +1,21 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { loadCustodyFile, assertFileOpen } from '@/lib/custody';
+import { postReversalEntry } from '@/lib/voucher-utils';
 
 const sb = () => getSupabase();
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const auth = await requireModulePermission(request, 'custodies', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: custody, error: custodyErr } = await s.from('custodies')
-      .select('*, employees(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (custodyErr) {
-      console.error('Custody GET error:', custodyErr);
-      throw custodyErr;
-    }
-
-    if (!custody) return notFound();
-
-    return success(custody);
+    const file = await loadCustodyFile(auth.companyId, id);
+    if (!file) return notFound();
+    return success(file);
   } catch (err) {
     return handleApiError(err);
   }
@@ -34,53 +23,37 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const auth = await requireManagerOrAbove(request);
+    const auth = await requireModulePermission(request, 'custodies', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBodySafe(request);
+    const file = await loadCustodyFile(auth.companyId, id);
+    if (!file) return notFound();
+    assertFileOpen(file);
 
-    const { data: existing } = await s.from('custodies')
-      .select('id, status, amount')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    if ((existing as any).status === 'settled') {
-      return error('لا يمكن تعديل عهدة تم تسويتها');
+    const body = await request.json();
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (body.reason !== undefined || body.description !== undefined) {
+      update.reason = body.reason ?? body.description;
+      update.description = body.description ?? body.reason;
     }
-
-    const updateData: any = {};
-    if (body.employee_id !== undefined) updateData.employee_id = body.employee_id;
-    if (body.amount !== undefined) {
-      updateData.amount = parseFloat(body.amount);
-      // تحديث المبلغ المتبقي إذا لم يتم تحديده صراحة
-      if (body.remaining_amount === undefined) {
-        updateData.remaining_amount = parseFloat(body.amount);
+    if (body.notes !== undefined) update.notes = body.notes;
+    if (body.project_id !== undefined) {
+      if (body.project_id) {
+        const { data: p } = await sb().from('projects').select('id').eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
+        if (!p) return error('المشروع غير موجود', 404);
       }
+      update.project_id = body.project_id || null;
     }
-    if (body.remaining_amount !== undefined) updateData.remaining_amount = parseFloat(body.remaining_amount);
-    if (body.date !== undefined) updateData.date = body.date;
-    if (body.reason !== undefined) updateData.reason = body.reason;
-    if (body.description !== undefined) updateData.reason = body.description; // backwards compat
-    if (body.status !== undefined) updateData.status = body.status;
-
-    const { data: updated, error: updateErr } = await s.from('custodies')
-      .update(updateData)
-      .eq('id', id)
-      .select('*')
-      .single();
-
-    if (updateErr) {
-      console.error('Custody update error:', updateErr);
-      throw updateErr;
+    if (body.amount !== undefined || body.employee_id !== undefined) {
+      return error('لا يُعدَّل مبلغ الملف أو الموظف بعد الصرف — استخدم تعزيز أو قيد عكسي');
     }
 
-    return success(updated);
+    const { data, error: uErr } = await sb().from('custodies')
+      .update(update).eq('id', id).eq('company_id', auth.companyId).select('*').single();
+    if (uErr) throw uErr;
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
@@ -88,54 +61,36 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const auth = await requireManagerOrAbove(request);
     const { id } = await params;
-    const s = sb();
+    const file = await loadCustodyFile(auth.companyId, id);
+    if (!file) return notFound();
+    if (file.is_closed) return error('لا يمكن حذف ملف مغلق');
+    if (file.total_expenses > 0.005) return error('لا يمكن حذف ملف عليه إثباتات مصروف — اعكس المصروفات أولاً');
 
-    const { data: existing } = await s.from('custodies')
-      .select('id, status, journal_entry_id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    if ((existing as any).status === 'settled') {
-      return error('لا يمكن حذف عهدة تم تسويتها');
+    if (file.journal_entry_id) {
+      const { error: revErr } = await postReversalEntry(auth.companyId, {
+        journalEntryId: file.journal_entry_id,
+        referenceType: 'custody_reversal',
+        referenceId: id,
+        description: `عكس افتتاح عهدة ${file.file_number || id}`,
+        userId: auth.userId,
+      });
+      if (revErr) throw revErr;
     }
 
-    // حذف تسويات العهدة أولاً
-    await s.from('custody_settlements').delete().eq('custody_id', id);
-    
-    // حذف إيداعات العهدة
-    try {
-      await s.from('custody_deposits').delete().eq('custody_id', id);
-    } catch (e) {
-      // table might not exist or have no data
-    }
+    await sb().from('custodies').update({
+      status: 'settled',
+      remaining_amount: 0,
+      notes: `${file.notes || ''} [ملغى]`.trim(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', id).eq('company_id', auth.companyId);
 
-    // حذف القيد المحاسبي المرتبط إن وجد
-    if ((existing as any).journal_entry_id) {
-      await s.from('journal_lines').delete().eq('journal_entry_id', (existing as any).journal_entry_id);
-      await s.from('journal_entries').delete().eq('id', (existing as any).journal_entry_id);
-    }
-
-    // حذف العهدة
-    await s.from('custodies').delete().eq('id', id);
-
-    return success({ deleted: true });
+    return success({ cancelled: true });
   } catch (err) {
     return handleApiError(err);
-  }
-}
-
-async function parseBodySafe(request: Request): Promise<any> {
-  try {
-    return await request.json();
-  } catch {
-    return {};
   }
 }
