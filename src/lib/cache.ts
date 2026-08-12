@@ -40,8 +40,8 @@ export const ROUTE_CACHE_CONFIG: Record<string, CacheOptions> = {
   'GET:/api/dashboard': { cache: 'no-store' },
   'GET:/api/categories': { cache: 'no-store' },
   'GET:/api/settings': { cache: 'no-store' },
-  'GET:/api/reports': { cache: 'private', maxAge: 30, staleWhileRevalidate: 10 },
-  'GET:/api/currencies': { cache: 'private', maxAge: 60, staleWhileRevalidate: 30 },
+  'GET:/api/reports': { cache: 'no-store' },
+  'GET:/api/currencies': { cache: 'no-store' },
   'GET:/api/financial': { cache: 'no-store' },
   'GET:/api/admin/subscription-plans': { cache: 'public', maxAge: 3600, staleWhileRevalidate: 600 },
 };

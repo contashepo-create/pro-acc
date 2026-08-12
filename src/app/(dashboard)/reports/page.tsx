@@ -12,6 +12,7 @@ import { Table } from '@/components/ui/Table';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { StatCard } from '@/components/ui/StatCard';
 import { formatCurrency } from '@/lib/utils';
+import { apiFetch } from '@/lib/api-client';
 import { Download, FileText, RefreshCw, TrendingUp, PieChart, Users, DollarSign, ArrowDownRight, ArrowUpRight } from 'lucide-react';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -81,7 +82,7 @@ export default function ReportsPage() {
     try {
       if (tab === 'trial_balance' || tab === 'income_statement' || tab === 'balance_sheet') {
         const type = tab;
-        const res = await fetch(`/api/reports/financial?type=${type}&${qs()}`);
+        const res = await apiFetch(`/api/reports/financial?type=${type}&${qs()}`);
         const json = await res.json();
         if (!json.success) throw new Error(json.message || 'فشل تحميل التقرير');
         if (tab === 'trial_balance') setTrialBalance(json.data);
