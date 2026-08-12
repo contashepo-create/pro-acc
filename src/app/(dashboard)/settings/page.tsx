@@ -87,6 +87,8 @@ export default function SettingsPage() {
   const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'Proaccwebcontroller_bot';
 
   useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t) setTab(t);
     // Load company data and settings
     fetch('/api/settings')
       .then((r) => r.json())
