@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
       reference_id: custody.id,
       created_by: auth.userId,
       lines: [
-        { account_id: acc.custodyId, debit: amount, credit: 0, description: `عهدة ${emp.name}`, project_id },
+        { account_id: acc.custodyId, debit: amount, credit: 0, description: `عهدة ${emp.name}` },
         { account_id: bank.account_id, debit: 0, credit: amount, description: `صرف عهدة ${fileNumber}` },
       ],
     });

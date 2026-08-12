@@ -29,56 +29,29 @@ export async function GET(request: NextRequest) {
 
       const p: any = project;
 
-      // Get all journal entries for this project
-      let jeQuery = s.from('journal_entries')
-        .select('id')
-        .eq('company_id', auth.companyId)
-        .eq('project_id', projectId)
-        .is('deleted_at', null);
+      const { sumProjectJournal } = await import('@/lib/project-costs');
+      const journal = await sumProjectJournal(auth.companyId, projectId);
 
-      if (from) jeQuery = jeQuery.gte('date', from);
-      if (to) jeQuery = jeQuery.lte('date', to);
-
-      const { data: entries } = await jeQuery;
-      const entryIds = (entries || []).map((e: any) => e.id);
-
-      let revenue = 0;
-      let costs = {
+      const costs = {
         materials: 0,
         labor: 0,
         subcontractors: 0,
         equipment: 0,
         other: 0,
-        total: 0,
+        total: journal.expenses,
       };
-
-      if (entryIds.length > 0) {
-        // Get all lines for these entries
-        const { data: lines } = await s.from('journal_lines')
-          .select('account_id, debit, credit, accounts(code, name, type)')
-          .in('journal_entry_id', entryIds);
-
-        for (const line of lines || []) {
-          const acc: any = (line as any).accounts;
-          const debit = parseFloat((line as any).debit) || 0;
-          const credit = parseFloat((line as any).credit) || 0;
-
-          if (acc?.type === 'revenue') {
-            revenue += credit - debit;
-          } else if (acc?.type === 'expense') {
-            const code = acc.code || '';
-            if (code.startsWith('511') || code === '5110') costs.materials += debit - credit;
-            else if (code.startsWith('521') || code === '5210') costs.labor += debit - credit;
-            else if (code.startsWith('215') || code === '2150') costs.subcontractors += debit - credit;
-            else if (code.startsWith('124') || code.startsWith('123')) costs.equipment += debit - credit;
-            else costs.other += debit - credit;
-
-            costs.total += debit - credit;
-          }
-        }
+      for (const acc of journal.accounts) {
+        if (acc.type !== 'expense') continue;
+        const net = acc.debit - acc.credit;
+        const code = acc.code || '';
+        if (code.startsWith('511')) costs.materials += net;
+        else if (code.startsWith('521') || code.startsWith('522')) costs.labor += net;
+        else if (code.startsWith('215') || code.startsWith('513')) costs.subcontractors += net;
+        else if (code.startsWith('512') || code.startsWith('52')) costs.equipment += net;
+        else costs.other += net;
       }
 
-      // Also include invoices for this project as revenue
+      let revenue = journal.revenue;
       let invoiceQuery = s.from('invoices')
         .select('total, status')
         .eq('company_id', auth.companyId)
@@ -166,33 +139,9 @@ export async function GET(request: NextRequest) {
 
         const revenue = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
 
-        // Get costs from journal
-        const { data: entries } = await s.from('journal_entries')
-          .select('id')
-          .eq('company_id', auth.companyId)
-          .eq('project_id', p.id)
-          .is('deleted_at', null);
-
-        const entryIds = (entries || []).map((e: any) => e.id);
-        let costs = 0;
-
-        if (entryIds.length > 0) {
-          const { data: expenseAccounts } = await s.from('accounts')
-            .select('id')
-            .eq('company_id', auth.companyId)
-            .eq('type', 'expense');
-
-          const expIds = (expenseAccounts || []).map((a: any) => a.id);
-
-          if (expIds.length > 0) {
-            const { data: lines } = await s.from('journal_lines')
-              .select('debit')
-              .in('account_id', expIds)
-              .in('journal_entry_id', entryIds);
-
-            costs = (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
-          }
-        }
+        const { sumProjectJournal } = await import('@/lib/project-costs');
+        const journal = await sumProjectJournal(auth.companyId, p.id);
+        const costs = journal.expenses;
 
         const profit = revenue - costs;
         const profitMargin = revenue > 0 ? (profit / revenue) * 100 : 0;

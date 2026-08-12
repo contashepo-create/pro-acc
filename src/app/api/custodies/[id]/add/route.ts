@@ -36,7 +36,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       reference_id: id,
       created_by: auth.userId,
       lines: [
-        { account_id: acc.custodyId, debit: amount, credit: 0, description, project_id: file.project_id },
+        { account_id: acc.custodyId, debit: amount, credit: 0, description },
         { account_id: bank.account_id, debit: 0, credit: amount, description },
       ],
     });
