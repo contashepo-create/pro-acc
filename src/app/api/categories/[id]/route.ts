@@ -52,6 +52,7 @@ export async function PUT(
     const { data: updated, error: updateErr } = await s.from('transaction_categories')
       .update(updateData)
       .eq('id', id)
+      .eq('company_id', auth.companyId)
       .select('*')
       .single();
 
@@ -90,7 +91,7 @@ export async function DELETE(
       return error('لا يمكن حذف الفئة لأنها مستخدمة في معاملات');
     }
 
-    await s.from('transaction_categories').delete().eq('id', id);
+    await s.from('transaction_categories').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ deleted: true });
   } catch (err) {
