@@ -91,6 +91,20 @@ export async function POST(request: NextRequest) {
       return error('المبلغ يجب أن يكون أكبر من صفر');
     }
 
+    // عزل مستأجرين: الصندوق والمشروع (إن وُجد) يجب أن ينتميا لهذه الشركة
+    const { data: box } = await s.from('petty_cash_boxes')
+      .select('id, daily_limit')
+      .eq('id', body.box_id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+    if (!box) return error('الصندوق غير موجود', 404);
+
+    if (body.project_id) {
+      const { data: proj } = await s.from('projects')
+        .select('id').eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!proj) return error('المشروع غير موجود', 404);
+    }
+
     // Check daily limit for withdrawals
     if (body.type === 'withdrawal') {
       const today = new Date().toISOString().split('T')[0];
@@ -101,16 +115,10 @@ export async function POST(request: NextRequest) {
         .eq('date', today);
 
       const todayTotal = (todayTxs || []).reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
-      const { data: box } = await s.from('petty_cash_boxes')
-        .select('daily_limit')
-        .eq('id', body.box_id)
-        .maybeSingle();
 
-      if (box) {
-        const limit = parseFloat((box as any).daily_limit || 0);
-        if (limit > 0 && todayTotal + body.amount > limit) {
-          return error(`تجاوزت الحد اليومي للسحب (${limit} ر.س). المتبقي اليوم: ${(limit - todayTotal).toFixed(2)} ر.س`);
-        }
+      const limit = parseFloat((box as any).daily_limit || 0);
+      if (limit > 0 && todayTotal + body.amount > limit) {
+        return error(`تجاوزت الحد اليومي للسحب (${limit} ر.س). المتبقي اليوم: ${(limit - todayTotal).toFixed(2)} ر.س`);
       }
     }
 
