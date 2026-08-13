@@ -216,24 +216,44 @@ ALTER TABLE petty_cash_reconciliation ADD COLUMN IF NOT EXISTS is_balanced BOOLE
 ALTER TABLE reminder_log ADD COLUMN IF NOT EXISTS sent BOOLEAN DEFAULT false;
 
 -- Ensure visitors log exists (public ad tracking)
+-- visitor_logs was created by 006-features WITHOUT company_id. Keep shape
+-- backward-compatible and add company_id + referrer/visited_at if missing.
 CREATE TABLE IF NOT EXISTS visitor_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
   ip_address TEXT,
   user_agent TEXT,
   path TEXT,
-  visited_at TIMESTAMPTZ DEFAULT NOW()
+  referrer TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE visitor_logs ADD COLUMN IF NOT EXISTS company_id  UUID REFERENCES companies(id) ON DELETE CASCADE;
+ALTER TABLE visitor_logs ADD COLUMN IF NOT EXISTS referrer    TEXT;
+ALTER TABLE visitor_logs ADD COLUMN IF NOT EXISTS visited_at  TIMESTAMPTZ DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_visitor_logs_company ON visitor_logs(company_id);
+CREATE INDEX IF NOT EXISTS idx_visitor_logs_date    ON visitor_logs(created_at);
 
 CREATE TABLE IF NOT EXISTS visitor_stats (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  stat_date DATE NOT NULL DEFAULT CURRENT_DATE,
-  visits INT NOT NULL DEFAULT 0,
-  unique_visitors INT NOT NULL DEFAULT 0,
-  UNIQUE(company_id, stat_date)
+  date DATE UNIQUE NOT NULL,
+  visits INTEGER DEFAULT 0,
+  unique_visitors INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE visitor_stats ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES companies(id) ON DELETE CASCADE;
+ALTER TABLE visitor_stats ADD COLUMN IF NOT EXISTS stat_date  DATE;
+-- Backfill stat_date from legacy 'date' column where null
+UPDATE visitor_stats SET stat_date = date WHERE stat_date IS NULL AND date IS NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid
+     WHERE t.relname='visitor_stats' AND c.conname='visitor_stats_company_date_unique'
+  ) THEN
+    ALTER TABLE visitor_stats ADD CONSTRAINT visitor_stats_company_date_unique UNIQUE (company_id, stat_date);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_visitor_stats_company ON visitor_stats(company_id);
 
 COMMIT;
 
