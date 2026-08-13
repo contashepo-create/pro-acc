@@ -210,7 +210,7 @@ export default function PurchaseInvoicesPage() {
             } catch { toast.error('تعذر عرض الفاتورة'); }
           }}
           onEdit={row.status !== 'cancelled' ? handleEdit : undefined}
-          onDelete={handleDelete}
+          onDelete={!row.journal_entry_id && (parseFloat(row.paid_amount) || 0) <= 0 ? handleDelete : undefined}
         />
       ),
     },
