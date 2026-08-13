@@ -124,7 +124,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // حذف العملية
-    await s.from('custom_actions').delete().eq('id', id);
+    await s.from('custom_actions').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ message: 'تم حذف العملية بنجاح' });
   } catch (err) {

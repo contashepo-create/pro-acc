@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { User, Mail, Shield, Clock, Save, AlertCircle, Check } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { User, Mail, Shield, Save } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -16,8 +17,11 @@ const ROLE_LABELS: Record<string, string> = {
   supervisor: 'مراقب',
 };
 
+const MIN_PASSWORD_LENGTH = 8;
+
 export default function ProfilePage() {
-  const { user } = useAuthStore();
+  const router = useRouter();
+  const { user, setUser, logout } = useAuthStore();
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
   const [saving, setSaving] = useState(false);
@@ -26,6 +30,12 @@ export default function ProfilePage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordMsg, setPasswordMsg] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  useEffect(() => {
+    if (user?.name) setName(user.name);
+    if (user?.email) setEmail(user.email);
+  }, [user?.name, user?.email]);
 
   const handleSaveProfile = async () => {
     setSaving(true);
@@ -34,10 +44,16 @@ export default function ProfilePage() {
       const res = await fetch('/api/auth/me', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ name }),
       });
       const json = await res.json();
-      if (json.success) {
+      if (res.ok && json.success) {
+        // خادم الـ API يعيد المستخدم المحدّث عند الحفظ الناجح
+        const updatedUser = json.user;
+        if (updatedUser && user) {
+          setUser({ ...user, name: updatedUser.name, email: updatedUser.email });
+        }
         setMessage('✅ تم حفظ البيانات بنجاح');
       } else {
         setMessage('❌ ' + (json.message || 'فشل الحفظ'));
@@ -51,7 +67,7 @@ export default function ProfilePage() {
 
   const handleChangePassword = async () => {
     setPasswordMsg('');
-    if (!oldPassword || !newPassword) {
+    if (!oldPassword || !newPassword || !confirmPassword) {
       setPasswordMsg('❌ يرجى ملء جميع الحقول');
       return;
     }
@@ -59,28 +75,41 @@ export default function ProfilePage() {
       setPasswordMsg('❌ كلمة المرور الجديدة غير متطابقة');
       return;
     }
-    if (newPassword.length < 6) {
-      setPasswordMsg('❌ كلمة المرور يجب أن تكون 6 أحرف على الأقل');
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      setPasswordMsg(`❌ كلمة المرور يجب أن تكون ${MIN_PASSWORD_LENGTH} أحرف على الأقل`);
+      return;
+    }
+    if (newPassword === oldPassword) {
+      setPasswordMsg('❌ كلمة المرور الجديدة يجب أن تختلف عن الحالية');
       return;
     }
 
+    setChangingPassword(true);
     try {
       const res = await fetch('/api/auth/me', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
       });
       const json = await res.json();
-      if (json.success) {
-        setPasswordMsg('✅ تم تغيير كلمة المرور بنجاح');
+      if (res.ok && json.success) {
+        setPasswordMsg('✅ تم تغيير كلمة المرور بنجاح — جاري تسجيل الخروج لإعادة الدخول بكلمة المرور الجديدة...');
         setOldPassword('');
         setNewPassword('');
         setConfirmPassword('');
+        // إبطال الجلسة الحالية إجبارياً لأن السيرفر رفع token_version
+        setTimeout(async () => {
+          await logout();
+          router.replace('/login');
+        }, 1200);
       } else {
         setPasswordMsg('❌ ' + (json.message || 'فشل تغيير كلمة المرور'));
       }
     } catch {
       setPasswordMsg('❌ فشل الاتصال');
+    } finally {
+      setChangingPassword(false);
     }
   };
 
@@ -139,13 +168,13 @@ export default function ProfilePage() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Input label="كلمة المرور الحالية" type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} />
-          <Input label="كلمة المرور الجديدة" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-          <Input label="تأكيد كلمة المرور" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+          <Input label="كلمة المرور الحالية" type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} autoComplete="current-password" />
+          <Input label={`كلمة المرور الجديدة (${MIN_PASSWORD_LENGTH} أحرف على الأقل)`} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" />
+          <Input label="تأكيد كلمة المرور" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" />
         </div>
         
-        <Button onClick={handleChangePassword} className="mt-4" variant="outline">
-          تغيير كلمة المرور
+        <Button onClick={handleChangePassword} className="mt-4" variant="outline" disabled={changingPassword}>
+          {changingPassword ? 'جاري التغيير...' : 'تغيير كلمة المرور'}
         </Button>
       </Card>
     </div>

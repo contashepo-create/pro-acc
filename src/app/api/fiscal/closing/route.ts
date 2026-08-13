@@ -310,7 +310,7 @@ export async function POST(request: NextRequest) {
         status: 'closed',
         closed_at: new Date().toISOString(),
       })
-      .eq('id', fiscalYearId);
+      .eq('id', fiscalYearId).eq('company_id', auth.companyId);
 
     if (updateErr) throw updateErr;
 

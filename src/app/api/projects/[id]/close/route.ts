@@ -172,7 +172,7 @@ export async function POST(
         closed_by: auth.userId,
         closure_journal_entry_id: closureJournalId,
       })
-      .eq('id', id)
+      .eq('id', id).eq('company_id', auth.companyId)
       .select('*, contacts(name)')
       .single();
 

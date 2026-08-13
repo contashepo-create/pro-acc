@@ -1,7 +1,7 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
@@ -11,10 +11,8 @@ export async function GET(
 ) {
   try {
     const { id } = await paramsPromise;
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
+    await requireAdmin(request);
+    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف المستخدم غير صالح', 400);
 
     const s = sb();
     const { data, error: err } = await s.from('admin_audit_log')
@@ -32,6 +30,6 @@ export async function GET(
       timestamp: new Date(row.created_at).toLocaleString('ar-SA'),
     })));
   } catch (err) {
-    return serverError(err);
+    return adminJsonError(err);
   }
 }

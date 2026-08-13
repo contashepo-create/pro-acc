@@ -274,7 +274,7 @@ export async function POST(req: NextRequest) {
       const { error: linesErr } = await insertJournalLines(auth.companyId, journalLines);
       if (linesErr) throw linesErr;
 
-      await s.from('purchase_invoices').update({ journal_entry_id: journalEntryId }).eq('id', invoiceId);
+      await s.from('purchase_invoices').update({ journal_entry_id: journalEntryId }).eq('id', invoiceId).eq('company_id', auth.companyId);
 
       if (custodyFile) {
         const { recordCustodyTx, syncCustodyTotals } = await import('@/lib/custody');

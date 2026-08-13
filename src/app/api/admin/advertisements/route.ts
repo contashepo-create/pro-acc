@@ -1,71 +1,77 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-  return payload;
-}
+
 
 export async function GET(req: NextRequest) {
   try {
+    await requireAdmin(req);
+    const s = sb();
     const activeParam = req.nextUrl.searchParams.get('active');
     const displayMode = req.nextUrl.searchParams.get('display_mode');
-    
-    let query = sb().from('advertisements').select('*');
-    
-    if (activeParam === 'true') {
-      query = query.eq('is_active', true);
-    }
-    
-    if (displayMode) {
-      query = query.eq('display_mode', displayMode);
-    }
+    const q = req.nextUrl.searchParams.get('q') || '';
 
-    const { data: ads, error: err } = await query.order('priority', { ascending: false }).order('created_at', { ascending: false });
-    
+    // Admin listing: select only display columns (no internal fields beyond what UI needs)
+    let query = s.from('advertisements')
+      .select('id, title, body, type, display_mode, priority, link_url, link_text, is_active, starts_at, expires_at, show_until, created_at, updated_at');
+
+    if (activeParam === 'true') query = query.eq('is_active', true);
+    else if (activeParam === 'false') query = query.eq('is_active', false);
+    if (displayMode) query = query.eq('display_mode', displayMode);
+
+    const { data: ads, error: err } = await query
+      .order('priority', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(200);
+
     if (err) {
-      console.error('Error fetching ads:', err);
-      // إذا كان الجدول غير موجود
       if (err.code === '42P01') return success([]);
       throw err;
     }
 
-    // للعملاء: إرجاع الإعلانات النشطة فقط التي لم تنتهِ
-    if (activeParam === 'true') {
-      const now = new Date().toISOString();
-      const filtered = (ads || []).filter((ad: any) => {
-        // يجب أن تكون نشطة
-        if (!ad.is_active) return false;
-        // إذا كان هناك تاريخ انتهاء، تحقق منه
-        if (ad.expires_at && new Date(ad.expires_at) < new Date(now)) return false;
-        // إذا كان هناك تاريخ بدء، تحقق منه
-        if (ad.starts_at && new Date(ad.starts_at) > new Date(now)) return false;
-        return true;
-      });
-      return success(filtered);
+    let result = ads || [];
+    if (q) {
+      const needle = q.replace(/[%_]/g, '').toLowerCase().slice(0, 64);
+      if (needle) {
+        result = result.filter((a: any) =>
+          String(a.title || '').toLowerCase().includes(needle) ||
+          String(a.body || '').toLowerCase().includes(needle)
+        );
+      }
     }
 
-    return success(ads || []);
+    return success(result);
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const admin = requireAdmin(req);
+    const admin = await requireAdmin(req);
     const body = await parseBody(req);
     const { title, body: bodyText, type, display_mode, priority, linkUrl, linkText, showDuration, expiresAt } = body;
 
-    if (!title || !bodyText) return error('العنوان والنص مطلوبان');
+    if (!title || typeof title !== 'string' || !bodyText || typeof bodyText !== 'string') {
+      return error('العنوان والنص مطلوبان');
+    }
+    if (title.length > 300) return error('العنوان طويل جداً');
+    if (bodyText.length > 5000) return error('نص الإعلان طويل جداً');
+    if (linkUrl) {
+      try {
+        const u = new URL(String(linkUrl));
+        if (!['http:', 'https:'].includes(u.protocol)) return error('رابط غير صالح');
+      } catch {
+        return error('رابط غير صالح');
+      }
+    }
+    if (display_mode && !['top_bar', 'banner', 'popup', 'modal', 'inline'].includes(display_mode)) {
+      return error('نوع العرض غير صالح');
+    }
 
     // حساب تاريخ انتهاء العرض بناءً على مدة العرض
     let finalExpiresAt = expiresAt || null;
@@ -93,18 +99,26 @@ export async function POST(req: NextRequest) {
     if (insertErr) throw insertErr;
     return success(data);
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }
 
 export async function PATCH(req: NextRequest) {
   try {
-    requireAdmin(req);
+    await requireAdmin(req);
     const body = await parseBody(req);
     const { id, isActive, title, body: bodyText, type, display_mode, priority, linkUrl, linkText, expiresAt } = body;
 
-    if (!id) return error('id مطلوب');
+    if (!id || typeof id !== 'string' || id.length > 64) return error('id غير صالح');
+    // Validate URL if provided
+    if (linkUrl !== undefined && linkUrl !== null && linkUrl !== '') {
+      try {
+        const u = new URL(String(linkUrl));
+        if (!['http:', 'https:'].includes(u.protocol)) return error('رابط غير صالح');
+      } catch {
+        return error('رابط غير صالح');
+      }
+    }
 
     const updateData: any = { updated_at: new Date().toISOString() };
     if (isActive !== undefined) updateData.is_active = isActive;
@@ -129,14 +143,13 @@ export async function PATCH(req: NextRequest) {
     if (updateErr) throw updateErr;
     return success(data);
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
-    requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const body = await parseBody(req);
     const { id } = body;
 
@@ -145,7 +158,6 @@ export async function DELETE(req: NextRequest) {
     await sb().from('advertisements').delete().eq('id', id);
     return success({ deleted: true });
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }

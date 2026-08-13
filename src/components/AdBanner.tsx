@@ -52,7 +52,7 @@ export function AdBanner() {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetch('/api/admin/advertisements?active=true&display_mode=banner')
+    fetch('/api/advertisements?display_mode=banner')
       .then((r) => r.json())
       .then((d) => { 
         if (d.success) setAds(d.data || []); 

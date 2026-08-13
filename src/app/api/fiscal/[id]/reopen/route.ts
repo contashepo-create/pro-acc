@@ -21,7 +21,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       .select('id').eq('company_id', companyId).eq('status', 'closed').gt('start_date', fy.start_date);
 
     for (const newer of (newerClosed || [])) {
-      await s.from('fiscal_years').update({ status: 'open', closed_at: null, closed_by: null }).eq('id', newer.id);
+      await s.from('fiscal_years').update({ status: 'open', closed_at: null, closed_by: null }).eq('id', newer.id).eq('company_id', auth.companyId);
     }
 
     const { data: closingJes } = await s.from('journal_entries')
@@ -34,7 +34,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const { error: updErr } = await s.from('fiscal_years')
-      .update({ status: 'open', closed_at: null, closed_by: null }).eq('id', id);
+      .update({ status: 'open', closed_at: null, closed_by: null })
+      .eq('id', id).eq('company_id', auth.companyId);
     if (updErr) throw updErr;
 
     return success({ ...fy, status: 'open' });

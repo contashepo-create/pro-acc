@@ -102,7 +102,7 @@ const AP_ACC = '00000000-0000-4000-8000-000000002110';
 
 function baseDb() {
   return {
-    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
+    users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
     contacts: [
       { id: SUPPLIER, company_id: C1, name: 'مورد' },
       { id: FOREIGN_SUPPLIER, company_id: C2, name: 'مورد أجنبي' },
@@ -119,7 +119,22 @@ function baseDb() {
     disbursement_invoice_items: [] as Row[],
     journal_entries: [] as Row[],
     journal_lines: [] as Row[],
-    journal_sequences: [] as Row[],
+        subscriptions: [{
+      id: 's1', company_id: C1, plan_id: 'p1', plan_code: 'enterprise', status: 'active',
+      start_date: '2024-01-01',
+      end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      subscription_plans: { code: 'enterprise', name: 'Enterprise', features_modules: {
+        dashboard: true, accounts: true, journal: true, invoices: true, quotations: true,
+        clients: true, contacts: true, reports_basic: true, reports_advanced: true,
+        reports_consolidated: true, settings: true, subscription: true, inventory: true,
+        purchases: true, cost_centers: true, banks: true, cash: true, warehouses: true,
+        branches: true, tax_reports: true, fixed_assets: true, pos: true, workflows: true,
+        approvals: true, custody: true, employees: true, projects: true, budgets: true,
+        messages: true, crm: true, contracts: true, tenders: true, boq: true,
+        progress_billing: true, subcontractors: true, payroll: true
+      } },
+    }],
+journal_sequences: [] as Row[],
     inventory_items: [] as Row[],
     inventory_transactions: [] as Row[],
     warehouses: [{ id: 'wh-1', company_id: C1 }],

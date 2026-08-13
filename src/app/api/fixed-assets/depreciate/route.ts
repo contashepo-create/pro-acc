@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
 
       if (remaining <= 0) {
         // Fully depreciated
-        await s.from('fixed_assets').update({ status: 'fully_depreciated' }).eq('id', asset.id);
+        await s.from('fixed_assets').update({ status: 'fully_depreciated' }).eq('id', asset.id).eq('company_id', auth.companyId);
         continue;
       }
 
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
       await s.from('fixed_assets').update({
         accumulated_depreciation: accumulated + monthlyDepreciation,
         net_book_value: purchaseCost - (accumulated + monthlyDepreciation),
-      }).eq('id', asset.id);
+      }).eq('id', asset.id).eq('company_id', auth.companyId);
 
       // Log depreciation
       await s.from('depreciation_log').insert({

@@ -13,10 +13,17 @@
  */
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
+process.env.ADMIN_TOKEN_SECRET = 'test-admin-separate-secret-32chars!';
 
-import { createToken, verifyToken } from '@/lib/auth';
+import { createToken, verifyToken, createAdminToken, verifyAdminToken as verifyAdminJwt } from '@/lib/auth';
 import { createHash, randomBytes, createHmac } from 'crypto';
-import { verifyAdminToken } from '@/lib/admin-auth';
+
+// Re-export for backwards compat with existing assertions below
+const verifyAdminToken = async (req: any) => {
+  const token = req?.cookies?.get?.('admin_token')?.value;
+  if (!token) return null;
+  return verifyAdminJwt(token);
+};
 
 // ---- Sanity helpers replicating the routes' token generation ----
 
@@ -132,30 +139,44 @@ describe('token_version invalidation semantics', () => {
 });
 
 describe('Admin token (superadmin JWT)', () => {
-  test('accepts a valid superadmin admin_token', async () => {
-    const t = createToken('admin-1', 'superadmin', 0);
-    const payload = await verifyAdminToken(makeAdminRequest(t));
+  test('accepts a valid superadmin admin_token (signed with ADMIN_TOKEN_SECRET)', () => {
+    const t = createAdminToken('admin-1', 0);
+    const payload = verifyAdminJwt(t);
     expect(payload).not.toBeNull();
     expect(payload!.userId).toBe('admin-1');
     expect(payload!.role).toBe('superadmin');
   });
 
-  test('rejects an admin_token whose role is not superadmin', async () => {
-    const t = createToken('regular-user', 'admin', 0);
-    expect(await verifyAdminToken(makeAdminRequest(t))).toBeNull();
+  test('rejects a normal user JWT when used as an admin token (different secret)', () => {
+    const t = createToken('admin-1', 'superadmin', 0); // signed with TOKEN_SECRET, not ADMIN
+    expect(verifyAdminJwt(t)).toBeNull();
+  });
+
+  test('rejects an admin_token whose role is not superadmin', () => {
+    // Forge a token with the admin secret but wrong role; verifyAdminToken requires role=superadmin.
+    const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+    const now = Math.floor(Date.now() / 1000);
+    const payload = Buffer.from(JSON.stringify({ sub: 'admin-1', role: 'admin', ver: 0, iat: now, exp: now + 3600 })).toString('base64url');
+    const sig = createHmac('sha256', process.env.ADMIN_TOKEN_SECRET!).update(`${header}.${payload}`).digest('base64url');
+    expect(verifyAdminJwt(`${header}.${payload}.${sig}`)).toBeNull();
   });
 
   test('returns null when no admin_token cookie is present', async () => {
     expect(await verifyAdminToken(makeAdminRequest(undefined))).toBeNull();
   });
 
-  test('returns null for an expired admin token', async () => {
+  test('returns null for an expired admin token', () => {
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
     const payload = Buffer.from(
       JSON.stringify({ sub: 'admin-1', role: 'superadmin', ver: 0, iat: 1000000, exp: 1000001 })
     ).toString('base64url');
-    const sig = createHmac('sha256', process.env.TOKEN_SECRET!).update(`${header}.${payload}`).digest('base64url');
-    expect(await verifyAdminToken(makeAdminRequest(`${header}.${payload}.${sig}`))).toBeNull();
+    const sig = createHmac('sha256', process.env.ADMIN_TOKEN_SECRET!).update(`${header}.${payload}`).digest('base64url');
+    expect(verifyAdminJwt(`${header}.${payload}.${sig}`)).toBeNull();
+  });
+
+  test('rejects a token signed with the wrong (user) secret', () => {
+    const t = createToken('x', 'superadmin', 0);
+    expect(verifyAdminJwt(t)).toBeNull();
   });
 });
 

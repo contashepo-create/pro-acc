@@ -9,6 +9,21 @@ export async function POST(request: NextRequest) {
     const auth = await requireApiAuth(request);
     const s = sb();
 
+    // Enforce storage limit for the company plan. max_storage_mb = 0 means
+    // "no file uploads allowed at all" (matches the new Start/Pro/
+    // Enterprise defaults where add-on purchase is required).
+    let storageMb = 0;
+    let planCode: string | null = null;
+    try {
+      const { getCompanyPlanLimits } = await import('@/lib/plan-limits');
+      const limits = await getCompanyPlanLimits(auth.companyId);
+      storageMb = limits?.max_storage_mb ?? 0;
+      planCode = limits?.planCode ?? null;
+    } catch { storageMb = 0; }
+    if (storageMb <= 0) {
+      return error('باقتك الحالية لا تتضمن مساحة تخزين للملفات. قم بترقية الباقة أو شراء إضافة التخزين (3$ لكل جيجابايت شهرياً).', 403);
+    }
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
 
@@ -22,9 +37,27 @@ export async function POST(request: NextRequest) {
       return error('نوع الملف غير مدعوم. الأنواع المدعومة: JPG, PNG, PDF');
     }
 
-    // Validate size (max 5MB)
+    // Validate size (per-file cap 5MB)
     if (file.size > 5 * 1024 * 1024) {
       return error('حجم الملف كبير جداً. الحد الأقصى 5MB');
+    }
+
+    // Enforce cumulative storage cap: count size already used in receipts bucket.
+    let used = 0;
+    try {
+      const { countUsedStorageBytes } = await import('@/lib/plan-limits');
+      used = await countUsedStorageBytes(auth.companyId);
+    } catch (e) {
+      console.warn('[upload] could not compute used storage; blocking upload:', e);
+      return error('تعذر التحقق من مساحة التخزين. حاول لاحقاً.', 503);
+    }
+    const capBytes = storageMb * 1024 * 1024;
+    if (used + file.size > capBytes) {
+      const totalGb = (storageMb / 1024).toFixed(storageMb >= 1024 ? 1 : 0);
+      return error(
+        `لا تتوفر مساحة تخزين كافية. المستخدم حالياً ${formatBytes(used)} من ${storageMb >= 1024 ? `${totalGb} GB` : `${storageMb} MB`}. احذف ملفات غير ضرورية أو قم بشراء سعة إضافية.`,
+        403
+      );
     }
 
     // Convert file to buffer
@@ -91,4 +124,10 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     return handleApiError(err);
   }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }

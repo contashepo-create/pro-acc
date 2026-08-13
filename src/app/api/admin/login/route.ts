@@ -5,11 +5,10 @@ import { adminLoginSchema } from '@/lib/validation';
 import { sendTelegramCode } from '@/lib/telegram';
 import { setSession, updateSession } from '@/lib/admin-session';
 import { getSupabase } from '@/lib/supabase-client';
-import { randomInt } from 'crypto';
+import { randomInt, randomBytes } from 'crypto';
+import { auditLog } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
-
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || '';
 
 function cleanEnv(s: string): string {
   return (s || '').replace(/^\uFEFF/, '').trim();
@@ -27,21 +26,23 @@ export async function POST(request: NextRequest) {
 
     const { email, password } = parsed.data;
 
-    step = 'check_dev_email';
-    // Allow any admin user that exists in DB, but also check env var if set
-    // This fixes "هذه اللوحة مخصصة للمطور فقط" even with correct email
-    const adminEmailEnvRaw = process.env.ADMIN_EMAIL || '';
-    const adminEmailEnv = cleanEnv(adminEmailEnvRaw).toLowerCase();
+    step = 'normalize_email';
     const inputEmail = cleanEnv(email).toLowerCase();
-    
-    // If ADMIN_EMAIL env is set, check against it, otherwise allow any email that will be checked in DB
-    // For backward compatibility, always allow conta.moha@gmail.com
-    if (adminEmailEnv && adminEmailEnv !== '' && inputEmail !== adminEmailEnv && inputEmail !== 'conta.moha@gmail.com') {
-      // Only block if env var is set and email doesn't match env nor fallback
-      // But don't block yet, let DB check handle it - this is just for specific dev panel restriction
-      // Actually, for security, if ADMIN_EMAIL is set, we should enforce it
-      // For now, log warning but don't block if user exists in DB
-      console.warn(`[ADMIN LOGIN] Email ${inputEmail} does not match ADMIN_EMAIL env ${adminEmailEnv}, but will check DB`);
+
+    // Rate-limit by IP and email to slow brute force against the admin panel.
+    // We reuse the app's rate-limit helper; if unavailable, allow-through with
+    // a warning (fail-open only when the rate limiter itself is broken).
+    try {
+      const { checkRateLimit } = await import('@/lib/rate-limit');
+      const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+        || request.headers.get('x-real-ip')
+        || 'unknown';
+      const rl = await checkRateLimit('admin:' + inputEmail, ip);
+      if (!rl.allowed) {
+        return error(`تم حظر المحاولات مؤقتاً. حاول بعد ${rl.remainingMinutes} دقائق`, 429);
+      }
+    } catch (e) {
+      console.warn('[ADMIN LOGIN] rate-limit unavailable:', e);
     }
 
     step = 'get_supabase';
@@ -90,13 +91,13 @@ export async function POST(request: NextRequest) {
     }
 
     step = 'generate_code';
+    // 6-digit cryptographically secure OTP. Use randomInt (CSPRNG); fallback
+    // uses randomBytes (also CSPRNG) — never Math.random which is predictable.
     let code: string;
     try {
-      code = String(randomInt(100000, 1000000));
-    } catch (e) {
-      // Fallback if crypto.randomInt not available
-      code = String(Math.floor(100000 + Math.random() * 900000));
-      console.warn(`[ADMIN LOGIN] randomInt failed, using Math.random fallback:`, e);
+      code = String(randomInt(0, 1000000)).padStart(6, '0');
+    } catch {
+      code = String(randomBytes(4).readUInt32BE(0) % 1000000).padStart(6, '0');
     }
 
     step = 'set_session';
@@ -123,15 +124,18 @@ export async function POST(request: NextRequest) {
     }
 
     if (!sent) {
-      console.warn(`[ADMIN 2FA] Telegram not configured or failed, code for ${a.email}: ${code}`);
-      // Don't fail if Telegram not configured, allow login with code from logs
-      // Only fail if Telegram IS configured but failed to send
+      // SECURITY: NEVER log the 2FA code even if Telegram fails.
+      // Previously the code was printed to server logs which allowed anyone with
+      // log access (or noisy error-tracking pipelines) to bypass 2FA.
+      console.warn(`[ADMIN 2FA] Telegram not configured or failed to send code for ${a.email}`);
       const botToken = cleanEnv(process.env.TELEGRAM_BOT_TOKEN || '');
       if (botToken) {
-        // Telegram configured but failed to send - this is an error
-        console.error(`[ADMIN LOGIN] Telegram configured but send failed`);
-        // Still allow login but warn - code is in logs
+        return error('تعذر إرسال رمز التحقق عبر تيليجرام. حاول مرة أخرى أو تواصل مع الدعم', 500);
       }
+      // If Telegram is NOT configured (dev mode), refuse login instead of
+      // leaking the code through logs. Admin must configure TELEGRAM_BOT_TOKEN
+      // and TELEGRAM_ADMIN_CHAT_ID before the admin panel is usable.
+      return error('لم يتم تكوين إرسال رمز التحقق. يرجى ضبط إعدادات تيليجرام', 503);
     } else {
       step = 'update_session';
       try {
@@ -143,11 +147,20 @@ export async function POST(request: NextRequest) {
     }
 
     const response = success({
-      message: sent ? 'تم إرسال رمز التحقق إلى تيليجرام' : 'تعذر إرسال رمز التحقق. تحقق من سجلات الخادم',
+      message: 'تم إرسال رمز التحقق إلى تيليجرام',
       email: a.email,
     });
 
-    setAuthCookie(response, 'admin_session', a.id, 1800);
+    // admin_session is a short-lived server-side pointer (UUID), NOT a JWT.
+    // HttpOnly + SameSite=Lax (Strict would break the 2FA redirect flow).
+    // Match the server-side session TTL (30 minutes) so the cookie doesn't
+    // outlive the server's state.
+    setAuthCookie(response, 'admin_session', a.id, 1800); // 30 minutes
+
+    // Audit successful step-1
+    try {
+      await auditLog(a.id, 'admin_login_step1', 'Password verified, 2FA code sent');
+    } catch {}
 
     return response;
   } catch (err) {

@@ -47,10 +47,17 @@ interface UserProfile {
     end_date: string;
     plan: {
       id: string;
+      code?: string;
       name: string;
+      currency?: string;
       price_monthly: number;
-      max_users: number;
-      features: string[];
+      price_yearly?: number | null;
+      max_users: number | null;
+      max_invoices_per_month?: number | null;
+      max_quotations_per_month?: number | null;
+      max_storage_mb?: number | null;
+      features?: string[] | string | null;
+      features_modules?: Record<string, boolean> | string | null;
     };
   };
 }
@@ -307,13 +314,13 @@ export default function UserProfilePage() {
               <div className="flex justify-between items-start">
                 <span className="text-sm text-text-muted">السعر الشهري</span>
                 <span className="text-sm font-medium text-text-primary">
-                  {user.subscription.plan.price_monthly} ر.س
+                  ${user.subscription.plan.price_monthly} {user.subscription.plan.currency && user.subscription.plan.currency !== 'USD' ? `(${user.subscription.plan.currency})` : ''}
                 </span>
               </div>
               <div className="flex justify-between items-start">
                 <span className="text-sm text-text-muted">الحد الأقصى للمستخدمين</span>
                 <span className="text-sm font-medium text-text-primary">
-                  {user.subscription.plan.max_users} مستخدم
+                  {user.subscription.plan.max_users ?? 'غير محدود'} مستخدم
                 </span>
               </div>
               <div className="flex justify-between items-start">
@@ -340,14 +347,42 @@ export default function UserProfilePage() {
               </div>
               <div className="pt-3 border-t">
                 <p className="text-sm font-medium text-text-primary mb-2">الميزات:</p>
-                <ul className="space-y-1">
-                  {user.subscription.plan.features.map((feature, idx) => (
-                    <li key={idx} className="text-xs text-text-muted flex items-center gap-2">
-                      <CheckCircle size={12} className="text-green-500" />
-                      {feature}
-                    </li>
-                  ))}
-                </ul>
+                {(() => {
+                  const { features, features_modules } = user.subscription.plan;
+                  let list: string[] = [];
+                  if (Array.isArray(features)) {
+                    list = features.map((f) => String(f));
+                  } else if (typeof features === 'string') {
+                    try {
+                      const parsed = JSON.parse(features);
+                      list = Array.isArray(parsed) ? parsed.map((f) => String(f)) : [];
+                    } catch { list = []; }
+                  }
+                  if (list.length === 0 && features_modules) {
+                    let mods: Record<string, boolean> = {};
+                    if (typeof features_modules === 'string') {
+                      try { mods = JSON.parse(features_modules); } catch { mods = {}; }
+                    } else {
+                      mods = features_modules as Record<string, boolean>;
+                    }
+                    list = Object.entries(mods)
+                      .filter(([, v]) => Boolean(v))
+                      .map(([k]) => k);
+                  }
+                  if (list.length === 0) {
+                    return <p className="text-xs text-text-muted">لا توجد بيانات ميزات مسجلة لهذه الباقة.</p>;
+                  }
+                  return (
+                    <ul className="space-y-1">
+                      {list.map((feature, idx) => (
+                        <li key={idx} className="text-xs text-text-muted flex items-center gap-2">
+                          <CheckCircle size={12} className="text-green-500" />
+                          {feature}
+                        </li>
+                      ))}
+                    </ul>
+                  );
+                })()}
               </div>
             </div>
           ) : (

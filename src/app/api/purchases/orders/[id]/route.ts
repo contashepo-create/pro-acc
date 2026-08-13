@@ -75,7 +75,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     let newTotal: number | undefined;
     if (parsed.data.items) {
-      await s.from('purchase_order_items').delete().eq('purchase_order_id', id);
+      await s.from('purchase_order_items').delete().eq('purchase_order_id', id).eq('company_id', auth.companyId);
       let sum = 0;
       for (const item of parsed.data.items) {
         const lineTotal = round2(item.quantity * item.unit_price);
@@ -158,7 +158,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
       await s.from('purchase_order_items')
         .update({ received_quantity: receivedQty + receiveQty })
-        .eq('id', item.id);
+        .eq('id', item.id).eq('company_id', auth.companyId);
 
       // تحديث المخزون — المطابقة الحالية code = description
       // (قيد تصميمي موثق؛ الربط المباشر بالأصناف ضمن مراجعة قسم المخزون)

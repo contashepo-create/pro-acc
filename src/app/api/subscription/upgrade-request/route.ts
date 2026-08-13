@@ -6,7 +6,10 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    // Allow expired users to view their prior upgrade requests (read access is
+    // always allowed, but explicit skipModuleGuard keeps the path consistent
+    // with the POST endpoint which is whitelisted for expired-write access).
+    const auth = await requireApiAuth(request, { skipModuleGuard: true });
     const s = sb();
 
     const { data, error: err } = await s.from('upgrade_requests')

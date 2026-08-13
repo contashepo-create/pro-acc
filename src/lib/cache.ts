@@ -30,10 +30,18 @@ const DEFAULT_CACHE: CacheOptions = {
 /**
  * Route-specific cache configuration
  * Maps route patterns to cache settings
+ *
+ * SECURITY RULES (do not relax):
+ *   1. Any endpoint that returns company-scoped data MUST be 'private' or 'no-store'.
+ *      'public' caches response across ALL visitors (CDN level) → cross-tenant data leak.
+ *   2. Admin endpoints are only served to superadmin and are never CDN-cacheable.
+ *   3. Auth/session/cookie-varying endpoints MUST add Vary: Cookie and use 'private'
+ *      so browsers don't share them across tabs/users.
+ *   4. Use 'public' ONLY for truly anonymous, stateless assets (e.g. advertisement feed,
+ *      public plan listings) and those MUST NOT depend on Cookie/Authorization.
  */
 export const ROUTE_CACHE_CONFIG: Record<string, CacheOptions> = {
   // Tenant data is company-scoped and mutates on every create/delete.
-  // Caching lists caused "deleted but still visible" then Not found on retry.
   'GET:/api/accounts': { cache: 'no-store' },
   'GET:/api/journal': { cache: 'no-store' },
   'GET:/api/banks': { cache: 'no-store' },
@@ -41,9 +49,41 @@ export const ROUTE_CACHE_CONFIG: Record<string, CacheOptions> = {
   'GET:/api/categories': { cache: 'no-store' },
   'GET:/api/settings': { cache: 'no-store' },
   'GET:/api/reports': { cache: 'no-store' },
+  'GET:/api/financial-audit': { cache: 'no-store' },
   'GET:/api/currencies': { cache: 'no-store' },
   'GET:/api/financial': { cache: 'no-store' },
-  'GET:/api/admin/subscription-plans': { cache: 'public', maxAge: 3600, staleWhileRevalidate: 600 },
+  'GET:/api/invoices': { cache: 'no-store' },
+  'GET:/api/quotations': { cache: 'no-store' },
+  'GET:/api/contacts': { cache: 'no-store' },
+  'GET:/api/clients': { cache: 'no-store' },
+  'GET:/api/suppliers': { cache: 'no-store' },
+  'GET:/api/inventory': { cache: 'no-store' },
+  'GET:/api/projects': { cache: 'no-store' },
+  'GET:/api/employees': { cache: 'no-store' },
+  'GET:/api/warehouses': { cache: 'no-store' },
+  'GET:/api/branches': { cache: 'no-store' },
+  'GET:/api/custodies': { cache: 'no-store' },
+  'GET:/api/fixed-assets': { cache: 'no-store' },
+  'GET:/api/purchases': { cache: 'no-store' },
+  'GET:/api/vouchers': { cache: 'no-store' },
+  'GET:/api/budgets': { cache: 'no-store' },
+  'GET:/api/cost-centers': { cache: 'no-store' },
+  'GET:/api/tax-returns': { cache: 'no-store' },
+  'GET:/api/messages': { cache: 'no-store' },
+  'GET:/api/notifications': { cache: 'no-store' },
+  'GET:/api/payroll': { cache: 'no-store' },
+  'GET:/api/pos': { cache: 'no-store' },
+  'GET:/api/company': { cache: 'no-store' },
+  // Authenticated self
+  'GET:/api/auth/me': { cache: 'no-store', vary: 'Cookie' },
+  'GET:/api/auth/subscription': { cache: 'no-store', vary: 'Cookie' },
+  'GET:/api/auth/subscription-status': { cache: 'no-store', vary: 'Cookie' },
+  // Admin endpoints — never publicly cacheable.
+  'GET:/api/admin': { cache: 'no-store', vary: 'Cookie' },
+  'GET:/api/admin/session': { cache: 'no-store', vary: 'Cookie' },
+  'GET:/api/admin/subscription-plans': { cache: 'private', maxAge: 60, vary: 'Cookie' },
+  // Public plan listings used on landing page (no auth needed)
+  'GET:/api/advertisements': { cache: 'public', maxAge: 60, staleWhileRevalidate: 300 },
 };
 
 /**
@@ -67,12 +107,17 @@ export function getCacheConfig(method: string, pathname: string): CacheOptions {
 
 /**
  * Apply cache headers to a NextResponse
+ * SECURITY: even 'private' caches can leak across browser tabs if the user has
+ * multiple accounts / is on a shared machine, so we default to Vary: Cookie and
+ * add Pragma/Expires for legacy proxies on no-store responses.
  */
 export function applyCacheHeaders(response: NextResponse, options: CacheOptions): NextResponse {
   const { cache = 'private', maxAge = 0, staleWhileRevalidate = 0, vary } = options;
   
   if (cache === 'no-store') {
-    response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    response.headers.set('Pragma', 'no-cache');
+    response.headers.set('Expires', '0');
   } else {
     const directives = [
       cache,
@@ -82,11 +127,29 @@ export function applyCacheHeaders(response: NextResponse, options: CacheOptions)
     
     response.headers.set('Cache-Control', directives);
   }
-  
-  if (vary) {
+
+  // Any non-public response must vary on Cookie so caches don't serve cached
+  // pages from one session to another. Public endpoints never read Cookie.
+  if (cache !== 'public') {
+    const existing = response.headers.get('Vary');
+    const needed = (vary ? `${vary}, Cookie` : 'Cookie, Authorization');
+    const merged = existing ? `${existing}, ${needed}` : needed;
+    response.headers.set('Vary', merged);
+  } else if (vary) {
     response.headers.set('Vary', vary);
   }
   
+  // Security headers — apply at response level for defense-in-depth.
+  if (!response.headers.has('X-Content-Type-Options')) {
+    response.headers.set('X-Content-Type-Options', 'nosniff');
+  }
+  if (!response.headers.has('X-Frame-Options')) {
+    response.headers.set('X-Frame-Options', 'DENY');
+  }
+  if (!response.headers.has('Referrer-Policy')) {
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  }
+
   return response;
 }
 

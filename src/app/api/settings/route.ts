@@ -120,7 +120,7 @@ export async function PUT(request: NextRequest) {
 
       if (Object.keys(companyUpdate).length > 0) {
         companyUpdate.updated_at = new Date().toISOString();
-        await s.from('companies').update(companyUpdate).eq('id', auth.companyId);
+        await s.from('companies').update(companyUpdate).eq('id', auth.companyId).eq('company_id', auth.companyId);
       }
     }
 

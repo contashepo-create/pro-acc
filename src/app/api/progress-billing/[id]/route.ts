@@ -62,7 +62,7 @@ export async function PUT(
 
     const { data: updated, error: updateErr } = await s.from('progress_billing')
       .update(updateData)
-      .eq('id', id)
+      .eq('id', id).eq('company_id', auth.companyId)
       .select('*')
       .single();
 
@@ -97,7 +97,7 @@ export async function DELETE(
       await deleteJournalEntry(auth.companyId, claim.journal_entry_id);
     }
 
-    await s.from('progress_billing').delete().eq('id', id);
+    await s.from('progress_billing').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ deleted: true });
   } catch (err) {

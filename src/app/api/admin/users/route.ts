@@ -1,36 +1,31 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-  return payload;
-}
+
 
 // Get all users with full profile data
 export async function GET(req: NextRequest) {
   try {
-    const admin = requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const userId = req.nextUrl.searchParams.get('user_id');
     const companyId = req.nextUrl.searchParams.get('company_id');
 
     const s = sb();
 
     if (userId) {
-      // Get single user with full profile
+      // Get single user with full profile (NEVER select password_hash)
       const { data: user, error: userError } = await s
         .from('users')
         .select(`
-          *,
+          id, name, email, role, is_active, email_verified, last_login,
+          last_activity, created_at, updated_at, company_id,
           company:companies!inner(
-            id, name, commercial_registration, tax_number, 
-            phone, email, address, currency_symbol, 
+            id, name, commercial_registration, tax_number,
+            phone, email, address, currency_symbol,
             is_active, created_at, updated_at
           ),
           permissions:user_permissions(
@@ -42,25 +37,33 @@ export async function GET(req: NextRequest) {
 
       if (userError) throw userError;
 
-      // Get user activity
+      // Get user activity (company-scoped audit trail for the user's company).
+      // admin_audit_log records actions by admins, not by users, so we surface
+      // the most-recent events for the company this user belongs to.
       const { data: activity } = await s
         .from('admin_audit_log')
-        .select('*')
+        .select('id, action, entity_type, entity_id, note, created_at, admin_id')
+        .eq('company_id', (user as any).company_id)
         .order('created_at', { ascending: false })
         .limit(20);
 
-      // Get subscription info
+      // Get subscription info (explicit column list — no password/token fields)
       const { data: subscription } = await s
         .from('subscriptions')
         .select(`
-          *,
+          id, subscriber_number, plan_id, plan_code, status,
+          start_date, end_date, trial_end_date, auto_renew,
+          extra_users, extra_branches, extra_storage_gb, addons_json, created_at,
           plan:subscription_plans(
-            id, name, price_monthly, max_users, features
+            id, code, name, currency, price_monthly, price_yearly, max_users,
+            max_invoices_per_month, max_quotations_per_month, max_storage_mb,
+            features, features_modules
           )
         `)
         .eq('company_id', (user as any).company_id)
-        .eq('status', 'active')
-        .single();
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
       return success({
         user,
@@ -70,10 +73,10 @@ export async function GET(req: NextRequest) {
     }
 
     if (companyId) {
-      // Get all users for a company
+      // Get all users for a company — NEVER return password_hash/token fields
       const { data: users, error: usersError } = await s
         .from('users')
-        .select('*')
+        .select('id, name, email, role, is_active, email_verified, last_login, last_activity, created_at, updated_at, company_id')
         .eq('company_id', companyId)
         .order('created_at', { ascending: false });
 
@@ -81,11 +84,11 @@ export async function GET(req: NextRequest) {
       return success(users || []);
     }
 
-    // Get all users with companies
+    // Get all users with companies (safe columns only)
     const { data: users, error: usersError } = await s
       .from('users')
       .select(`
-        *,
+        id, name, email, role, is_active, email_verified, last_login, last_activity, created_at, updated_at, company_id,
         company:companies(
           id, name, is_active
         )
@@ -97,7 +100,6 @@ export async function GET(req: NextRequest) {
 
     return success(users || []);
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }

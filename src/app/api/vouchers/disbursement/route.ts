@@ -251,7 +251,7 @@ export async function POST(request: NextRequest) {
 
       await s.from('voucher_disbursements')
         .update({ journal_entry_id: journalEntryId })
-        .eq('id', voucherId);
+        .eq('id', voucherId).eq('company_id', auth.companyId);
 
       // 5. تخصيص اختياري على فواتير المشتريات غير المسددة
       if (invoice_items && invoice_items.length > 0) {

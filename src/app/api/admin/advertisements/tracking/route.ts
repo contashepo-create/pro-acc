@@ -1,190 +1,54 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-  return payload;
+function sanitizeId(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const cleaned = v.trim();
+  if (!/^[0-9a-fA-F-]{8,}$/.test(cleaned)) return null;
+  return cleaned;
 }
 
-// Get ad tracking data (views, clicks, notifications)
+/**
+ * GET (admin-only): return view/click/notification stats for one ad.
+ */
 export async function GET(req: NextRequest) {
   try {
-    const admin = requireAdmin(req);
-    const adId = req.nextUrl.searchParams.get('ad_id');
-
-    if (!adId) return error('ad_id مطلوب');
+    await requireAdmin(req);
+    const adId = sanitizeId(req.nextUrl.searchParams.get('ad_id'));
+    if (!adId) return error('ad_id غير صالح', 400);
 
     const s = sb();
-
-    // Get ad statistics
     const { data: ad, error: adError } = await s.from('advertisements')
       .select('id, title, views, clicks, notifications_sent, display_mode, type, is_active')
       .eq('id', adId)
-      .single();
+      .maybeSingle();
 
     if (adError) throw adError;
+    if (!ad) return error('الإعلان غير موجود', 404);
 
-    // Get views by company
-    const { data: viewsData } = await s
-      .from('ad_views')
-      .select(`
-        company_id,
-        companies!inner(id, name, email),
-        users!inner(id, name, email),
-        viewed_at,
-        ip_address
-      `)
-      .eq('advertisement_id', adId)
-      .order('viewed_at', { ascending: false })
-      .limit(100);
-
-    // Get clicks by company
-    const { data: clicksData } = await s
-      .from('ad_clicks')
-      .select(`
-        company_id,
-        companies!inner(id, name, email),
-        users!inner(id, name, email),
-        clicked_at,
-        ip_address
-      `)
-      .eq('advertisement_id', adId)
-      .order('clicked_at', { ascending: false })
-      .limit(100);
-
-    // Get notifications sent
-    const { data: notificationsData } = await s
-      .from('ad_notifications')
-      .select(`
-        company_id,
-        companies!inner(id, name, email),
-        users!inner(id, name, email),
-        sent_at,
-        delivery_method,
-        delivered,
-        read_at
-      `)
-      .eq('advertisement_id', adId)
-      .order('sent_at', { ascending: false })
-      .limit(100);
-
-    // Aggregate statistics
-    const uniqueCompanies = new Set();
-    const uniqueUsers = new Set();
-
-    (viewsData || []).forEach((v: any) => {
-      if (v.company_id) uniqueCompanies.add(v.company_id);
-      if (v.user_id) uniqueUsers.add(v.user_id);
-    });
+    // Stats only — do NOT leak IPs or PII to the admin dashboard beyond counts
+    const [{ count: viewCount }, { count: clickCount }, { count: notifCount }] = await Promise.all([
+      s.from('ad_views').select('*', { count: 'exact', head: true }).eq('advertisement_id', adId),
+      s.from('ad_clicks').select('*', { count: 'exact', head: true }).eq('advertisement_id', adId),
+      s.from('ad_notifications').select('*', { count: 'exact', head: true }).eq('advertisement_id', adId),
+    ]);
 
     return success({
       ad,
       statistics: {
-        totalViews: ad?.views || 0,
-        totalClicks: ad?.clicks || 0,
-        totalNotifications: ad?.notifications_sent || 0,
-        uniqueCompaniesViewed: uniqueCompanies.size,
-        uniqueUsersViewed: uniqueUsers.size,
+        totalViews: (ad as any).views || 0,
+        totalClicks: (ad as any).clicks || 0,
+        totalNotifications: (ad as any).notifications_sent || 0,
+        viewEvents: viewCount || 0,
+        clickEvents: clickCount || 0,
+        notificationEvents: notifCount || 0,
       },
-      views: viewsData || [],
-      clicks: clicksData || [],
-      notifications: notificationsData || [],
     });
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
-  }
-}
-
-// Record ad view
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-    const { advertisement_id, company_id, user_id } = body;
-
-    if (!advertisement_id || !company_id) {
-      return error('advertisement_id و company_id مطلوبان');
-    }
-
-    const s = sb();
-
-    // Check if already viewed
-    const { data: existing } = await s.from('ad_views')
-      .select('id')
-      .eq('advertisement_id', advertisement_id)
-      .eq('company_id', company_id)
-      .maybeSingle();
-
-    if (existing) {
-      return success({ already_viewed: true });
-    }
-
-    // Record view
-    const { data, error: insertError } = await s.from('ad_views')
-      .insert({
-        advertisement_id,
-        company_id,
-        user_id: user_id || null,
-        ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || null,
-        user_agent: req.headers.get('user-agent') || null,
-      })
-      .select()
-      .single();
-
-    if (insertError) throw insertError;
-
-    return success({ recorded: true, view: data });
-  } catch (e: any) {
-    return serverError(e);
-  }
-}
-
-// Record ad click
-export async function PUT(req: NextRequest) {
-  try {
-    const body = await req.json();
-    const { advertisement_id, company_id, user_id } = body;
-
-    if (!advertisement_id || !company_id) {
-      return error('advertisement_id و company_id مطلوبان');
-    }
-
-    const s = sb();
-
-    // Check if already clicked
-    const { data: existing } = await s.from('ad_clicks')
-      .select('id')
-      .eq('advertisement_id', advertisement_id)
-      .eq('company_id', company_id)
-      .maybeSingle();
-
-    if (existing) {
-      return success({ already_clicked: true });
-    }
-
-    // Record click
-    const { data, error: insertError } = await s.from('ad_clicks')
-      .insert({
-        advertisement_id,
-        company_id,
-        user_id: user_id || null,
-        ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || null,
-        user_agent: req.headers.get('user-agent') || null,
-      })
-      .select()
-      .single();
-
-    if (insertError) throw insertError;
-
-    return success({ recorded: true, click: data });
-  } catch (e: any) {
-    return serverError(e);
+    return adminJsonError(e);
   }
 }

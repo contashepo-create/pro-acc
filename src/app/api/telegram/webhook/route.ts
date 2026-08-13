@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
+import { randomInt } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -161,8 +162,14 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: true }, { status: 200 });
           }
 
-          // توليد كود سداسي عشوائي آمن (2FA Code)
-          const code = String(Math.floor(100000 + Math.random() * 900000));
+          // توليد كود سداسي عشوائي آمن (2FA Code) باستخدام CSPRNG
+          let code: string;
+          try {
+            code = String(randomInt(0, 1000000)).padStart(6, '0');
+          } catch {
+            // fallback — يجب ألا يحدث أبداً، ولكن للأمان فقط
+            code = String(Math.floor(100000 + Math.random() * 900000));
+          }
           const updatedSession = {
             step: 'approved_and_code_sent',
             code,

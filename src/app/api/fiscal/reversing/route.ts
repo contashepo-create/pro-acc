@@ -96,14 +96,14 @@ export async function POST(request: NextRequest) {
 
     if (linesErr) {
       // التراجع عن إنشاء القيد العكسي
-      await s.from('journal_entries').delete().eq('id', re.id);
+      await s.from('journal_entries').delete().eq('id', re.id).eq('company_id', auth.companyId);
       throw linesErr;
     }
 
     // تحديث القيد الأصلي للإشارة إلى القيد العكسي
     await s.from('journal_entries')
       .update({ reversed_by: re.id })
-      .eq('id', originalEntryId);
+      .eq('id', originalEntryId).eq('company_id', auth.companyId);
 
     return success({
       originalEntryId,

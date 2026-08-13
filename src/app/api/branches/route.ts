@@ -34,6 +34,28 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'branches', 'create');
     const s = sb();
+
+    // Enforce branch/warehouse add-on limit — count includes warehouses too
+    // since extra_branches is shared between branches and warehouses.
+    try {
+      const { getCompanyPlanLimits, checkPlanLimit } = await import('@/lib/plan-limits');
+      const limits = await getCompanyPlanLimits(auth.companyId);
+      if (!limits || !limits.features_modules.branches) {
+        return error('إدارة الفروع والمستودعات غير مفعلة في باقتك. رجّع الباقة أو اشترِ إضافة فرع/مستودع.', 403);
+      }
+      const limit = await checkPlanLimit(auth.companyId, 'branches');
+      if (!limit.allowed) {
+        return error(
+          `تم الوصول للحد الأقصى من الفروع/المستودعات (${limit.limit}) في باقتك. ` +
+          `اشترِ إضافة فرع/مستودع ($10/شهر) لإضافة المزيد.`,
+          403
+        );
+      }
+    } catch (e: any) {
+      if (e?.message?.includes('غير مُضمَّنة') || e?.message?.includes('انتهت')) throw e;
+      console.warn('[branches] limit check failed:', e);
+    }
+
     const body = await parseBody(req);
     const { code, name, address, phone, manager_id, is_main } = body;
 

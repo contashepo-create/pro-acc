@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, setAuthCookie, clearAuthCookie } from '@/lib/api-helpers';
-import { verifyPassword, createToken } from '@/lib/auth';
+import { verifyPassword, createAdminToken } from '@/lib/auth';
 import { getSession, deleteSession } from '@/lib/admin-session';
 import { getSupabase } from '@/lib/supabase-client';
+import { adminJsonError } from '@/lib/admin-guard';
+import { auditLog } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
 
@@ -56,8 +58,10 @@ export async function POST(request: NextRequest) {
       return error('كلمة المرور الرئيسية غير صحيحة', 401);
     }
 
-    const token = createToken(a.id, 'superadmin');
+    // SECURITY: Use admin-specific secret; shorter TTL (24h); role enforced.
+    const token = createAdminToken(a.id, 0);
     await deleteSession(adminId);
+    try { await auditLog(a.id, 'admin_login_success', 'Admin login successful (step 3)'); } catch {}
 
     const response = success({
       message: 'تم تسجيل الدخول بنجاح',
@@ -66,11 +70,10 @@ export async function POST(request: NextRequest) {
     });
 
     setAuthCookie(response, 'admin_token', token, 86400);
-
     clearAuthCookie(response, 'admin_session');
 
     return response;
   } catch (err) {
-    return serverError(err);
+    return adminJsonError(err);
   }
 }

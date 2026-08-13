@@ -114,7 +114,7 @@ export async function PUT(
       .eq('id', id).eq('company_id', auth.companyId);
     if (updErr) throw updErr;
 
-    const { error: delErr } = await s.from('journal_lines').delete().eq('journal_entry_id', id);
+    const { error: delErr } = await s.from('journal_lines').delete().eq('journal_entry_id', id).eq('company_id', auth.companyId);
     if (delErr) throw delErr;
 
     const { insertJournalLines } = await import('@/lib/journal-utils');
@@ -188,7 +188,7 @@ export async function DELETE(
     // حذف سطور القيد أولاً
     const { error: lErr } = await s.from('journal_lines')
       .delete()
-      .eq('journal_entry_id', id)
+      .eq('journal_entry_id', id).eq('company_id', auth.companyId)
       .eq('company_id', auth.companyId);
     
     if (lErr) {

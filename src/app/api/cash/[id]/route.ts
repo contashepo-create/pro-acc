@@ -159,7 +159,7 @@ export async function DELETE(
 
       const { error: jeErr } = await s.from('journal_entries')
         .delete()
-        .eq('id', tx.journal_entry_id);
+        .eq('id', tx.journal_entry_id).eq('company_id', auth.companyId);
       if (jeErr) throw jeErr;
     }
 
@@ -176,7 +176,7 @@ export async function DELETE(
 
     const { error: deleteError } = await s.from('cash_transactions')
       .delete()
-      .eq('id', id);
+      .eq('id', id).eq('company_id', auth.companyId);
     if (deleteError) throw deleteError;
 
     return success({ deleted: true });

@@ -108,15 +108,15 @@ const FOREIGN_PROJ = '00000000-0000-4000-8000-000000000p99';
 
 function baseDb() {
   return {
-    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
+    users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
     contacts: [
       { id: CLIENT, company_id: C1, name: 'عميل', type: 'client', account_id: null },
       { id: FOREIGN_CLIENT, company_id: C2, name: 'أجنبي', type: 'client' },
     ],
     accounts: [
-      { id: AR, company_id: C1, code: '1130', name: 'العملاء', type: 'asset', is_active: true },
-      { id: REVENUE, company_id: C1, code: '4100', name: 'إيرادات', type: 'revenue', is_active: true },
-      { id: EXPENSE, company_id: C1, code: '5100', name: 'تكاليف', type: 'expense', is_active: true },
+      { id: AR, company_id: C1, code: '1130', name: 'العملاء', type: 'asset', is_active: true, token_version: 0 },
+      { id: REVENUE, company_id: C1, code: '4100', name: 'إيرادات', type: 'revenue', is_active: true, token_version: 0 },
+      { id: EXPENSE, company_id: C1, code: '5100', name: 'تكاليف', type: 'expense', is_active: true, token_version: 0 },
     ],
     projects: [] as Row[],
     boq_items: [] as Row[],
@@ -124,7 +124,22 @@ function baseDb() {
     invoice_items: [] as Row[],
     journal_entries: [] as Row[],
     journal_lines: [] as Row[],
-    journal_sequences: [] as Row[],
+        subscriptions: [{
+      id: 's1', company_id: C1, plan_id: 'p1', plan_code: 'enterprise', status: 'active',
+      start_date: '2024-01-01',
+      end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      subscription_plans: { code: 'enterprise', name: 'Enterprise', features_modules: {
+        dashboard: true, accounts: true, journal: true, invoices: true, quotations: true,
+        clients: true, contacts: true, reports_basic: true, reports_advanced: true,
+        reports_consolidated: true, settings: true, subscription: true, inventory: true,
+        purchases: true, cost_centers: true, banks: true, cash: true, warehouses: true,
+        branches: true, tax_reports: true, fixed_assets: true, pos: true, workflows: true,
+        approvals: true, custody: true, employees: true, projects: true, budgets: true,
+        messages: true, crm: true, contracts: true, tenders: true, boq: true,
+        progress_billing: true, subcontractors: true, payroll: true
+      } },
+    }],
+journal_sequences: [] as Row[],
   } as Record<string, Row[]>;
 }
 

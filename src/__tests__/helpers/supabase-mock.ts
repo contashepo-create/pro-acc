@@ -62,9 +62,53 @@ export const mockClient = {
     const terminal = terminalOp(ops);
     const key = `${table}:${terminal}`;
     const queue = results.get(key);
-    if (!queue || queue.length === 0) return { data: null, error: null };
-    const val = queue.shift();
-    return { data: val, error: null };
+    if (queue && queue.length > 0) {
+      const val = queue.shift();
+      return { data: val, error: null };
+    }
+
+    // Sensible test defaults when test doesn't explicitly set a result.
+    // These mirror a healthy paid subscriber so the subscription-guard
+    // doesn't trip up unrelated unit tests.
+    if (table === 'subscriptions') {
+      if (terminal === 'single' || terminal === 'maybeSingle') {
+        return {
+          data: {
+            id: 'sub-test',
+            company_id: 'co-test',
+            plan_id: 'plan-start',
+            plan_code: 'start',
+            status: 'active',
+            start_date: '2024-01-01',
+            end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+            extra_users: 0,
+            extra_branches: 0,
+            extra_storage_gb: 0,
+            addons_json: {},
+            subscription_plans: {
+              code: 'start',
+              name: 'Start',
+              trial_days: 7,
+              max_users: 1,
+              max_storage_mb: 0,
+              features_modules: { dashboard: true, accounts: true, journal: true, invoices: true, quotations: true, clients: true, contacts: true, reports_basic: true, settings: true, subscription: true, messages: true },
+            },
+          },
+          error: null,
+        };
+      }
+      return { data: [], error: null };
+    }
+    if (table === 'companies') {
+      if (terminal === 'single' || terminal === 'maybeSingle') {
+        return { data: { id: 'co-test', is_active: true, name: 'Test Co' }, error: null };
+      }
+      return { data: [], error: null };
+    }
+    if (table === 'users') {
+      if (terminal === 'select') return { data: [], error: null };
+    }
+    return { data: null, error: null };
   },
 };
 

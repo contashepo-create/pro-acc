@@ -1,28 +1,30 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
+import { success, error, parseBody } from '@/lib/api-helpers';
+import { verifyMasterPassword } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-  return payload;
-}
-
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const admin = requireAdmin(request);
+    const __admin = await requireAdmin(request);
     const { id: companyId } = await params;
+    // Validate UUID shape to prevent path-based filter injection
+    if (!/^[0-9a-fA-F-]{8,}$/.test(companyId)) return error('معرّف الشركة غير صالح', 400);
+
     const body = await parseBody(request);
-    const { days = 7, reason } = body;
+    const { days = 7, reason, masterPassword } = body;
+
+    // Sensitive monetary action: require master password re-entry
+    if (!masterPassword) return error('كلمة المرور الرئيسية مطلوبة', 401);
+    const ok = await verifyMasterPassword(__admin.adminId, String(masterPassword));
+    if (!ok) return error('كلمة المرور الرئيسية غير صحيحة', 401);
 
     if (days !== 7) {
       return error('التمديد المسموح به هو 7 أيام فقط', 400);
     }
+    if (reason && String(reason).length > 500) return error('السبب طويل جداً', 400);
 
     const s = sb();
 
@@ -55,7 +57,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .update({
         end_date: newEndDate.toISOString().split('T')[0],
         trial_extended: true,
-        trial_extended_by: admin.userId,
+        trial_extended_by: __admin.adminId,
         trial_extended_at: new Date().toISOString(),
         original_end_date: subData.end_date,
         updated_at: new Date().toISOString(),
@@ -68,7 +70,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     // Audit log
     await s.from('admin_audit_log').insert({
-      admin_id: admin.userId,
+      admin_id: __admin.adminId,
       action: 'extend_trial',
       details: `Extended trial for company ${companyId} by ${days} days. Reason: ${reason || 'N/A'}`,
       target_type: 'company',
@@ -85,7 +87,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     return success({ subscription: updated, message: `تم تمديد الفترة التجريبية 7 أيام. تنتهي الآن في ${newEndDate.toISOString().split('T')[0]}` });
   } catch (e) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }

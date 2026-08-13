@@ -41,7 +41,7 @@ export async function PUT(
           overtime_hours: overtimeHours,
           status: 'completed',
         })
-        .eq('id', id)
+        .eq('id', id).eq('company_id', auth.companyId)
         .select()
         .single();
 

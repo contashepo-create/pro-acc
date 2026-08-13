@@ -1,8 +1,9 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, notFound, parseBody, handleApiError } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
+import { success, error, notFound, parseBody } from '@/lib/api-helpers';
 import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
+import { randomInt } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -11,17 +12,15 @@ export async function GET(
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const __admin = await requireAdmin(request);
     const { id } = await paramsPromise;
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
+    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الشركة غير صالح', 400);
 
     const s = sb();
 
-    // Get company info
+    // Get company info — safe column list (no secrets / internal metadata)
     const { data: company, error: companyErr } = await s.from('companies')
-      .select('*')
+      .select('id, name, commercial_registration, tax_number, vat_number, address, phone, email, country, country_code, currency_code, currency_symbol, vat_rate, is_active, created_at, updated_at, trial_end_date')
       .eq('id', id)
       .maybeSingle();
 
@@ -56,7 +55,7 @@ export async function GET(
       },
     });
   } catch (err) {
-    return handleApiError(err);
+    return adminJsonError(err);
   }
 }
 
@@ -65,11 +64,9 @@ export async function PATCH(
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const __admin = await requireAdmin(request);
     const { id } = await paramsPromise;
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
+    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الشركة غير صالح', 400);
 
     const body = await parseBody<any>(request);
 
@@ -86,7 +83,7 @@ export async function PATCH(
       // Toggle status - requires master password
       const masterHeader = request.headers.get('x-master-password');
       if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(payload.userId, masterHeader);
+      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
 
       const { error: updateErr } = await s.from('companies')
@@ -94,7 +91,7 @@ export async function PATCH(
         .eq('id', id);
       if (updateErr) throw updateErr;
 
-      await auditLog(payload.userId, body.is_active ? 'activate_company' : 'deactivate_company',
+      await auditLog(__admin.adminId, body.is_active ? 'activate_company' : 'deactivate_company',
         JSON.stringify({ companyName: company.name }), 'company', id);
 
       return success({ message: body.is_active ? 'تم تفعيل الشركة' : 'تم إيقاف الشركة' });
@@ -104,7 +101,7 @@ export async function PATCH(
       // Edit company info - requires master password
       const masterHeader = request.headers.get('x-master-password');
       if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(payload.userId, masterHeader);
+      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
 
       const updateData: any = { updated_at: new Date().toISOString() };
@@ -122,7 +119,7 @@ export async function PATCH(
         .eq('id', id);
       if (updateErr) throw updateErr;
 
-      await auditLog(payload.userId, 'edit_company',
+      await auditLog(__admin.adminId, 'edit_company',
         JSON.stringify({ companyName: company.name, fields: Object.keys(updateData) }), 'company', id);
 
       return success({ message: 'تم تحديث بيانات الشركة' });
@@ -132,7 +129,7 @@ export async function PATCH(
       // Change subscription plan - requires master password
       const masterHeader = request.headers.get('x-master-password');
       if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(payload.userId, masterHeader);
+      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
 
       const { data: plan } = await s.from('subscription_plans')
@@ -165,7 +162,11 @@ export async function PATCH(
         subscriberNumber = (existingSub as any).subscriber_number;
       } else {
         const { data: seqResult } = await s.rpc('nextval', { seq: 'subscriber_number_seq' }).single();
-        subscriberNumber = seqResult as any || Math.floor(Math.random() * 90000) + 10000;
+        try {
+          subscriberNumber = seqResult as any || Number(randomInt(10000, 99999));
+        } catch {
+          subscriberNumber = seqResult as any || 10000 + Math.floor(Date.now() % 90000);
+        }
       }
 
       if (existingSub) {
@@ -207,7 +208,7 @@ export async function PATCH(
         });
       } catch {}
 
-      await auditLog(payload.userId, 'change_company_plan',
+      await auditLog(__admin.adminId, 'change_company_plan',
         JSON.stringify({ companyName: company.name, planName: (plan as any).name }), 'company', id);
 
       return success({ message: `تم تغيير الباقة إلى ${(plan as any).name}` });
@@ -216,7 +217,7 @@ export async function PATCH(
     if (body.action === 'extend_subscription') {
       const masterHeader = request.headers.get('x-master-password');
       if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(payload.userId, masterHeader);
+      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
 
       const { data: sub } = await s.from('subscriptions')
@@ -246,7 +247,7 @@ export async function PATCH(
         });
       } catch {}
 
-      await auditLog(payload.userId, 'extend_subscription',
+      await auditLog(__admin.adminId, 'extend_subscription',
         JSON.stringify({ companyName: company.name, days: body.days || 30 }), 'company', id);
 
       return success({ message: `تم تمديد الاشتراك ${body.days || 30} يوم` });
@@ -255,7 +256,7 @@ export async function PATCH(
     if (body.action === 'cancel_subscription') {
       const masterHeader = request.headers.get('x-master-password');
       if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(payload.userId, masterHeader);
+      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
 
       const { data: sub } = await s.from('subscriptions')
@@ -281,7 +282,7 @@ export async function PATCH(
         });
       } catch {}
 
-      await auditLog(payload.userId, 'cancel_subscription',
+      await auditLog(__admin.adminId, 'cancel_subscription',
         JSON.stringify({ companyName: company.name }), 'company', id);
 
       return success({ message: 'تم إلغاء الاشتراك' });
@@ -289,6 +290,6 @@ export async function PATCH(
 
     return error('إجراء غير معروف');
   } catch (err) {
-    return serverError(err);
+    return adminJsonError(err);
   }
 }

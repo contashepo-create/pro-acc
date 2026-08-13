@@ -178,7 +178,7 @@ export async function PUT(request: NextRequest) {
       status: finalStatus,
       gateway_response: gateway_response ? JSON.stringify(gateway_response) : null,
       updated_at: new Date().toISOString(),
-    }).eq('id', recordId);
+    }).eq('id', recordId).eq('company_id', auth.companyId);
 
     if (finalStatus === 'paid') {
       try {
@@ -201,7 +201,7 @@ export async function PUT(request: NextRequest) {
             created_by: auth.userId,
           });
           if (!jeErr && journalId) {
-            await s.from('payment_records').update({ journal_entry_id: journalId }).eq('id', recordId);
+            await s.from('payment_records').update({ journal_entry_id: journalId }).eq('id', recordId).eq('company_id', auth.companyId);
             const { data: invRow } = await s.from('invoices')
               .select('total, paid_amount, status')
               .eq('id', rec.invoice_id).eq('company_id', auth.companyId).maybeSingle();
