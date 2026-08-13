@@ -91,48 +91,52 @@ export async function POST(req: NextRequest) {
 
     if (assetErr) throw assetErr;
 
-    // إنشاء قيد الشراء
-    const { data: assetAcc } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.FIXED_ASSETS_START)
-      .maybeSingle();
-
+    // إنشاء قيد الشراء — إلزامي متوازن (لا أصل بلا قيد)
     const { data: bankAcc } = await s.from('accounts')
       .select('id')
       .eq('company_id', auth.companyId)
       .eq('code', ACCOUNT_CODES.BANKS)
       .maybeSingle();
 
-    if (assetAcc && bankAcc) {
-      const jeNum = await getNextJournalNumber(auth.companyId, purchase_date || new Date().toISOString());
-      const { data: je } = await s.from('journal_entries')
-        .insert({ 
-          company_id: auth.companyId, 
-          number: jeNum, 
-          date: purchase_date, 
-          type: 'general', 
-          description: `شراء أصل ثابت: ${name}`, 
-          created_by: auth.userId 
-        })
-        .select('id')
-        .single();
+    if (!assetAccount?.id || !bankAcc?.id) {
+      // تراجع: لا أصل يتيم بدون قيد شراء
+      await s.from('fixed_assets').delete().eq('id', asset.id).eq('company_id', auth.companyId);
+      return error('تعذر إنشاء قيد شراء الأصل (حساب الأصل/البنك غير موجود) — راجع دليل الحسابات');
+    }
 
-      const { error: jlErr } = await insertJournalLines(auth.companyId, [
-        {
-          journal_entry_id: je.id,
-          account_id: assetAccount?.id || assetAcc.id,
-          debit: purchase_cost,
-          credit: 0,
-        },
-        {
-          journal_entry_id: je.id,
-          account_id: bankAcc.id,
-          debit: 0,
-          credit: purchase_cost,
-        },
-      ]);
-      if (jlErr) throw jlErr;
+    const jeNum = await getNextJournalNumber(auth.companyId, purchase_date || new Date().toISOString());
+    const { data: je } = await s.from('journal_entries')
+      .insert({ 
+        company_id: auth.companyId, 
+        number: jeNum, 
+        date: purchase_date, 
+        type: 'general', 
+        description: `شراء أصل ثابت: ${name}`,
+        reference_type: 'fixed_asset',
+        reference_id: asset.id,
+        created_by: auth.userId 
+      })
+      .select('id')
+      .single();
+
+    const { error: jlErr } = await insertJournalLines(auth.companyId, [
+      {
+        journal_entry_id: je.id,
+        account_id: assetAccount.id,
+        debit: purchase_cost,
+        credit: 0,
+      },
+      {
+        journal_entry_id: je.id,
+        account_id: bankAcc.id,
+        debit: 0,
+        credit: purchase_cost,
+      },
+    ]);
+    if (jlErr) {
+      await s.from('journal_entries').delete().eq('id', je.id).eq('company_id', auth.companyId);
+      await s.from('fixed_assets').delete().eq('id', asset.id).eq('company_id', auth.companyId);
+      throw jlErr;
     }
 
     return success(asset, 201);

@@ -64,8 +64,33 @@ export async function DELETE(
     const s = sb();
 
     const { data: existing } = await s.from('fixed_assets')
-      .select('id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      .select('id, accumulated_depreciation')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
     if (!existing) return notFound();
+
+    // أصل مُهلك (له إهلاك متراكم أو سجل إهلاك) لا يُحذف — عطّله بدلاً من ذلك
+    if ((parseFloat((existing as any).accumulated_depreciation) || 0) > 0) {
+      return error('لا يمكن حذف أصل مُهلك — عطّله بدلاً من الحذف');
+    }
+    const { data: logs } = await s.from('depreciation_log')
+      .select('id').eq('asset_id', id).limit(1);
+    if (logs && logs.length > 0) {
+      return error('لا يمكن حذف أصل له سجل إهلاك — عطّله بدلاً من الحذف');
+    }
+
+    // احذف قيد الشراء المرتبط (إن وُجد) حتى لا يبقى قيد يتيم
+    const { data: je } = await s.from('journal_entries')
+      .select('id')
+      .eq('reference_type', 'fixed_asset')
+      .eq('reference_id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+    if (je) {
+      await s.from('journal_lines').delete().eq('journal_entry_id', (je as any).id);
+      await s.from('journal_entries').delete().eq('id', (je as any).id).eq('company_id', auth.companyId);
+    }
 
     const { error: delErr } = await s.from('fixed_assets').delete().eq('id', id).eq('company_id', auth.companyId);
     if (delErr) throw delErr;
