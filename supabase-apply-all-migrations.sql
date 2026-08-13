@@ -4905,27 +4905,34 @@ ON CONFLICT (key) DO NOTHING;
 
 -- ------------- notifications.type CHECK (widen idempotently) -------------
 DO $$
-DECLARE c text;
+DECLARE r RECORD;
 BEGIN
-  -- Drop existing constraint(s) on notifications.type so we can re-add
-  -- the widened whitelist (covers all types the app writes).
-  FOR c IN
-    SELECT conname FROM pg_constraint
-     WHERE conrelid = 'notifications'::regclass AND contype='c'
-       AND pg_get_constraintdef(oid) LIKE '%type%IN%'
+  -- Drop EVERY check constraint that involves column `type`, regardless of
+  -- how pg_get_constraintdef formats it (spaces, newlines, auto-generated
+  -- names, etc.), so we can safely re-add our widened whitelist.
+  FOR r IN
+    SELECT c.conname AS conname
+      FROM pg_constraint c
+      JOIN pg_class      t ON t.oid = c.conrelid
+      JOIN pg_namespace  n ON n.oid = t.relnamespace
+      JOIN pg_attribute  a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+     WHERE t.relname = 'notifications'
+       AND n.nspname = 'public'
+       AND c.contype = 'c'
+       AND a.attname = 'type'
   LOOP
-    EXECUTE 'ALTER TABLE notifications DROP CONSTRAINT IF EXISTS ' || quote_ident(c);
+    EXECUTE 'ALTER TABLE notifications DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname);
   END LOOP;
-
-  ALTER TABLE notifications
-    ADD CONSTRAINT notifications_type_check
-    CHECK (type IN (
-      'info','warning','success','error',
-      'subscription','upgrade','addon_granted',
-      'approval_request','approval_response','approval_approved','approval_rejected',
-      'push','support_update','closing'
-    ));
 END $$;
+
+ALTER TABLE notifications
+  ADD CONSTRAINT notifications_type_check
+  CHECK (type IN (
+    'info','warning','success','error',
+    'subscription','upgrade','addon_granted',
+    'approval_request','approval_response','approval_approved','approval_rejected',
+    'push','support_update','closing'
+  ));
 
 
 
