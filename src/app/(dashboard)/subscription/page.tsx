@@ -1,14 +1,20 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Check, Loader2, CreditCard, Crown, AlertTriangle, Upload, DollarSign, Calendar, Clock, Image as ImageIcon, Send, Key as KeyIcon } from 'lucide-react';
+import { Check, Loader2, CreditCard, Crown, AlertTriangle, Upload, DollarSign, Calendar, Clock, Image as ImageIcon, Send, Key as KeyIcon, UserPlus, Building2, HardDrive, Download } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Modal } from '@/components/ui/Modal';
-import { useRouter } from 'next/navigation'; // FIXED: Added missing import for page redirection
-import { useAuthStore } from '@/store/auth-store'; // FIXED: Added missing import for user role checks
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useAuthStore } from '@/store/auth-store';
+
+const ADDONS = [
+  { id: 'extra_user', label: 'مستخدم إضافي', monthly: 5, yearly: 48, icon: UserPlus },
+  { id: 'extra_branch', label: 'فرع/مستودع إضافي', monthly: 10, yearly: 96, icon: Building2 },
+  { id: 'storage_gb', label: '1 جيجا بايت تخزين', monthly: 3, yearly: 30, icon: HardDrive },
+] as const;
 
 interface Plan {
   id: string; code: string; name: string; description: string; description_ar: string;
@@ -25,28 +31,41 @@ interface PaymentMethod {
   code: string; name_ar: string; account_number: string; instructions: string;
 }
 
+type AddonId = 'extra_user' | 'extra_branch' | 'storage_gb';
+
 export default function SubscriptionPageEnhanced() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
-  
-  // FIXED: حماية الصفحة برمجياً على مستوى المكون لمنع أي مستخدم إضافي (غير المدير) من الدخول لصفحة الباقات أو طلبات الترقية المالية
+
   const { user: loggedInUser, isLoading: authLoading } = useAuthStore();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     if (!authLoading && loggedInUser && loggedInUser.role !== 'admin') {
       router.push('/dashboard');
     }
   }, [loggedInUser, authLoading, router]);
+
   const [subscription, setSubscription] = useState<any>(null);
   const [upgradeRequests, setUpgradeRequests] = useState<any[]>([]);
+  const [addonRequests, setAddonRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [duration, setDuration] = useState<'monthly' | 'yearly'>('monthly');
   const [form, setForm] = useState({ payment_method: 'instapay', amount: '', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<any>(null);
+
+  // Add-on modal
+  const [showAddonModal, setShowAddonModal] = useState(false);
+  const [selectedAddon, setSelectedAddon] = useState<AddonId>('extra_user');
+  const [addonQty, setAddonQty] = useState(1);
+  const [addonDuration, setAddonDuration] = useState<'monthly'|'yearly'>('monthly');
+  const [addonForm, setAddonForm] = useState({ payment_method: 'instapay', amount: '5', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
+  const [addonSubmitting, setAddonSubmitting] = useState(false);
 
   // Activation code state
   const [activationCode, setActivationCode] = useState('');
@@ -55,21 +74,41 @@ export default function SubscriptionPageEnhanced() {
   const [activating, setActivating] = useState(false);
   const [activationMsg, setActivationMsg] = useState<any>(null);
 
+  // Support tab state
+  const [activeTab, setActiveTab] = useState<'plans'|'addons'|'support'|'export'>('plans');
   useEffect(() => {
-    Promise.all([
+    const tab = searchParams?.get('tab');
+    if (tab === 'support' || tab === 'export' || tab === 'addons') setActiveTab(tab as any);
+  }, [searchParams]);
+
+  // Support form
+  const [supportForm, setSupportForm] = useState({ subject: '', message: '', category: 'billing' });
+  const [supportSubmitting, setSupportSubmitting] = useState(false);
+  const [supportTickets, setSupportTickets] = useState<any[]>([]);
+
+  // Data export
+  const [exports, setExports] = useState<any[]>([]);
+  const [exportRequesting, setExportRequesting] = useState(false);
+
+  const refreshAll = async () => {
+    const [subData, payData, reqData, addonData, supData, expData] = await Promise.all([
       fetch('/api/auth/subscription').then(r=>r.json()),
       fetch('/api/admin/payment-methods').then(r=>r.json()).catch(()=>({success:false})),
-      fetch('/api/subscription/upgrade-request').then(r=>r.json()).catch(()=>({success:false}))
-    ]).then(([subData, payData, reqData]) => {
-      if (subData.success) {
-        setPlans(subData.data.plans || []);
-        setSubscription(subData.data.subscription);
-      }
-      if (payData.success) setPaymentMethods(payData.data.methods || []);
-      if (reqData.success) setUpgradeRequests(reqData.data.requests || []);
-      setLoading(false);
-    });
-  }, []);
+      fetch('/api/subscription/upgrade-request').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/subscription/addon-request').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/support').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/company/data-export').then(r=>r.json()).catch(()=>({success:false})),
+    ]);
+    if (subData.success) { setPlans(subData.data.plans || []); setSubscription(subData.data.subscription); }
+    if (payData.success) setPaymentMethods(payData.data.methods || []);
+    if (reqData.success) setUpgradeRequests(reqData.data.requests || []);
+    if (addonData.success) setAddonRequests(addonData.data.requests || []);
+    if (supData.success) setSupportTickets(supData.data.tickets || []);
+    if (expData.success) setExports(expData.data.exports || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { refreshAll(); }, []);
 
   const openUpgrade = (plan: Plan) => {
     setSelectedPlan(plan);
@@ -154,8 +193,7 @@ export default function SubscriptionPageEnhanced() {
       if (data.success) {
         setMessage({ type: 'success', text: 'تم إرسال طلب الترقية. سيتم مراجعته قريباً.' });
         setShowUpgradeModal(false);
-        // Refresh requests
-        fetch('/api/subscription/upgrade-request').then(r=>r.json()).then(d=>{ if(d.success) setUpgradeRequests(d.data.requests); });
+        refreshAll();
       } else {
         setMessage({ type: 'error', text: data.message });
       }
@@ -164,14 +202,115 @@ export default function SubscriptionPageEnhanced() {
     } finally { setSubmitting(false); }
   };
 
+  const openAddon = (id: AddonId) => {
+    const addon = ADDONS.find(a => a.id === id)!;
+    setSelectedAddon(id);
+    setAddonQty(1);
+    setAddonDuration('monthly');
+    setAddonForm({ payment_method: 'instapay', amount: String(addon.monthly), date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
+    setShowAddonModal(true);
+  };
+
+  const addonUnitPrice = () => {
+    const a = ADDONS.find(x => x.id === selectedAddon)!;
+    return addonDuration === 'monthly' ? a.monthly : a.yearly;
+  };
+  const addonTotal = () => addonUnitPrice() * addonQty;
+
+  const submitAddon = async () => {
+    setAddonSubmitting(true);
+    try {
+      const res = await fetch('/api/subscription/addon-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          addon_type: selectedAddon,
+          quantity: addonQty,
+          duration_type: addonDuration,
+          payment_method_code: addonForm.payment_method,
+          payment_amount: Number(addonForm.amount) || addonTotal(),
+          payment_date: addonForm.date,
+          payment_time: addonForm.time,
+          receipt_image_url: addonForm.receipt_url,
+          notes: addonForm.notes,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMessage({ type: 'success', text: 'تم إرسال طلب الإضافة. سيتم تفعيلها بعد مراجعة الدفع.' });
+        setShowAddonModal(false);
+        refreshAll();
+      } else {
+        setMessage({ type: 'error', text: data.message });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'خطأ في الإرسال' });
+    } finally { setAddonSubmitting(false); }
+  };
+
+  const submitSupport = async () => {
+    if (!supportForm.subject.trim() || !supportForm.message.trim()) {
+      setMessage({ type: 'error', text: 'العنوان والرسالة مطلوبان' });
+      return;
+    }
+    setSupportSubmitting(true);
+    try {
+      const res = await fetch('/api/support', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(supportForm),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMessage({ type: 'success', text: 'تم إرسال رسالتك. سنتواصل معك قريباً.' });
+        setSupportForm({ subject: '', message: '', category: 'billing' });
+        refreshAll();
+      } else setMessage({ type: 'error', text: data.message });
+    } catch {
+      setMessage({ type: 'error', text: 'خطأ في الإرسال' });
+    } finally { setSupportSubmitting(false); }
+  };
+
+  const requestExport = async () => {
+    setExportRequesting(true);
+    try {
+      const res = await fetch('/api/company/data-export', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setMessage({ type: 'success', text: 'جاري تجهيز ملف التحميل. حدّث الصفحة بعد دقائق.' });
+        setTimeout(refreshAll, 3000);
+      } else setMessage({ type: 'error', text: data.message });
+    } catch {
+      setMessage({ type: 'error', text: 'خطأ' });
+    } finally { setExportRequesting(false); }
+  };
+
   if (loading) return <div className="flex justify-center h-64 items-center"><Loader2 className="animate-spin" /></div>;
 
   const currentPlanCode = subscription?.plan_code;
   const priceForSelected = selectedPlan ? (duration === 'yearly' ? (selectedPlan.price_yearly || selectedPlan.price_monthly * 12 * 0.8) : selectedPlan.price_monthly) : 0;
 
+  const tabs = [
+    { id: 'plans', label: 'الباقات' },
+    { id: 'addons', label: 'الإضافات' },
+    { id: 'support', label: 'الدعم والتواصل' },
+    { id: 'export', label: 'تحميل بياناتي' },
+  ] as const;
+
   return (
     <div className="space-y-6">
-      <PageHeader title="الباقات والترقية" description="اختر الباقة المناسبة واطلب ترقية مع إرفاق إيصال الدفع" />
+      <PageHeader title="الباقات والاشتراك" description="اختر الباقة، اطلب إضافات، تواصل مع الدعم، أو حمّل بياناتك" />
+
+      {/* Tabs */}
+      <div className="flex gap-2 flex-wrap border-b border-border">
+        {tabs.map(t => (
+          <button key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === t.id ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-primary'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
       {message && (
         <div className={`rounded-xl p-4 text-sm flex items-center gap-2 ${message.type === 'success' ? 'bg-green-900/20 border border-green-800/30 text-green-300' : 'bg-red-900/20 border border-red-800/30 text-red-300'}`}>
@@ -179,80 +318,62 @@ export default function SubscriptionPageEnhanced() {
         </div>
       )}
 
-      {subscription && (
-        <Card title="اشتراكك الحالي">
-          <div className="flex items-center gap-3">
-            <Crown size={20} className="text-amber-500" />
-            <div>
-              <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
-              <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم</div>
-            </div>
-          </div>
-          {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-yellow-900/20 border border-yellow-800/30 rounded-lg text-xs text-yellow-300 flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
-        </Card>
-      )}
-
-      {upgradeRequests.length > 0 && (
-        <Card title="طلبات الترقية السابقة">
-          <div className="space-y-2">
-            {upgradeRequests.map((req: any) => (
-              <div key={req.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
+      {activeTab === 'plans' && (
+        <>
+          {subscription && (
+            <Card title="اشتراكك الحالي">
+              <div className="flex items-center gap-3">
+                <Crown size={20} className="text-amber-500" />
                 <div>
-                  <div className="font-medium">{req.subscription_plans?.name || req.requested_plan_id} - {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
-                  <div className="text-xs text-text-muted">{new Date(req.created_at).toLocaleDateString()} - {req.payment_method_code} - ${req.payment_amount}</div>
+                  <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
+                  <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
                 </div>
-                <span className={`px-2 py-1 rounded-full text-xs ${req.status === 'pending' ? 'bg-yellow-900/30 text-yellow-400' : req.status === 'approved' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
               </div>
-            ))}
-          </div>
-        </Card>
-      )}
+              {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-yellow-900/20 border border-yellow-800/30 rounded-lg text-xs text-yellow-300 flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
+            </Card>
+          )}
 
-      {/* ============ تفعيل بكود ============ */}
-      <Card>
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
-            <KeyIcon size={20} className="text-green-600" />
-          </div>
-          <div>
-            <h3 className="font-bold">تفعيل بكود</h3>
-            <p className="text-xs text-text-muted">أدخل كود التفعيل لتفعيل الباقة فوراً</p>
-          </div>
-        </div>
-        {activationMsg && (
-          <div className={`mb-3 p-3 rounded-lg text-sm ${activationMsg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-            {activationMsg.text}
-          </div>
-        )}
-        {codePreview && (
-          <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700">
-            <div><strong>الباقة:</strong> {codePreview.plan_name}</div>
-            <div><strong>المدة:</strong> {codePreview.duration_months} شهر</div>
-          </div>
-        )}
-        <div className="flex gap-2">
-          <Input 
-            placeholder="أدخل كود التفعيل هنا..." 
-            value={activationCode} 
-            onChange={(e) => { setActivationCode(e.target.value); setCodePreview(null); }}
-            dir="ltr"
-            className="flex-1"
-          />
-          <Button 
-            variant="outline" 
-            onClick={checkCode} 
-            disabled={!activationCode || codeChecking}
-          >
-            {codeChecking ? '...' : 'تحقق'}
-          </Button>
-          <Button 
-            onClick={activateCode} 
-            disabled={!activationCode || !codePreview || codePreview?.is_used || activating}
-          >
-            {activating ? 'جاري التفعيل...' : 'تفعيل'}
-          </Button>
-        </div>
-      </Card>
+          {upgradeRequests.length > 0 && (
+            <Card title="طلبات الترقية السابقة">
+              <div className="space-y-2">
+                {upgradeRequests.map((req: any) => (
+                  <div key={req.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
+                    <div>
+                      <div className="font-medium">{req.subscription_plans?.name || req.requested_plan_id} - {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
+                      <div className="text-xs text-text-muted">{new Date(req.created_at).toLocaleDateString()} - {req.payment_method_code} - ${req.payment_amount}</div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs ${req.status === 'pending' ? 'bg-yellow-900/30 text-yellow-400' : req.status === 'approved' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          <Card>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
+                <KeyIcon size={20} className="text-green-600" />
+              </div>
+              <div>
+                <h3 className="font-bold">تفعيل بكود</h3>
+                <p className="text-xs text-text-muted">أدخل كود التفعيل لتفعيل الباقة أو الإضافات فوراً</p>
+              </div>
+            </div>
+            {activationMsg && (
+              <div className={`mb-3 p-3 rounded-lg text-sm ${activationMsg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{activationMsg.text}</div>
+            )}
+            {codePreview && (
+              <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700">
+                <div><strong>الباقة:</strong> {codePreview.plan_name}</div>
+                <div><strong>المدة:</strong> {codePreview.duration_months} شهر</div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input placeholder="أدخل كود التفعيل هنا..." value={activationCode} onChange={(e) => { setActivationCode(e.target.value); setCodePreview(null); }} dir="ltr" className="flex-1" />
+              <Button variant="outline" onClick={checkCode} disabled={!activationCode || codeChecking}>{codeChecking ? '...' : 'تحقق'}</Button>
+              <Button onClick={activateCode} disabled={!activationCode || !codePreview || codePreview?.is_used || activating}>{activating ? 'جاري التفعيل...' : 'تفعيل'}</Button>
+            </div>
+          </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {plans.map((plan) => {
@@ -364,6 +485,147 @@ export default function SubscriptionPageEnhanced() {
             </Button>
           </div>
         )}
+      </Modal>
+      </>)}
+
+      {activeTab === 'addons' && (
+        <div className="space-y-4">
+          <Card title="الإضافات المدفوعة">
+            <p className="text-xs text-text-muted mb-4">اشترِ إضافات على باقتك الحالية دون تغيير الباقة نفسها. المدة تبدأ من تاريخ الموافقة.</p>
+            <div className="grid md:grid-cols-3 gap-4">
+              {ADDONS.map((a) => {
+                const Icon = a.icon;
+                const active = (a.id === 'extra_user' ? subscription?.extra_users : a.id === 'extra_branch' ? subscription?.extra_branches : 0) || 0;
+                return (
+                  <div key={a.id} className="border rounded-xl p-4 bg-bg-secondary flex flex-col gap-3">
+                    <div className="flex items-center gap-2"><Icon size={22} className="text-accent" /><h3 className="font-bold">{a.label}</h3></div>
+                    <div className="text-sm">
+                      <div><strong>${a.monthly}</strong>/شهر · <strong>${a.yearly}</strong>/سنة (خصم {(100 - Math.round(a.yearly/(a.monthly*12)*100))}%)</div>
+                      <div className="text-xs text-text-muted mt-1">مفعّل حالياً: <strong>{active}</strong></div>
+                    </div>
+                    <Button onClick={() => openAddon(a.id)} className="mt-auto">شراء الإضافة</Button>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+
+          {addonRequests.length > 0 && (
+            <Card title="طلبات الإضافات السابقة">
+              <div className="space-y-2">
+                {addonRequests.map((r: any) => (
+                  <div key={r.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
+                    <div>
+                      <div className="font-medium">{r.addon_type === 'extra_user' ? 'مستخدم إضافي' : r.addon_type === 'extra_branch' ? 'فرع/مستودع إضافي' : 'تخزين إضافي'} ×{r.quantity} - {r.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
+                      <div className="text-xs text-text-muted">{new Date(r.created_at).toLocaleDateString()} - ${r.total_amount_usd}</div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs ${r.status === 'pending' ? 'bg-yellow-900/30 text-yellow-400' : r.status === 'approved' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{r.status === 'pending' ? 'معلق' : r.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'support' && (
+        <div className="grid md:grid-cols-2 gap-4">
+          <Card title="رسالة جديدة للدعم">
+            <div className="space-y-3">
+              <select value={supportForm.category} onChange={e => setSupportForm({...supportForm, category: e.target.value})} className="w-full px-3 py-2 bg-bg-secondary border rounded-lg text-sm">
+                <option value="billing">دفع/اشتراك</option>
+                <option value="technical">مشكلة تقنية</option>
+                <option value="account">حسابي</option>
+                <option value="data_request">طلب بيانات</option>
+                <option value="other">أخرى</option>
+              </select>
+              <Input placeholder="عنوان الرسالة" value={supportForm.subject} onChange={(e:any) => setSupportForm({...supportForm, subject: e.target.value})} />
+              <textarea value={supportForm.message} onChange={e => setSupportForm({...supportForm, message: e.target.value})} className="w-full px-3 py-2 bg-bg-secondary border rounded-xl text-sm h-32" placeholder="اشرح طلبك بوضوح..."></textarea>
+              <Button onClick={submitSupport} disabled={supportSubmitting} leftIcon={supportSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}>{supportSubmitting ? 'جاري الإرسال...' : 'إرسال'}</Button>
+              <p className="text-[10px] text-text-muted">تعمل الرسائل حتى مع انتهاء الاشتراك.</p>
+            </div>
+          </Card>
+          <Card title="الرسائل السابقة">
+            <div className="space-y-2">
+              {supportTickets.length === 0 ? <p className="text-sm text-text-muted">لا توجد رسائل سابقة.</p> :
+                supportTickets.map((t: any) => (
+                  <div key={t.id} className="p-3 bg-bg-secondary rounded-lg text-sm">
+                    <div className="flex justify-between"><strong>{t.subject}</strong> <span className={`text-xs ${t.status === 'open' ? 'text-yellow-400' : t.status === 'resolved' ? 'text-green-400' : 'text-text-muted'}`}>{t.status === 'open' ? 'مفتوحة' : t.status === 'in_progress' ? 'قيد المعالجة' : t.status === 'resolved' ? 'تم الحل' : 'مغلقة'}</span></div>
+                    <div className="text-xs text-text-muted">{new Date(t.created_at).toLocaleDateString()}</div>
+                  </div>
+                ))}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {activeTab === 'export' && (
+        <Card title="تحميل نسخة من بياناتك">
+          <p className="text-sm text-text-secondary mb-4">
+            يمكنك طلب تصدير جميع بيانات شركتك (الحسابات، القيود، الفواتير، العملاء، الموردين، المشاريع، العهد، المخزون،...) في ملف JSON في أي وقت حتى بعد انتهاء الاشتراك. لا يُحذف شيء دون موافقتك.
+          </p>
+          <Button onClick={requestExport} disabled={exportRequesting} leftIcon={exportRequesting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}>{exportRequesting ? 'جاري التجهيز...' : 'طلب تصدير جديد'}</Button>
+          <div className="mt-6 space-y-2">
+            {exports.length === 0 ? <p className="text-xs text-text-muted">لا توجد طلبات تصدير سابقة.</p> :
+              exports.map((ex: any) => (
+                <div key={ex.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
+                  <div>
+                    <div className="font-medium">{new Date(ex.requested_at).toLocaleString()}</div>
+                    <div className="text-xs text-text-muted">{ex.file_size_bytes ? `${Math.round(ex.file_size_bytes/1024)} KB` : ''}</div>
+                  </div>
+                  {ex.status === 'ready' && ex.download_url ? (
+                    <a href={ex.download_url} download={`pro-acc-export-${ex.id}.json`} className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs">تحميل</a>
+                  ) : ex.status === 'failed' ? (
+                    <span className="text-xs text-red-400">فشل</span>
+                  ) : (
+                    <span className="text-xs text-yellow-400">قيد التجهيز...</span>
+                  )}
+                </div>
+              ))}
+          </div>
+        </Card>
+      )}
+
+      <Modal isOpen={showAddonModal} onClose={() => setShowAddonModal(false)} title={`شراء: ${ADDONS.find(a => a.id === selectedAddon)?.label || ''}`} size="lg">
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-text-muted">الكمية</label>
+              <input type="number" min={1} max={100} value={addonQty} onChange={e => setAddonQty(Math.max(1, Math.min(100, Number(e.target.value) || 1)))} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-text-muted">المدة</label>
+              <select value={addonDuration} onChange={e => setAddonDuration(e.target.value as any)} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm">
+                <option value="monthly">شهري - ${addonUnitPrice()}/وحدة</option>
+                <option value="yearly">سنوي - ${addonUnitPrice()}/وحدة (توفير 20%)</option>
+              </select>
+            </div>
+          </div>
+          <div className="p-3 bg-amber-950/20 border border-amber-900/30 rounded-xl text-xs text-amber-300">
+            المبلغ المطلوب: <strong>${addonTotal()}</strong>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-text-muted">طريقة الدفع</label>
+              <select value={addonForm.payment_method} onChange={e => setAddonForm({...addonForm, payment_method: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm">
+                <option value="instapay">انستا باي</option>
+                <option value="orange_cash">أورنج كاش</option>
+                <option value="bank_transfer">تحويل بنكي</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-text-muted">المبلغ</label>
+              <Input type="number" value={addonForm.amount} onChange={(e:any)=>setAddonForm({...addonForm, amount: e.target.value})} />
+            </div>
+            <div><label className="text-xs text-text-muted">التاريخ</label><Input type="date" value={addonForm.date} onChange={(e:any)=>setAddonForm({...addonForm, date: e.target.value})} /></div>
+            <div><label className="text-xs text-text-muted">الوقت</label><Input type="time" value={addonForm.time} onChange={(e:any)=>setAddonForm({...addonForm, time: e.target.value})} /></div>
+          </div>
+          <div>
+            <label className="text-xs text-text-muted">رابط إيصال الدفع</label>
+            <Input placeholder="https://..." value={addonForm.receipt_url} onChange={(e:any)=>setAddonForm({...addonForm, receipt_url: e.target.value})} />
+          </div>
+          <Button onClick={submitAddon} disabled={addonSubmitting} className="w-full" leftIcon={addonSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>{addonSubmitting ? 'جاري الإرسال...' : 'رفع طلب الإضافة'}</Button>
+        </div>
       </Modal>
     </div>
   );

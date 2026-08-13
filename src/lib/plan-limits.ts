@@ -25,6 +25,8 @@ export interface PlanLimits {
   max_invoices_per_month: number | null;
   max_quotations_per_month: number | null;
   max_storage_mb: number;              // 0 = no file uploads
+  max_branches: number;                // base branches (0 unless plan grants) + extra_branches add-on
+  max_warehouses: number;              // same pool as branches (1 extra branch = 1 extra warehouse slot)
   features_modules: Record<string, boolean>;
   extra_users: number;
   extra_branches: number;
@@ -37,7 +39,8 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
     .select(
       'plan_id, plan_code, status, extra_users, extra_branches, addons_json, ' +
       'subscription_plans(code, max_users, max_projects, max_clients, max_suppliers, ' +
-      'max_employees, max_invoices_per_month, max_quotations_per_month, max_storage_mb, features_modules)'
+      'max_employees, max_invoices_per_month, max_quotations_per_month, max_storage_mb, ' +
+      'max_branches, features_modules)'
     )
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
@@ -51,6 +54,12 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
   const baseUsers = Number(plan?.max_users ?? 1);
   const extraUsers = Number(subr.extra_users ?? 0);
   const extraBranches = Number(subr.extra_branches ?? 0);
+  // Plans that include branches/warehouses (Pro+ have branches:true) allocate one
+  // default branch+warehouse on company creation. Everything beyond that must be
+  // paid via the extra_branches add-on.
+  const planIncludesBranches = !!(plan?.features_modules && (plan.features_modules as any).branches);
+  const baseBranches = planIncludesBranches ? 1 : 0;
+  const maxBranches = baseBranches + extraBranches;
 
   const features = plan?.features_modules && typeof plan.features_modules === 'object'
     ? (plan.features_modules as Record<string, boolean>)
@@ -66,6 +75,8 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
     max_invoices_per_month: plan?.max_invoices_per_month ?? null,
     max_quotations_per_month: plan?.max_quotations_per_month ?? null,
     max_storage_mb: Number(plan?.max_storage_mb ?? 0),
+    max_branches: maxBranches,
+    max_warehouses: maxBranches,
     features_modules: features,
     extra_users: extraUsers,
     extra_branches: extraBranches,
@@ -106,8 +117,8 @@ export async function checkPlanLimit(
     quotations: limits.max_quotations_per_month,
     users: limits.max_users,
     storage: limits.max_storage_mb,
-    branches: null,  // branches are add-on, not plan-capped
-    warehouses: null,
+    branches: limits.max_branches,
+    warehouses: limits.max_warehouses,
   };
 
   let limit = planLimitMap[resource];
