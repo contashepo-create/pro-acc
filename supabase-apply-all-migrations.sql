@@ -801,6 +801,13 @@ INSERT INTO _migrations (filename) VALUES ('011-fix-all-sequences-race-condition
 -- ==================== 011-final-security-accounting.sql ====================
 -- Migration 011: Final fixes for 10/10 - RLS Policies, Refresh Tokens, Credit Notes, Auto Depreciation
 
+-- 0. Soft-delete columns added FIRST so views below can reference them safely.
+ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS reference TEXT;
+ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id);
+ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE accounts        ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE contacts        ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
 -- 1. Full RLS Policies - Defense in depth
 -- Enable RLS on all critical tables if not already enabled
 ALTER TABLE companies ENABLE ROW LEVEL SECURITY;
@@ -942,15 +949,7 @@ CREATE TABLE IF NOT EXISTS journal_sequences (
   UNIQUE(company_id, year)
 );
 
--- 8. Add missing columns that cause server errors
-ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS reference TEXT;
-ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id);
-ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-
-ALTER TABLE accounts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-ALTER TABLE contacts ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-
--- 9. Improve login_attempts with company_id index
+-- 8. Improve login_attempts with company_id index
 CREATE INDEX IF NOT EXISTS idx_login_attempts_company ON login_attempts(company_id);
 CREATE INDEX IF NOT EXISTS idx_login_attempts_email_time ON login_attempts(email, attempted_at DESC);
 
