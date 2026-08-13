@@ -195,7 +195,17 @@ ORDER BY الحالة, r.name;
 
 -- ============================================================
 -- التأكد من وجود خطط الاشتراك الثلاثة بالأسعار الصحيحة
+-- (الأعمدة الصحيحة: name / price_monthly / price_yearly / currency)
 -- ============================================================
-SELECT code, name_en, monthly_price_usd, yearly_price_usd, is_active
+SELECT code,
+       name,
+       COALESCE(currency,'USD')        AS currency,
+       price_monthly,
+       price_yearly,
+       max_invoices_per_month,
+       max_quotations_per_month,
+       max_storage_mb,
+       is_active
 FROM subscription_plans
-ORDER BY monthly_price_usd;
+WHERE code IN ('start','pro','enterprise')
+ORDER BY sort_order NULLS LAST, price_monthly;
