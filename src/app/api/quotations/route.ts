@@ -40,6 +40,11 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'quotations', 'create');
+    // Plan limit: monthly quotations cap
+    const { checkPlanLimit } = await import('@/lib/plan-limits');
+    const limitCheck = await checkPlanLimit(auth.companyId, 'quotations');
+    if (!limitCheck.allowed) return error(limitCheck.message || 'تم تجاوز حد عروض الأسعار الشهري', 402);
+
     const s = sb();
     const data = await parseBody(req);
     const { date, contact_id, items, notes, tax_rate, valid_until } = data;

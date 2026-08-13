@@ -13,10 +13,12 @@ import { useAuthStore } from '@/store/auth-store'; // FIXED: Added missing impor
 interface Plan {
   id: string; code: string; name: string; description: string; description_ar: string;
   price_monthly: number; price_yearly: number; yearly_discount_percent: number;
-  trial_days: number; max_users: number; max_clients: number; max_suppliers?: number;
-  max_employees?: number; max_projects: number; max_invoices_per_month?: number;
+  trial_days: number; max_users: number; max_clients: number | null; max_suppliers?: number | null;
+  max_employees?: number | null; max_projects: number | null; max_invoices_per_month?: number | null;
+  max_quotations_per_month?: number | null;
   max_storage_mb?: number;
   features_modules: any;
+  currency?: string;
 }
 
 interface PaymentMethod {
@@ -182,7 +184,7 @@ export default function SubscriptionPageEnhanced() {
           <div className="flex items-center gap-3">
             <Crown size={20} className="text-amber-500" />
             <div>
-              <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
+              <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 14 يوماً)'}</div>
               <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم</div>
             </div>
           </div>
@@ -197,7 +199,7 @@ export default function SubscriptionPageEnhanced() {
               <div key={req.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
                 <div>
                   <div className="font-medium">{req.subscription_plans?.name || req.requested_plan_id} - {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
-                  <div className="text-xs text-text-muted">{new Date(req.created_at).toLocaleDateString()} - {req.payment_method_code} - {req.payment_amount} ر.س</div>
+                  <div className="text-xs text-text-muted">{new Date(req.created_at).toLocaleDateString()} - {req.payment_method_code} - ${req.payment_amount}</div>
                 </div>
                 <span className={`px-2 py-1 rounded-full text-xs ${req.status === 'pending' ? 'bg-yellow-900/30 text-yellow-400' : req.status === 'approved' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
               </div>
@@ -256,31 +258,35 @@ export default function SubscriptionPageEnhanced() {
         {plans.map((plan) => {
           const isCurrent = currentPlanCode === plan.code;
           const isTrial = plan.code === 'trial';
+          const currency = plan.currency || 'USD';
+          const sym = currency === 'USD' ? '$' : currency;
           const monthlyPrice = plan.price_monthly;
           const yearlyPrice = plan.price_yearly || Math.round(plan.price_monthly * 12 * (1 - plan.yearly_discount_percent/100));
           const yearlyDiscount = plan.yearly_discount_percent || 20;
-          
+          const fmtLimit = (v: number | null | undefined) =>
+            v === null || v === undefined ? 'غير محدود' : v;
+
           return (
             <div key={plan.id} className={`border rounded-2xl p-5 flex flex-col ${isCurrent ? 'border-accent ring-2 ring-accent/30 bg-accent/5' : 'border-border bg-card'}`}>
               <h3 className="font-bold text-lg">{plan.name}</h3>
               <p className="text-xs text-text-muted mt-1">{plan.description_ar || plan.description}</p>
               {isTrial && <span className="mt-2 text-xs bg-blue-900/30 text-blue-300 px-2 py-1 rounded-full w-fit">{plan.trial_days} أيام تجريبية</span>}
-              
+
               <div className="mt-4">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold">{monthlyPrice}</span>
-                  <span className="text-xs text-text-muted">ر.س/شهر</span>
+                  <span className="text-2xl font-bold">{sym}{monthlyPrice}</span>
+                  <span className="text-xs text-text-muted">/شهر</span>
                 </div>
                 <div className="text-xs text-text-muted mt-1">
-                  {yearlyPrice} ر.س/سنة <span className="text-green-400">خصم {yearlyDiscount}%</span>
+                  {sym}{yearlyPrice}/سنة <span className="text-green-400">خصم {yearlyDiscount}%</span>
                 </div>
               </div>
 
               <div className="mt-4 space-y-1 text-xs">
-                <div>👥 مستخدمين: {plan.max_users}</div>
-                <div>👤 عملاء: {plan.max_clients}</div>
-                <div>🏗️ مشاريع: {plan.max_projects}</div>
-                <div>🧾 فواتير/شهر: {plan.max_invoices_per_month}</div>
+                <div>👥 المستخدم الرئيسي: {plan.max_users}</div>
+                <div>🧾 فواتير/شهر: {fmtLimit(plan.max_invoices_per_month)}</div>
+                <div>📄 عروض سعر/شهر: {fmtLimit(plan.max_quotations_per_month)}</div>
+                <div>💾 التخزين: {plan.max_storage_mb ?? 0} MB</div>
               </div>
 
               <div className="mt-3 flex flex-wrap gap-1">
@@ -302,8 +308,8 @@ export default function SubscriptionPageEnhanced() {
         {selectedPlan && (
           <div className="space-y-5">
             <div className="flex gap-2 p-1 bg-bg-secondary rounded-xl">
-              <button onClick={() => setDuration('monthly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'monthly' ? 'bg-accent text-white' : 'text-text-muted'}`}>شهري - {selectedPlan.price_monthly} ر.س</button>
-              <button onClick={() => setDuration('yearly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'yearly' ? 'bg-accent text-white' : 'text-text-muted'}`}>سنوي - {Math.round((selectedPlan.price_yearly || selectedPlan.price_monthly * 12 * 0.8))} ر.س (خصم {selectedPlan.yearly_discount_percent}%)</button>
+              <button onClick={() => setDuration('monthly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'monthly' ? 'bg-accent text-white' : 'text-text-muted'}`}>شهري - ${selectedPlan.price_monthly}</button>
+              <button onClick={() => setDuration('yearly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'yearly' ? 'bg-accent text-white' : 'text-text-muted'}`}>سنوي - ${Math.round((selectedPlan.price_yearly || selectedPlan.price_monthly * 12 * 0.8))} (خصم {selectedPlan.yearly_discount_percent}%)</button>
             </div>
 
             <div className="p-3 bg-blue-900/20 border border-blue-800/30 rounded-xl text-xs">
@@ -349,7 +355,7 @@ export default function SubscriptionPageEnhanced() {
             </div>
 
             <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 text-xs text-amber-300">
-              <div className="font-bold">المبلغ المطلوب: {priceForSelected} ر.س ({duration === 'yearly' ? 'سنوي' : 'شهري'})</div>
+              <div className="font-bold">المبلغ المطلوب: ${priceForSelected} ({duration === 'yearly' ? 'سنوي' : 'شهري'})</div>
               <div className="mt-1">بعد التحويل، ارفق قيمة التحويل وتاريخه ووقته وصورة الإيصال. سيصل الطلب للإدارة عبر البوت وسيتم تنبيه الإدارة في لوحة التحكم.</div>
             </div>
 

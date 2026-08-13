@@ -26,31 +26,29 @@ export async function GET(request: NextRequest) {
       .select('*', { count: 'exact', head: true })
       .eq('company_id', auth.companyId);
 
+    // Use the canonical plan-limits helper so extra_users add-on is counted.
     let maxUsers: number | null = null;
     let planName: string | null = null;
     let planCode: string | null = null;
+    let extraUsers = 0;
+    let extraBranches = 0;
 
     try {
-      const { data: sub } = await s
-        .from('subscriptions')
-        .select('plan_code, status')
-        .eq('company_id', auth.companyId)
-        .eq('status', 'active')
-        .maybeSingle();
-
-      if (sub) {
-        planCode = (sub as { plan_code: string }).plan_code;
-        
-        const { data: plan } = await s
-          .from('subscription_plans')
-          .select('max_users, name')
-          .eq('code', planCode)
-          .maybeSingle();
-        
-        if (plan) {
-          maxUsers = (plan as { max_users: number }).max_users ?? null;
-          planName = (plan as { name: string }).name ?? null;
-        }
+      const { getCompanyPlanLimits } = await import('@/lib/plan-limits');
+      const limits = await getCompanyPlanLimits(auth.companyId);
+      if (limits) {
+        maxUsers = limits.max_users;
+        planCode = limits.planCode;
+        extraUsers = limits.extra_users;
+        extraBranches = limits.extra_branches;
+        // Also fetch plan name
+        const { data: sub } = await s
+          .from('subscriptions')
+          .select('plan_id, subscription_plans(name)')
+          .eq('company_id', auth.companyId)
+          .order('created_at', { ascending: false })
+          .limit(1).maybeSingle();
+        if (sub) planName = ((sub as any).subscription_plans as any)?.name || null;
       }
     } catch {
       // ignore
@@ -62,6 +60,8 @@ export async function GET(request: NextRequest) {
       maxUsers,
       planName,
       planCode,
+      extra_users: extraUsers,
+      extra_branches: extraBranches,
     });
   } catch (err) {
     return handleApiError(err);
@@ -119,28 +119,21 @@ export async function POST(request: NextRequest) {
       .select('*', { count: 'exact', head: true })
       .eq('company_id', auth.companyId);
 
+    // Use the canonical plan-limits helper (counts extra_users add-on too).
     let maxUsers: number | null = null;
     let planName = '';
 
     try {
-      const { data: sub } = await s
-        .from('subscriptions')
-        .select('plan_code')
-        .eq('company_id', auth.companyId)
-        .eq('status', 'active')
-        .maybeSingle();
-
-      if (sub) {
-        const { data: plan } = await s
-          .from('subscription_plans')
-          .select('max_users, name')
-          .eq('code', (sub as { plan_code: string }).plan_code)
-          .maybeSingle();
-        
-        if (plan) {
-          maxUsers = (plan as { max_users: number }).max_users ?? null;
-          planName = (plan as { name: string }).name ?? '';
-        }
+      const { getCompanyPlanLimits } = await import('@/lib/plan-limits');
+      const limits = await getCompanyPlanLimits(auth.companyId);
+      if (limits) {
+        maxUsers = limits.max_users;
+        planName = '';
+        const { data: sub } = await s.from('subscriptions')
+          .select('subscription_plans(name)')
+          .eq('company_id', auth.companyId)
+          .order('created_at', { ascending: false }).limit(1).maybeSingle();
+        if (sub) planName = ((sub as any).subscription_plans as any)?.name || '';
       }
     } catch {
       // ignore

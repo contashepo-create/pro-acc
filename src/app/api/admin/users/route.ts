@@ -50,7 +50,9 @@ export async function GET(req: NextRequest) {
         .select(`
           *,
           plan:subscription_plans(
-            id, name, price_monthly, max_users, features
+            id, code, name, currency, price_monthly, price_yearly, max_users,
+            max_invoices_per_month, max_quotations_per_month, max_storage_mb,
+            features, features_modules
           )
         `)
         .eq('company_id', (user as any).company_id)

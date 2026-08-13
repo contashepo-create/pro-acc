@@ -12,10 +12,11 @@ async function doCleanup() {
   const s = sb();
   const fifteenDaysAgo = new Date(Date.now() - 15 * 86400000).toISOString();
 
-  // Get subscriptions matching criteria
+  // Get subscriptions matching criteria — clean up trial/expired/cancelled
+  // accounts (any plan_code as long as status is trial/expired/cancelled).
+  // Active paid Start/Pro/Enterprise subscribers are preserved.
   const { data: subs } = await s.from('subscriptions')
     .select('company_id')
-    .in('plan_code', ['trial', 'free', 'starter'])
     .in('status', ['trial', 'expired', 'cancelled']);
 
   const subCompanyIds = [...new Set((subs || []).map((s: any) => s.company_id))];

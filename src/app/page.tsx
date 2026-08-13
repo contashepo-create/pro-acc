@@ -38,20 +38,30 @@ export default function LandingPage() {
 
   const plans = [
     {
-      name: 'تجريبي', price: '0', period: '30 يوم',
-      features: ['جميع الميزات', 'شركة واحدة', 'مستخدم واحد', 'دعم عبر البريد'],
+      name: 'الأساسية (Start)', price: '15', period: 'شهرياً',
+      priceYearly: '144',
+      features: ['1 مستخدم رئيسي', '100 فاتورة/شهر', '50 عرض سعر/شهر', 'قيود يومية وتقارير أساسية', 'دعم عبر البريد'],
       color: 'border-border',
+      badge: null as string | null,
     },
     {
-      name: 'احترافي', price: '199', period: 'شهرياً',
-      features: ['كل ميزات التجريبي', 'حتى 10 مستخدمين', 'مشاريع غير محدودة', 'دعم优先', 'تقارير متقدمة'],
+      name: 'الاحترافية (Pro)', price: '35', period: 'شهرياً',
+      priceYearly: '336',
+      features: ['1 مستخدم رئيسي', '500 فاتورة/شهر', '250 عرض سعر/شهر', 'مخزون + مراكز تكلفة + بنوك', 'تقارير مالية متقدمة'],
       color: 'border-accent ring-2 ring-accent',
+      badge: 'الأكثر شيوعاً',
     },
     {
-      name: 'مؤسسات', price: '499', period: 'شهرياً',
-      features: ['كل ميزات الاحترافي', 'مستخدمين غير محدودين', 'دعم مخصص', 'تكامل API', 'نسخ احتياطي'],
+      name: 'الشاملة (Enterprise)', price: '60', period: 'شهرياً',
+      priceYearly: '576',
+      features: ['1 مستخدم رئيسي', 'فواتير وعروض غير محدودة', 'أصول ثابتة + POS', 'أتمتة وموافقات', 'دعم مخصص'],
       color: 'border-border',
+      badge: null as string | null,
     },
+  ];
+  const addons = [
+    { label: 'مستخدم إضافي', price: '5$ / شهر' },
+    { label: 'فرع/مستودع إضافي', price: '10$ / شهر' },
   ];
 
   const handleComplaint = async (e: React.FormEvent) => {
@@ -131,7 +141,7 @@ export default function LandingPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center relative">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 border border-accent/20 mb-6">
             <Zap size={14} className="text-accent" />
-            <span className="text-xs font-medium text-accent">تجربة مجانية 30 يوماً — بدون بطاقة ائتمان</span>
+            <span className="text-xs font-medium text-accent">تجربة مجانية 14 يوماً — بدون بطاقة ائتمان</span>
           </div>
           <h1 className="text-3xl sm:text-5xl font-bold text-text-primary mb-6 leading-tight">
             نظام محاسبة متكامل
@@ -195,14 +205,23 @@ export default function LandingPage() {
             <h2 className="text-2xl sm:text-3xl font-bold text-text-primary mb-3">اختر الخطة المناسبة</h2>
             <p className="text-text-muted">ابدأ بتجربة مجانية ثم اختر الخطة التي تناسبك</p>
           </div>
+          <div className="text-center mb-6 text-sm text-text-muted">
+            تجربة مجانية 14 يوماً — جميع الأسعار بالدولار الأمريكي (USD). خصم 20% على الدفع السنوي.
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-5xl mx-auto">
             {plans.map((p, i) => (
-              <div key={i} className={`card p-6 flex flex-col ${p.color}`}>
+              <div key={i} className={`card p-6 flex flex-col relative ${p.color}`}>
+                {p.badge && (
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-accent text-white text-[10px] px-3 py-1 rounded-full font-bold">
+                    {p.badge}
+                  </div>
+                )}
                 <h3 className="text-lg font-bold text-text-primary mb-2">{p.name}</h3>
-                <div className="mb-4">
-                  <span className="text-3xl font-bold text-text-primary">{p.price}</span>
-                  <span className="text-sm text-text-muted mr-1">ر.س / {p.period}</span>
+                <div className="mb-1">
+                  <span className="text-3xl font-bold text-text-primary">${p.price}</span>
+                  <span className="text-sm text-text-muted mr-1">/ {p.period}</span>
                 </div>
+                <div className="text-xs text-text-muted mb-4">أو ${p.priceYearly} سنوياً (وفّر 20%)</div>
                 <ul className="space-y-2 mb-6 flex-1">
                   {p.features.map((f, j) => (
                     <li key={j} className="flex items-center gap-2 text-sm text-text-secondary">
@@ -212,11 +231,27 @@ export default function LandingPage() {
                   ))}
                 </ul>
                 <Link href="/register" className={`btn w-full ${i === 1 ? 'btn-primary' : 'btn-secondary'}`}>
-                  {i === 0 ? 'ابدأ تجربة مجانية' : 'اشترك الآن'}
+                  ابدأ تجربة مجانية
                 </Link>
               </div>
             ))}
           </div>
+
+          <div className="mt-6 max-w-3xl mx-auto card p-4">
+            <div className="text-sm font-bold text-text-primary mb-2 text-center">الإضافات (Add-ons)</div>
+            <div className="flex flex-wrap gap-3 justify-center text-xs text-text-secondary">
+              {addons.map((a, i) => (
+                <div key={i} className="flex items-center gap-2 bg-bg-secondary px-3 py-1.5 rounded-full border border-border">
+                  <span>➕ {a.label}</span>
+                  <span className="font-bold text-accent">{a.price}</span>
+                </div>
+              ))}
+            </div>
+            <div className="text-[10px] text-text-muted text-center mt-2">
+              جميع الخطط تشمل مستخدماً رئيسياً واحداً فقط. لا يوجد رفع ملفات في أي خطة حالياً.
+            </div>
+          </div>
+
           <div className="text-center mt-8">
             <p className="text-sm text-text-muted">جميع الخطط تشمل تحديثات مجانية ودعم فني</p>
           </div>

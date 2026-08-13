@@ -6,8 +6,9 @@
  *  - Password policy enforcement via zod.
  *  - Disposable-email blocking.
  *  - Duplicate email / company / phone rejection (409).
- *  - Trial subscription is ALWAYS created — including when the `trial` plan
- *    row is missing (resilience fix), with a 7-day fallback.
+ *  - Trial subscription is created against the Start plan (code='start'),
+ *    with trial_days=14. If the Start plan is missing the registration still
+ *    succeeds and logs a warning (no auto-seeding of a phantom 'trial' plan).
  *  - New user is stored with a scrypt-hashed password and a verification token.
  */
 
@@ -113,13 +114,14 @@ describe('register — duplicate detection', () => {
 describe('register — user creation security', () => {
   beforeEach(resetMock);
 
-  function successSetup(planRow: any | null = { id: 'p1', trial_days: 7 }) {
+  function successSetup(planRow: any | null = { id: 'p1', code: 'start', trial_days: 14 }) {
     setResult('users', 'select', []); // no duplicate email
     setResult('companies', 'select', []); // no duplicate name/phone
     // The company insert chain ends with `.select(...).single()` → terminal op 'single'.
     setResult('companies', 'single', { id: 'company-1' });
     setResult('users', 'single', { id: 'u1', name: validBody.name, email: validBody.email, role: 'admin' });
-    setResult('subscription_plans', 'single', planRow);
+    // register now uses maybeSingle (not single) when looking up the Start plan.
+    setResult('subscription_plans', 'maybeSingle', planRow);
     setResult('subscriptions', 'upsert', null);
   }
 
@@ -144,43 +146,38 @@ describe('register — user creation security', () => {
     expect(data.email).toBe(validBody.email.toLowerCase());
   });
 
-  test('creates a trial subscription with the plan trial_days', async () => {
-    successSetup({ id: 'p1', trial_days: 7 });
+  test('creates a trial subscription with the plan trial_days (14 days, Start plan)', async () => {
+    successSetup({ id: 'p1', code: 'start', trial_days: 14 });
     const res = await registerPOST(req(validBody));
     expect(res.status).toBe(201);
 
     const upsert = findOp('subscriptions', 'upsert')!;
+    expect(upsert).not.toBeNull();
     const sub = upsert.args[0] as any;
     expect(sub.plan_id).toBe('p1');
-    expect(sub.plan_code).toBe('trial');
+    expect(sub.plan_code).toBe('start');
     expect(sub.status).toBe('trial');
     expect(sub.auto_renew).toBe(false);
-    // end_date should be today + 7 days
+    // end_date should be today + 14 days
     const end = new Date(sub.end_date);
     const start = new Date(sub.start_date);
     const diffDays = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-    expect(diffDays).toBe(7);
+    expect(diffDays).toBe(14);
   });
 
-  test('RESILIENCE: creates the trial subscription even when the trial plan row is missing', async () => {
-    // No 'trial' plan found in the DB.
+  test('RESILIENCE: registration still succeeds when the Start plan row is missing (no auto-seeding)', async () => {
+    // The Start plan is missing in the DB (migration 032 hasn't been run yet).
     successSetup(null);
-    // Fallback: register seeds the plan, returning a new plan id.
-    setResult('subscription_plans', 'maybeSingle', { id: 'seeded-trial-plan' });
 
     const res = await registerPOST(req(validBody));
     expect(res.status).toBe(201);
 
-    // The plan was seeded with 7 days.
-    const planInsert = findOp('subscription_plans', 'insert')!;
-    expect(planInsert).not.toBeNull();
-    expect((planInsert.args[0] as any).trial_days).toBe(7);
+    // Register must NOT try to recreate a 'trial' plan behind the scenes.
+    const planInsert = findOp('subscription_plans', 'insert');
+    expect(planInsert).toBeNull();
 
-    // The subscription was still created, referencing the seeded plan.
-    const upsert = findOp('subscriptions', 'upsert')!;
-    const sub = upsert.args[0] as any;
-    expect(sub.plan_id).toBe('seeded-trial-plan');
-    expect(sub.plan_code).toBe('trial');
-    expect(sub.status).toBe('trial');
+    // It skips creating the subscription (warns) rather than failing.
+    const upsert = findOp('subscriptions', 'upsert');
+    expect(upsert).toBeNull();
   });
 });
