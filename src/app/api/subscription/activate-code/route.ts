@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     if (ac.addon_type) {
       // Fetch current subscription
       const { data: sub, error: sErr } = await s.from('subscriptions')
-        .select('id, extra_users, extra_branches, addons_json, company_id')
+        .select('id, extra_users, extra_branches, extra_storage_gb, addons_json, company_id')
         .eq('company_id', auth.companyId)
         .order('created_at', { ascending: false })
         .limit(1).maybeSingle();
@@ -69,10 +69,12 @@ export async function POST(request: NextRequest) {
       const qty = Number(ac.addon_quantity || 1);
       let extra_users = Number(curSub.extra_users || 0);
       let extra_branches = Number(curSub.extra_branches || 0);
+      let extra_storage_gb = Number(curSub.extra_storage_gb || 0);
       const addons = (curSub.addons_json && typeof curSub.addons_json === 'object') ? curSub.addons_json : {};
 
       if (ac.addon_type === 'extra_user') extra_users += qty;
       if (ac.addon_type === 'extra_branch') extra_branches += qty;
+      if (ac.addon_type === 'storage_gb') extra_storage_gb += qty;
 
       const addonKey =
         ac.addon_type === 'extra_user' ? 'extra_users_total_paid' :
@@ -85,14 +87,17 @@ export async function POST(request: NextRequest) {
       };
 
       await s.from('subscriptions').update({
-        extra_users, extra_branches, addons_json: addonMerge,
+        extra_users, extra_branches, extra_storage_gb, addons_json: addonMerge,
         // If subscription was expired/cancelled, activating an add-on does NOT
         // automatically reactivate — only a plan code does.
         updated_at: new Date().toISOString(),
       }).eq('id', curSub.id);
 
+      const addonLabelAr = ac.addon_type === 'extra_user' ? 'مستخدم إضافي'
+        : ac.addon_type === 'extra_branch' ? 'فرع/مستودع إضافي'
+        : 'سعة تخزين (جيجابايت)';
       return success({
-        message: `✅ تم تفعيل إضافة: ${ac.addon_type === 'extra_user' ? 'مستخدم إضافي' : ac.addon_type === 'extra_branch' ? 'فرع/مستودع إضافي' : 'سعة تخزين'} ×${qty}`,
+        message: `✅ تم تفعيل إضافة: ${addonLabelAr} ×${qty}`,
         type: 'addon',
         addon_type: ac.addon_type,
         quantity: qty,

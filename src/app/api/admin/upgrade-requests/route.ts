@@ -121,54 +121,80 @@ export async function PUT(req: NextRequest) {
     // إذا تم قبول الطلب، نقوم بترقية الاشتراك
     if (status === 'approved') {
       try {
-        // حساب تاريخ الانتهاء
-        const durationDays = reqData.duration_type === 'yearly' ? 365 : 30;
-        const endDate = new Date();
-        endDate.setDate(endDate.getDate() + durationDays);
+        const months = reqData.duration_type === 'yearly' ? 12 : 1;
 
         // جلب كود الباقة
-        let planCode = 'basic';
+        let planCode = 'start';
+        let planName = '';
         if (reqData.requested_plan_id) {
           const { data: plan } = await s.from('subscription_plans')
-            .select('code')
+            .select('code, name')
             .eq('id', reqData.requested_plan_id)
             .maybeSingle();
-          if (plan) planCode = (plan as any).code;
+          if (plan) {
+            planCode = (plan as any).code;
+            planName = (plan as any).name || planCode;
+          }
         }
 
-        // البحث عن اشتراك حالي
+        // البحث عن اشتراك حالي لحساب تاريخ البدء (stack if active)
         const { data: currentSub } = await s.from('subscriptions')
-          .select('id')
+          .select('id, end_date, status')
           .eq('company_id', reqData.company_id)
-          .order('created_at', { ascending: false })
+          .order('created_at', { ascending: false})
           .limit(1)
           .maybeSingle();
 
+        const now = new Date();
+        let startDate: Date = now;
         if (currentSub) {
-          await s.from('subscriptions').update({
-            plan_id: reqData.requested_plan_id || null,
-            plan_code: planCode,
-            status: 'active',
-            end_date: endDate.toISOString().split('T')[0],
-            updated_at: new Date().toISOString(),
-          }).eq('id', (currentSub as any).id);
+          const cur = currentSub as any;
+          const curEnd = cur.end_date ? new Date(cur.end_date) : null;
+          if (curEnd && curEnd > now) startDate = curEnd;
+        }
+        const endDate = new Date(startDate.getTime());
+        endDate.setMonth(endDate.getMonth() + months);
+
+        const patch: Record<string, any> = {
+          plan_id: reqData.requested_plan_id || null,
+          plan_code: planCode,
+          status: 'active',
+          start_date: startDate.toISOString().split('T')[0],
+          end_date: endDate.toISOString().split('T')[0],
+          updated_at: new Date().toISOString(),
+        };
+
+        if (currentSub) {
+          await s.from('subscriptions').update(patch).eq('id', (currentSub as any).id);
         } else {
           await s.from('subscriptions').insert({
             company_id: reqData.company_id,
-            plan_id: reqData.requested_plan_id || null,
-            plan_code: planCode,
-            status: 'active',
-            start_date: new Date().toISOString().split('T')[0],
-            end_date: endDate.toISOString().split('T')[0],
+            ...patch,
           });
         }
+
+        // Audit trail
+        try {
+          await s.from('addon_grant_audit').insert({
+            company_id: reqData.company_id,
+            admin_id: __admin.adminId,
+            addon_type: 'plan_upgrade',
+            quantity: months,
+            months_granted: months,
+            previous_extra_users: 0,
+            previous_extra_branches: 0,
+            new_extra_users: 0,
+            new_extra_branches: 0,
+            note: `upgrade approved → ${planCode} (${reqData.duration_type})`,
+          });
+        } catch {}
 
         // إشعار الشركة
         try {
           await s.from('company_messages').insert({
             company_id: reqData.company_id,
             subject: 'تمت الموافقة على طلب الترقية',
-            body: `تمت الموافقة على ترقيتك. استمتع بالمميزات الجديدة!`,
+            body: `تمت الموافقة على ترقيتك إلى باقة \"${planName}\" لمدة ${months === 12 ? 'سنة' : 'شهر'}. تنتهي الباقة في ${endDate.toISOString().split('T')[0]}. استمتع بالمميزات الجديدة!`,
             type: 'upgrade',
             status: 'open',
           });

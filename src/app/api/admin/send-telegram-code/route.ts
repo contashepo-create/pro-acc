@@ -21,11 +21,21 @@ export async function POST(request: NextRequest) {
     }
     if (session.step !== 'code_sent') return error('حالة الجلسة غير صالحة', 400);
 
+    // Refresh session TTL on resend.
+    const refreshed = { ...session, codeSent: false, expiresAt: Date.now() + 30 * 60 * 1000 };
+    try {
+      const { setSession: setSess } = await import('@/lib/admin-session');
+      await setSess(adminId, refreshed);
+    } catch {}
+
     // Never resend more than once every 60s — track via codeSent timestamp in future;
     // for now, allow resend but do NOT return the code.
-    const sent = await sendTelegramCode(session.code);
+    const sent = await sendTelegramCode(refreshed.code);
     if (sent) {
-      await updateSession(adminId, { codeSent: true }).catch(() => {});
+      try {
+        const { updateSession: updSess } = await import('@/lib/admin-session');
+        await updSess(adminId, { codeSent: true });
+      } catch {}
       return success({ message: 'تم إرسال رمز التحقق', alreadySent: false });
     }
     return error('تعذر إرسال رمز التحقق', 500);

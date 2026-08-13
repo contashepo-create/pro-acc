@@ -13,13 +13,15 @@ export async function POST(request: NextRequest) {
     // "no file uploads allowed at all" (matches the new Start/Pro/
     // Enterprise defaults where add-on purchase is required).
     let storageMb = 0;
+    let planCode: string | null = null;
     try {
       const { getCompanyPlanLimits } = await import('@/lib/plan-limits');
       const limits = await getCompanyPlanLimits(auth.companyId);
       storageMb = limits?.max_storage_mb ?? 0;
+      planCode = limits?.planCode ?? null;
     } catch { storageMb = 0; }
     if (storageMb <= 0) {
-      return error('باقتك الحالية لا تتضمن مساحة تخزين للملفات. قم بترقية الباقة أو شراء إضافة التخزين.', 403);
+      return error('باقتك الحالية لا تتضمن مساحة تخزين للملفات. قم بترقية الباقة أو شراء إضافة التخزين (3$ لكل جيجابايت شهرياً).', 403);
     }
 
     const formData = await request.formData();
@@ -41,20 +43,21 @@ export async function POST(request: NextRequest) {
     }
 
     // Enforce cumulative storage cap: count size already used in receipts bucket.
+    let used = 0;
     try {
-      const used = await countUsedStorage(s, auth.companyId);
-      const capBytes = storageMb * 1024 * 1024;
-      if (used + file.size > capBytes) {
-        return error(
-          `لا تتوفر مساحة تخزين كافية. المستخدم حالياً ${formatBytes(used)} من ${storageMb} MB. احذف ملفات غير ضرورية أو قم بترقية الباقة.`,
-          403
-        );
-      }
+      const { countUsedStorageBytes } = await import('@/lib/plan-limits');
+      used = await countUsedStorageBytes(auth.companyId);
     } catch (e) {
-      // If we can't compute used storage, deny upload rather than silently
-      // letting it exceed the plan — safety first.
       console.warn('[upload] could not compute used storage; blocking upload:', e);
       return error('تعذر التحقق من مساحة التخزين. حاول لاحقاً.', 503);
+    }
+    const capBytes = storageMb * 1024 * 1024;
+    if (used + file.size > capBytes) {
+      const totalGb = (storageMb / 1024).toFixed(storageMb >= 1024 ? 1 : 0);
+      return error(
+        `لا تتوفر مساحة تخزين كافية. المستخدم حالياً ${formatBytes(used)} من ${storageMb >= 1024 ? `${totalGb} GB` : `${storageMb} MB`}. احذف ملفات غير ضرورية أو قم بشراء سعة إضافية.`,
+        403
+      );
     }
 
     // Convert file to buffer
@@ -120,19 +123,6 @@ export async function POST(request: NextRequest) {
     }
   } catch (err) {
     return handleApiError(err);
-  }
-}
-
-async function countUsedStorage(s: ReturnType<typeof sb>, companyId: string): Promise<number> {
-  // Best-effort: list files under the company's prefix and sum their sizes.
-  // Falls back to 0 if the storage backend is unavailable.
-  try {
-    // @ts-ignore - supabase-js storage API
-    const { data: files, error } = await s.storage.from('receipts').list(companyId);
-    if (error || !files) return 0;
-    return (files as any[]).reduce((sum, f) => sum + (Number(f.metadata?.size) || 0), 0);
-  } catch {
-    return 0;
   }
 }
 

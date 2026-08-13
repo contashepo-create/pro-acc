@@ -153,7 +153,9 @@ export async function POST(request: NextRequest) {
 
     // admin_session is a short-lived server-side pointer (UUID), NOT a JWT.
     // HttpOnly + SameSite=Lax (Strict would break the 2FA redirect flow).
-    setAuthCookie(response, 'admin_session', a.id, 600); // 10 minutes
+    // Match the server-side session TTL (30 minutes) so the cookie doesn't
+    // outlive the server's state.
+    setAuthCookie(response, 'admin_session', a.id, 1800); // 30 minutes
 
     // Audit successful step-1
     try {

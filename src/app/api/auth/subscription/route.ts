@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     const { data: subscription } = await s.from('subscriptions')
       .select(`id, subscriber_number, plan_id, plan_code, status,
                start_date, end_date, trial_end_date, auto_renew,
-               extra_users, extra_branches, addons_json,
+               extra_users, extra_branches, extra_storage_gb, addons_json,
                subscription_plans(name, price_monthly, price_yearly, currency,
                                   max_invoices_per_month, max_quotations_per_month,
                                   max_storage_mb, features_modules)`)
@@ -50,6 +50,7 @@ export async function GET(request: NextRequest) {
 
       // Effective limits = plan base + add-ons
       const plan = sub.subscription_plans as Record<string, any> | null;
+      const extraStorageGb = Number(sub.extra_storage_gb || 0);
       subData = {
         id: sub.id,
         subscriber_number: sub.subscriber_number || null,
@@ -69,12 +70,13 @@ export async function GET(request: NextRequest) {
         price_yearly: plan?.price_yearly ?? null,
         extra_users: Number(sub.extra_users || 0),
         extra_branches: Number(sub.extra_branches || 0),
+        extra_storage_gb: extraStorageGb,
         addons: sub.addons_json || {},
         limits: plan ? {
           max_users: (Number(plan.max_users) || 1) + Number(sub.extra_users || 0),
           max_invoices_per_month: plan.max_invoices_per_month,
           max_quotations_per_month: plan.max_quotations_per_month,
-          max_storage_mb: Number(plan.max_storage_mb || 0),
+          max_storage_mb: Number(plan.max_storage_mb || 0) + extraStorageGb * 1024,
         } : null,
       };
     }
@@ -87,6 +89,8 @@ export async function GET(request: NextRequest) {
         extra_user_yearly_usd: 48,
         extra_branch_monthly_usd: 10,
         extra_branch_yearly_usd: 96,
+        storage_gb_monthly_usd: 3,
+        storage_gb_yearly_usd: 30,
       },
     });
   } catch (err) {

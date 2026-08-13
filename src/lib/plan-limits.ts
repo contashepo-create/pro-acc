@@ -24,12 +24,13 @@ export interface PlanLimits {
   max_employees: number | null;
   max_invoices_per_month: number | null;
   max_quotations_per_month: number | null;
-  max_storage_mb: number;              // 0 = no file uploads
+  max_storage_mb: number;              // 0 = no file uploads; add plan base + extra_storage_gb*1024
   max_branches: number;                // base branches (0 unless plan grants) + extra_branches add-on
   max_warehouses: number;              // same pool as branches (1 extra branch = 1 extra warehouse slot)
   features_modules: Record<string, boolean>;
   extra_users: number;
   extra_branches: number;
+  extra_storage_gb: number;
 }
 
 export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimits | null> {
@@ -37,7 +38,7 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
   const { data: sub } = await s
     .from('subscriptions')
     .select(
-      'plan_id, plan_code, status, extra_users, extra_branches, addons_json, ' +
+      'plan_id, plan_code, status, extra_users, extra_branches, extra_storage_gb, addons_json, ' +
       'subscription_plans(code, max_users, max_projects, max_clients, max_suppliers, ' +
       'max_employees, max_invoices_per_month, max_quotations_per_month, max_storage_mb, ' +
       'max_branches, features_modules)'
@@ -54,6 +55,17 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
   const baseUsers = Number(plan?.max_users ?? 1);
   const extraUsers = Number(subr.extra_users ?? 0);
   const extraBranches = Number(subr.extra_branches ?? 0);
+  const extraStorageGb = Number(subr.extra_storage_gb ?? 0);
+  // Backward-compat: if the column is missing but addons_json tracks storage purchases,
+  // fall back to the addons_json value so old data keeps working until migration 036 runs.
+  let effectiveExtraGb = extraStorageGb;
+  if (!effectiveExtraGb && subr.addons_json && typeof subr.addons_json === 'object') {
+    const legacy = Number((subr.addons_json as any).extra_storage_gb_paid ?? 0);
+    if (legacy > 0) effectiveExtraGb = legacy;
+  }
+  const baseStorageMb = Number(plan?.max_storage_mb ?? 0);
+  const maxStorageMb = baseStorageMb + effectiveExtraGb * 1024;
+
   // Plans that include branches/warehouses (Pro+ have branches:true) allocate one
   // default branch+warehouse on company creation. Everything beyond that must be
   // paid via the extra_branches add-on.
@@ -74,12 +86,13 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
     max_employees: plan?.max_employees ?? null,
     max_invoices_per_month: plan?.max_invoices_per_month ?? null,
     max_quotations_per_month: plan?.max_quotations_per_month ?? null,
-    max_storage_mb: Number(plan?.max_storage_mb ?? 0),
+    max_storage_mb: maxStorageMb,
     max_branches: maxBranches,
     max_warehouses: maxBranches,
     features_modules: features,
     extra_users: extraUsers,
     extra_branches: extraBranches,
+    extra_storage_gb: effectiveExtraGb,
   };
 }
 
@@ -197,6 +210,39 @@ async function countResource(resource: LimitResource, companyId: string): Promis
     default:
       return 0;
   }
+}
+
+/**
+ * Count used storage bytes under the receipts bucket for a company.
+ * Centralized here so upload + limits share the same implementation.
+ * Returns 0 on "not found" (no files yet) but throws on other storage errors
+ * so callers can fail-closed.
+ */
+export async function countUsedStorageBytes(companyId: string): Promise<number> {
+  const { getSupabase: gs } = await import('@/lib/supabase-client');
+  const s = gs();
+  let total = 0;
+  let offset = 0;
+  const pageSize = 1000;
+  while (true) {
+    // @ts-ignore supabase-js storage types
+    const { data: files, error } = await s.storage.from('receipts').list(companyId, {
+      limit: pageSize,
+      offset,
+      sortBy: { column: 'name', order: 'asc' },
+    });
+    if (error) {
+      const msg = String(error.message || '').toLowerCase();
+      if (msg.includes('not found') || msg.includes('does not exist') || msg.includes('404')) return 0;
+      throw error;
+    }
+    if (!files || files.length === 0) break;
+    for (const f of files as any[]) total += Number(f.metadata?.size) || 0;
+    if (files.length < pageSize) break;
+    offset += pageSize;
+    if (offset > 50000) break;
+  }
+  return total;
 }
 
 /**

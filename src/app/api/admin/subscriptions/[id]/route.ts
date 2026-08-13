@@ -36,11 +36,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       end_date?: string;
       extra_users?: number | '';
       extra_branches?: number | '';
+      extra_storage_gb?: number | '';
       notes?: string;
     }>(req);
 
     const s = sb();
-    const { data: existing } = await s.from('subscriptions').select('id,company_id,extra_users,extra_branches').eq('id', id).maybeSingle();
+    const { data: existing } = await s.from('subscriptions').select('id,company_id,extra_users,extra_branches,extra_storage_gb').eq('id', id).maybeSingle();
     if (!existing) return error('الاشتراك غير موجود', 404);
 
     const patch: Record<string, any> = { updated_at: new Date().toISOString() };
@@ -49,24 +50,38 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (body.end_date) patch.end_date = body.end_date;
     if (body.extra_users !== undefined) patch.extra_users = normInt(body.extra_users, 0) ?? 0;
     if (body.extra_branches !== undefined) patch.extra_branches = normInt(body.extra_branches, 0) ?? 0;
+    if (body.extra_storage_gb !== undefined) patch.extra_storage_gb = normInt(body.extra_storage_gb, 0) ?? 0;
 
     const prev = existing as any;
     const { data: updated, error: uErr } = await s.from('subscriptions').update(patch).eq('id', id).select().single();
     if (uErr) throw uErr;
 
     // Audit changes to addons
-    if (patch.extra_users !== undefined || patch.extra_branches !== undefined) {
+    const addonChanged = patch.extra_users !== undefined
+      || patch.extra_branches !== undefined
+      || patch.extra_storage_gb !== undefined;
+    if (addonChanged) {
+      const addonType =
+        patch.extra_users !== undefined ? 'extra_user' :
+        patch.extra_branches !== undefined ? 'extra_branch' :
+        'storage_gb';
+      const newUsers = Number(patch.extra_users ?? prev.extra_users ?? 0);
+      const newBranches = Number(patch.extra_branches ?? prev.extra_branches ?? 0);
+      const prevUsers = Number(prev.extra_users || 0);
+      const prevBranches = Number(prev.extra_branches || 0);
+      const qty = addonType === 'extra_user' ? Math.abs(newUsers - prevUsers)
+        : addonType === 'extra_branch' ? Math.abs(newBranches - prevBranches)
+        : Math.abs(Number(patch.extra_storage_gb ?? prev.extra_storage_gb ?? 0) - Number(prev.extra_storage_gb || 0));
       try { await s.from('addon_grant_audit').insert({
         company_id: prev.company_id,
         admin_id: admin.adminId,
-        addon_type: patch.extra_users !== undefined ? 'extra_user' : 'extra_branch',
-        quantity: Math.abs(Number(patch.extra_users ?? prev.extra_users) - Number(prev.extra_users ?? 0))
-               + Math.abs(Number(patch.extra_branches ?? prev.extra_branches) - Number(prev.extra_branches ?? 0)),
+        addon_type: addonType,
+        quantity: qty,
         months_granted: 0,
-        previous_extra_users: Number(prev.extra_users || 0),
-        previous_extra_branches: Number(prev.extra_branches || 0),
-        new_extra_users: Number(patch.extra_users ?? prev.extra_users),
-        new_extra_branches: Number(patch.extra_branches ?? prev.extra_branches),
+        previous_extra_users: prevUsers,
+        previous_extra_branches: prevBranches,
+        new_extra_users: newUsers,
+        new_extra_branches: newBranches,
         note: body.notes || 'manual admin adjustment',
       }); } catch {}
     }

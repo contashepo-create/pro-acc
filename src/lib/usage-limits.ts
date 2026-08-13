@@ -21,6 +21,7 @@ export interface PlanLimits {
   features_modules: Record<string, boolean>;
   extra_users: number;
   extra_branches: number;
+  extra_storage_gb: number;
 }
 
 export async function getCompanyLimits(companyId: string): Promise<PlanLimits> {
@@ -40,6 +41,7 @@ export async function getCompanyLimits(companyId: string): Promise<PlanLimits> {
       features_modules: l.features_modules,
       extra_users: l.extra_users,
       extra_branches: l.extra_branches,
+      extra_storage_gb: l.extra_storage_gb,
     };
   }
   // Defaults: Start-plan fallback when no subscription exists yet
@@ -60,6 +62,7 @@ export async function getCompanyLimits(companyId: string): Promise<PlanLimits> {
     },
     extra_users: 0,
     extra_branches: 0,
+    extra_storage_gb: 0,
   };
 }
 

@@ -57,7 +57,7 @@ export async function PUT(req: NextRequest) {
       // Atomically update the subscription + insert grant audit.
       // 1) Fetch current subscription
       const { data: sub, error: sErr } = await s.from('subscriptions')
-        .select('id, extra_users, extra_branches, company_id, plan_id, addons_json')
+        .select('id, extra_users, extra_branches, extra_storage_gb, company_id, plan_id, addons_json')
         .eq('company_id', req_.company_id)
         .order('created_at', { ascending: false})
         .limit(1).maybeSingle();
@@ -66,11 +66,14 @@ export async function PUT(req: NextRequest) {
 
       const prevUsers = Number(curSub.extra_users || 0);
       const prevBranches = Number(curSub.extra_branches || 0);
+      const prevStorageGb = Number(curSub.extra_storage_gb || 0);
       let newUsers = prevUsers;
       let newBranches = prevBranches;
+      let newStorageGb = prevStorageGb;
 
       if (req_.addon_type === 'extra_user') newUsers += Number(req_.quantity);
       if (req_.addon_type === 'extra_branch') newBranches += Number(req_.quantity);
+      if (req_.addon_type === 'storage_gb') newStorageGb += Number(req_.quantity);
 
       const currentAddons = curSub.addons_json && typeof curSub.addons_json === 'object'
         ? (curSub.addons_json as Record<string, any>)
@@ -91,6 +94,7 @@ export async function PUT(req: NextRequest) {
         .update({
           extra_users: newUsers,
           extra_branches: newBranches,
+          extra_storage_gb: newStorageGb,
           addons_json: addonMerge,
           updated_at: new Date().toISOString(),
         })
@@ -100,7 +104,7 @@ export async function PUT(req: NextRequest) {
         return error('فشل تحديث الاشتراك: ' + uErr.message, 500);
       }
 
-      // Insert audit row
+      // Insert audit row (audit table doesn't track storage yet; storage changes are in the message).
       await s.from('addon_grant_audit').insert({
         company_id: req_.company_id,
         request_id: req_.id,
@@ -117,11 +121,14 @@ export async function PUT(req: NextRequest) {
 
       // Notify customer via company_messages
       try {
-        const labels = { extra_user: 'مستخدم إضافي', extra_branch: 'فرع/مستودع إضافي', storage_gb: 'سعة تخزين إضافية' };
+        const labels: Record<string,string> = { extra_user: 'مستخدم إضافي', extra_branch: 'فرع/مستودع إضافي', storage_gb: 'سعة تخزين إضافية (جيجابايت)' };
+        const bodyMsg = req_.addon_type === 'storage_gb'
+          ? `تمت الموافقة على طلب الإضافة وعدد ${req_.quantity} جيجابايت × ${(labels as any)[req_.addon_type]} لمدة ${months === 12 ? 'سنة' : 'شهر'}. أصبح لديك الآن ${newStorageGb} جيجابايت سعة تخزين إضافية (${newStorageGb * 1024} ميجابايت).`
+          : `تمت الموافقة على طلب الإضافة وعدد ${req_.quantity} × ${(labels as any)[req_.addon_type]} لمدة ${months === 12 ? 'سنة' : 'شهر'}. أصبح لديك الآن ${newUsers} مقعد مستخدم إضافي و${newBranches} فرع/مستودع إضافي.`;
         await s.from('company_messages').insert({
           company_id: req_.company_id,
           subject: `تم تفعيل إضافة: ${(labels as any)[req_.addon_type]}`,
-          body: `تمت الموافقة على طلب الإضافة وعدد ${req_.quantity} × ${(labels as any)[req_.addon_type]} لمدة ${months === 12 ? 'سنة' : 'شهر'}. أصبح لديك الآن ${newUsers} مقعد مستخدم إضافي و${newBranches} فرع/مستودع إضافي.`,
+          body: bodyMsg,
           type: 'addon_granted',
           status: 'open',
         });
