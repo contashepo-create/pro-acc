@@ -76,73 +76,86 @@ export async function POST(
       await s.from('boq_items').insert(boqItems);
     }
 
-    // 3. إنشاء فاتورة + قيد محاسبي
+    // 3. إنشاء فاتورة + قيد محاسبي (نموذج حسابات التحكم: 1130 + contact_id)
     const invoiceId = generateId();
-    const { data: arContact } = await s.from('contacts')
-      .select('account_id')
-      .eq('id', (quotation as any).contact_id)
-      .maybeSingle();
 
+    const { resolveAccountId } = await import('@/lib/voucher-utils');
+    const arAccountId = await resolveAccountId(auth.companyId, ACCOUNT_CODES.ACCOUNTS_RECEIVABLE);
     const { data: revAcc } = await s.from('accounts')
       .select('id')
       .eq('code', ACCOUNT_CODES.CONTRACT_REVENUE)
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
-    const { data: vatAcc } = await s.from('accounts')
-      .select('id')
-      .eq('code', ACCOUNT_CODES.VAT_SALES)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
+    if (!arAccountId || !revAcc) {
+      // تراجع كامل: لا مشروع محول بلا قيد
+      await s.from('boq_items').delete().eq('project_id', projectId).eq('company_id', auth.companyId);
+      await s.from('projects').delete().eq('id', projectId).eq('company_id', auth.companyId);
+      return error('حسابات التحويل (1130 / 4100) غير موجودة — راجع دليل الحسابات');
+    }
 
     const vatAmount = parseFloat((quotation as any).tax_amount) || parseFloat((quotation as any).vat_amount) || 0;
     const subtotal = parseFloat((quotation as any).subtotal) || contractValue;
-
-    let journalEntryId: string | null = null;
-
-    if (arContact?.account_id && revAcc) {
-      const lines = [
-        {
-          account_id: arContact.account_id,
-          debit: subtotal + vatAmount,
-          credit: 0,
-          description: `فاتورة مشروع محول من عرض: ${(quotation as any).number}`,
-          project_id: projectId,
-          contact_id: (quotation as any).contact_id,
-        },
-        {
-          account_id: revAcc.id,
-          debit: 0,
-          credit: subtotal,
-          description: `إيرادات عقد - مشروع محول`,
-          project_id: projectId,
-          contact_id: (quotation as any).contact_id,
-        },
-      ];
-
-      if (vatAmount > 0 && vatAcc) {
-        lines.push({
-          account_id: vatAcc.id,
-          debit: 0,
-          credit: vatAmount,
-          description: `ضريبة قيمة مضافة`,
-          project_id: projectId,
-          contact_id: (quotation as any).contact_id,
-        });
+    let vatAccId: string | null = null;
+    if (vatAmount > 0) {
+      const { data: vatAcc } = await s.from('accounts')
+        .select('id')
+        .eq('code', ACCOUNT_CODES.VAT_SALES)
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
+      if (!vatAcc) {
+        await s.from('boq_items').delete().eq('project_id', projectId).eq('company_id', auth.companyId);
+        await s.from('projects').delete().eq('id', projectId).eq('company_id', auth.companyId);
+        return error('حساب ضريبة المبيعات (2120) غير موجود');
       }
-
-      const je = await createJournalEntry(auth.companyId, {
-        date: startDate,
-        type: 'general',
-        description: `فاتورة مشروع محول من عرض سعر: ${(quotation as any).number}`,
-        lines,
-        reference_type: 'quotation_conversion',
-        reference_id: id,
-        created_by: auth.userId,
-      });
-
-      if (!je.error) journalEntryId = je.journalId;
+      vatAccId = vatAcc.id;
     }
+
+    const lines = [
+      {
+        account_id: arAccountId,
+        debit: subtotal + vatAmount,
+        credit: 0,
+        description: `فاتورة مشروع محول من عرض: ${(quotation as any).number}`,
+        project_id: projectId,
+        contact_id: (quotation as any).contact_id,
+      },
+      {
+        account_id: revAcc.id,
+        debit: 0,
+        credit: subtotal,
+        description: `إيرادات عقد - مشروع محول`,
+        project_id: projectId,
+        contact_id: (quotation as any).contact_id,
+      },
+    ];
+    if (vatAmount > 0 && vatAccId) {
+      lines.push({
+        account_id: vatAccId,
+        debit: 0,
+        credit: vatAmount,
+        description: `ضريبة قيمة مضافة`,
+        project_id: projectId,
+        contact_id: (quotation as any).contact_id,
+      });
+    }
+
+    const je = await createJournalEntry(auth.companyId, {
+      date: startDate,
+      type: 'general',
+      description: `فاتورة مشروع محول من عرض سعر: ${(quotation as any).number}`,
+      lines,
+      reference_type: 'quotation_conversion',
+      reference_id: id,
+      created_by: auth.userId,
+    });
+
+    if (je.error || !je.journalId) {
+      await s.from('boq_items').delete().eq('project_id', projectId).eq('company_id', auth.companyId);
+      await s.from('projects').delete().eq('id', projectId).eq('company_id', auth.companyId);
+      throw je.error || new Error('فشل قيد التحويل');
+    }
+    const journalEntryId = je.journalId;
 
     // إنشاء الفاتورة
     const invoiceNumber = `INV-${projectId.substring(0, 8).toUpperCase()}`;

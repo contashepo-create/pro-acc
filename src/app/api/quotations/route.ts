@@ -47,6 +47,11 @@ export async function POST(req: NextRequest) {
     if (!date || !contact_id || !items || items.length === 0)
       return error('date, contact_id, items are required');
 
+    // عزل مستأجرين: العميل يجب أن ينتمي لهذه الشركة
+    const { data: contact } = await s.from('contacts')
+      .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
+    if (!contact) return error('العميل غير موجود', 404);
+
     let subtotal = 0;
     for (const item of items) subtotal += (item.quantity || 0) * (item.unit_price || 0);
     const rate = tax_rate || 0;
