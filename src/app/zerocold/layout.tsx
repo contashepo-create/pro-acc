@@ -5,13 +5,19 @@ import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   ShieldAlert, LayoutDashboard, Building2, Users, Database, Activity, LogOut, Loader2,
-  MessageSquare, MessageSquareWarning, Megaphone, Settings,
+  MessageSquare, MessageSquareWarning, Megaphone, Settings, CreditCard, Key,
+  Package, Headphones,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { href: '/zerocold', label: 'لوحة التحكم', icon: LayoutDashboard },
   { href: '/zerocold/companies', label: 'الشركات', icon: Building2 },
   { href: '/zerocold/users', label: 'المستخدمين', icon: Users },
+  { href: '/zerocold/plans', label: 'الباقات', icon: CreditCard },
+  { href: '/zerocold/subscriptions', label: 'الاشتراكات', icon: Package },
+  { href: '/zerocold/addon-requests', label: 'طلبات الإضافات', icon: Package },
+  { href: '/zerocold/codes', label: 'أكواد التفعيل', icon: Key },
+  { href: '/zerocold/support', label: 'تذاكر الدعم', icon: Headphones },
   { href: '/zerocold/app-settings', label: 'إعدادات التطبيق', icon: Settings },
   { href: '/zerocold/messages', label: 'الرسائل', icon: MessageSquare },
   { href: '/zerocold/complaints', label: 'الشكاوي', icon: MessageSquareWarning },

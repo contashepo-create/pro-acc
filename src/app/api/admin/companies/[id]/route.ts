@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, notFound, parseBody } from '@/lib/api-helpers';
 import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
+import { randomInt } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -161,7 +162,11 @@ export async function PATCH(
         subscriberNumber = (existingSub as any).subscriber_number;
       } else {
         const { data: seqResult } = await s.rpc('nextval', { seq: 'subscriber_number_seq' }).single();
-        subscriberNumber = seqResult as any || Math.floor(Math.random() * 90000) + 10000;
+        try {
+          subscriberNumber = seqResult as any || Number(randomInt(10000, 99999));
+        } catch {
+          subscriberNumber = seqResult as any || 10000 + Math.floor(Date.now() % 90000);
+        }
       }
 
       if (existingSub) {
