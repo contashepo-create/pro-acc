@@ -73,6 +73,14 @@ export async function PUT(
 
     const existing = txRes as Record<string, any>;
 
+    // حركة مُرحَّلة (لها قيد) لا تُعدَّل حقولها المالية — وإلا يفترق القيد عن الحركة
+    if (existing.journal_entry_id) {
+      const financialKeys = ['type', 'amount', 'account_id', 'bank_safe_id', 'tax_rate', 'tax_amount'];
+      if (financialKeys.some((k) => body[k] !== undefined)) {
+        return error('لا يمكن تعديل مبلغ/نوع/حسابات حركة مُرحَّلة — اعكسها وسجّل حركة جديدة');
+      }
+    }
+
     const updateData: Record<string, any> = {};
     if (body.date !== undefined) updateData.date = body.date;
     if (body.type !== undefined) updateData.type = body.type;
@@ -87,7 +95,8 @@ export async function PUT(
     if (Object.keys(updateData).length > 0) {
       const { error: updateError } = await s.from('cash_transactions')
         .update(updateData)
-        .eq('id', id);
+        .eq('id', id)
+        .eq('company_id', auth.companyId);
       if (updateError) throw updateError;
     }
 
@@ -99,13 +108,14 @@ export async function PUT(
       action: 'update',
       entity_type: 'cash_transaction',
       entity_id: id,
-      old_values: JSON.stringify(existing),
-      new_values: JSON.stringify(body),
+      old_values: existing,
+      new_values: body,
     });
 
     const { data: updated, error: fetchError } = await s.from('cash_transactions')
       .select('*, journal_entries(number)')
       .eq('id', id)
+      .eq('company_id', auth.companyId)
       .single();
 
     if (fetchError) throw fetchError;
@@ -161,7 +171,7 @@ export async function DELETE(
       action: 'delete',
       entity_type: 'cash_transaction',
       entity_id: id,
-      old_values: JSON.stringify(tx),
+      old_values: tx,
     });
 
     const { error: deleteError } = await s.from('cash_transactions')

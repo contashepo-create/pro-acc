@@ -108,23 +108,27 @@ export async function POST(request: NextRequest) {
 
     const txnType = normalizedType;
 
-    // Get account info if specified
-    let accountInfo = null;
+    // Get account info if specified — عزل مستأجرين صارم
+    let accountInfo: any = null;
     if (accountId) {
       const { data } = await s.from('accounts')
         .select('id, name, type, name_en, current_balance')
         .eq('id', accountId)
-        .single();
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
+      if (!data) return error('الحساب المحدد غير موجود', 404);
       accountInfo = data;
     }
 
-    // Get bank safe info if specified
-    let bankSafeInfo = null;
+    // Get bank safe info if specified — عزل مستأجرين صارم
+    let bankSafeInfo: any = null;
     if (bankSafeId) {
       const { data } = await s.from('banks_safes')
         .select('id, name, type, account_id')
         .eq('id', bankSafeId)
-        .single();
+        .eq('company_id', auth.companyId)
+        .maybeSingle();
+      if (!data) return error('الخزينة/البنك المحدد غير موجود', 404);
       bankSafeInfo = data;
     }
 
@@ -140,32 +144,43 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Determine credit account based on transaction type
-    let creditAccountCode: string | null = null;
-    if (txnType === 'revenue') {
-      creditAccountCode = ACCOUNT_CODES.CONTRACT_REVENUE;
-    } else if (txnType === 'expense') {
-      creditAccountCode = ACCOUNT_CODES.DIRECT_COSTS;
-    } else if (bankSafeInfo?.account_id) {
-      creditAccountCode = null; // use bank account itself
-    }
-
-    // Resolve account IDs
-    const { data: creditAcc } = creditAccountCode
-      ? await s.from('accounts').select('id').eq('code', creditAccountCode).eq('company_id', auth.companyId).maybeSingle()
-      : { data: null };
-
-    const debitAccountId = bankSafeInfo?.account_id || accountId || null;
-    const creditAccountId = (creditAcc as any)?.id || bankSafeInfo?.account_id || null;
-
-    // VAT calculation
-    const vRate = (tax_enabled && tax_rate) ? tax_rate : 0;
+    // Determine counterpart account based on transaction type
+    const vRate = (tax_enabled && tax_rate) ? Number(tax_rate) : 0;
     const baseAmount = parseFloat(amount);
     const taxAmount = txnType === 'revenue' ? baseAmount * vRate / (1 + vRate) : 0;
-    // For revenue: amount includes VAT, so net = amount / (1+rate), VAT = amount - net
-    // For expense: amount is the expense, VAT is extra
     const expenseTaxAmount = txnType === 'expense' ? baseAmount * vRate : 0;
     const totalPayment = txnType === 'expense' ? baseAmount + expenseTaxAmount : baseAmount;
+
+    // النقدية (الطرف النقدي) — الخزينة/البنك إن وُجد وإلا الحساب المحدد
+    const cashAccountId = bankSafeInfo?.account_id || accountId || null;
+
+    // الحساب المقابل (إيراد/مصروف) — حساب مختار من الواجهة أو حساب تحكم
+    let counterpartAccountId: string | null = accountId || null;
+    if (txnType === 'revenue' && !accountId) {
+      const { data: revAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).eq('company_id', auth.companyId).maybeSingle();
+      counterpartAccountId = revAcc?.id || null;
+    } else if (txnType === 'expense' && !accountId) {
+      const { data: expAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.DIRECT_COSTS).eq('company_id', auth.companyId).maybeSingle();
+      counterpartAccountId = expAcc?.id || null;
+    }
+
+    if (!cashAccountId || !counterpartAccountId) {
+      return error('الحسابات المحاسبية للحركة غير مكتملة (النقدية أو الحساب المقابل) — راجع شجرة الحسابات', 400);
+    }
+
+    // حسابات الضريبة إلزامية عند احتسابها — وإلا قيد غير متوازن
+    let vatSalesAccId: string | null = null;
+    let vatPurchAccId: string | null = null;
+    if (taxAmount > 0) {
+      const { data: vatSalesAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.VAT_SALES).eq('company_id', auth.companyId).maybeSingle();
+      if (!vatSalesAcc) return error('حساب ضريبة المبيعات (2120) غير موجود');
+      vatSalesAccId = vatSalesAcc.id;
+    }
+    if (expenseTaxAmount > 0) {
+      const { data: vatPurchAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.VAT_PURCHASES).eq('company_id', auth.companyId).maybeSingle();
+      if (!vatPurchAcc) return error('حساب ضريبة المشتريات (1180) غير موجود');
+      vatPurchAccId = vatPurchAcc.id;
+    }
 
     // Insert cash transaction record
     const { data: transaction, error: insertErr } = await s.from('cash_transactions')
@@ -174,7 +189,7 @@ export async function POST(request: NextRequest) {
         date,
         type: txnType,
         amount: baseAmount,
-        account_id: debitAccountId || null,
+        account_id: counterpartAccountId,
         bank_safe_id: bankSafeId || null,
         contact_id: contactId || null,
         project_id: projectId || null,
@@ -189,91 +204,49 @@ export async function POST(request: NextRequest) {
 
     if (insertErr) throw insertErr;
 
-    // Create journal entry via helper with VAT support
-    if (debitAccountId && creditAccountId) {
-      const journalLines: any[] = [];
-
-      if (txnType === 'revenue') {
-        // Revenue: debit cash (full), credit revenue (net), credit VAT_SALES (vat)
-        const netRevenue = baseAmount - taxAmount;
-        journalLines.push({
-          account_id: debitAccountId,
-          debit: baseAmount,
-          credit: 0,
-          description: description || reason,
-          project_id: projectId || null,
-          contact_id: contactId || null,
-        });
-        journalLines.push({
-          account_id: creditAccountId,
-          debit: 0,
-          credit: netRevenue,
-          description: description || reason,
-          project_id: projectId || null,
-          contact_id: contactId || null,
-        });
-        if (taxAmount > 0) {
-          const { data: vatSalesAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.VAT_SALES).eq('company_id', auth.companyId).maybeSingle();
-          if (vatSalesAcc) {
-            journalLines.push({
-              account_id: (vatSalesAcc as any).id,
-              debit: 0,
-              credit: taxAmount,
-              description: `ضريبة مخرجات: ${description || reason}`,
-              project_id: projectId || null,
-              contact_id: contactId || null,
-            });
-          }
-        }
-      } else {
-        // Expense: debit expense (net), debit VAT_PURCHASES (vat), credit cash (total)
-        journalLines.push({
-          account_id: creditAccountId,
-          debit: baseAmount,
-          credit: 0,
-          description: description || reason,
-          project_id: projectId || null,
-          contact_id: contactId || null,
-        });
-        journalLines.push({
-          account_id: debitAccountId,
-          debit: 0,
-          credit: totalPayment,
-          description: description || reason,
-          project_id: projectId || null,
-          contact_id: contactId || null,
-        });
-        if (expenseTaxAmount > 0) {
-          const { data: vatPurchAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.VAT_PURCHASES).eq('company_id', auth.companyId).maybeSingle();
-          if (vatPurchAcc) {
-            journalLines.push({
-              account_id: (vatPurchAcc as any).id,
-              debit: expenseTaxAmount,
-              credit: 0,
-              description: `ضريبة مدخلات: ${description || reason}`,
-              project_id: projectId || null,
-              contact_id: contactId || null,
-            });
-          }
-        }
+    // القيد المحاسبي إلزامي متوازن — فشله يلغي الحركة بالكامل
+    const journalLines: any[] = [];
+    if (txnType === 'revenue') {
+      // قبض: مدين النقدية (بالمبلغ الشامل) / دائن الإيراد (الصافي) + ضريبة مخرجات
+      const netRevenue = baseAmount - taxAmount;
+      journalLines.push({ account_id: cashAccountId, debit: baseAmount, credit: 0, description: description || reason, project_id: projectId || null, contact_id: contactId || null });
+      journalLines.push({ account_id: counterpartAccountId, debit: 0, credit: netRevenue, description: description || reason, project_id: projectId || null, contact_id: contactId || null });
+      if (taxAmount > 0 && vatSalesAccId) {
+        journalLines.push({ account_id: vatSalesAccId, debit: 0, credit: taxAmount, description: `ضريبة مخرجات: ${description || reason}`, project_id: projectId || null, contact_id: contactId || null });
       }
-
-      const je = await createJournalEntry(auth.companyId, {
-        date,
-        type: 'general',
-        description: description || reason,
-        lines: journalLines,
-        reference_type: 'cash_transaction',
-        reference_id: (transaction as any).id,
-        created_by: auth.userId,
-      });
-
-      if (je.error) {
-        console.warn('Failed to create journal entry for cash transaction:', je.error);
+    } else {
+      // صرف: مدين المصروف (الصافي) + ضريبة مدخلات / دائن النقدية (الشامل)
+      journalLines.push({ account_id: counterpartAccountId, debit: baseAmount, credit: 0, description: description || reason, project_id: projectId || null, contact_id: contactId || null });
+      journalLines.push({ account_id: cashAccountId, debit: 0, credit: totalPayment, description: description || reason, project_id: projectId || null, contact_id: contactId || null });
+      if (expenseTaxAmount > 0 && vatPurchAccId) {
+        journalLines.push({ account_id: vatPurchAccId, debit: expenseTaxAmount, credit: 0, description: `ضريبة مدخلات: ${description || reason}`, project_id: projectId || null, contact_id: contactId || null });
       }
     }
 
-    return success(transaction, 201);
+    const je = await createJournalEntry(auth.companyId, {
+      date,
+      type: 'general',
+      description: description || reason,
+      lines: journalLines,
+      reference_type: 'cash_transaction',
+      reference_id: (transaction as any).id,
+      created_by: auth.userId,
+    });
+
+    if (je.error || !je.journalId) {
+      await s.from('cash_transactions').delete().eq('id', (transaction as any).id).eq('company_id', auth.companyId);
+      throw je.error || new Error('فشل قيد الحركة النقدية');
+    }
+
+    const { data: linked, error: linkErr } = await s.from('cash_transactions')
+      .update({ journal_entry_id: je.journalId })
+      .eq('id', (transaction as any).id)
+      .eq('company_id', auth.companyId)
+      .select('*')
+      .single();
+    if (linkErr) throw linkErr;
+
+    return success(linked, 201);
   } catch (err) {
     return handleApiError(err);
   }
