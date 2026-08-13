@@ -1,7 +1,7 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, notFound, parseBody } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
@@ -11,11 +11,9 @@ export async function PATCH(
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const __admin = await requireAdmin(request);
     const { id } = await paramsPromise;
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
+    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف المستخدم غير صالح', 400);
 
     const masterHeader = request.headers.get('x-master-password');
     if (!masterHeader) {
@@ -27,7 +25,7 @@ export async function PATCH(
       return error('is_active يجب أن يكون true أو false');
     }
 
-    const valid = await verifyMasterPassword(payload.userId, masterHeader);
+    const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
     if (!valid) {
       return error('كلمة المرور الرئيسية غير صحيحة', 401);
     }
@@ -48,7 +46,7 @@ export async function PATCH(
     if (updateErr) throw updateErr;
 
     await auditLog(
-      payload.userId,
+      __admin.adminId,
       body.is_active ? 'activate_user' : 'deactivate_user',
       JSON.stringify({ userName: user.name, userEmail: user.email, previousState: user.is_active }),
       'user',
@@ -59,6 +57,6 @@ export async function PATCH(
       message: body.is_active ? 'تم تفعيل المستخدم بنجاح' : 'تم إيقاف المستخدم بنجاح',
     });
   } catch (err) {
-    return serverError(err);
+    return adminJsonError(err);
   }
 }

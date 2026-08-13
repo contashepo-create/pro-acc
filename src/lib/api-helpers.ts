@@ -177,18 +177,15 @@ export async function requireModulePermission(
 }
 
 export async function requireAdminAuth(request: Request): Promise<{ userId: string; email: string }> {
-  const req = request as any;
-  const adminToken = req.cookies?.get
-    ? req.cookies.get('admin_token')?.value
-    : null;
-
-  if (!adminToken) throw new AuthError('غير مصرح به');
-
-  const { verifyToken } = await import('@/lib/auth');
-  const payload = verifyToken(adminToken);
-  if (!payload || payload.role !== 'superadmin') throw new AuthError('غير مصرح به');
-
-  return { userId: payload.userId, email: payload.userId };
+  // Delegate to the central admin guard which enforces the ADMIN_TOKEN_SECRET
+  // signature, role=superadmin, and admin_users.is_active check.
+  try {
+    const { requireAdmin } = await import('@/lib/admin-guard');
+    const ctx = await requireAdmin(request);
+    return { userId: ctx.adminId, email: ctx.email };
+  } catch (e) {
+    throw new AuthError('غير مصرح به');
+  }
 }
 
 export function handleApiError(err: unknown) {

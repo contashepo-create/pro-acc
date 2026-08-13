@@ -1,21 +1,15 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-  return payload;
-}
+
 
 export async function GET(req: NextRequest) {
   try {
-    requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const s = sb();
     const status = req.nextUrl.searchParams.get('status') || 'pending';
 
@@ -80,13 +74,13 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     console.error('Upgrade requests GET error:', e);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }
 
 export async function PUT(req: NextRequest) {
   try {
-    const admin = requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const body = await parseBody(req);
     const { id, status, admin_notes } = body;
 
@@ -113,7 +107,7 @@ export async function PUT(req: NextRequest) {
       .update({
         status,
         admin_notes: admin_notes || null,
-        reviewed_by: admin.userId,
+        reviewed_by: __admin.adminId,
         reviewed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
@@ -189,13 +183,13 @@ export async function PUT(req: NextRequest) {
   } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     console.error('Upgrade requests PUT error:', e);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
-    requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const s = sb();
     const id = req.nextUrl.searchParams.get('id');
     if (!id) return error('id is required');
@@ -203,7 +197,6 @@ export async function DELETE(req: NextRequest) {
     await s.from('upgrade_requests').delete().eq('id', id);
     return success({ deleted: true });
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }

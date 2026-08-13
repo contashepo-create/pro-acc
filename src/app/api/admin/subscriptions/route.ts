@@ -1,20 +1,15 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-}
+
 
 export async function GET(req: NextRequest) {
   try {
-    requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const status = req.nextUrl.searchParams.get('status');
     const s = sb();
 
@@ -43,7 +38,6 @@ export async function GET(req: NextRequest) {
 
     return success({ subscriptions: result });
   } catch (e) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }

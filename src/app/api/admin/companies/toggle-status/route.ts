@@ -1,24 +1,21 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
+import { success, error, parseBody } from '@/lib/api-helpers';
 import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
+    const __admin = await requireAdmin(request);
 
     const masterHeader = request.headers.get('x-master-password');
     if (!masterHeader) {
       return error('كلمة المرور الرئيسية مطلوبة في ترويسة x-master-password', 401);
     }
 
-    const valid = await verifyMasterPassword(payload.userId, masterHeader);
+    const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
     if (!valid) {
       return error('كلمة المرور الرئيسية غير صحيحة', 401);
     }
@@ -26,6 +23,9 @@ export async function POST(request: NextRequest) {
     const body = await parseBody<{ companyId: string; is_active: boolean }>(request);
     if (!body.companyId || typeof body.is_active !== 'boolean') {
       return error('companyId و is_active مطلوبان');
+    }
+    if (!/^[0-9a-fA-F-]{8,}$/.test(body.companyId)) {
+      return error('معرّف الشركة غير صالح', 400);
     }
 
     const s = sb();
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     if (updateErr) throw updateErr;
 
     await auditLog(
-      payload.userId,
+      __admin.adminId,
       body.is_active ? 'activate_company' : 'deactivate_company',
       JSON.stringify({ companyName: company.name, previousState: company.is_active }),
       'company',
@@ -55,6 +55,6 @@ export async function POST(request: NextRequest) {
       message: body.is_active ? 'تم تفعيل الشركة بنجاح' : 'تم إيقاف الشركة بنجاح',
     });
   } catch (err) {
-    return serverError(err);
+    return adminJsonError(err);
   }
 }

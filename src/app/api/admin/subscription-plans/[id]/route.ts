@@ -1,20 +1,15 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-}
+
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const { id } = await params;
     const body = await parseBody(req);
     const s = sb();
@@ -105,13 +100,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     console.error('Plans PUT error:', e);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const { id } = await params;
     const s = sb();
     const url = new URL(req.url);
@@ -154,7 +149,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
     return success({ deleted: true, migrated: subscriberCount || 0 });
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }

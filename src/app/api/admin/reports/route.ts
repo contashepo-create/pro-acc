@@ -1,21 +1,15 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { success, error, serverError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-  return payload;
-}
+
 
 export async function GET(request: NextRequest) {
   try {
-    const admin = requireAdmin(request);
+    const __admin = await requireAdmin(request);
     const url = new URL(request.url);
     const type = url.searchParams.get('type') || 'ads';
     const startDate = url.searchParams.get('start');
@@ -109,8 +103,7 @@ export async function GET(request: NextRequest) {
       return error('نوع التقرير غير صالح', 400);
     }
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }
 

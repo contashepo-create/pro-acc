@@ -1,20 +1,15 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
-function requireAdmin(request: NextRequest) {
-  const token = request.cookies.get('admin_token')?.value;
-  if (!token) throw new Error('Unauthorized');
-  const payload = verifyToken(token);
-  if (!payload || payload.role !== 'superadmin') throw new Error('Unauthorized');
-}
+
 
 export async function GET(req: NextRequest) {
   try {
-    requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const s = sb();
     const { data, error: err } = await s.from('subscription_plans')
       .select('*')
@@ -25,14 +20,13 @@ export async function GET(req: NextRequest) {
     }
     return success({ plans: data || [] });
   } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    requireAdmin(req);
+    const __admin = await requireAdmin(req);
     const body = await parseBody(req);
     const { 
       code, name, description, description_ar,
@@ -109,6 +103,6 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     if (e.message === 'Unauthorized') return error('Unauthorized', 401);
     console.error('Plans POST error:', e);
-    return serverError(e);
+    return adminJsonError(e);
   }
 }

@@ -82,7 +82,7 @@ export function AdPopup() {
     // التحقق من عدم العرض في هذه الجلسة
     if (hasShownThisSession()) return;
 
-    fetch('/api/admin/advertisements?active=true&display_mode=popup')
+    fetch('/api/advertisements?display_mode=popup')
       .then((r) => r.json())
       .then((d) => { 
         if (d.success) setAds(d.data || []); 

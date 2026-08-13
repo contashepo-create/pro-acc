@@ -1,7 +1,7 @@
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
 
 const sb = () => getSupabase();
 
@@ -14,10 +14,7 @@ const KNOWN_TABLES = [
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
+  const __admin = await requireAdmin(request);
 
     const s = sb();
 
@@ -49,7 +46,7 @@ export async function GET(request: NextRequest) {
       slowQueries: [],
     });
   } catch (err) {
-    return serverError(err);
+    return adminJsonError(err);
   }
 }
 

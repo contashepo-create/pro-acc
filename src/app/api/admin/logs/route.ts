@@ -1,69 +1,53 @@
 import { NextRequest } from 'next/server';
+import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, parseBody, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
-import { verifyToken } from '@/lib/auth';
-import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
 
+function applySearch(query: any, search: string) {
+  if (!search) return query;
+  const cleaned = search.replace(/[(),".:;%]/g, ' ').trim().slice(0, 80);
+  if (!cleaned) return query;
+  return query.or(`action.ilike.%${cleaned}%,details.ilike.%${cleaned}%`);
+}
+
 export async function GET(request: NextRequest) {
   try {
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
+      const __admin = await requireAdmin(request);
+    await requireAdmin(request);
 
-    const { page, pageSize } = getPaginationParams(request.url);
-    const { from, to } = getDateRangeParams(request.url);
-    const rawSearch = request.nextUrl.searchParams.get('search') || '';
-    const action = request.nextUrl.searchParams.get('action') || '';
-
-    // SECURITY: The search term is interpolated into a PostgREST `.or()`
-    // filter. Strip characters PostgREST treats as filter syntax (commas,
-    // parentheses, quotes, colons, operators) to neutralize filter injection.
-    const search = rawSearch.replace(/[()",.:;]/g, ' ').trim().slice(0, 100);
+    const { page, pageSize } = (() => {
+      const url = new URL(request.url);
+      const p = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
+      const ps = Math.min(200, Math.max(1, parseInt(url.searchParams.get('pageSize') || '50', 10) || 50));
+      return { page: p, pageSize: ps };
+    })();
+    const url = new URL(request.url);
+    const search = url.searchParams.get('search') || '';
+    const action = url.searchParams.get('action') || '';
+    const from = url.searchParams.get('from');
+    const to = url.searchParams.get('to');
 
     const s = sb();
 
-    let countBuilder = s.from('admin_audit_log').select('*', { count: 'exact', head: true });
-
-    if (search) {
-      countBuilder = countBuilder.or(`action.ilike.%${search}%,details.ilike.%${search}%`);
-    }
-    if (action) {
-      countBuilder = countBuilder.eq('action', action);
-    }
-    if (from) {
-      countBuilder = countBuilder.gte('created_at', from);
-    }
-    if (to) {
-      const toDate = new Date(to + 'T23:59:59');
-      countBuilder = countBuilder.lte('created_at', toDate.toISOString());
-    }
-
-    const { count: total, error: countErr } = await countBuilder;
+    let countQ = s.from('admin_audit_log').select('*', { count: 'exact', head: true });
+    countQ = applySearch(countQ, search);
+    if (action) countQ = countQ.eq('action', action);
+    if (from) countQ = countQ.gte('created_at', from);
+    if (to) countQ = countQ.lte('created_at', to + 'T23:59:59');
+    const { count: total, error: countErr } = await countQ;
     if (countErr) throw countErr;
 
-    let dataBuilder = s.from('admin_audit_log')
+    let dataQ = s.from('admin_audit_log')
       .select('id, action, details, ip_address, target_type, target_id, created_at')
       .order('created_at', { ascending: false })
       .range((page - 1) * pageSize, page * pageSize - 1);
-
-    if (search) {
-      dataBuilder = dataBuilder.or(`action.ilike.%${search}%,details.ilike.%${search}%`);
-    }
-    if (action) {
-      dataBuilder = dataBuilder.eq('action', action);
-    }
-    if (from) {
-      dataBuilder = dataBuilder.gte('created_at', from);
-    }
-    if (to) {
-      const toDate = new Date(to + 'T23:59:59');
-      dataBuilder = dataBuilder.lte('created_at', toDate.toISOString());
-    }
-
-    const { data: logs, error: dataErr } = await dataBuilder;
+    dataQ = applySearch(dataQ, search);
+    if (action) dataQ = dataQ.eq('action', action);
+    if (from) dataQ = dataQ.gte('created_at', from);
+    if (to) dataQ = dataQ.lte('created_at', to + 'T23:59:59');
+    const { data: logs, error: dataErr } = await dataQ;
     if (dataErr) throw dataErr;
 
     return success({
@@ -79,35 +63,34 @@ export async function GET(request: NextRequest) {
       pageSize,
     });
   } catch (err) {
-    return serverError(err);
+    return adminJsonError(err);
   }
 }
 
 export async function DELETE(request: NextRequest) {
   try {
-    const token = request.cookies.get('admin_token')?.value;
-    if (!token) return error('Unauthorized', 401);
-    const payload = verifyToken(token);
-    if (!payload || payload.role !== 'superadmin') return error('Unauthorized', 401);
-
+    const __admin = await requireAdmin(request);
     const body = await parseBody<{ masterPassword: string }>(request);
-    if (!body.masterPassword) {
-      return error('كلمة السر الرئيسية مطلوبة', 401);
-    }
+    if (!body.masterPassword) return error('كلمة السر الرئيسية مطلوبة', 401);
 
-    const valid = await verifyMasterPassword(payload.userId, body.masterPassword);
-    if (!valid) {
-      return error('كلمة السر الرئيسية غير صحيحة', 401);
-    }
+    // verify master password before mass-delete
+    const { verifyMasterPassword, auditLog } = await import('@/lib/admin-auth');
+    const valid = await verifyMasterPassword(__admin.adminId, body.masterPassword);
+    if (!valid) return error('كلمة السر الرئيسية غير صحيحة', 401);
 
     const s = sb();
+    // Never delete the seed/system entries — safer to truncate by time (older than now).
+    // Use delete with `id` is not null to delete all rows (PostgREST requires a filter).
     const { error: deleteErr } = await s.from('admin_audit_log').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (deleteErr) throw deleteErr;
 
-    await auditLog(payload.userId, 'clear_logs', 'Cleared all audit logs');
+    await auditLog(__admin.adminId, 'clear_logs', 'Audit logs cleared by admin');
 
-    return success({ message: 'تم مسح سجل الأحداث بنجاح' });
+    return success({ message: 'تم مسح السجلات بنجاح' });
   } catch (err) {
-    return serverError(err);
+    return adminJsonError(err);
   }
 }
+
+// Use serverError for unexpected non-auth errors
+export { serverError };
