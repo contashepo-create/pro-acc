@@ -122,6 +122,7 @@ WITH required(schema_name, table_name, group_name) AS (
     ('purchasing','purchase_orders','purchasing'),
     ('support','company_data_exports','support'),
     ('support','company_messages','support'),
+    ('system','app_settings','system'),
     ('support','messages','support'),
     ('support','notifications','support'),
     ('support','support_tickets','support'),
