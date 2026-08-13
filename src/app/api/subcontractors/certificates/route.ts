@@ -2,8 +2,6 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { ACCOUNT_CODES } from '@/lib/constants';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -57,16 +55,43 @@ export async function POST(req: NextRequest) {
 
     const s = sb();
 
+    // عزل مستأجرين: العقد يجب أن ينتمي لهذه الشركة
     const { data: contract } = await s.from('subcontractor_contracts')
       .select('*')
       .eq('id', contract_id)
+      .eq('company_id', auth.companyId)
       .maybeSingle();
 
-    if (!contract) return error('العقد غير موجود');
+    if (!contract) return error('العقد غير موجود', 404);
 
     const rate = retention_rate ?? (contract as Record<string, any>).retention_rate ?? 0;
     const retentionAmount = gross_amount * rate;
     const netAmount = gross_amount - retentionAmount;
+
+    // حل الحسابات قبل أي كتابة — القيد إلزامي متوازن
+    const { data: costAccount } = await s.from('accounts')
+      .select('id')
+      .eq('company_id', auth.companyId)
+      .eq('code', ACCOUNT_CODES.DIRECT_COSTS)
+      .maybeSingle();
+    const { data: apAccount } = await s.from('accounts')
+      .select('id')
+      .eq('company_id', auth.companyId)
+      .eq('code', ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES)
+      .maybeSingle();
+    if (!costAccount || !apAccount) {
+      return error('حسابات التكلفة المباشرة (5100) أو مقاولي الباطن (2150) غير موجودة — راجع دليل الحسابات');
+    }
+    let retentionAccountId: string | null = null;
+    if (retentionAmount > 0) {
+      const { data: retentionAccount } = await s.from('accounts')
+        .select('id')
+        .eq('company_id', auth.companyId)
+        .eq('code', ACCOUNT_CODES.RETENTIONS)
+        .maybeSingle();
+      if (!retentionAccount) return error('حساب محجوزات الضمان (2160) غير موجود');
+      retentionAccountId = retentionAccount.id;
+    }
 
     const { data: cert, error: certErr } = await s.from('subcontractor_certificates')
       .insert({
@@ -86,58 +111,40 @@ export async function POST(req: NextRequest) {
 
     if (certErr) throw certErr;
 
-    // Get accounts
-    const { data: costAccount } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.DIRECT_COSTS)
-      .maybeSingle();
-
-    const { data: apAccount } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES)
-      .maybeSingle();
-
-    const { data: retentionAccount } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.RETENTIONS)
-      .maybeSingle();
-
-    if (costAccount && apAccount) {
-      // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
-      const nextNumber = await getNextJournalNumber(auth.companyId, date);
-
-      const { data: je, error: jeErr } = await s.from('journal_entries')
-        .insert({
-          company_id: auth.companyId,
-          number: nextNumber,
-          date,
-          type: 'general',
-          description: `شهادة مقاول باطن: ${certificate_number}`,
-          reference_type: 'subcon_certificate',
-          reference_id: cert.id,
-          created_by: auth.userId,
-        })
-        .select('*')
-        .single();
-
-      if (jeErr) throw jeErr;
-
-      const lines = [
-        { journal_entry_id: je.id, account_id: costAccount.id, debit: gross_amount, credit: 0 },
-        { journal_entry_id: je.id, account_id: apAccount.id, debit: 0, credit: netAmount },
-      ];
-      if (retentionAmount > 0 && retentionAccount) {
-        lines.push({ journal_entry_id: je.id, account_id: retentionAccount.id, debit: 0, credit: retentionAmount });
-      }
-
-      const { error: jlErr } = await insertJournalLines(auth.companyId, lines);
-      if (jlErr) throw jlErr;
+    // القيد: مدين التكلفة / دائن ذمم المقاول + محجوز الضمان (متوازن)
+    const lines: Array<{ account_id: string; debit: number; credit: number }> = [
+      { account_id: costAccount.id, debit: Number(gross_amount), credit: 0 },
+      { account_id: apAccount.id, debit: 0, credit: Number(netAmount) },
+    ];
+    if (retentionAmount > 0 && retentionAccountId) {
+      lines.push({ account_id: retentionAccountId, debit: 0, credit: Number(retentionAmount) });
     }
 
-    return success(cert, 201);
+    const { createJournalEntry } = await import('@/lib/journal-utils');
+    const je = await createJournalEntry(auth.companyId, {
+      date,
+      type: 'general',
+      description: `شهادة مقاول باطن: ${certificate_number}`,
+      lines,
+      reference_type: 'subcon_certificate',
+      reference_id: cert.id,
+      created_by: auth.userId,
+    });
+
+    if (je.error || !je.journalId) {
+      await s.from('subcontractor_certificates').delete().eq('id', cert.id).eq('company_id', auth.companyId);
+      throw je.error || new Error('فشل قيد الشهادة');
+    }
+
+    const { data: linked, error: linkErr } = await s.from('subcontractor_certificates')
+      .update({ journal_entry_id: je.journalId })
+      .eq('id', cert.id)
+      .eq('company_id', auth.companyId)
+      .select('*')
+      .single();
+    if (linkErr) throw linkErr;
+
+    return success(linked, 201);
   } catch (err) {
     return handleApiError(err);
   }
