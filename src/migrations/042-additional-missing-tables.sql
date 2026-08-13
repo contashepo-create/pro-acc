@@ -59,15 +59,14 @@ CREATE TABLE IF NOT EXISTS custom_modules (
   sort_order INT NOT NULL DEFAULT 100,
   created_by UUID REFERENCES users(id),
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(company_id, code)
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_custom_modules_company ON custom_modules(company_id);
 
 CREATE TABLE IF NOT EXISTS custom_actions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  module_id UUID REFERENCES custom_modules(id) ON DELETE CASCADE,
+  module_id UUID REFERENCES custom_modules(id) ON DELETE SET NULL,
   name TEXT NOT NULL,
   name_en TEXT,
   icon TEXT DEFAULT '⚡',
@@ -77,11 +76,23 @@ CREATE TABLE IF NOT EXISTS custom_actions (
   sort_order INT NOT NULL DEFAULT 100,
   created_by UUID REFERENCES users(id),
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(company_id, code)
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+-- Unique only per (company, code); module_id is optional.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+     JOIN pg_class t ON t.oid = c.conrelid
+     WHERE t.relname = 'custom_actions' AND c.conname = 'custom_actions_company_code_key'
+  ) THEN
+    ALTER TABLE custom_actions ADD CONSTRAINT custom_actions_company_code_key UNIQUE (company_id, code);
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_custom_actions_company ON custom_actions(company_id);
-CREATE INDEX IF NOT EXISTS idx_custom_actions_module  ON custom_actions(module_id);
+-- Safely create module_id column/index (if the table was created earlier without it)
+ALTER TABLE custom_actions ADD COLUMN IF NOT EXISTS module_id UUID REFERENCES custom_modules(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_custom_actions_module ON custom_actions(module_id);
 
 CREATE TABLE IF NOT EXISTS user_permissions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
