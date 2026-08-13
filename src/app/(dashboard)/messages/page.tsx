@@ -26,10 +26,6 @@ export default function MessagesPage() {
 
   useEffect(() => { fetchData(); }, []);
 
-  const handleEdit = async (message: any) => {
-    alert('تعديل الرسالة - سيتم فتح نافذة التعديل');
-  };
-
   const handleDelete = async (message: any) => {
     try {
       const res = await fetch(`/api/messages/${message.id}`, { method: 'DELETE' });
@@ -39,7 +35,7 @@ export default function MessagesPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -64,7 +60,6 @@ export default function MessagesPage() {
       render: (row: any) => (
         <ActionButtons
           item={row}
-          onEdit={handleEdit}
           onDelete={handleDelete}
         />
       ),

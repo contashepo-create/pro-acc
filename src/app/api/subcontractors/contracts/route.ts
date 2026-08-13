@@ -31,6 +31,11 @@ export async function POST(req: NextRequest) {
     if (!subcontractor_id || !contract_number || !contract_value || !start_date)
       return error('subcontractor_id, contract_number, contract_value, start_date are required');
 
+    // عزل مستأجرين: المقاول (جهة اتصال نوعها subcontractor) يجب أن ينتمي للشركة
+    const { data: sub } = await s.from('contacts')
+      .select('id').eq('id', subcontractor_id).eq('company_id', auth.companyId).eq('type', 'subcontractor').maybeSingle();
+    if (!sub) return error('المقاول غير موجود', 404);
+
     const { data: result, error: insertError } = await s.from('subcontractor_contracts')
       .insert({ company_id: auth.companyId, subcontractor_id, contract_number, description: description || null, contract_value, start_date, end_date: end_date || null, retention_rate: retention_rate || 0, status: 'active' })
       .select('*').single();

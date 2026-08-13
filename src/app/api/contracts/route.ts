@@ -75,6 +75,18 @@ export async function POST(request: NextRequest) {
       return error('العنوان وتاريخ البدء والانتهاء مطلوبة');
     }
 
+    // عزل مستأجرين: المشروع والطرف (إن وُجدا) يجب أن ينتميا لهذه الشركة
+    if (body.project_id) {
+      const { data: proj } = await s.from('projects')
+        .select('id').eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!proj) return error('المشروع غير موجود', 404);
+    }
+    if (body.contact_id) {
+      const { data: contact } = await s.from('contacts')
+        .select('id').eq('id', body.contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف غير موجود', 404);
+    }
+
     const contractId = generateId();
     const { data: contract, error: insertErr } = await s.from('contracts')
       .insert({

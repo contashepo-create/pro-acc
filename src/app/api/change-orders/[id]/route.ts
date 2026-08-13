@@ -7,6 +7,23 @@ import { logAudit } from '@/lib/audit';
 
 const sb = () => getSupabase();
 
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireModulePermission(request, 'projects', 'read');
+    const { id } = await params;
+    const s = sb();
+    const { data, error: qErr } = await s.from('change_orders')
+      .select('*, projects(name)')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+    if (qErr || !data) return error('أمر التغيير غير موجود', 404);
+    return success(data);
+  } catch (err) {
+    return handleApiError(err);
+  }
+}
+
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'projects', 'update');
@@ -17,7 +34,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const s = sb();
     const { data: existing, error: exErr } = await s.from('change_orders')
-      .select('id, number, project_id, change_amount, new_contract_amount, status, title')
+      .select('id, number, project_id, change_amount, new_contract_amount, base_contract_amount, status, title')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (exErr || !existing) return error('أمر التغيير غير موجود', 404);
 
@@ -27,9 +44,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (parsed.data.status !== undefined) updates.status = parsed.data.status;
     if (parsed.data.change_amount !== undefined) {
       updates.change_amount = parsed.data.change_amount;
-      // Recompute the contract value impact.
-      const { data: project } = await s.from('projects').select('contract_value').eq('id', existing.project_id).maybeSingle();
-      const base = parseFloat(String(project?.contract_value)) || 0;
+      // الأساس الصحيح لقيمة العقد قبل هذا الأمر هو base_contract_amount
+      // (وليس القيمة الحالية للمشروع التي قد تشمل أوامر تغيير أخرى).
+      const base = parseFloat(String((existing as any).base_contract_amount ?? 0)) || 0;
       const { adjustedContractAmount } = applyChangeOrder({ baseContractAmount: base, changeAmount: parsed.data.change_amount });
       updates.new_contract_amount = adjustedContractAmount;
     }
@@ -37,7 +54,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (Object.keys(updates).length === 0) return error('لا توجد تغييرات');
 
     const { data: updated, error: upErr } = await s.from('change_orders')
-      .update(updates).eq('id', id).select('id, number, title, status, change_amount, new_contract_amount').single();
+      .update(updates).eq('id', id).eq('company_id', auth.companyId).select('id, number, title, status, change_amount, new_contract_amount').single();
     if (upErr || !updated) return error('فشل تحديث أمر التغيير', 500);
 
     await logAudit({
@@ -61,7 +78,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       .select('id, number').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (exErr || !existing) return error('أمر التغيير غير موجود', 404);
 
-    const { error: delErr } = await s.from('change_orders').delete().eq('id', id);
+    const { error: delErr } = await s.from('change_orders').delete().eq('id', id).eq('company_id', auth.companyId);
     if (delErr) return error('فشل حذف أمر التغيير', 500);
 
     await logAudit({

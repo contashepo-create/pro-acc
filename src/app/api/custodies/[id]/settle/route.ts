@@ -84,13 +84,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           company_id: auth.companyId,
           employee_id: file.employee_id,
           date,
-          type: 'custody_shortage',
           amount: shortage,
           remaining_amount: shortage,
           reason: `عجز عهدة ${file.file_number || id}`,
-          custody_id: id,
         });
-      } catch { /* أعمدة اختيارية */ }
+      } catch { /* عمود إضافي/الجدول غير متاح — القيد المحاسبي هو الأصل */ }
     }
 
     await s.from('custodies').update({

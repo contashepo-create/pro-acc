@@ -29,13 +29,21 @@ export async function POST(request: NextRequest) {
 
     if (!body.employee_id || !body.amount) return error('الموظف والمبلغ مطلوبان');
 
+    const amount = Number(body.amount);
+    if (!(amount > 0)) return error('المبلغ يجب أن يكون موجباً');
+
+    // عزل مستأجرين: الموظف يجب أن ينتمي لهذه الشركة
+    const { data: employee } = await s.from('employees')
+      .select('id').eq('id', body.employee_id).eq('company_id', auth.companyId).maybeSingle();
+    if (!employee) return error('الموظف غير موجود', 404);
+
     const { data: advance, error: insertErr } = await s.from('employee_advances')
       .insert({
         id: generateId(),
         company_id: auth.companyId,
         employee_id: body.employee_id,
-        amount: body.amount,
-        remaining_amount: body.amount,
+        amount,
+        remaining_amount: amount,
         date: body.date || new Date().toISOString().split('T')[0],
         reason: body.reason || null,
       })

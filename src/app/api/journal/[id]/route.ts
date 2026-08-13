@@ -151,10 +151,11 @@ export async function DELETE(
     
     if (!entryRes) return notFound();
 
-    // التحقق من وجود قيود عكسية
+    // التحقق من وجود قيود عكسية — العمود الصحيح هو reversal_of
+    // (كان الفحص السابق على عمود `reference` غير الموجود، فلا يعمل إطلاقاً)
     const { data: reversalRes } = await s.from('journal_entries')
       .select('id')
-      .eq('reference', id)
+      .eq('reversal_of', id)
       .eq('company_id', auth.companyId)
       .limit(1);
     

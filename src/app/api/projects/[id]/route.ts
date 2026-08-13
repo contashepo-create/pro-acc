@@ -54,13 +54,26 @@ export async function PUT(
 
     if (!existing) return notFound();
 
-    const updateData: any = {};
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.client_id !== undefined) updateData.client_id = body.client_id;
+    const updateData: any = { updated_at: new Date().toISOString() };
+    if (typeof body.name === 'string' && body.name.trim()) updateData.name = body.name.trim();
     if (body.start_date !== undefined) updateData.start_date = body.start_date;
     if (body.end_date !== undefined) updateData.end_date = body.end_date;
     if (body.budget !== undefined) updateData.budget = body.budget;
     if (body.status !== undefined) updateData.status = body.status;
+    // كانت تُهمل رغم إرسال النموذج لها:
+    if (body.contract_value !== undefined) updateData.contract_value = Number(body.contract_value) || 0;
+    if (body.description !== undefined) updateData.description = body.description || null;
+    if (body.location !== undefined) updateData.location = body.location || null;
+
+    // العميل الجديد (إن تغيّر) يجب أن ينتمي للشركة — منع الربط المتقاطع
+    if (body.client_id !== undefined && body.client_id) {
+      const { data: client } = await s.from('contacts')
+        .select('id').eq('id', body.client_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!client) return error('العميل المحدد غير موجود', 404);
+      updateData.client_id = body.client_id;
+    } else if (body.client_id === null || body.client_id === '') {
+      updateData.client_id = null;
+    }
 
     const { data: updated, error: updateErr } = await s.from('projects')
       .update(updateData)
@@ -70,6 +83,25 @@ export async function PUT(
       .single();
 
     if (updateErr) throw updateErr;
+
+    // تحديث بنود BOQ (استبدال كامل) عند إرسالها من نموذج التعديل
+    if (Array.isArray(body.items)) {
+      const cleanItems = body.items.filter((it: any) => it && String(it.description || '').trim() !== '');
+      await s.from('boq_items').delete().eq('project_id', id).eq('company_id', auth.companyId);
+      for (const item of cleanItems) {
+        const itemTotal = Number(item.total) || (Number(item.quantity) * Number(item.unit_price)) || 0;
+        const { error: boqErr } = await s.from('boq_items').insert({
+          company_id: auth.companyId,
+          project_id: id,
+          description: String(item.description).trim(),
+          unit: item.unit || 'واحدة',
+          quantity: Number(item.quantity) || 1,
+          unit_price: Number(item.unit_price) || 0,
+          total: itemTotal,
+        });
+        if (boqErr) throw boqErr;
+      }
+    }
 
     return success(updated);
   } catch (err) {

@@ -6,11 +6,12 @@ const sb = () => getSupabase();
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    await requireModulePermission(req, 'fiscal', 'approve');
+    const auth = await requireModulePermission(req, 'fiscal', 'approve');
     const { id } = await params;
     const s = sb();
 
-    const { data: fy } = await s.from('fiscal_years').select('*').eq('id', id).maybeSingle();
+    const { data: fy } = await s.from('fiscal_years')
+      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!fy) return notFound();
     if (fy.status !== 'closed') return error('السنة المالية غير مقفلة');
 

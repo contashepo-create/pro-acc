@@ -3,6 +3,7 @@ import { success, error, notFound, requireModulePermission, requireManagerOrAbov
 import { getSupabase } from '@/lib/supabase-client';
 import { pickContactFields, writeContact } from '@/lib/contact-fields';
 import { getContactBalance } from '@/lib/contact-utils';
+import { contactUpdateSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
@@ -54,7 +55,11 @@ export async function PUT(
     const s = sb();
     const body = await request.json();
 
-    const picked = pickContactFields(body);
+    // رفض أي تحديث يحمل قيماً غير صالحة (مثل type: 'alien') قبل أي كتابة في القاعدة.
+    const parsed = contactUpdateSchema.safeParse(body);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+
+    const picked = pickContactFields(parsed.data);
     if (picked.error) return error(picked.error);
 
     const { data: contactRes } = await s.from('contacts')

@@ -4,6 +4,25 @@ import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireApiAuth(req);
+    const { id } = await params;
+    const s = sb();
+
+    const { data, error: queryError } = await s.from('currencies')
+      .select('id, code, name, rate, is_base, company_id')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+
+    if (queryError || !data) return error('Currency not found', 404);
+    return success(data);
+  } catch (e) {
+    return handleApiError(e);
+  }
+}
+
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireApiAuth(req);

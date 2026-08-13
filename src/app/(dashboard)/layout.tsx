@@ -58,7 +58,7 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="min-h-screen bg-bg-primary flex">
+    <div className="h-dvh bg-bg-primary flex overflow-hidden">
       {/* Sidebar — FIXED: Width is determined dynamically by isCollapsed */}
       <aside className="hidden lg:flex flex-col h-screen bg-sidebar-bg border-l border-border transition-all duration-300 shrink-0"
         style={{ width: isCollapsed ? '70px' : '260px' }}

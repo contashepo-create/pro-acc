@@ -85,6 +85,25 @@ export async function PUT(
 
     if (updateError) throw updateError;
 
+    // إعادة تسمية/ترقيم حساب مستخدم في القيود: حدّث الحقول المكررة في سطور
+    // القيد (account_code/account_name) حتى تبقى التقارير متسقة بعد إعادة الترقيم.
+    if (fields.code !== undefined || fields.name !== undefined) {
+      const { data: used } = await s.from('journal_lines')
+        .select('id')
+        .eq('company_id', auth.companyId)
+        .eq('account_id', id)
+        .limit(1);
+      if (used && used.length > 0) {
+        const linePatch: Record<string, any> = {};
+        if (fields.code !== undefined) linePatch.account_code = fields.code;
+        if (fields.name !== undefined) linePatch.account_name = fields.name;
+        await s.from('journal_lines')
+          .update(linePatch)
+          .eq('company_id', auth.companyId)
+          .eq('account_id', id);
+      }
+    }
+
     return success(updated);
   } catch (err) {
     return handleApiError(err);
@@ -117,15 +136,19 @@ export async function DELETE(
     }
 
     // Journal usage check — journal_lines is company-scoped, so query it
-    // directly. The previous two-step (all journal_entries ids, then
-    // `.in(journal_entry_id, ids)`) silently missed usage once the company
-    // passed Supabase's 1000-row default limit on journal_entries.
-    const { data: lines } = await s.from('journal_lines')
+    // directly. Check BOTH the FK (account_id) and the denormalized code:
+    // lines store both, and old lines may only carry one of them.
+    const { data: linesById } = await s.from('journal_lines')
+      .select('id')
+      .eq('company_id', auth.companyId)
+      .eq('account_id', id)
+      .limit(1);
+    const { data: linesByCode } = await s.from('journal_lines')
       .select('id')
       .eq('company_id', auth.companyId)
       .eq('account_code', account.code)
       .limit(1);
-    if (lines && lines.length > 0) {
+    if ((linesById && linesById.length > 0) || (linesByCode && linesByCode.length > 0)) {
       return error('لا يمكن حذف حساب له قيود محاسبية. قم بإلغاء تنشيط الحساب بدلاً من حذفه');
     }
 

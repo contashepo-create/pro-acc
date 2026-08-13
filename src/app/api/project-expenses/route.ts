@@ -56,6 +56,9 @@ export async function POST(req: NextRequest) {
       return error('project_id, expense_type, description, amount, date are required');
     }
 
+    const expenseAmount = Number(amount);
+    if (!(expenseAmount > 0)) return error('المبلغ يجب أن يكون موجباً');
+
     if (!PROJECT_EXPENSE_CODES[expense_type]) {
       return error('expense_type must be one of: materials, labor, subcontractor, equipment, other');
     }
@@ -66,10 +69,17 @@ export async function POST(req: NextRequest) {
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
-    if (!project) return error('المشروع غير موجود');
+    if (!project) return error('المشروع غير موجود', 404);
 
     if ((project as any).status === 'completed' || (project as any).status === 'cancelled') {
       return error('لا يمكن تسجيل مصروفات على مشروع مكتمل أو ملغى');
+    }
+
+    // الطرف المحدد (إن وُجد) يجب أن ينتمي للشركة
+    if (contact_id) {
+      const { data: contact } = await s.from('contacts')
+        .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف المحدد غير موجود', 404);
     }
 
     const accountCode = PROJECT_EXPENSE_CODES[expense_type];
@@ -89,7 +99,8 @@ export async function POST(req: NextRequest) {
         .eq('id', bank_safe_id)
         .eq('company_id', auth.companyId)
         .maybeSingle();
-      if (bankSafe) paymentAccountId = (bankSafe as any).account_id;
+      if (!bankSafe?.account_id) return error('الخزينة/البنك غير موجود أو بلا حساب محاسبي', 404);
+      paymentAccountId = (bankSafe as any).account_id;
     }
 
     if (!paymentAccountId) {
@@ -104,15 +115,15 @@ export async function POST(req: NextRequest) {
     if (!paymentAccountId) return error('لم يتم العثور على حساب النقدية أو البنك');
 
     // VAT calculation (input VAT)
-    const vRate = (tax_enabled && tax_rate) ? tax_rate : 0;
-    const taxAmount = amount * vRate;
-    const totalPayment = amount + taxAmount;
+    const vRate = (tax_enabled && tax_rate) ? Number(tax_rate) : 0;
+    const taxAmount = expenseAmount * vRate;
+    const totalPayment = expenseAmount + taxAmount;
 
     // Build journal lines: debit expense (net) + debit VAT_PURCHASES + credit cash (total)
     const journalLines: any[] = [
       {
         account_id: expenseAcc.id,
-        debit: amount,
+        debit: expenseAmount,
         credit: 0,
         description: `${description} (${expense_type})`,
         project_id: project_id,
@@ -128,49 +139,36 @@ export async function POST(req: NextRequest) {
       },
     ];
 
-    // Add input VAT line if applicable
+    // إلزامي وجود حساب ضريبة المدخلات عند احتساب ضريبة — وإلا قيد غير متوازن
     if (taxAmount > 0) {
       const { data: vatPurchAcc } = await s.from('accounts')
         .select('id')
         .eq('code', ACCOUNT_CODES.VAT_PURCHASES)
         .eq('company_id', auth.companyId)
         .maybeSingle();
-      if (vatPurchAcc) {
-        journalLines.push({
-          account_id: (vatPurchAcc as any).id,
-          debit: taxAmount,
-          credit: 0,
-          description: `ضريبة مدخلات: ${description}`,
-          project_id: project_id,
-          contact_id: contact_id || null,
-        });
-      }
+      if (!vatPurchAcc) return error('حساب ضريبة المشتريات (1180) غير موجود');
+      journalLines.push({
+        account_id: (vatPurchAcc as any).id,
+        debit: taxAmount,
+        credit: 0,
+        description: `ضريبة مدخلات: ${description}`,
+        project_id: project_id,
+        contact_id: contact_id || null,
+      });
     }
 
-    const je = await createJournalEntry(auth.companyId, {
-      date,
-      type: 'general',
-      description: `مصروف مشروع: ${description} - ${(project as any).name}`,
-      lines: journalLines,
-      reference_type: 'project_expense',
-      created_by: auth.userId,
-    });
-
-    if (je.error) {
-      console.warn('Failed to create journal entry for project expense:', je.error);
-    }
-
+    // 1. سجل المصروف أولاً (journal_entry_id مؤقتاً null)
     const { data: expense, error: insertErr } = await s.from('project_expenses')
       .insert({
         company_id: auth.companyId,
         project_id,
         expense_type,
         description,
-        amount,
+        amount: expenseAmount,
         date,
         contact_id: contact_id || null,
         account_code: accountCode,
-        journal_entry_id: je.error ? null : je.journalId,
+        journal_entry_id: null,
         notes: notes || null,
         tax_rate: vRate,
         tax_amount: taxAmount,
@@ -181,7 +179,38 @@ export async function POST(req: NextRequest) {
 
     if (insertErr) throw insertErr;
 
-    return success(expense, 201);
+    // 2. قيد المحاسبة — فشله يلغي المصروف بالكامل (لا مصروف بلا قيد)
+    const je = await createJournalEntry(auth.companyId, {
+      date,
+      type: 'general',
+      description: `مصروف مشروع: ${description} - ${(project as any).name}`,
+      lines: journalLines,
+      reference_type: 'project_expense',
+      reference_id: expense.id,
+      created_by: auth.userId,
+    });
+
+    if (je.error || !je.journalId) {
+      await s.from('project_expenses').delete().eq('id', expense.id).eq('company_id', auth.companyId);
+      throw je.error || new Error('فشل قيد مصروف المشروع');
+    }
+
+    // 3. اربط القيد بالمصروف
+    const { data: linked, error: linkErr } = await s.from('project_expenses')
+      .update({ journal_entry_id: je.journalId })
+      .eq('id', expense.id)
+      .eq('company_id', auth.companyId)
+      .select('*')
+      .single();
+    if (linkErr) {
+      // تراجع: احذف القيد والمصروف معاً
+      await s.from('journal_lines').delete().eq('journal_entry_id', je.journalId);
+      await s.from('journal_entries').delete().eq('id', je.journalId).eq('company_id', auth.companyId);
+      await s.from('project_expenses').delete().eq('id', expense.id).eq('company_id', auth.companyId);
+      throw linkErr;
+    }
+
+    return success(linked, 201);
   } catch (err) {
     return handleApiError(err);
   }

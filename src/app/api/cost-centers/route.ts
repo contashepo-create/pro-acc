@@ -34,6 +34,13 @@ export async function POST(req: NextRequest) {
 
     if (!code || !name) return error('الكود والاسم مطلوبان');
 
+    // عزل مستأجرين: المركز الأب (إن وُجد) يجب أن ينتمي لنفس الشركة
+    if (parent_id) {
+      const { data: parent } = await s.from('cost_centers')
+        .select('id').eq('id', parent_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!parent) return error('المركز الأب غير موجود', 404);
+    }
+
     const { data, error: err } = await s.from('cost_centers')
       .insert({
         company_id: auth.companyId,

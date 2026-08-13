@@ -60,11 +60,11 @@ export function Modal({
 
   return (
     <div
-      className={`modal-backdrop flex items-center justify-center ${isFull ? 'p-0' : 'p-4'}`}
+      className={`modal-backdrop flex ${isFull ? 'p-0' : 'p-4'}`}
       onClick={handleBackdropClick}
     >
       <div
-        className={`modal-content bg-bg-card border border-border shadow-modal w-full ${sizeClasses[size]} ${isFull ? 'flex flex-col' : ''} ${className}`}
+        className={`modal-content bg-bg-card border border-border shadow-modal w-full ${sizeClasses[size]} ${isFull ? 'flex flex-col' : 'm-auto'} ${className}`}
         role="dialog"
         aria-modal="true"
         aria-label={typeof title === 'string' ? title : undefined}

@@ -1,16 +1,18 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, User, Phone, Mail, FileText } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
-import { Textarea } from '@/components/ui/Textarea';
+import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { formatCurrency } from '@/lib/utils';
+import { fetchRecord, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 
 export default function DailyWorkersPage() {
@@ -21,14 +23,14 @@ export default function DailyWorkersPage() {
   const [editing, setEditing] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', phone: '', email: '', tax_number: '', notes: '' });
+  const [form, setForm] = useState<any>({ name: '', phone: '', daily_wage: 0 });
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/contacts?type=daily_worker');
+      const res = await fetch('/api/daily-workers');
       const json = await res.json();
-      if (json.success) setRows(json.data?.contacts || []);
+      if (json.success) setRows(json.data?.workers || []);
       else { setError(json.message || 'فشل'); toast.error(json.message || 'فشل تحميل البيانات'); }
     } catch { setError('فشل تحميل البيانات'); }
     finally { setLoading(false); }
@@ -37,20 +39,20 @@ export default function DailyWorkersPage() {
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
-    if (!form.name) { setSaveError('اسم العامل مطلوب'); return; }
+    if (!form.name.trim()) { setSaveError('اسم العامل مطلوب'); return; }
     setSaving(true); setSaveError('');
     try {
-      const url = editing ? `/api/contacts/${editing.id}` : '/api/contacts';
+      const url = editing ? `/api/daily-workers/${editing.id}` : '/api/daily-workers';
       const method = editing ? 'PUT' : 'POST';
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, type: 'daily_worker' }),
+        body: JSON.stringify(form),
       });
       const json = await res.json();
       if (json.success) {
         setShowModal(false); setEditing(null);
-        setForm({ name: '', phone: '', email: '', tax_number: '', notes: '' });
+        setForm({ name: '', phone: '', daily_wage: 0 });
         toast.success(editing ? 'تم تحديث العامل' : 'تم إضافة عامل يومي');
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -58,15 +60,19 @@ export default function DailyWorkersPage() {
     finally { setSaving(false); }
   };
 
-  const handleEdit = (row: any) => {
+  const handleEdit = async (row: any) => {
+    const { data, error } = await fetchRecord(`/api/daily-workers/${row.id}`);
+    const src = recordOrRow(data, row);
+    if (!data && error) toast.error(error);
     setEditing(row);
-    setForm({ name: row.name || '', phone: row.phone || '', email: row.email || '', tax_number: row.tax_number || '', notes: row.notes || '' });
+    setForm({ name: src.name || '', phone: src.phone || '', daily_wage: src.daily_wage ?? 0 });
     setShowModal(true);
   };
 
   const handleDelete = async (row: any) => {
+    if (!confirm(`حذف العامل "${row.name}"؟`)) return;
     try {
-      const res = await fetch(`/api/contacts/${row.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/daily-workers/${row.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) { toast.success('تم حذف العامل'); fetchData(); }
       else toast.error(json.message || 'فشل الحذف');
@@ -76,10 +82,9 @@ export default function DailyWorkersPage() {
   const columns = [
     { key: 'name', label: 'اسم العامل', sortable: true },
     { key: 'phone', label: 'الجوال', render: (r: any) => <span dir="ltr">{r.phone || '—'}</span> },
-    { key: 'email', label: 'البريد', render: (r: any) => <span dir="ltr">{r.email || '—'}</span> },
-    { key: 'tax_number', label: 'الرقم الضريبي' },
-    { key: 'notes', label: 'ملاحظات' },
-    { key: 'actions', label: 'إجراءات', render: (r: any) => <ActionButtons item={r} onEdit={handleEdit} onDelete={handleDelete} /> },
+    { key: 'daily_wage', label: 'الأجر اليومي', render: (r: any) => formatCurrency(r.daily_wage || 0) },
+    { key: 'is_active', label: 'الحالة', render: (r: any) => <Badge variant={r.is_active ? 'success' : 'danger'}>{r.is_active ? 'نشط' : 'معطّل'}</Badge> },
+    { key: 'actions', label: 'إجراءات', render: (r: any) => <ActionButtons item={r} onEdit={() => handleEdit(r)} onDelete={() => handleDelete(r)} /> },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
@@ -89,32 +94,28 @@ export default function DailyWorkersPage() {
     <div className="space-y-6">
       <PageHeader
         title="العمال اليوميون"
-        description="إدارة العمال اليومية بشكل منفصل"
-        actions={<Button onClick={() => { setEditing(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة عامل يومي</Button>}
+        description="إدارة سجل العمالة اليومية والأجور"
+        actions={<Button onClick={() => { setEditing(null); setForm({ name: '', phone: '', daily_wage: 0 }); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة عامل يومي</Button>}
       />
       {rows.length === 0 ? (
         <EmptyState title="لا يوجد عمال يوميون" actionLabel="إضافة عامل" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={rows} searchable searchKeys={['name', 'phone', 'tax_number']} />
+        <DataTable columns={columns} data={rows} searchable searchKeys={['name', 'phone']} />
       )}
       <Modal
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditing(null); }}
         title={editing ? `تعديل: ${editing.name}` : 'إضافة عامل يومي جديد'}
-        size="lg"
+        size="md"
         footer={<div className="flex gap-2">
           <Button variant="ghost" onClick={() => { setShowModal(false); setEditing(null); }}>إلغاء</Button>
           <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button>
         </div>}
       >
         <div className="space-y-4">
-          <Input label="اسم العامل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="col-span-2" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="رقم الهاتف" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} dir="ltr" />
-            <Input label="البريد الإلكتروني" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} dir="ltr" />
-            <Input label="الرقم الضريبي" value={form.tax_number} onChange={(e) => setForm({ ...form, tax_number: e.target.value })} dir="ltr" />
-          </div>
-          <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          <Input label="اسم العامل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <Input label="رقم الهاتف" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} dir="ltr" />
+          <Input label="الأجر اليومي" type="number" value={form.daily_wage} onChange={(e) => setForm({ ...form, daily_wage: parseFloat(e.target.value) || 0 })} />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

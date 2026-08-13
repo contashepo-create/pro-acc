@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError, success, requireModulePermission } from '@/lib/api-helpers';
+import { error, handleApiError, success, requireModulePermission } from '@/lib/api-helpers';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { insertJournalLines } from '@/lib/journal-utils';
 
@@ -23,6 +23,15 @@ export async function POST(request: NextRequest) {
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
     const depreciationDate = new Date(currentYear, currentMonth, 1).toISOString().split('T')[0];
+
+    // حل حسابي الإهلاك قبل أي كتابة — لا إهلاك بلا قيد متوازن
+    const { data: depExpAcc } = await s.from('accounts')
+      .select('id').eq('company_id', auth.companyId).eq('code', '5260').maybeSingle();
+    const { data: accumAcc } = await s.from('accounts')
+      .select('id').eq('company_id', auth.companyId).eq('code', '1290').maybeSingle();
+    if (!depExpAcc || !accumAcc) {
+      return error('حسابا الإهلاك (5260) ومجمع الإهلاك (1290) غير موجودين — راجع دليل الحسابات');
+    }
 
     let totalDepreciation = 0;
     const createdEntries: any[] = [];
@@ -74,19 +83,12 @@ export async function POST(request: NextRequest) {
         .select('id')
         .single();
 
-      // Get depreciation expense and accumulated depreciation accounts
-      const { data: depExpAcc } = await s.from('accounts')
-        .select('id').eq('company_id', auth.companyId).eq('code', '5260').maybeSingle();
-      const { data: accumAcc } = await s.from('accounts')
-        .select('id').eq('company_id', auth.companyId).eq('code', '1290').maybeSingle();
-
-      if (depExpAcc && accumAcc) {
-        const { error: jlErr } = await insertJournalLines(auth.companyId, [
-          { journal_entry_id: je.id, account_id: depExpAcc.id, debit: monthlyDepreciation, credit: 0, description: `إهلاك ${asset.code}` },
-          { journal_entry_id: je.id, account_id: accumAcc.id, debit: 0, credit: monthlyDepreciation, description: `مجمع إهلاك ${asset.code}` },
-        ]);
-        if (jlErr) throw jlErr;
-      }
+      // حسابات الإهلاك حُلَّت قبل الحلقة — القيد هنا إلزامي
+      const { error: jlErr } = await insertJournalLines(auth.companyId, [
+        { journal_entry_id: je.id, account_id: depExpAcc.id, debit: monthlyDepreciation, credit: 0, description: `إهلاك ${asset.code}` },
+        { journal_entry_id: je.id, account_id: accumAcc.id, debit: 0, credit: monthlyDepreciation, description: `مجمع إهلاك ${asset.code}` },
+      ]);
+      if (jlErr) throw jlErr;
 
       // Update asset
       await s.from('fixed_assets').update({

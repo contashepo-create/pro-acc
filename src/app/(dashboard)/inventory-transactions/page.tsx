@@ -121,19 +121,7 @@ export default function InventoryTransactionsPage() {
     }
   };
 
-  const handleDelete = async (transaction: any) => {
-    try {
-      const res = await fetch(`/api/inventory-transactions/${transaction.id}`, { method: 'DELETE' });
-      const json = await res.json();
-      if (json.success) {
-        fetchData();
-      } else {
-        alert(json.message || 'فشل الحذف');
-      }
-    } catch (e) {
-      alert('خطأ في الاتصال بالخادم');
-    }
-  };
+
 
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'success' | 'danger' | 'warning' | 'info'; label: string }> = {
@@ -163,7 +151,8 @@ export default function InventoryTransactionsPage() {
         <ActionButtons
           item={row}
           onEdit={handleEdit}
-          onDelete={handleDelete}
+          // الحركات المخزنية لا تُحذف (أثر مالي/مخزني) — التصحيح بحركة عكسية
+          onDelete={undefined}
         />
       ),
     },

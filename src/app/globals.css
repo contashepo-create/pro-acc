@@ -530,6 +530,9 @@ tr:hover td { background: var(--color-bg-hover); }
   backdrop-filter: blur(4px);
   z-index: 1000;
   animation: fade-in 0.15s ease-out;
+  /* السماح بالتمرير عندما يكون محتوى النافذة أطول من الشاشة
+     (بدلاً من قصّ أعلى/أسفل المحتوى مع items-center) */
+  overflow-y: auto;
 }
 .modal-content { animation: modal-enter 0.2s ease-out; }
 @keyframes modal-enter {
@@ -672,6 +675,9 @@ tr:hover td { background: var(--color-bg-hover); }
     max-width: 100% !important;
     position: static !important;
     overflow: visible !important;
+    /* فك قيود الارتفاع حتى تُطبع الفاتورة على عدة صفحات كاملة */
+    height: auto !important;
+    min-height: 0 !important;
     box-shadow: none !important;
   }
 
