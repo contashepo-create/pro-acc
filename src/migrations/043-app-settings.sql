@@ -23,6 +23,32 @@ CREATE TABLE IF NOT EXISTS app_settings (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Idempotently ensure any columns missing on pre-existing copies of
+-- app_settings (e.g. created by an older migration) exist before we try
+-- to INSERT into them.
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS value       TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS category    TEXT DEFAULT 'general';
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS updated_by  UUID REFERENCES admin_users(id) ON DELETE SET NULL;
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS created_at  TIMESTAMPTZ DEFAULT NOW();
+
+-- Ensure the PRIMARY KEY on `key` exists.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+     JOIN pg_class t ON t.oid = c.conrelid
+     WHERE t.relname = 'app_settings' AND c.contype = 'p'
+  ) THEN
+    -- Can't directly add PK on a nullable column; guarantee NOT NULL first.
+    UPDATE app_settings SET key = '' WHERE key IS NULL;
+    DELETE FROM app_settings WHERE key = '';  -- shouldn't happen
+    ALTER TABLE app_settings ALTER COLUMN key SET NOT NULL;
+    ALTER TABLE app_settings ADD CONSTRAINT app_settings_pkey PRIMARY KEY (key);
+  END IF;
+END $$;
+
 -- Seed sensible defaults (idempotent via ON CONFLICT)
 INSERT INTO app_settings (key, value, category, description) VALUES
   ('app_name',          'برو أكاونت - Pro Acc',  'branding',  'اسم التطبيق الظاهر في الواجهة والتقارير'),
