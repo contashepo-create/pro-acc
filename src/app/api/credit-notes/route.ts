@@ -99,6 +99,19 @@ export async function POST(request: NextRequest) {
       await s.from('credit_note_sequences').insert({ company_id: auth.companyId, year, last_number: 1 });
     }
 
+    // حل الحسابات قبل أي كتابة — القيد العكسي إلزامي متوازن
+    const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE).maybeSingle();
+    const { data: revAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).maybeSingle();
+    if (!arAccount || !revAccount) {
+      return error('حسابات الذمم (1130) أو الإيرادات (4100) غير موجودة — راجع دليل الحسابات');
+    }
+    let vatAccountId: string | null = null;
+    if (taxAmount > 0) {
+      const { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.VAT_SALES).maybeSingle();
+      if (!vatAccount) return error('حساب ضريبة المبيعات (2120) غير موجود');
+      vatAccountId = vatAccount.id;
+    }
+
     // Insert credit note
     const { data: cn, error: cnErr } = await s.from('credit_notes')
       .insert({
@@ -122,7 +135,7 @@ export async function POST(request: NextRequest) {
 
     // Insert items
     for (const item of items) {
-      await s.from('credit_note_items').insert({
+      const { error: itemErr } = await s.from('credit_note_items').insert({
         company_id: auth.companyId,
         credit_note_id: cn.id,
         description: item.description,
@@ -130,62 +143,43 @@ export async function POST(request: NextRequest) {
         unit_price: item.unit_price,
         total: item.quantity * item.unit_price,
       });
+      if (itemErr) throw itemErr;
     }
 
-    // Create reversal journal entry
-    // Credit note = reverse the original invoice entry
-    // Debit Revenue (4100), Debit VAT (2120) / Credit AR (1130)
-    const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE).maybeSingle();
-    const { data: revAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).maybeSingle();
-    const { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.VAT_SALES).maybeSingle();
-
-    if (arAccount && revAccount) {
-      const journalLines: any[] = [
-        {
-          account_id: revAccount.id,
-          debit: subtotal,
-          credit: 0,
-          description: `إشعار دائن: ${reason}`,
-          project_id: project_id || null,
-          contact_id: linkedContactId,
-        },
-        {
-          account_id: arAccount.id,
-          debit: 0,
-          credit: total,
-          description: `إشعار دائن: ${reason}`,
-          project_id: project_id || null,
-          contact_id: linkedContactId,
-        },
-      ];
-
-      if (taxAmount > 0 && vatAccount) {
-        journalLines.push({
-          account_id: vatAccount.id,
-          debit: taxAmount,
-          credit: 0,
-          description: `ضريبة إشعار دائن: ${reason}`,
-          project_id: project_id || null,
-          contact_id: linkedContactId,
-        });
-      }
-
-      const je = await createJournalEntry(auth.companyId, {
-        date: date || new Date().toISOString().split('T')[0],
-        type: 'general',
-        description: `إشعار دائن ${cn.number} - ${reason}`,
-        lines: journalLines,
-        reference_type: 'credit_note',
-        reference_id: cn.id,
-        created_by: auth.userId,
-      });
-
-      if (!je.error) {
-        await s.from('credit_notes').update({ journal_entry_id: je.journalId }).eq('id', cn.id);
-      }
+    // Create reversal journal entry — فشله يلغي الإشعار بالكامل
+    const journalLines: any[] = [
+      { account_id: revAccount.id, debit: subtotal, credit: 0, description: `إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId },
+      { account_id: arAccount.id, debit: 0, credit: total, description: `إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId },
+    ];
+    if (taxAmount > 0 && vatAccountId) {
+      journalLines.push({ account_id: vatAccountId, debit: taxAmount, credit: 0, description: `ضريبة إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId });
     }
 
-    return success(cn, 201);
+    const je = await createJournalEntry(auth.companyId, {
+      date: date || new Date().toISOString().split('T')[0],
+      type: 'general',
+      description: `إشعار دائن ${cn.number} - ${reason}`,
+      lines: journalLines,
+      reference_type: 'credit_note',
+      reference_id: cn.id,
+      created_by: auth.userId,
+    });
+
+    if (je.error || !je.journalId) {
+      await s.from('credit_note_items').delete().eq('credit_note_id', cn.id);
+      await s.from('credit_notes').delete().eq('id', cn.id).eq('company_id', auth.companyId);
+      throw je.error || new Error('فشل قيد الإشعار الدائن');
+    }
+
+    const { data: linked, error: linkErr } = await s.from('credit_notes')
+      .update({ journal_entry_id: je.journalId })
+      .eq('id', cn.id)
+      .eq('company_id', auth.companyId)
+      .select('*')
+      .single();
+    if (linkErr) throw linkErr;
+
+    return success(linked, 201);
   } catch (err) {
     return handleApiError(err);
   }
