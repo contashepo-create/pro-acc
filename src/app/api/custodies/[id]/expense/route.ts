@@ -105,16 +105,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (excess > 0) {
       await recordCustodyTx(auth.companyId, id, 'adjustment', excess, `زيادة: ${description}`, auth.userId);
       try {
+        // الزيادة التزام على الشركة للموظف (2140) — لا تُسجَّل كسلفة على الموظف
         await s.from('employee_advances').insert({
           company_id: auth.companyId,
           employee_id: file.employee_id,
           date,
-          type: 'custody_surplus',
           amount: excess,
-          description: `زيادة عهدة ${file.file_number || id}`,
-          custody_id: id,
+          remaining_amount: 0,
+          reason: `مستحق للموظف — زيادة عهدة ${file.file_number || id}`,
         });
-      } catch { /* أعمدة اختيارية */ }
+      } catch { /* عمود إضافي/الجدول غير متاح — القيد المحاسبي هو الأصل */ }
     }
     if (invoiceId) {
       try {
