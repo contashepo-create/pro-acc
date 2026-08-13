@@ -72,13 +72,19 @@ const C2 = 'company-2';
 function baseDb() {
   return {
     users: [
-      { id: 'u-admin', company_id: C1, name: 'مدير', role: 'admin', is_active: true },
-      { id: 'u-sup', company_id: C1, name: 'مشرف', role: 'supervisor', is_active: true },
+      { id: 'u-admin', company_id: C1, name: 'مدير', role: 'admin', is_active: true, token_version: 0 },
+      { id: 'u-sup', company_id: C1, name: 'مشرف', role: 'supervisor', is_active: true, token_version: 0 },
     ],
-    companies: [{ id: C1, name: 'شركة', email: 'co@x.com', phone: '0500' }],
+    companies: [{ id: C1, name: 'شركة', email: 'co@x.com', phone: '0500', is_active: true }],
     accounts: [{ id: 'a1', company_id: C1, code: '1130', name: 'العملاء' }],
     contacts: [{ id: 'c1', company_id: C1, name: 'عميل' }],
     employees: [{ id: 'e1', company_id: C1, name: 'موظف' }],
+    subscriptions: [{
+      id: 's1', company_id: C1, plan_id: 'p1', plan_code: 'start', status: 'active',
+      start_date: '2024-01-01',
+      end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      subscription_plans: { code: 'start', name: 'Start', features_modules: { dashboard: true } },
+    }],
     backup_logs: [] as Row[],
     security_audit_log: [] as Row[],
   } as Record<string, Row[]>;

@@ -141,7 +141,7 @@ export default function LandingPage() {
         <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center relative">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 border border-accent/20 mb-6">
             <Zap size={14} className="text-accent" />
-            <span className="text-xs font-medium text-accent">تجربة مجانية 14 يوماً — بدون بطاقة ائتمان</span>
+            <span className="text-xs font-medium text-accent">تجربة مجانية 7 أيام — بدون بطاقة ائتمان</span>
           </div>
           <h1 className="text-3xl sm:text-5xl font-bold text-text-primary mb-6 leading-tight">
             نظام محاسبة متكامل
@@ -206,7 +206,7 @@ export default function LandingPage() {
             <p className="text-text-muted">ابدأ بتجربة مجانية ثم اختر الخطة التي تناسبك</p>
           </div>
           <div className="text-center mb-6 text-sm text-text-muted">
-            تجربة مجانية 14 يوماً — جميع الأسعار بالدولار الأمريكي (USD). خصم 20% على الدفع السنوي.
+            تجربة مجانية 7 أيام — جميع الأسعار بالدولار الأمريكي (USD). خصم 20% على الدفع السنوي.
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 max-w-5xl mx-auto">
             {plans.map((p, i) => (

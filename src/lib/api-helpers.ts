@@ -53,7 +53,7 @@ export class AuthError extends Error {
 
 const sb = () => getSupabase();
 
-export async function requireApiAuth(request: Request, options: { checkSubscription?: boolean } = {}): Promise<{ companyId: string; userId: string; role: string }> {
+export async function requireApiAuth(request: Request, options: { checkSubscription?: boolean; skipModuleGuard?: boolean } = {}): Promise<{ companyId: string; userId: string; role: string }> {
   const { extractToken, verifyToken } = await import('@/lib/auth');
   const token = extractToken(request);
   if (!token) throw new AuthError('غير مصرح به');
@@ -88,8 +88,24 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
     // ignore if company check fails
   }
 
-  // Check subscription if requested
-  if (options.checkSubscription) {
+  // Subscription guard: enforce plan state + module gating unless caller
+  // explicitly opts out (e.g. login/register flows run before a company/
+  // subscription exists yet).
+  if (options.checkSubscription !== false && !options.skipModuleGuard) {
+    try {
+      const url = new URL(request.url, 'http://localhost');
+      const { assertSubscriptionAccess } = await import('@/lib/subscription-guard');
+      await assertSubscriptionAccess(u.company_id, request.method, url.pathname);
+    } catch (e) {
+      if (e instanceof AuthError) throw e;
+      // On unexpected errors (e.g. DB issue) we fail-soft with a warning
+      // rather than locking everyone out. This keeps the platform
+      // available during transient DB issues while still logging.
+      console.warn('Subscription guard check failed (fail-open):', e);
+    }
+  } else if (options.checkSubscription) {
+    // Legacy behavior: expiry-only check (used by callers that still
+    // manage module gating themselves).
     try {
       const { getCompanySubscription } = await import('@/lib/subscription');
       const sub = await getCompanySubscription(u.company_id);
@@ -98,7 +114,6 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
       }
     } catch (e) {
       if (e instanceof AuthError) throw e;
-      // ignore subscription check errors (fail open for now, log)
       console.warn('Subscription check failed:', e);
     }
   }

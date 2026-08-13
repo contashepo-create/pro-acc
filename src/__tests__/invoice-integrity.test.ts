@@ -104,8 +104,8 @@ const SAFE = '00000000-0000-4000-8000-0000000000b1';
 
 function baseDb() {
   return {
-    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
-    companies: [{ id: C1, is_active: true, name: 'شركة الاختبار', tax_number: '312345678901234' }],
+    users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    companies: [{ id: C1, is_active: true, token_version: 0, name: 'شركة الاختبار', tax_number: '312345678901234' }],
     contacts: [{ id: CLIENT, company_id: C1, name: 'عميل' }],
     projects: [] as Row[],
     accounts: [
@@ -116,7 +116,22 @@ function baseDb() {
     ],
     banks_safes: [{ id: SAFE, company_id: C1, account_id: BANK_ACC }],
     invoice_sequences: [] as Row[],
-    journal_sequences: [] as Row[],
+        subscriptions: [{
+      id: 's1', company_id: C1, plan_id: 'p1', plan_code: 'enterprise', status: 'active',
+      start_date: '2024-01-01',
+      end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      subscription_plans: { code: 'enterprise', name: 'Enterprise', features_modules: {
+        dashboard: true, accounts: true, journal: true, invoices: true, quotations: true,
+        clients: true, contacts: true, reports_basic: true, reports_advanced: true,
+        reports_consolidated: true, settings: true, subscription: true, inventory: true,
+        purchases: true, cost_centers: true, banks: true, cash: true, warehouses: true,
+        branches: true, tax_reports: true, fixed_assets: true, pos: true, workflows: true,
+        approvals: true, custody: true, employees: true, projects: true, budgets: true,
+        messages: true, crm: true, contracts: true, tenders: true, boq: true,
+        progress_billing: true, subcontractors: true, payroll: true
+      } },
+    }],
+journal_sequences: [] as Row[],
     voucher_receipts: [] as Row[],
     invoices: [] as Row[],
     invoice_items: [] as Row[],

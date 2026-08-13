@@ -117,7 +117,8 @@ const PO = '00000000-0000-4000-8000-000000000c01';
 
 function baseDb() {
   return {
-    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
+    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin', token_version: 0 }],
+    companies: [{ id: C1, name: 'شركة', is_active: true }],
     warehouses: [
       { id: W1, company_id: C1, name: 'المستودع الرئيسي' },
       { id: W2, company_id: C1, name: 'مستودع الفرع' },
@@ -142,6 +143,21 @@ function baseDb() {
     journal_entries: [] as Row[],
     journal_lines: [] as Row[],
     journal_sequences: [] as Row[],
+    subscriptions: [{
+      id: 's1', company_id: C1, plan_id: 'p1', plan_code: 'enterprise', status: 'active',
+      start_date: '2024-01-01',
+      end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      subscription_plans: { code: 'enterprise', name: 'Enterprise', features_modules: {
+        dashboard: true, accounts: true, journal: true, invoices: true, quotations: true,
+        clients: true, contacts: true, reports_basic: true, reports_advanced: true,
+        reports_consolidated: true, settings: true, subscription: true, inventory: true,
+        purchases: true, cost_centers: true, banks: true, cash: true, warehouses: true,
+        branches: true, tax_reports: true, fixed_assets: true, pos: true, workflows: true,
+        approvals: true, custody: true, employees: true, projects: true, budgets: true,
+        messages: true, crm: true, contracts: true, tenders: true, boq: true,
+        progress_billing: true, subcontractors: true, payroll: true,
+      } },
+    }],
   } as Record<string, Row[]>;
 }
 
@@ -360,7 +376,7 @@ describe('inventory items — create/edit/delete guards', () => {
     expect(r1.status).toBe(400);
 
     const db = baseDb();
-    db.inventory_items.push({ id: 'draft-item', company_id: C1, code: 'TMP', name: 'مؤقت', unit: 'وحدة', warehouse_id: W1, quantity: '0', is_active: true });
+    db.inventory_items.push({ id: 'draft-item', company_id: C1, code: 'TMP', name: 'مؤقت', unit: 'وحدة', warehouse_id: W1, quantity: '0', is_active: true, token_version: 0 });
     mockDb = makeDb(db);
     const r2 = await itemDELETE(authedRequest(undefined, 'DELETE'), paramsOf('draft-item'));
     expect(r2.status).toBe(200);

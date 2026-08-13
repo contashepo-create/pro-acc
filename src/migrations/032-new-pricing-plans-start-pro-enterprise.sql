@@ -20,7 +20,7 @@ ALTER TABLE subscription_plans
   ADD COLUMN IF NOT EXISTS price_monthly NUMERIC(10,2) NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS price_yearly  NUMERIC(10,2),
   ADD COLUMN IF NOT EXISTS yearly_discount_percent INT NOT NULL DEFAULT 20,
-  ADD COLUMN IF NOT EXISTS trial_days    INT NOT NULL DEFAULT 14,
+  ADD COLUMN IF NOT EXISTS trial_days    INT NOT NULL DEFAULT 7,
   ADD COLUMN IF NOT EXISTS max_users          INT NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS max_clients        INT,
   ADD COLUMN IF NOT EXISTS max_suppliers      INT,
@@ -78,7 +78,7 @@ VALUES
   ('start', 'الأساسية - Start',
    'للأنشطة الصغيرة والتجارة الفردية: مبيعات، مشتريات، قيود يومية، تقارير أساسية.',
    'USD',
-   15.00, 144.00, 20, 14,
+   15.00, 144.00, 20, 7,
    1, NULL, NULL, NULL, NULL,
    50, 100,
    0,
@@ -92,14 +92,15 @@ VALUES
      'contacts', true,
      'reports_basic', true,
      'settings', true,
-     'subscription', true
+     'subscription', true,
+     'messages', true
    ),
    true, 10),
 
   ('pro', 'الاحترافية - Pro',
    'للشركات الناشئة: كل ميزات الأساسية + مخزون، مراكز تكلفة، خزائن وبنوك، تقارير متقدمة.',
    'USD',
-   35.00, 336.00, 20, 14,
+   35.00, 336.00, 20, 7,
    1, NULL, NULL, NULL, NULL,
    250, 500,
    0,
@@ -122,14 +123,20 @@ VALUES
      'cash', true,
      'warehouses', true,
      'branches', true,
-     'tax_reports', true
+     'tax_reports', true,
+     'custody', true,
+     'employees', true,
+     'projects', true,
+     'budgets', true,
+     'messages', true,
+     'approvals', true
    ),
    true, 20),
 
   ('enterprise', 'الشاملة - Enterprise',
    'للشركات النشطة: فواتير وعروض غير محدودة + أصول ثابتة، POS، وأتمتة متقدمة.',
    'USD',
-   60.00, 576.00, 20, 14,
+   60.00, 576.00, 20, 7,
    1, NULL, NULL, NULL, NULL,
      NULL, NULL,     -- NULL = unlimited quotations/invoices
    0,
@@ -157,7 +164,19 @@ VALUES
      'fixed_assets', true,
      'pos', true,
      'workflows', true,
-     'approvals', true
+     'approvals', true,
+     'custody', true,
+     'employees', true,
+     'projects', true,
+     'budgets', true,
+     'messages', true,
+     'crm', true,
+     'contracts', true,
+     'tenders', true,
+     'boq', true,
+     'progress_billing', true,
+     'subcontractors', true,
+     'payroll', true
    ),
    true, 30)
 

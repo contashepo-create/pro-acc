@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
             if (subTyped.trial_extended) {
               subscriptionMessage = 'انتهت المدة التجريبية الممددة. يرجى الاشتراك للمتابعة';
             } else {
-              subscriptionMessage = 'انتهت المدة التجريبية (7 أيام). يمكنك طلب تمديد 7 أيام إضافية من الإدارة أو الاشتراك';
+              subscriptionMessage = 'انتهت المدة التجريبية (7 أيام). يمكنك طلب تمديد من الإدارة أو الاشتراك';
             }
           } else {
             subscriptionMessage = 'انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول';

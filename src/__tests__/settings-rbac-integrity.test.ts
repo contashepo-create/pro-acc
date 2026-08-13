@@ -100,17 +100,22 @@ const C2 = 'company-2';
 function baseDb() {
   return {
     users: [
-      { id: 'u-admin', company_id: C1, name: 'مدير', email: 'admin@x.com', role: 'admin', is_active: true },
-      { id: 'u-mgr', company_id: C1, name: 'مدير عام', email: 'mgr@x.com', role: 'manager', is_active: true },
-      { id: 'u-sup', company_id: C1, name: 'مشرف', email: 'sup@x.com', role: 'supervisor', is_active: true },
-      { id: 'u-target', company_id: C1, name: 'هدف', email: 'tgt@x.com', role: 'accountant', is_active: true },
-      { id: 'u-foreign', company_id: C2, name: 'أجنبي', email: 'f@x.com', role: 'admin', is_active: true },
+      { id: 'u-admin', company_id: C1, name: 'مدير', email: 'admin@x.com', role: 'admin', is_active: true, token_version: 0 },
+      { id: 'u-mgr', company_id: C1, name: 'مدير عام', email: 'mgr@x.com', role: 'manager', is_active: true, token_version: 0 },
+      { id: 'u-sup', company_id: C1, name: 'مشرف', email: 'sup@x.com', role: 'supervisor', is_active: true, token_version: 0 },
+      { id: 'u-target', company_id: C1, name: 'هدف', email: 'tgt@x.com', role: 'accountant', is_active: true, token_version: 0 },
+      { id: 'u-foreign', company_id: C2, name: 'أجنبي', email: 'f@x.com', role: 'admin', is_active: true, token_version: 0 },
     ],
     companies: [{ id: C1, name: 'شركة', is_active: true }],
     settings: [] as Row[],
     user_permissions: [] as Row[],
     audit_log: [] as Row[],
-    subscriptions: [] as Row[],
+    subscriptions: [{
+      id: 's1', company_id: C1, plan_id: 'p1', plan_code: 'start', status: 'active',
+      start_date: '2024-01-01',
+      end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      subscription_plans: { code: 'start', name: 'Start', features_modules: {} },
+    }],
   } as Record<string, Row[]>;
 }
 

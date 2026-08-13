@@ -88,8 +88,8 @@ const C1 = 'company-1';
 
 function baseDb() {
   return {
-    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
-    companies: [{ id: C1, is_active: true }],
+    users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    companies: [{ id: C1, is_active: true, token_version: 0 }],
     accounts: [] as Row[],
     journal_lines: [] as Row[],
     banks_safes: [] as Row[],

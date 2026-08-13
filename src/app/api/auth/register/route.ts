@@ -220,11 +220,11 @@ export async function POST(request: NextRequest) {
     }
     if (!user) return error('فشل إنشاء المستخدم', 500);
 
-    // Create trial subscription on the Start plan (14 days).
+    // Create trial subscription on the Start plan (7 days).
     // We never auto-recreate a 'trial' plan row; new registrations start on
-    // the Start plan with status='trial' for 14 days.
+    // the Start plan with status='trial' for 7 days.
     try {
-      const DEFAULT_TRIAL_DAYS = 14;
+      const DEFAULT_TRIAL_DAYS = 7;
       let trialPlanId: string | null = null;
       let trialDays = DEFAULT_TRIAL_DAYS;
       let planCode: string = 'start';

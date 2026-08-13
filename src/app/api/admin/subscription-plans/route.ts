@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
       price_monthly: normInt(priceMonthly ?? price_monthly, 0) || 0,
       price_yearly: normInt(priceYearly ?? price_yearly),
       yearly_discount_percent: normInt(yearly_discount_percent, 20) ?? 20,
-      trial_days: normInt(trial_days, 14) ?? 14,
+      trial_days: normInt(trial_days, 7) ?? 7,
       max_users: normInt(maxUsers ?? max_users, 1) ?? 1,
       max_clients: normInt(max_clients, null),
       max_suppliers: normInt(max_suppliers, null),

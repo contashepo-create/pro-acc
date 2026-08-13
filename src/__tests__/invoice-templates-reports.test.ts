@@ -75,18 +75,18 @@ const C1 = 'company-1';
 
 function baseDb() {
   return {
-    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
-    companies: [{ id: C1, is_active: true }],
+    users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    companies: [{ id: C1, is_active: true, token_version: 0 }],
     contacts: [
-      { id: 'c1', company_id: C1, name: 'شركة الأفق', type: 'client', tax_number: '300000000000003', is_active: true },
-      { id: 's1', company_id: C1, name: 'مؤسسة التوريدات', type: 'supplier', tax_number: '300000000000004', is_active: true },
+      { id: 'c1', company_id: C1, name: 'شركة الأفق', type: 'client', tax_number: '300000000000003', is_active: true, token_version: 0 },
+      { id: 's1', company_id: C1, name: 'مؤسسة التوريدات', type: 'supplier', tax_number: '300000000000004', is_active: true, token_version: 0 },
     ],
     accounts: [
-      { id: 'a-cap', company_id: C1, code: '3100', name: 'رأس المال', type: 'equity', is_active: true },
-      { id: 'a-ret', company_id: C1, code: '3200', name: 'الأرباح المحتجزة', type: 'equity', is_active: true },
-      { id: 'a-rev', company_id: C1, code: '4100', name: 'إيرادات عقود', type: 'revenue', is_active: true },
-      { id: 'a-exp1', company_id: C1, code: '5110', name: 'مواد خام', type: 'expense', is_active: true },
-      { id: 'a-exp2', company_id: C1, code: '5210', name: 'رواتب وأجور', type: 'expense', is_active: true },
+      { id: 'a-cap', company_id: C1, code: '3100', name: 'رأس المال', type: 'equity', is_active: true, token_version: 0 },
+      { id: 'a-ret', company_id: C1, code: '3200', name: 'الأرباح المحتجزة', type: 'equity', is_active: true, token_version: 0 },
+      { id: 'a-rev', company_id: C1, code: '4100', name: 'إيرادات عقود', type: 'revenue', is_active: true, token_version: 0 },
+      { id: 'a-exp1', company_id: C1, code: '5110', name: 'مواد خام', type: 'expense', is_active: true, token_version: 0 },
+      { id: 'a-exp2', company_id: C1, code: '5210', name: 'رواتب وأجور', type: 'expense', is_active: true, token_version: 0 },
     ],
     journal_entries: [
       { id: 'je-1', company_id: C1, date: '2026-01-15', type: 'general', deleted_at: null },

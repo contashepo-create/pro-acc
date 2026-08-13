@@ -184,7 +184,7 @@ export default function SubscriptionPageEnhanced() {
           <div className="flex items-center gap-3">
             <Crown size={20} className="text-amber-500" />
             <div>
-              <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 14 يوماً)'}</div>
+              <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
               <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم</div>
             </div>
           </div>

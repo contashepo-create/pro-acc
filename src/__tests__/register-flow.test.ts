@@ -7,7 +7,7 @@
  *  - Disposable-email blocking.
  *  - Duplicate email / company / phone rejection (409).
  *  - Trial subscription is created against the Start plan (code='start'),
- *    with trial_days=14. If the Start plan is missing the registration still
+ *    with trial_days=7. If the Start plan is missing the registration still
  *    succeeds and logs a warning (no auto-seeding of a phantom 'trial' plan).
  *  - New user is stored with a scrypt-hashed password and a verification token.
  */
@@ -114,7 +114,7 @@ describe('register — duplicate detection', () => {
 describe('register — user creation security', () => {
   beforeEach(resetMock);
 
-  function successSetup(planRow: any | null = { id: 'p1', code: 'start', trial_days: 14 }) {
+  function successSetup(planRow: any | null = { id: 'p1', code: 'start', trial_days: 7 }) {
     setResult('users', 'select', []); // no duplicate email
     setResult('companies', 'select', []); // no duplicate name/phone
     // The company insert chain ends with `.select(...).single()` → terminal op 'single'.
@@ -146,8 +146,8 @@ describe('register — user creation security', () => {
     expect(data.email).toBe(validBody.email.toLowerCase());
   });
 
-  test('creates a trial subscription with the plan trial_days (14 days, Start plan)', async () => {
-    successSetup({ id: 'p1', code: 'start', trial_days: 14 });
+  test('creates a trial subscription with the plan trial_days (7 days, Start plan)', async () => {
+    successSetup({ id: 'p1', code: 'start', trial_days: 7 });
     const res = await registerPOST(req(validBody));
     expect(res.status).toBe(201);
 
@@ -158,11 +158,11 @@ describe('register — user creation security', () => {
     expect(sub.plan_code).toBe('start');
     expect(sub.status).toBe('trial');
     expect(sub.auto_renew).toBe(false);
-    // end_date should be today + 14 days
+    // end_date should be today + 7 days
     const end = new Date(sub.end_date);
     const start = new Date(sub.start_date);
     const diffDays = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-    expect(diffDays).toBe(14);
+    expect(diffDays).toBe(7);
   });
 
   test('RESILIENCE: registration still succeeds when the Start plan row is missing (no auto-seeding)', async () => {

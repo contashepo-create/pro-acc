@@ -102,15 +102,30 @@ const A2 = '00000000-0000-4000-8000-0000000000a2';
 
 function baseDb() {
   return {
-    users: [{ id: 'u1', company_id: C1, is_active: true, role: 'admin' }],
-    companies: [{ id: C1, is_active: true }],
+    users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    companies: [{ id: C1, is_active: true, token_version: 0 }],
     accounts: [
       { id: A1, company_id: C1, code: '1110', name: 'النقدية' },
       { id: A2, company_id: C1, code: '4100', name: 'إيرادات' },
     ],
     journal_entries: [] as Row[],
     journal_lines: [] as Row[],
-    journal_sequences: [] as Row[],
+        subscriptions: [{
+      id: 's1', company_id: C1, plan_id: 'p1', plan_code: 'enterprise', status: 'active',
+      start_date: '2024-01-01',
+      end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+      subscription_plans: { code: 'enterprise', name: 'Enterprise', features_modules: {
+        dashboard: true, accounts: true, journal: true, invoices: true, quotations: true,
+        clients: true, contacts: true, reports_basic: true, reports_advanced: true,
+        reports_consolidated: true, settings: true, subscription: true, inventory: true,
+        purchases: true, cost_centers: true, banks: true, cash: true, warehouses: true,
+        branches: true, tax_reports: true, fixed_assets: true, pos: true, workflows: true,
+        approvals: true, custody: true, employees: true, projects: true, budgets: true,
+        messages: true, crm: true, contracts: true, tenders: true, boq: true,
+        progress_billing: true, subcontractors: true, payroll: true
+      } },
+    }],
+journal_sequences: [] as Row[],
     invoices: [] as Row[],
     custodies: [] as Row[],
   } as Record<string, Row[]>;
