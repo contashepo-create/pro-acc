@@ -58,7 +58,7 @@ export async function PUT(
         approved_at: now,
         approval_comments: comments || null,
       })
-      .eq('id', id);
+      .eq('id', id).eq('company_id', auth.companyId);
 
     if (updateErr) throw updateErr;
 
@@ -71,7 +71,7 @@ export async function PUT(
         // Revert approval status
         await s.from('approval_requests')
           .update({ status: 'pending', approved_by: null, approved_at: null })
-          .eq('id', id);
+          .eq('id', id).eq('company_id', auth.companyId);
         return error('فشل تنفيذ الإجراء بعد الاعتماد');
       }
     }

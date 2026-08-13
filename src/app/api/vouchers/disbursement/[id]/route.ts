@@ -214,7 +214,8 @@ export async function DELETE(
     if ((voucher as Record<string, any>).disbursement_type === 'employee_advance' && (voucher as Record<string, any>).journal_entry_id) {
       await s.from('employee_advances')
         .delete()
-        .eq('journal_entry_id', (voucher as Record<string, any>).journal_entry_id);
+        .eq('journal_entry_id', (voucher as Record<string, any>).journal_entry_id)
+        .eq('company_id', ctx.companyId);
     }
 
     // قيد عكسي — الأصل يبقى للتدقيق

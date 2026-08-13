@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
         used_by: auth.companyId,
         used_at: new Date().toISOString(),
       })
-      .eq('id', ac.id)
+      .eq('id', ac.id).eq('company_id', auth.companyId)
       .eq('is_used', false)
       .select('*')
       .single();
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
         // If subscription was expired/cancelled, activating an add-on does NOT
         // automatically reactivate — only a plan code does.
         updated_at: new Date().toISOString(),
-      }).eq('id', curSub.id);
+      }).eq('id', curSub.id).eq('company_id', auth.companyId);
 
       const addonLabelAr = ac.addon_type === 'extra_user' ? 'مستخدم إضافي'
         : ac.addon_type === 'extra_branch' ? 'فرع/مستودع إضافي'
@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
     };
 
     if (currentSub) {
-      await s.from('subscriptions').update(patch).eq('id', (currentSub as any).id);
+      await s.from('subscriptions').update(patch).eq('id', (currentSub as any).eq('company_id', auth.companyId).id);
     } else {
       await s.from('subscriptions').insert({
         company_id: auth.companyId,

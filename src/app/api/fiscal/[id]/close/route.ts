@@ -100,7 +100,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
 
     const { error: updErr } = await s.from('fiscal_years')
-      .update({ status: 'closed', closed_at: new Date().toISOString(), closed_by: auth.userId }).eq('id', id);
+      .update({ status: 'closed', closed_at: new Date().toISOString(), closed_by: auth.userId })
+      .eq('id', id).eq('company_id', auth.companyId);
     if (updErr) throw updErr;
 
     return success({ ...fy, status: 'closed', warnings });

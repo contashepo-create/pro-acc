@@ -117,7 +117,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // حذف القسم
-    await s.from('custom_modules').delete().eq('id', id);
+    await s.from('custom_modules').delete().eq('id', id).eq('company_id', auth.companyId);
 
     // حذف الصلاحيات المرتبطة بهذا القسم
     await s.from('user_permissions')

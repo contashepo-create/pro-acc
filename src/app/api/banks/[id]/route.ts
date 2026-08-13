@@ -91,7 +91,7 @@ export async function PUT(
     if (Object.keys(updateData).length > 0) {
       const { error: updateError } = await s.from('banks_safes')
         .update(updateData)
-        .eq('id', id);
+        .eq('id', id).eq('company_id', auth.companyId);
       if (updateError) throw updateError;
     }
 
@@ -152,7 +152,8 @@ export async function PUT(
           await s.from('journal_lines')
             .delete()
             .eq('journal_entry_id', openingEntryId)
-            .in('account_id', affectedAccountIds);
+            .in('account_id', affectedAccountIds)
+            .eq('company_id', auth.companyId);
 
           const lines: any[] = [];
           if (newOpeningBalance > 0 && capitalAccount) {
@@ -241,7 +242,7 @@ export async function DELETE(
 
     const { error: deleteError } = await s.from('banks_safes')
       .delete()
-      .eq('id', id);
+      .eq('id', id).eq('company_id', auth.companyId);
     if (deleteError) throw deleteError;
 
     return success({ deleted: true });

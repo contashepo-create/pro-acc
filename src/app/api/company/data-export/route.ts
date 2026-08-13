@@ -91,7 +91,7 @@ export async function processPendingExports() {
 
   for (const exp of pending as { id: string; company_id: string }[]) {
     try {
-      await s.from('company_data_exports').update({ status: 'processing' }).eq('id', exp.id);
+      await s.from('company_data_exports').update({ status: 'processing' }).eq('id', exp.id).eq('company_id', exp.company_id);
       const dump = await buildCompanyDump(exp.company_id);
       // Store the dump as a compact JSON string in download_url for
       // simplicity. In production, upload to S3/Blob storage and put a
@@ -104,12 +104,12 @@ export async function processPendingExports() {
         download_url: `data:application/json;charset=utf-8;base64,${Buffer.from(json).toString('base64')}`,
         file_size_bytes: size,
         expires_at: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
-      }).eq('id', exp.id);
+      }).eq('id', exp.id).eq('company_id', exp.company_id);
     } catch (e: any) {
       await s.from('company_data_exports').update({
         status: 'failed',
         error_message: e?.message || 'unknown error',
-      }).eq('id', exp.id);
+      }).eq('id', exp.id).eq('company_id', exp.company_id);
     }
   }
 }

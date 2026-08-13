@@ -59,7 +59,7 @@ export async function PUT(
 
     const { data: updated, error: updateErr } = await s.from('boq_items')
       .update(updateData)
-      .eq('id', id)
+      .eq('id', id).eq('company_id', auth.companyId)
       .select('*')
       .single();
 
@@ -88,7 +88,7 @@ export async function DELETE(
 
     if (!existing) return notFound();
 
-    await s.from('boq_items').delete().eq('id', id);
+    await s.from('boq_items').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ deleted: true });
   } catch (err) {

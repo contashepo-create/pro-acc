@@ -152,7 +152,7 @@ export async function PUT(
       header.tax_amount = vatAmount;
       header.total = round2(subtotal + vatAmount);
 
-      await s.from('invoice_items').delete().eq('invoice_id', id);
+      await s.from('invoice_items').delete().eq('invoice_id', id).eq('company_id', auth.companyId);
       for (const item of items) {
         await s.from('invoice_items').insert({ company_id: auth.companyId, invoice_id: id, ...item });
       }

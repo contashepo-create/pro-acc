@@ -205,7 +205,7 @@ export async function POST(request: NextRequest) {
 
       await s.from('voucher_receipts')
         .update({ journal_entry_id: journalEntryId })
-        .eq('id', receiptId);
+        .eq('id', receiptId).eq('company_id', auth.companyId);
 
       // Open Items: الفاتورة لا تتغير إلا بتخصيص صريح.
       // سند بلا invoice_items = دفعة مقدمة / رصيد غير مخصص — الفواتير تبقى كما هي.

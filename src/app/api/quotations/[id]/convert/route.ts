@@ -191,14 +191,21 @@ export async function POST(
       await s.from('invoice_items').insert(invItems);
     }
 
-    // 4. تحديث حالة العرض
-    await s.from('quotations')
+    // 4. تحديث حالة العرض (مُقيَّد بالشركة لمنع العبث بين المستأجرين)
+    const { error: qUpdErr } = await s.from('quotations')
       .update({ status: 'converted', project_id: projectId })
-      .eq('id', id);
+      .eq('id', id).eq('company_id', auth.companyId);
+    if (qUpdErr) {
+      await s.from('invoice_items').delete().eq('invoice_id', invoiceId).eq('company_id', auth.companyId);
+      await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId).eq('company_id', auth.companyId);
+      await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);
+      await s.from('invoices').delete().eq('id', invoiceId).eq('company_id', auth.companyId);
+      throw qUpdErr;
+    }
 
     const { data: projectFull } = await s.from('projects')
       .select('*, contacts(name)')
-      .eq('id', projectId)
+      .eq('id', projectId).eq('company_id', auth.companyId)
       .single();
 
     const result = projectFull as Record<string, any>;

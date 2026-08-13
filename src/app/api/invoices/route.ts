@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
           created_by: auth.userId,
         });
         if (recJeErr || !journalId) throw recJeErr || new Error('فشل قيد التحصيل');
-        await s.from('voucher_receipts').update({ journal_entry_id: journalId }).eq('id', recData.id);
+        await s.from('voucher_receipts').update({ journal_entry_id: journalId }).eq('id', recData.id).eq('company_id', auth.companyId);
         const { error: allocErr } = await applyInvoiceAllocations(
           auth.companyId, 'receipt', recData.id, journalId, finalPaidAmount,
           [{ invoice_id: invoiceId, amount: finalPaidAmount }], clientId
@@ -308,7 +308,7 @@ export async function POST(request: NextRequest) {
           const validation = validateInvoiceForZatca(qrPayload);
           if (validation.valid) {
             zatcaQRData = generateZatcaQRData(qrPayload);
-            await s.from('invoices').update({ zatca_qr: zatcaQRData }).eq('id', invoiceId);
+            await s.from('invoices').update({ zatca_qr: zatcaQRData }).eq('id', invoiceId).eq('company_id', auth.companyId);
           }
         }
       } catch (zatcaErr) {
@@ -327,7 +327,7 @@ export async function POST(request: NextRequest) {
       // التراجع التلقائي الذري (Auto Rollback)
       console.error('Invoice combined creation failed, rolling back:', txErr);
       try {
-        if (voucherReceiptId) await s.from('voucher_receipts').delete().eq('id', voucherReceiptId);
+        if (voucherReceiptId) await s.from('voucher_receipts').delete().eq('id', voucherReceiptId).eq('company_id', auth.companyId);
         if (journalEntryId) {
           await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
           await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);

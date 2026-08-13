@@ -65,7 +65,7 @@ export async function GET(
           vatTotal: parseFloat(String(inv.tax_amount)),
         });
         // Store for future use
-        await s.from('invoices').update({ zatca_qr: qrData }).eq('id', id);
+        await s.from('invoices').update({ zatca_qr: qrData }).eq('id', id).eq('company_id', auth.companyId);
       } catch {
         // ignore
       }

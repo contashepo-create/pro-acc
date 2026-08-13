@@ -145,7 +145,7 @@ export async function POST(
     // Update equipment last maintenance date
     await s.from('equipment')
       .update({ last_maintenance_date: body.maintenance_date, updated_at: new Date().toISOString() })
-      .eq('id', id);
+      .eq('id', id).eq('company_id', auth.companyId);
 
     return success(data, 201);
   } catch (err) {

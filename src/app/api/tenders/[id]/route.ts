@@ -112,7 +112,7 @@ export async function PUT(
       // Update tender with project reference
       await s.from('tenders')
         .update({ project_id: projectId, updated_at: new Date().toISOString() })
-        .eq('id', id);
+        .eq('id', id).eq('company_id', auth.companyId);
 
       return success({ project, tender_id: id }, 201);
     }

@@ -120,7 +120,7 @@ export async function POST(req: NextRequest) {
       throw jeErr || new Error('فشل قيد صرف العهدة');
     }
 
-    await s.from('custodies').update({ journal_entry_id: journalId }).eq('id', custody.id);
+    await s.from('custodies').update({ journal_entry_id: journalId }).eq('id', custody.id).eq('company_id', auth.companyId);
     try {
       await recordCustodyTx(auth.companyId, custody.id, 'addition', amount, `افتتاح الملف ${fileNumber}`, auth.userId);
     } catch { /* جدول الحركات قد لا يوجد */ }

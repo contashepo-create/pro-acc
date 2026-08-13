@@ -76,7 +76,7 @@ export async function PUT(
       if (body.tax_rate !== undefined) updateData.tax_rate = body.tax_rate;
       if (body.discount_amount !== undefined) updateData.discount_amount = body.discount_amount;
 
-      await s.from('quotation_items').delete().eq('quotation_id', id);
+      await s.from('quotation_items').delete().eq('quotation_id', id).eq('company_id', auth.companyId);
       for (const item of body.items) {
         await s.from('quotation_items').insert({
           company_id: auth.companyId,
@@ -91,7 +91,7 @@ export async function PUT(
 
     const { data: updated, error: updateErr } = await s.from('quotations')
       .update(updateData)
-      .eq('id', id)
+      .eq('id', id).eq('company_id', auth.companyId)
       .select('*')
       .single();
 
@@ -124,8 +124,8 @@ export async function DELETE(
       return error('لا يمكن حذف عرض محول إلى مشروع');
     }
 
-    await s.from('quotation_items').delete().eq('quotation_id', id);
-    await s.from('quotations').delete().eq('id', id);
+    await s.from('quotation_items').delete().eq('quotation_id', id).eq('company_id', auth.companyId);
+    await s.from('quotations').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ deleted: true });
   } catch (err) {

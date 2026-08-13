@@ -59,7 +59,7 @@ export async function DELETE(
     }
 
     await s.from('credit_note_items').delete().eq('credit_note_id', id);
-    await s.from('credit_notes').delete().eq('id', id);
+    await s.from('credit_notes').delete().eq('id', id).eq('company_id', auth.companyId);
 
     return success({ deleted: true });
   } catch (err) {
