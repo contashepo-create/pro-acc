@@ -11,6 +11,9 @@ import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { Badge } from '@/components/ui/Badge';
+import { ActionButtons } from '@/components/ui/ActionButtons';
+import { RecordViewModal } from '@/components/ui/RecordViewModal';
+import { fetchRecord, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatCurrency } from '@/lib/utils';
 
@@ -28,6 +31,8 @@ export default function ChangeOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<any>({ project_id: '', title: '', description: '', change_amount: 0, status: 'draft' });
 
@@ -46,18 +51,48 @@ export default function ChangeOrdersPage() {
   useEffect(() => { fetchData(); }, []);
 
   const openNew = () => {
+    setEditingId(null);
     setForm({ project_id: '', title: '', description: '', change_amount: 0, status: 'draft' });
     setShowModal(true);
   };
 
+  const handleEdit = async (row: any) => {
+    const { data, error } = await fetchRecord(`/api/change-orders/${row.id}`);
+    const src = recordOrRow(data, row);
+    if (!data && error) toast.error(error);
+    setEditingId(row.id);
+    setForm({
+      project_id: src.project_id || '',
+      title: src.title || '',
+      description: src.description || '',
+      change_amount: src.change_amount ?? 0,
+      status: src.status || 'draft',
+    });
+    setShowModal(true);
+  };
+
+  const handleDelete = async (row: any) => {
+    if (!confirm(`حذف أمر التغيير ${row.number}؟`)) return;
+    try {
+      const res = await fetch(`/api/change-orders/${row.id}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) { toast.success('تم الحذف'); fetchData(); }
+      else toast.error(json.message || 'فشل الحذف');
+    } catch { toast.error('خطأ في الاتصال'); }
+  };
+
   const handleSave = async () => {
+    if (!form.project_id) { toast.error('اختر المشروع'); return; }
+    if (!form.title.trim()) { toast.error('العنوان مطلوب'); return; }
     setSaving(true);
     try {
-      const res = await fetch('/api/change-orders', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form),
+      const url = editingId ? `/api/change-orders/${editingId}` : '/api/change-orders';
+      const method = editingId ? 'PATCH' : 'POST';
+      const res = await fetch(url, {
+        method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form),
       });
       const data = await res.json();
-      if (data.success) { toast.success('تم إنشاء أمر التغيير'); setShowModal(false); fetchData(); }
+      if (data.success) { toast.success(editingId ? 'تم تحديث أمر التغيير' : 'تم إنشاء أمر التغيير'); setShowModal(false); setEditingId(null); fetchData(); }
       else toast.error(data.message || 'فشل الحفظ');
     } catch { toast.error('خطأ في الاتصال'); }
     finally { setSaving(false); }
@@ -71,6 +106,21 @@ export default function ChangeOrdersPage() {
     { key: 'change_amount', label: 'قيمة التغيير', render: (r: any) => <span className={r.change_amount >= 0 ? 'text-success font-bold' : 'text-danger font-bold'}>{formatCurrency(r.change_amount)}</span> },
     { key: 'new_contract_amount', label: 'العقد بعد التعديل', render: (r: any) => <span className="font-bold">{formatCurrency(r.new_contract_amount)}</span> },
     { key: 'status', label: 'الحالة', render: (r: any) => { const m = statusMeta[r.status] || statusMeta.draft; return <Badge variant={m.variant}>{m.label}</Badge>; } },
+    {
+      key: 'actions', label: 'إجراءات',
+      render: (r: any) => (
+        <ActionButtons
+          item={r}
+          onView={async () => {
+            const { data, error } = await fetchRecord(`/api/change-orders/${r.id}`);
+            if (!data && error) { toast.error(error); return; }
+            setViewing(data);
+          }}
+          onEdit={() => handleEdit(r)}
+          onDelete={() => handleDelete(r)}
+        />
+      ),
+    },
   ];
 
   return (
@@ -86,7 +136,7 @@ export default function ChangeOrdersPage() {
         <DataTable columns={columns} data={rows} searchable searchKeys={['number', 'title']} pageSize={20} />
       )}
 
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="أمر تغيير جديد" size="md"
+      <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingId(null); }} title={editingId ? 'تعديل أمر التغيير' : 'أمر تغيير جديد'} size="md"
         footer={<>
           <Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button>
           <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button>
@@ -101,6 +151,13 @@ export default function ChangeOrdersPage() {
           <Textarea label="الوصف" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
         </div>
       </Modal>
+
+      <RecordViewModal
+        isOpen={!!viewing}
+        onClose={() => setViewing(null)}
+        title={viewing ? `أمر تغيير ${viewing.number}` : 'عرض أمر التغيير'}
+        record={viewing}
+      />
     </div>
   );
 }
