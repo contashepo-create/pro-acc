@@ -1,26 +1,74 @@
 -- Migration 017: Approval Workflow, Equipment, Timesheets, Budgets, Petty Cash
 
 -- ===== APPROVAL WORKFLOW =====
+-- Migration 016 already created approval_requests with the telegram-notification
+-- shape (transaction_type/transaction_id). To avoid a CREATE TABLE conflict
+-- (which caused "column transaction_type does not exist" errors on fresh DBs
+-- when 017's CREATE TABLE IF NOT EXISTS shape won due to index collisions),
+-- we no longer attempt to redefine the table here; we just ensure the 017
+-- columns and indexes exist.
 CREATE TABLE IF NOT EXISTS approval_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id UUID NOT NULL REFERENCES companies(id),
-  entity_type TEXT NOT NULL, -- journal_entry, voucher_disbursement, purchase_invoice, payroll, cash_transaction
-  entity_id UUID NOT NULL,
-  amount NUMERIC(15,2),
-  description TEXT,
-  requester_id UUID NOT NULL REFERENCES users(id),
-  approver_id UUID NOT NULL REFERENCES users(id),
   status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'cancelled')),
-  approved_by UUID REFERENCES users(id),
-  approved_at TIMESTAMPTZ,
-  approval_comments TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_approval_requests_company ON approval_requests(company_id);
-CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status);
-CREATE INDEX IF NOT EXISTS idx_approval_requests_approver ON approval_requests(approver_id);
-CREATE INDEX IF NOT EXISTS idx_approval_requests_entity ON approval_requests(entity_type, entity_id);
+
+-- 016 columns (idempotent)
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS transaction_type TEXT;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS transaction_id   TEXT;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS amount           NUMERIC(15,2);
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS requester_id     UUID REFERENCES users(id);
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS approver_chat_id TEXT;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS message          TEXT;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS approved_at      TIMESTAMPTZ;
+
+-- 017 columns (idempotent)
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS entity_type       TEXT;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS entity_id         UUID;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS description       TEXT;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS approver_id       UUID REFERENCES users(id);
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS approved_by       UUID REFERENCES users(id);
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS approval_comments TEXT;
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS updated_at        TIMESTAMPTZ DEFAULT NOW();
+
+-- Indexes (safe: use DO blocks for composite ones because IF NOT EXISTS
+-- does not detect definition mismatch)
+CREATE INDEX IF NOT EXISTS idx_approval_requests_company   ON approval_requests(company_id);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_status    ON approval_requests(status);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_requester ON approval_requests(requester_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+     WHERE schemaname = 'public' AND indexname = 'idx_approval_requests_transaction'
+  ) THEN
+    CREATE INDEX idx_approval_requests_transaction
+      ON approval_requests(transaction_type, transaction_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+     WHERE schemaname = 'public' AND indexname = 'idx_approval_requests_entity'
+  ) THEN
+    CREATE INDEX idx_approval_requests_entity
+      ON approval_requests(entity_type, entity_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+     WHERE schemaname = 'public' AND indexname = 'idx_approval_requests_approver'
+  ) THEN
+    CREATE INDEX idx_approval_requests_approver
+      ON approval_requests(approver_id);
+  END IF;
+END $$;
+
+-- Keep the two column shapes in sync for rows written via either API.
+UPDATE approval_requests
+   SET transaction_type = entity_type,
+       transaction_id   = entity_id::TEXT
+ WHERE entity_type IS NOT NULL
+   AND (transaction_type IS NULL OR transaction_id IS NULL);
 
 -- ===== EQUIPMENT MANAGEMENT =====
 CREATE TABLE IF NOT EXISTS equipment (
