@@ -18,6 +18,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const __admin = await requireAdmin(req);
     const { id } = await params;
+    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الباقة غير صالح', 400);
     const body = await parseBody(req);
     const s = sb();
 
@@ -159,6 +160,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   try {
     const __admin = await requireAdmin(req);
     const { id } = await params;
+    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الباقة غير صالح', 400);
     const s = sb();
     const url = new URL(req.url);
     const migrateTo = url.searchParams.get('migrate_to');

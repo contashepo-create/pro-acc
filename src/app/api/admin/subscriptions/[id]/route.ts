@@ -16,9 +16,21 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   try {
     await requireAdmin(_req);
     const { id } = await params;
+    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الاشتراك غير صالح', 400);
     const s = sb();
     const { data, error: err } = await s.from('subscriptions')
-      .select(`*, subscription_plans(*), companies(id,name,email,phone)`)
+      .select(`
+        id, subscriber_number, company_id, plan_id, plan_code, status,
+        start_date, end_date, trial_end_date, auto_renew,
+        extra_users, extra_branches, extra_storage_gb, addons_json,
+        created_at, updated_at,
+        subscription_plans(
+          id, code, name, description_ar, currency, price_monthly, price_yearly,
+          trial_days, max_users, max_invoices_per_month, max_quotations_per_month,
+          max_storage_mb, max_branches, features_modules, is_active
+        ),
+        companies(id,name,email,phone)
+      `)
       .eq('id', id).maybeSingle();
     if (err) throw err;
     if (!data) return error('الاشتراك غير موجود', 404);
@@ -30,6 +42,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const admin = await requireAdmin(req);
     const { id } = await params;
+    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الاشتراك غير صالح', 400);
     const body = await parseBody<{
       plan_id?: string;
       status?: string;

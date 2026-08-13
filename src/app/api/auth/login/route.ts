@@ -93,33 +93,34 @@ export async function POST(request: NextRequest) {
       });
     } catch {}
 
-    let subscriptionExpired = false;
+    // Subscription-status check: do NOT block login entirely when expired.
+    // Users must still be able to sign in to view data, contact support, enter
+    // an activation code, or buy an add-on. The subscription guard already
+    // blocks WRITES on expired accounts; here we just surface state so the UI
+    // can show the banner and disable write actions.
+    let subscriptionStatus: 'active' | 'trial' | 'expired' | 'trial_expired' | 'cancelled' | 'missing' = 'active';
     let subscriptionMessage = '';
+    let endDateStr: string | null = null;
+    let daysRemaining = 0;
     try {
-      const { data: sub } = await s.from('subscriptions')
-        .select('status, end_date, trial_extended').eq('company_id', u.company_id)
-        .order('end_date', { ascending: false }).limit(1).single();
-      if (sub) {
-        const subTyped = sub as { status: string; end_date: string; trial_extended: boolean };
-        const endDate = new Date(subTyped.end_date);
-        const isExpired = endDate < new Date();
-        if (isExpired) {
-          subscriptionExpired = true;
-          if (subTyped.status === 'trial') {
-            // Trial expired - check if extended
-            if (subTyped.trial_extended) {
-              subscriptionMessage = 'انتهت المدة التجريبية الممددة. يرجى الاشتراك للمتابعة';
-            } else {
-              subscriptionMessage = 'انتهت المدة التجريبية (7 أيام). يمكنك طلب تمديد من الإدارة أو الاشتراك';
-            }
-          } else {
-            subscriptionMessage = 'انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول';
-          }
-        }
+      const { getSubscriptionAccess } = await import('@/lib/subscription-guard');
+      const access = await getSubscriptionAccess(u.company_id);
+      subscriptionStatus = access.status;
+      endDateStr = access.endDate;
+      daysRemaining = access.daysRemaining;
+      if (access.isExpired) {
+        subscriptionMessage =
+          access.status === 'trial_expired'
+            ? 'انتهت المدة التجريبية (7 أيام). يمكنك الاشتراك أو إدخال كود تفعيل أو التواصل مع الدعم.'
+            : access.status === 'cancelled'
+              ? 'تم إلغاء الاشتراك. يرجى التواصل مع الدعم أو الاشتراك مجدداً.'
+              : access.status === 'missing'
+                ? 'لا يوجد اشتراك فعّال لهذه الشركة.'
+                : 'انتهت صلاحية الاشتراك. يمكنك التجديد أو إدخال كود تفعيل أو التواصل مع الدعم.';
       }
-    } catch {}
-
-    if (subscriptionExpired) return error(subscriptionMessage || 'انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك للدخول', 403);
+    } catch (e) {
+      console.warn('[login] subscription access check failed:', e);
+    }
 
     const token = createToken(u.id, u.role, Number((u as any).token_version) || 0);
     const { password_hash: _, ...safeUser } = u;
@@ -131,6 +132,13 @@ export async function POST(request: NextRequest) {
         registrationNumber: (c as any).commercial_registration,
         taxNumber: (c as any).tax_number, vatNumber: (c as any).vat_number || (c as any).tax_number,
         address: (c as any).address, phone: (c as any).phone, email: (c as any).email, logo: null,
+      },
+      subscription: {
+        status: subscriptionStatus,
+        is_expired: subscriptionStatus === 'expired' || subscriptionStatus === 'trial_expired' || subscriptionStatus === 'cancelled' || subscriptionStatus === 'missing',
+        message: subscriptionMessage || null,
+        end_date: endDateStr,
+        days_remaining: daysRemaining,
       },
       token,
     });
