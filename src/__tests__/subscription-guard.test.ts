@@ -31,6 +31,10 @@ describe('moduleForPath', () => {
     expect(moduleForPath('/api/crm')).toBe('crm');
     expect(moduleForPath('/api/tenders')).toBe('tenders');
     expect(moduleForPath('/api/boq')).toBe('boq');
+    expect(moduleForPath('/api/purchases')).toBe('purchases');
+    expect(moduleForPath('/api/purchases/invoices/abc')).toBe('purchases');
+    expect(moduleForPath('/api/purchases/orders')).toBe('purchases');
+    expect(moduleForPath('/api/bank-reconciliation')).toBe('banks');
     expect(moduleForPath('/api/contracts')).toBe('contracts');
     expect(moduleForPath('/api/progress-billing')).toBe('progress_billing');
     expect(moduleForPath('/api/subcontractors')).toBe('subcontractors');

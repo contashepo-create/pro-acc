@@ -115,6 +115,7 @@ const ROUTE_TO_MODULE: Array<{ prefix: string; module: string }> = [
   { prefix: '/api/inventory',         module: 'inventory' },
   { prefix: '/api/inventory-transactions', module: 'inventory' },
   { prefix: '/api/purchases',         module: 'purchases' },
+  { prefix: '/api/bank-reconciliation', module: 'banks' },
   { prefix: '/api/warehouses',        module: 'warehouses' },
   { prefix: '/api/branches',          module: 'branches' },
   { prefix: '/api/cost-centers',      module: 'cost_centers' },
@@ -277,10 +278,18 @@ export async function assertSubscriptionAccess(
   }
 
   // Module gating: only applies to non-always-available modules, even
-  // during trial/active subscription.
-  const moduleId = moduleForPath(pathname);
+  // during trial/active subscription. Unknown modules default to allowed
+  // for backward compatibility (undefined !== false). Sub-modules like
+  // purchase_invoices/purchase_orders resolve to the umbrella 'purchases'
+  // flag so fine-grained permissions don't accidentally lock out a plan
+  // that has purchases enabled.
+  let moduleId = moduleForPath(pathname);
   if (moduleId && !ALWAYS_AVAILABLE_MODULES.has(moduleId)) {
-    const allowed = access.features[moduleId] !== false;
+    // Sub-modules like nested /purchases/invoices are covered by the
+    // umbrella '/api/purchases' prefix; no alias map needed because our
+    // prefix matching always resolves to the parent key.
+    const flag = access.features[moduleId];
+    const allowed = flag !== false;
     if (!allowed) {
       throw new AuthError(
         `الوحدة "${moduleId}" غير مُضمَّنة في باقتك الحالية (${access.planName || access.planCode || '—'}). قم بترقية الباقة للوصول إليها.`,
