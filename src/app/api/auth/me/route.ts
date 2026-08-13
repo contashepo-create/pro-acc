@@ -1,9 +1,11 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { success, error, unauthorized, serverError, notFound } from '@/lib/api-helpers';
 import { verifyToken, extractToken, hashPassword, verifyPassword } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+
+const MIN_PASSWORD_LENGTH = 8;
 
 export async function GET(request: NextRequest) {
   try {
@@ -27,7 +29,10 @@ export async function GET(request: NextRequest) {
       .select('id, name, email, role, is_active, last_login, company_id, created_at, token_version')
       .eq('id', payload.userId).single();
 
-    if (userErr || !user) return notFound();
+    if (userErr || !user) {
+      console.error('[auth/me] failed to load user', userErr);
+      return notFound();
+    }
     const u = user as Record<string, any>;
     if (!u.is_active) return error('هذا الحساب غير نشط', 403);
 
@@ -55,8 +60,8 @@ export async function GET(request: NextRequest) {
 /**
  * PUT /api/auth/me
  * تحديث الملف الشخصي (الاسم) أو تغيير كلمة المرور.
- * كان زر حفظ الملف/كلمة المرور في صفحة الملف الشخصي يستدعي PUT على مسار
- * يملك GET فقط، فكان التحديث يفشل دائماً.
+ * يعيد النتيجة بتنسيق موحّد: { success, message, user? } مباشرة في جذر الـ JSON
+ * (بدون تغليف داخل خاصية data) حتى يتوافق مع استهلاك صفحة الملف الشخصي.
  */
 export async function PUT(request: NextRequest) {
   try {
@@ -70,7 +75,10 @@ export async function PUT(request: NextRequest) {
       .select('id, name, email, password_hash, token_version, is_active')
       .eq('id', payload.userId).single();
 
-    if (userErr || !user) return notFound();
+    if (userErr || !user) {
+      console.error('[auth/me PUT] failed to load user', userErr);
+      return notFound();
+    }
     const u = user as Record<string, any>;
     if (!u.is_active) return error('هذا الحساب غير نشط', 403);
 
@@ -87,19 +95,26 @@ export async function PUT(request: NextRequest) {
       if (!u.password_hash || !(await verifyPassword(String(body.old_password), u.password_hash))) {
         return error('كلمة المرور الحالية غير صحيحة');
       }
-      if (String(body.new_password).length < 8) {
-        return error('كلمة المرور الجديدة يجب أن تكون 8 أحرف على الأقل');
+      if (String(body.new_password).length < MIN_PASSWORD_LENGTH) {
+        return error(`كلمة المرور الجديدة يجب أن تكون ${MIN_PASSWORD_LENGTH} أحرف على الأقل`);
       }
 
       const newHash = await hashPassword(String(body.new_password));
       const nextVersion = storedVersion + 1;
       const { error: updErr } = await s.from('users')
-        .update({ password_hash: newHash, token_version: nextVersion })
+        .update({ password_hash: newHash, token_version: nextVersion, updated_at: new Date().toISOString() })
         .eq('id', u.id);
-      if (updErr) throw updErr;
+      if (updErr) {
+        console.error('[auth/me PUT] failed to update password', updErr);
+        throw updErr;
+      }
 
       // إبطال الجلسات السابقة: التوكن الحالي يصبح قديماً (ver !== token_version)
-      return success({ message: 'تم تغيير كلمة المرور بنجاح — سجّل الدخول مجدداً' });
+      // ملاحظة: هذه الاستجابة تُعاد بنجاح مباشرة بعد التحديث الفعلي في قاعدة البيانات.
+      return NextResponse.json(
+        { success: true, message: 'تم تغيير كلمة المرور بنجاح — سجّل الدخول مجدداً' },
+        { status: 200 }
+      );
     }
 
     // تحديث بيانات الملف الشخصي (الاسم والبريد)
@@ -114,12 +129,15 @@ export async function PUT(request: NextRequest) {
       .eq('id', u.id)
       .select('id, name, email, role, is_active')
       .single();
-    if (updErr) throw updErr;
+    if (updErr) {
+      console.error('[auth/me PUT] failed to update profile', updErr);
+      throw updErr;
+    }
 
     const uu = updated as Record<string, any>;
-    return success({
-      user: { id: uu.id, name: uu.name, email: uu.email, role: uu.role, isActive: uu.is_active },
-    });
+    const safeUser = { id: uu.id, name: uu.name, email: uu.email, role: uu.role, isActive: uu.is_active };
+
+    return NextResponse.json({ success: true, message: 'تم حفظ البيانات بنجاح', user: safeUser }, { status: 200 });
   } catch (err) {
     return serverError(err);
   }
