@@ -8,6 +8,9 @@
  * This catches the exact class of errors that have been plaguing this
  * codebase: API code that writes to a column that does not exist in
  * PostgreSQL, causing 42703 errors at runtime.
+ *
+ * It also verifies that every tenant-scoped update/delete carries a
+ * company_id filter to prevent cross-tenant data leakage.
  */
 import fs from 'fs';
 import path from 'path';
@@ -23,7 +26,7 @@ function buildSchema(): Record<string, Columns> {
   const migDir = path.resolve(__dirname, '../../src/migrations');
   const files = fs.readdirSync(migDir).filter(f => f.endsWith('.sql')).sort();
 
-  // Strip $$ plpgsql blocks and line comments, then regex out DDL.
+  // Strip $$ plpgsql blocks and comments, then regex out DDL.
   function stripBlocks(sql: string): string {
     sql = sql.replace(/\$\$[\s\S]*?\$\$/g, ' ');
     sql = sql.replace(/--[^\n]*/g, ' ');
@@ -37,7 +40,7 @@ function buildSchema(): Record<string, Columns> {
     tables[t].add(c);
   }
 
-  // CREATE TABLE ... ( ... ) — tracks depth of nested parentheses
+  // CREATE TABLE ... ( ... )
   const ctRe = /CREATE\s+(?:MATERIALIZED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(/gi;
   // ALTER TABLE t ADD COLUMN [IF NOT EXISTS] c
   const acRe = /ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/gi;
@@ -49,7 +52,7 @@ function buildSchema(): Record<string, Columns> {
     let m: RegExpExecArray | null;
     while ((m = ctRe.exec(sql))) {
       const name = m[1].toLowerCase();
-      // walk from the matching '(' to matching ')' at depth 0
+      // Walk from '(' to matching ')' at depth 0
       let d = 1, i = m.index + m[0].length;
       while (i < sql.length && d > 0) {
         const ch = sql[i];
@@ -58,7 +61,7 @@ function buildSchema(): Record<string, Columns> {
         i++;
       }
       const body = sql.slice(m.index + m[0].length, i - 1);
-      // split on top-level commas
+      // Split on top-level commas
       const cols: string[] = [];
       let cur = '', depth = 0;
       for (const ch of body) {
@@ -71,6 +74,8 @@ function buildSchema(): Record<string, Columns> {
       for (const col of cols) {
         const tok = col.trim().split(/\s+/)[0];
         if (!tok) continue;
+        // "KEY" is a valid column name (e.g. settings.key / app_settings.key),
+        // so don't treat it as a reserved word.
         if (/^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK|CREATE|INDEX|REFERENCES|LIKE|EXCLUDE)$/i.test(tok)) continue;
         if (/^[a-zA-Z_]\w*$/.test(tok)) addCol(name, tok);
       }
@@ -88,7 +93,6 @@ function topLevelKeys(block: string): Set<string> {
   const keys = new Set<string>();
   let i = 0, d = 0, inStr: string | null = null, esc = false;
   let cur = '';
-  // state machine: after '{' we're in the object
   while (i < block.length) {
     const ch = block[i];
     if (inStr) {
@@ -101,7 +105,6 @@ function topLevelKeys(block: string): Set<string> {
     if (ch === '{' || ch === '[' || ch === '(') d++;
     else if (ch === '}' || ch === ']' || ch === ')') d--;
     if (d === 0 && ch === '}') {
-      // finalize last key
       const km = cur.match(/^\s*([a-zA-Z_]\w*)\s*:/);
       if (km) keys.add(km[1].toLowerCase());
       break;
@@ -139,6 +142,10 @@ function findMatching(text: string, from: number, open: string, close: string): 
   return text.length;
 }
 
+function lineOf(text: string, idx: number): number {
+  return text.slice(0, idx).split('\n').length;
+}
+
 // ---------------------------------------------------------------------------
 // 3. Walk every route file and check insert/update/upsert payloads
 // ---------------------------------------------------------------------------
@@ -149,41 +156,57 @@ describe('End-to-end API → Database Schema Coverage', () => {
 
   // Columns whose values are JSONB — sub-keys under them are not validated.
   const JSONB_COLS = new Set([
-    'new_values','old_values','before_values','after_values','details','addons_json',
-    'features_modules','permissions','config','login_session_data','data',
+    'new_values', 'old_values', 'before_values', 'after_values', 'details',
+    'addons_json', 'features_modules', 'permissions', 'config',
+    'login_session_data', 'data',
   ]);
 
-      // Tables that are global/admin and intentionally have no company_id
-      const GLOBAL = new Set([
-        'admin_users','admin_sessions','subscription_plans','advertisements','app_settings',
-        'visitor_stats','visitor_logs','_migrations','company_registration_tokens',
-        'password_reset_tokens','password_reset_requests','login_attempts','push_subscriptions',
-        'telegram_test_runs','companies','users',
-      ]);
+  // Tables that are global/admin and intentionally have no company_id
+  const GLOBAL = new Set([
+    'admin_users', 'admin_sessions', 'subscription_plans', 'advertisements',
+    'app_settings', 'visitor_stats', 'visitor_logs', '_migrations',
+    'company_registration_tokens', 'password_reset_tokens',
+    'password_reset_requests', 'login_attempts', 'push_subscriptions',
+    'telegram_test_runs', 'companies', 'users',
+  ]);
 
-      // Routes (path fragment → truthy) where we know the mutation is in an
-      // auth/setup flow or uses a complex payload object (company_id present
-      // inside the object but not detectable by our simple top-level scan) —
-      // defined above per-file as isWhitelisted.
+  // Admin routes are allowed to operate on tenant tables without company_id
+  // (they're post-authentication admin panel endpoints that act on any tenant).
+  const ADMIN_ALLOWED_TABLES = new Set([
+    'companies', 'subscriptions', 'users', 'addon_requests', 'upgrade_requests',
+    'activation_codes', 'payment_methods', 'addon_grant_audit', 'complaints',
+    'support_tickets', 'company_messages', 'messages', 'notifications',
+    'backup_logs', 'bonds', 'audit_log', 'security_audit_log', 'ad_views',
+    'ad_clicks', 'admin_audit_log', 'financial_audit_log', 'advertisements',
+    'app_settings', 'subscription_plans', 'crm_contacts', 'crm_followups',
+  ]);
+
+  // Auth / public routes can operate on these tables without company_id
+  // (registration, setup, public ad tracking, visitor analytics, etc.).
+  const AUTH_ALLOWED_TABLES = new Set([
+    'users', 'companies', 'subscriptions', 'payment_transactions',
+    'password_reset_tokens', 'password_reset_requests',
+    'company_registration_tokens', 'refresh_tokens', 'ad_views', 'ad_clicks',
+    'visitor_logs', 'visitor_stats', 'settings', 'login_attempts',
+  ]);
 
   const violations: { file: string; line: number; table: string; op: string; missing: string[] }[] = [];
   const missedCompany: { file: string; line: number; table: string; op: string }[] = [];
 
-    for (const fp of files) {
+  for (const fp of files) {
     const rel = path.relative(path.resolve(__dirname, '../../'), fp);
     let ts = fs.readFileSync(fp, 'utf8');
     ts = ts.replace(/\/\/[^\n]*/g, '');
     ts = ts.replace(/\/\*[\s\S]*?\*\//g, '');
 
     const isAdminRoute = rel.includes(path.sep + 'admin' + path.sep);
-    const isAuthRoute = rel.includes(`${path.sep}auth${path.sep}`) ||
-                        rel.includes(`${path.sep}portal${path.sep}`) ||
-                        rel.includes(`${path.sep}visitors${path.sep}`) ||
-                        rel.includes(`${path.sep}ads${path.sep}`) ||
-                        rel.includes(`${path.sep}subscribe${path.sep}`);
+    const isAuthOrPublic =
+      rel.includes(`${path.sep}auth${path.sep}`) ||
+      rel.includes(`${path.sep}portal${path.sep}`) ||
+      rel.includes(`${path.sep}visitors${path.sep}`) ||
+      rel.includes(`${path.sep}ads${path.sep}`) ||
+      rel.includes(`${path.sep}subscribe${path.sep}`);
 
-    // Routes where mutations are allowed to carry non-standard company_id
-    // (public setup, initial company creation, public ad tracking, etc.)
     const isWhitelisted =
       rel.includes('/api/auth/') ||
       rel.includes('/api/portal/') ||
@@ -200,36 +223,27 @@ describe('End-to-end API → Database Schema Coverage', () => {
     while ((mut = mutRe.exec(ts))) {
       const op = mut[1];
       const end = mut.index + mut[0].length;
-      // Look for preceding .from() within the last 3000 characters (helper
-      // functions and long variable bindings can push the from() further up)
+      // Look back up to 3000 chars for the nearest preceding .from('table').
       const fromWindow = ts.slice(Math.max(0, mut.index - 3000), mut.index);
       const fromMatches = [...fromWindow.matchAll(fromRe)];
       if (fromMatches.length === 0) continue;
       const tableName = fromMatches[fromMatches.length - 1][1].toLowerCase();
 
-      // Ensure table exists
       if (!tables[tableName]) {
         violations.push({ file: rel, line: lineOf(ts, mut.index), table: tableName, op, missing: ['<TABLE_NOT_FOUND>'] });
         continue;
       }
 
-      // Skip to first non-space
       let j = end;
       while (j < ts.length && /\s/.test(ts[j])) j++;
 
-      // Skip whitespace/comments/line breaks to find real payload start
-      while (j < ts.length && /[\s]/.test(ts[j])) j++;
-
-      // Determine payload (if object or array-of-object)
       let payload = new Set<string>();
       if ((op === 'insert' || op === 'upsert' || op === 'update') && ts[j] === '{') {
         const endObj = findMatching(ts, j, '{', '}');
         payload = topLevelKeys(ts.slice(j, endObj));
       } else if ((op === 'insert' || op === 'upsert') && ts[j] === '[') {
-        // Batch insert of multiple objects — extract keys from the first object
         const endArr = findMatching(ts, j, '[', ']');
         const inner = ts.slice(j, endArr);
-        // Iterate through top-level objects in the array and merge keys
         let k = 0;
         while (k < inner.length) {
           const ob = inner.indexOf('{', k);
@@ -241,11 +255,11 @@ describe('End-to-end API → Database Schema Coverage', () => {
         }
       }
 
-      // Check for missing columns in the payload
+      // Column coverage: every payload key must exist in schema
       const missing: string[] = [];
       for (const k of payload) {
         if (JSONB_COLS.has(k)) continue;
-        if (k.startsWith('on_')) continue;
+        if (k.startsWith('on_')) continue; // e.g. on_conflict keys
         if (k === '...' || k === 'returning') continue;
         if (!tables[tableName].has(k)) missing.push(k);
       }
@@ -253,40 +267,32 @@ describe('End-to-end API → Database Schema Coverage', () => {
         violations.push({ file: rel, line: lineOf(ts, mut.index), table: tableName, op, missing });
       }
 
-      // Tenant isolation for mutations that are not admin/global/public.
-      // Also look BEHIND the mutation (within 3000 chars) for a .eq('company_id', ...)
-      // chained after a preceding .select/.update/.from on the same query — e.g.
-      //   s.from('x').update({...}).eq('id',id).eq('company_id', cid)
-      // is caught by lookahead, but a build-up pattern like
-      //   let q = s.from('x').eq('company_id', cid); q.update({...}).eq('id',id)
-      // needs lookbehind too.
-      const lookahead = ts.slice(mut.index, mut.index + 1200);
-      const lookbehind = ts.slice(Math.max(0, mut.index - 3000), mut.index);
-      const hasCompanyFilter = /\.eq\(\s*['"]company_id['"]/.test(lookahead)
-                            || /\.eq\(\s*['"]company_id['"]/.test(lookbehind);
-      const needCompany = !GLOBAL.has(tableName)
-                       && !(isAdminRoute && /^(companies|subscriptions|users|addon_requests|upgrade_requests|activation_codes|payment_methods|addon_grant_audit|complaints|support_tickets|company_messages|messages|notifications|backup_logs|bonds|audit_log|security_audit_log|ad_views|ad_clicks|admin_audit_log)$/.test(tableName))
-                       && !(isAuthRoute && /^(users|companies|subscriptions|payment_transactions|password_reset_tokens|password_reset_requests|company_registration_tokens|refresh_tokens|ad_views|ad_clicks|visitor_logs|settings|login_attempts)$/.test(tableName));
-        if (needCompany && !isWhitelisted) {
-          const hasCompanyInPayload = payload.has('company_id');
-          // lookahead up to 500 chars for chained .eq('company_id',...)
-          const laMatch = /\.eq\(\s*['"]company_id['"]/.test(lookahead.slice(0, 500));
-          // lookbehind up to 2000 chars: if the payload was built in a variable
-          // (e.g. piPayload / payload / rowsToInsert) that references company_id
-          // within the same function body, we consider it safe.
-          const lbMatch = /company_id\s*:/.test(lookbehind);
-          // Only enforce on update/delete (where missing company_id creates real cross-tenant risk).
-          // Insert paths are checked separately in the column-coverage test (company_id must
-          // exist as a column in the payload when the table requires it).
-          if (!hasCompanyInPayload && !laMatch && !lbMatch && (op === 'update' || op === 'delete')) {
-            missedCompany.push({ file: rel, line: lineOf(ts, mut.index), table: tableName, op });
-          }
+      // Tenant isolation for update/delete
+      const needCompany =
+        !GLOBAL.has(tableName) &&
+        !(isAdminRoute && ADMIN_ALLOWED_TABLES.has(tableName)) &&
+        !(isAuthOrPublic && AUTH_ALLOWED_TABLES.has(tableName)) &&
+        !isWhitelisted;
+
+      if (needCompany && (op === 'update' || op === 'delete')) {
+        const hasCompanyInPayload = payload.has('company_id');
+        const lookahead = ts.slice(mut.index, mut.index + 800);
+        const lookbehind = ts.slice(Math.max(0, mut.index - 2000), mut.index);
+        const laMatch = /\.eq\(\s*['"]company_id['"]/.test(lookahead);
+        // If the payload object was bound to a variable earlier (e.g.
+        //   const payload = { company_id: auth.companyId, ... };
+        //   await s.from('x').update(payload).eq('id',id);
+        // ), then within 2000 chars before the mutation we should see
+        // "company_id:" — treat as safe.
+        const lbMatch = /company_id\s*:/.test(lookbehind);
+        if (!hasCompanyInPayload && !laMatch && !lbMatch) {
+          missedCompany.push({ file: rel, line: lineOf(ts, mut.index), table: tableName, op });
         }
+      }
     }
   }
 
   test('No API route writes to a non-existent column (42703-proof)', () => {
-    // Print a compact report before asserting, to help debugging
     if (violations.length > 0) {
       console.log('Column-coverage violations:');
       for (const v of violations) {
@@ -329,13 +335,14 @@ describe('End-to-end API → Database Schema Coverage', () => {
       'pos_terminals','pos_sales','pos_sale_items','properties','property_leases','property_maintenance',
       'company_registration_tokens','refresh_tokens','admin_users','admin_sessions','_migrations',
       'audit_log','financial_audit_log','security_audit_log','backup_logs',
+      'financial_audit_trails','transaction_categories','crm_contacts','crm_followups',
+      'bank_reconciliation','bank_reconciliation_items','daily_worker_records',
+      'daily_worker_settlements','disbursement_invoice_items','receipt_invoice_items',
+      'tender_cost_items','salary_items','contract_documents',
+      'company_data_exports',
     ];
     const missing = required.filter(t => !tables[t]);
     if (missing.length > 0) console.log('Missing tables:', missing);
     expect(missing).toEqual([]);
   });
 });
-
-function lineOf(text: string, idx: number): number {
-  return text.slice(0, idx).split('\n').length;
-}
