@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -35,20 +35,12 @@ export async function GET(request: NextRequest) {
     const s = sb();
     const url = new URL(request.url);
 
-    const companyIdsParam = url.searchParams.get('company_ids');
     const asOfDate = url.searchParams.get('as_of_date') || new Date().toISOString().split('T')[0];
 
-    let companyIds: string[] = [];
-
-    if (companyIdsParam) {
-      companyIds = companyIdsParam.split(',');
-    } else {
-      companyIds = [auth.companyId];
-    }
-
-    if (companyIds.length === 0) {
-      return error('يجب تحديد شركة واحدة على الأقل للتوحيد');
-    }
+    // SECURITY: كان يقبل company_ids من المستخدم ويقرأ دفاتر أي شركة (تسريب
+    // مالي متقاطع للمستأجرين). لا يوجد نموذج مجموعات شركات في النظام، لذا
+    // التوحيد يقتصر على شركة المستخدم المصادَق فقط.
+    const companyIds: string[] = [auth.companyId];
 
     const consolidatedData = {
       assets: [] as ConsolidatedItem[],
@@ -77,6 +69,7 @@ export async function GET(request: NextRequest) {
         const { data: lines } = await s.from('journal_lines')
           .select('debit, credit')
           .eq('account_id', acc.id)
+          .eq('company_id', companyId)
           .lte('created_at', asOfDate) as { data: JournalLine[] | null };
 
         const totalDebit = (lines || []).reduce((sum: number, l: JournalLine) => 

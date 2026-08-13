@@ -85,7 +85,16 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    await s.from('crm_followups').delete().eq('crm_contact_id', id);
+    // عزل مستأجرين: التحقق من الملكية قبل أي حذف — كان حذف متابعات طرف
+    // أجنبي ممكناً بمجرد تخمين المعرّف (حذف بيانات شركة أخرى)
+    const { data: existing } = await s.from('crm_contacts')
+      .select('id')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+    if (!existing) return notFound();
+
+    await s.from('crm_followups').delete().eq('crm_contact_id', id).eq('company_id', auth.companyId);
     await s.from('crm_contacts').delete().eq('id', id).eq('company_id', auth.companyId);
     return success({ deleted: true });
   } catch (err) {
@@ -109,6 +118,14 @@ export async function POST(
     if (!body.scheduled_at) {
       return error('تاريخ المتابعة مطلوب');
     }
+
+    // عزل مستأجرين: الطرف يجب أن ينتمي لهذه الشركة قبل جدولة متابعة له
+    const { data: contact } = await s.from('crm_contacts')
+      .select('id')
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .maybeSingle();
+    if (!contact) return notFound();
 
     const followupId = generateId();
     const { data, error: insertErr } = await s.from('crm_followups')

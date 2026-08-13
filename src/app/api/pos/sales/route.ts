@@ -22,6 +22,13 @@ export async function POST(req: NextRequest) {
     const { terminal_id, total, payment_method } = body;
     if (!total) return error('total required');
 
+    // عزل مستأجرين: الطرفية (إن حُددت) يجب أن تنتمي لهذه الشركة
+    if (terminal_id) {
+      const { data: terminal } = await s.from('pos_terminals')
+        .select('id').eq('id', terminal_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!terminal) return error('الطرفية غير موجودة', 404);
+    }
+
     // Get next number
     let number = 1;
     try {
@@ -67,6 +74,15 @@ export async function POST(req: NextRequest) {
       throw jeErr || new Error('فشل قيد مبيعات نقطة البيع');
     }
 
-    return success(data, 201);
+    // ربط القيد بالبيعة (كان يبقى journal_entry_id فارغاً رغم نجاح الترحيل)
+    const { data: linked, error: linkErr } = await s.from('pos_sales')
+      .update({ journal_entry_id: journalId })
+      .eq('id', data.id)
+      .eq('company_id', auth.companyId)
+      .select()
+      .single();
+    if (linkErr) throw linkErr;
+
+    return success(linked, 201);
   } catch (e) { return handleApiError(e); }
 }
