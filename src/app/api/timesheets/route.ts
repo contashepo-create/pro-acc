@@ -74,6 +74,16 @@ export async function POST(request: NextRequest) {
       return error('رقم الموظف والتاريخ مطلوبان');
     }
 
+    // عزل مستأجرين: الموظف والمشروع (إن وُجد) يجب أن ينتميا لهذه الشركة
+    const { data: emp } = await s.from('employees')
+      .select('id').eq('id', body.employee_id).eq('company_id', auth.companyId).maybeSingle();
+    if (!emp) return error('الموظف غير موجود', 404);
+    if (body.project_id) {
+      const { data: proj } = await s.from('projects')
+        .select('id').eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!proj) return error('المشروع غير موجود', 404);
+    }
+
     const timesheetId = generateId();
     const checkIn = body.check_in || new Date().toISOString();
     const checkOut = body.check_out || null;

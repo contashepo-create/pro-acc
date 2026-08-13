@@ -37,6 +37,19 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const s = sb();
+
+    // عزل مستأجرين: المعدة والمشروع (إن وُجدا) يجب أن ينتميا لهذه الشركة
+    if (parsed.data.equipment_id) {
+      const { data: eq } = await s.from('equipment')
+        .select('id').eq('id', parsed.data.equipment_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!eq) return error('المعدة غير موجودة', 404);
+    }
+    if (parsed.data.project_id) {
+      const { data: proj } = await s.from('projects')
+        .select('id').eq('id', parsed.data.project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!proj) return error('المشروع غير موجود', 404);
+    }
+
     const { data, error: insErr } = await s.from('equipment_costs')
       .insert({
         company_id: auth.companyId,

@@ -71,6 +71,23 @@ export async function POST(request: NextRequest) {
       return error('العنوان والنوع والمبلغ وتاريخا الإصدار والانتهاء مطلوبة');
     }
 
+    // عزل مستأجرين: المشروع/الطرف/الخزينة (إن وُجدت) يجب أن تنتمي لهذه الشركة
+    if (body.project_id) {
+      const { data: proj } = await s.from('projects')
+        .select('id').eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!proj) return error('المشروع غير موجود', 404);
+    }
+    if (body.contact_id) {
+      const { data: contact } = await s.from('contacts')
+        .select('id').eq('id', body.contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف غير موجود', 404);
+    }
+    if (body.bank_safe_id) {
+      const { data: bank } = await s.from('banks_safes')
+        .select('id').eq('id', body.bank_safe_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!bank) return error('الخزينة/البنك غير موجود', 404);
+    }
+
     const validTypes = ['bid_bond', 'performance_bond', 'advance_payment', 'retention', 'warranty', 'insurance', 'other'];
     if (!validTypes.includes(body.type)) {
       return error(`النوع غير صالح. الأنواع المتاحة: ${validTypes.join('، ')}`);

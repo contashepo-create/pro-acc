@@ -67,6 +67,12 @@ export async function POST(request: NextRequest) {
       return error('عنوان العطاء واسم العميل مطلوبان');
     }
 
+    if (body.contact_id) {
+      const { data: contact } = await s.from('contacts')
+        .select('id').eq('id', body.contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف غير موجود', 404);
+    }
+
     const tenderId = generateId();
     const { data, error: insertErr } = await s.from('tenders')
       .insert({
