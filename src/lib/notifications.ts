@@ -314,6 +314,14 @@ export async function handleApprovalResponse(
       await createJournalEntryForApprovedTransaction(companyId, userId, transactionType, transactionId);
     } catch (createErr) {
       console.error('Failed to create journal entry on approval:', createErr);
+      // An approval without its required financial posting is not an approval.
+      // Restore both records to pending so it can be corrected and retried.
+      await s.from('approval_requests')
+        .update({ status: 'pending', approver_chat_id: null, approved_at: null })
+        .eq('id', approvalId)
+        .eq('company_id', companyId);
+      await updateTransactionStatus(companyId, transactionType, transactionId, 'pending', approvalId);
+      return { success: false, message: 'فشل ترحيل القيد المحاسبي؛ أعيد الطلب إلى الانتظار للمراجعة' };
     }
   }
   
