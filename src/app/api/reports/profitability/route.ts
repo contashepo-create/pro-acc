@@ -44,23 +44,42 @@ export async function GET(req: NextRequest) {
       billedByProject.set(inv.project_id, (billedByProject.get(inv.project_id) || 0) + net);
     }
 
-    let linesQuery = s.from('journal_lines')
-      .select('project_id, account_id, debit, credit')
+    // Project costs/revenue must use the SAME date window as the invoices.
+    // Filtering journal_lines alone has no accounting date and previously made
+    // a period profitability report include every historical posting.
+    let entryQuery = s.from('journal_entries')
+      .select('id')
       .eq('company_id', auth.companyId)
-      .not('project_id', 'is', null);
-    const { data: lines } = await linesQuery;
+      .is('deleted_at', null);
+    if (from) entryQuery = entryQuery.gte('date', from);
+    if (to) entryQuery = entryQuery.lte('date', to);
+    const { data: periodEntries, error: periodEntriesError } = await entryQuery;
+    if (periodEntriesError) throw periodEntriesError;
+    const periodEntryIds = (periodEntries || []).map((entry: { id: string }) => entry.id);
+
+    let lines: Array<{ project_id: string | null; account_id: string; debit: number | string; credit: number | string }> = [];
+    if (periodEntryIds.length > 0) {
+      const { data, error: linesError } = await s.from('journal_lines')
+        .select('project_id, account_id, debit, credit')
+        .eq('company_id', auth.companyId)
+        .in('journal_entry_id', periodEntryIds)
+        .not('project_id', 'is', null);
+      if (linesError) throw linesError;
+      lines = data || [];
+    }
 
     const costByProject = new Map<string, number>();
     const earnedByProject = new Map<string, number>();
     for (const l of lines || []) {
       if (!l.project_id) continue;
-      const debit = parseFloat(l.debit) || 0;
-      const credit = parseFloat(l.credit) || 0;
+      const projectId = String(l.project_id);
+      const debit = parseFloat(String(l.debit)) || 0;
+      const credit = parseFloat(String(l.credit)) || 0;
       if (expAccountIds.has(l.account_id)) {
-        costByProject.set(l.project_id, (costByProject.get(l.project_id) || 0) + debit - credit);
+        costByProject.set(projectId, (costByProject.get(projectId) || 0) + debit - credit);
       }
       if (revAccountIds.has(l.account_id)) {
-        earnedByProject.set(l.project_id, (earnedByProject.get(l.project_id) || 0) + credit - debit);
+        earnedByProject.set(projectId, (earnedByProject.get(projectId) || 0) + credit - debit);
       }
     }
 
