@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { createHash } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -12,12 +13,17 @@ export async function POST(request: NextRequest) {
       return error('رمز التحقق مطلوب');
     }
 
+    if (typeof token !== 'string' || token.length !== 64 || !/^[a-f0-9]+$/i.test(token)) {
+      return error('رمز التحقق غير صالح أو منتهي الصلاحية', 400);
+    }
+
     const s = sb();
     const now = new Date().toISOString();
+    const tokenHash = createHash('sha256').update(token).digest('hex');
 
     const { data: user, error: queryError } = await s.from('users')
       .select('id, email')
-      .eq('email_verification_token', token)
+      .eq('email_verification_token', tokenHash)
       .gt('email_verification_expires', now)
       .maybeSingle();
 

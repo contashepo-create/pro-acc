@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { resendVerificationSchema } from '@/lib/validation';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { sendEmail } from '@/lib/email';
 
 const sb = () => getSupabase();
@@ -53,9 +53,10 @@ export async function POST(request: NextRequest) {
     }
 
     const verificationToken = randomBytes(32).toString('hex');
+    const verificationTokenHash = createHash('sha256').update(verificationToken).digest('hex');
     await s.from('users')
       .update({
-        email_verification_token: verificationToken,
+        email_verification_token: verificationTokenHash,
         email_verification_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
         updated_at: new Date().toISOString(),
       })

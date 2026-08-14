@@ -117,10 +117,13 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
       await assertSubscriptionAccess(u.company_id, request.method, url.pathname);
     } catch (e) {
       if (e instanceof AuthError) throw e;
-      // On unexpected errors (e.g. DB issue) we fail-soft with a warning
-      // rather than locking everyone out. This keeps the platform
-      // available during transient DB issues while still logging.
-      console.warn('Subscription guard check failed (fail-open):', e);
+      // Never let an unavailable entitlement lookup grant write access in a
+      // deployed system. Reads remain available, but production writes fail
+      // closed until the subscription source can be verified.
+      console.error('Subscription guard check failed:', e);
+      if (process.env.NODE_ENV === 'production' && !['GET', 'HEAD', 'OPTIONS'].includes((request.method || 'GET').toUpperCase())) {
+        throw new AuthError('تعذر التحقق من حالة الاشتراك. حاول لاحقاً');
+      }
     }
   } else if (options.checkSubscription) {
     // Legacy behavior: expiry-only check (used by callers that still

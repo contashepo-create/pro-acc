@@ -62,7 +62,9 @@ export const resendVerificationSchema = z.object({
 });
 
 export const resetPasswordSchema = z.object({
-  token: z.string().min(1, 'الرمز مطلوب'),
+  // Reset links are 256-bit hexadecimal capabilities. Enforcing the exact
+  // representation avoids expensive hash/database work for arbitrary input.
+  token: z.string().regex(/^[a-f0-9]{64}$/i, 'الرمز غير صالح'),
   password: passwordPolicy,
 });
 

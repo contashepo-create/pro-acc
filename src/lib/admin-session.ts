@@ -7,6 +7,10 @@ export interface AdminSessionData {
   code: string;
   step: 'code_sent' | 'telegram_verified';
   codeSent: boolean;
+  /** OTP lifetime is deliberately shorter than the 2FA flow session. */
+  otpExpiresAt: number;
+  attempts: number;
+  lastResendAt: number;
   expiresAt: number;
 }
 
@@ -50,10 +54,16 @@ export async function getSession(adminId: string): Promise<AdminSessionData | nu
     await deleteSession(adminId);
     return null;
   }
+  // Sessions created before OTP expiry was introduced are deliberately not
+  // trusted for code verification; the admin can simply restart the flow.
+  if (session.step === 'code_sent' && (!Number.isFinite(session.otpExpiresAt) || Date.now() > session.otpExpiresAt)) {
+    await deleteSession(adminId);
+    return null;
+  }
   return session;
 }
 
-export async function updateSession(adminId: string, updates: Partial<Pick<AdminSessionData, 'step' | 'codeSent'>>): Promise<void> {
+export async function updateSession(adminId: string, updates: Partial<AdminSessionData>): Promise<void> {
   const session = await getSession(adminId);
   if (!session) return;
   Object.assign(session, updates);

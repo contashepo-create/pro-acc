@@ -86,7 +86,7 @@ describe('Schema wiring', () => {
 
   test('resetPasswordSchema enforces password policy', () => {
     expect(resetPasswordSchema.safeParse({ token: 't', password: '123456' }).success).toBe(false);
-    expect(resetPasswordSchema.safeParse({ token: 't', password: 'Str0ng!Pass' }).success).toBe(true);
+    expect(resetPasswordSchema.safeParse({ token: 'a'.repeat(64), password: 'Str0ng!Pass' }).success).toBe(true);
   });
 
   test('loginSchema stays permissive for legacy 6-char passwords', () => {
