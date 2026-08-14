@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
-import { hashPassword, createToken } from '@/lib/auth';
+import { hashPassword, createToken, getTokenSecret } from '@/lib/auth';
 import { registerSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
 import { sendEmail } from '@/lib/email';
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
   // FIXED: Store in Supabase instead of memory Map for serverless compatibility
   // For now, embed answer in HMAC signed token to avoid server state
   const { createHmac } = await import('crypto');
-  const secret = process.env.TOKEN_SECRET || 'fallback-secret';
+  const secret = getTokenSecret();
   const expires = Date.now() + 5 * 60 * 1000;
   const payload = `${a}:${b}:${answer}:${expires}`;
   const sig = createHmac('sha256', secret).update(payload).digest('hex');
@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
 
 export function verifyCaptchaToken(token: string, userAnswer: number): boolean {
   try {
-    const secret = process.env.TOKEN_SECRET || 'fallback-secret';
+    const secret = getTokenSecret();
     const decoded = Buffer.from(token, 'base64url').toString();
     const parts = decoded.split(':');
     if (parts.length !== 5) return false;

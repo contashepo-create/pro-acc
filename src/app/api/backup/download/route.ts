@@ -2,10 +2,9 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireAdmin, handleApiError } from '@/lib/api-helpers';
 import { createHmac } from 'crypto';
+import { getBackupSecret } from '@/lib/backup-integrity';
 
 const sb = () => getSupabase();
-
-const BACKUP_SECRET = process.env.BACKUP_SECRET || process.env.TOKEN_SECRET || 'backup-secret';
 
 export async function GET(request: NextRequest) {
   try {
@@ -50,8 +49,9 @@ export async function GET(request: NextRequest) {
     }
 
     const jsonString = JSON.stringify(backupData, null, 2);
-    const hash = createHmac('sha256', BACKUP_SECRET).update(jsonString).digest('hex');
-    const fileHash = createHmac('sha256', BACKUP_SECRET).update(jsonString).digest('hex').substring(0, 16);
+    const backupSecret = getBackupSecret();
+    const hash = createHmac('sha256', backupSecret).update(jsonString).digest('hex');
+    const fileHash = createHmac('sha256', backupSecret).update(jsonString).digest('hex').substring(0, 16);
 
     // Log backup for verification later
     await s.from('backup_logs').insert({

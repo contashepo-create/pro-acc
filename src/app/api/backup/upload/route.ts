@@ -2,10 +2,9 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireAdmin, handleApiError, error, success } from '@/lib/api-helpers';
 import { createHmac } from 'crypto';
+import { getBackupSecret } from '@/lib/backup-integrity';
 
 const sb = () => getSupabase();
-
-const BACKUP_SECRET = process.env.BACKUP_SECRET || process.env.TOKEN_SECRET || 'backup-secret';
 
 export async function POST(request: NextRequest) {
   try {
@@ -40,7 +39,7 @@ export async function POST(request: NextRequest) {
 
     // Verify HMAC signature to ensure not tampered
     const jsonString = JSON.stringify(backupData, null, 2);
-    const expectedFullHmac = createHmac('sha256', BACKUP_SECRET).update(jsonString).digest('hex');
+    const expectedFullHmac = createHmac('sha256', getBackupSecret()).update(jsonString).digest('hex');
     const expectedHash = expectedFullHmac.substring(0, 16);
     
     // Secure verification: search database logs for a record matching the CALCULATED full hmac signature of the actual uploaded content.
