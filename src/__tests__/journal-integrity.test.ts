@@ -276,6 +276,15 @@ describe('SQL journal RPCs write company_id', () => {
     expect(sql).toMatch(/jsonb_array_length\(p_lines\) < 2/);
   });
 
+  test('database trigger enforces tenant ownership for every direct ledger insert', () => {
+    const sql = fs.readFileSync(path.join(__dirname, '../migrations/048-ledger-row-integrity-trigger.sql'), 'utf8');
+    expect(sql).toContain('trg_enforce_journal_line_integrity');
+    expect(sql).toMatch(/journal_entries[\s\S]*company_id = NEW\.company_id/);
+    expect(sql).toMatch(/accounts[\s\S]*company_id = NEW\.company_id/);
+    expect(sql).toMatch(/contacts[\s\S]*company_id = NEW\.company_id/);
+    expect(sql).toMatch(/projects[\s\S]*company_id = NEW\.company_id/);
+  });
+
   test('create_journal_entry / create_invoice_with_journal INSERT lists include company_id', () => {
     const migrationsDir = path.join(__dirname, '../migrations');
     const files = [
