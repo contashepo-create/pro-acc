@@ -28,7 +28,7 @@ export default function VisitorsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="bg-bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-amber-400/60">اليوم</span>
+            <span className="text-xs text-text-secondary">اليوم</span>
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-600 to-blue-700 flex items-center justify-center">
               <Calendar size={14} className="text-white" />
             </div>
@@ -39,7 +39,7 @@ export default function VisitorsPage() {
 
         <div className="bg-bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-amber-400/60">مميزون</span>
+            <span className="text-xs text-text-secondary">مميزون</span>
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-600 to-green-700 flex items-center justify-center">
               <Users size={14} className="text-white" />
             </div>
@@ -50,7 +50,7 @@ export default function VisitorsPage() {
 
         <div className="bg-bg-card border border-border rounded-xl p-5">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-amber-400/60">الإجمالي</span>
+            <span className="text-xs text-text-secondary">الإجمالي</span>
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-600 to-fuchsia-700 flex items-center justify-center">
               <TrendingUp size={14} className="text-white" />
             </div>
@@ -66,7 +66,7 @@ export default function VisitorsPage() {
           <div className="space-y-2">
             {stats.weekly.map((day: any) => (
               <div key={day.date} className="flex items-center gap-3">
-                <span className="text-xs text-amber-400/60 w-28" dir="ltr">{day.date}</span>
+                <span className="text-xs text-text-secondary w-28" dir="ltr">{day.date}</span>
                 <div className="flex-1 h-6 rounded-full bg-bg-secondary overflow-hidden">
                   <div
                     className="h-full rounded-full bg-gradient-to-l from-amber-600 to-orange-600 transition-all duration-500"

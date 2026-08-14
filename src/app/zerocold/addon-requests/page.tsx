@@ -90,7 +90,7 @@ export default function AdminAddonRequests() {
                   <div className="text-[10px] text-text-muted mt-1">{new Date(r.created_at).toLocaleString('ar-SA')}</div>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <span className={`px-2 py-1 rounded text-xs w-fit ${r.status==='pending'?'bg-yellow-900/30 text-yellow-400':r.status==='approved'?'bg-green-900/30 text-green-400':'bg-red-900/30 text-red-400'}`}>
+                  <span className={`px-2 py-1 rounded text-xs w-fit ${r.status==='pending'?'bg-warning-light text-warning font-semibold':r.status==='approved'?'bg-success-light text-success font-semibold':'bg-danger-light text-danger font-semibold'}`}>
                     {r.status==='pending'?'معلق':r.status==='approved'?'مقبول':'مرفوض'}
                   </span>
                   {r.status === 'pending' && (

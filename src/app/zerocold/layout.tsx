@@ -39,6 +39,14 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
         pathname.startsWith('/zerocold/verify-telegram') ||
         pathname.startsWith('/zerocold/verify-master');
 
+      // Skip the session probe on auth pages entirely: it always 401s
+      // before login and just spams the browser console with
+      // "Failed to load resource: 401" noise.
+      if (isAuthPage) {
+        setChecking(false);
+        return;
+      }
+
       try {
         const res = await fetch('/api/admin/session');
         if (res.ok) {

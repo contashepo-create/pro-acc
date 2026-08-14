@@ -202,7 +202,7 @@ export default function ZerocoldCompaniesPage() {
 
         {/* Search */}
         <div className="relative mb-4">
-          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-600/50" />
+          <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted" />
           <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث بالاسم، الرقم الضريبي، رقم المشترك..."
             className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary placeholder-amber-700/50 focus:outline-none focus:border-amber-600 text-sm" />
         </div>
@@ -213,7 +213,7 @@ export default function ZerocoldCompaniesPage() {
         {filtered.length === 0 && !error ? (
           <div className="bg-bg-card border border-border rounded-xl p-8 text-center">
             <Building2 size={32} className="text-amber-600/30 mx-auto mb-2" />
-            <p className="text-amber-600/50 text-sm">لا توجد شركات</p>
+            <p className="text-text-muted text-sm">لا توجد شركات</p>
           </div>
         ) : (
           <div className="bg-bg-card border border-border rounded-xl overflow-x-auto">
@@ -260,7 +260,7 @@ export default function ZerocoldCompaniesPage() {
                           {!c.subscription ? 'لا اشتراك' : c.subscription.status === 'active' ? 'نشط' : c.subscription.status === 'trial' ? 'تجريبي' : c.subscription.status}
                         </span>
                       </td>
-                      <td className="p-3"><span className="text-xs text-amber-400/60">{c.subscription?.end_date || '—'}</span></td>
+                      <td className="p-3"><span className="text-xs text-text-secondary">{c.subscription?.end_date || '—'}</span></td>
                       <td className="p-3 text-center"><span className="text-xs text-amber-400/80 font-mono">{c.user_count}</span></td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-1">
@@ -313,7 +313,7 @@ export default function ZerocoldCompaniesPage() {
                       <p className="text-xs text-text-secondary/50 mb-2">المستخدمون</p>
                       {detailData.users.map((u: any, i: number) => (
                         <div key={u.id} className="flex items-center gap-2 py-1.5 border-b border-[#1f1725] last:border-0">
-                          <span className="text-xs text-amber-400/60">{i + 1}.</span>
+                          <span className="text-xs text-text-secondary">{i + 1}.</span>
                           <span className="text-sm text-amber-200">{u.name}</span>
                           <span className="text-xs text-text-secondary/40" dir="ltr">{u.email}</span>
                           <span className="text-xs px-1.5 py-0.5 bg-amber-950/30 text-text-secondary/60 rounded">{u.role}</span>

@@ -27,11 +27,9 @@ export function validationError(errors: Record<string, string[]> | string) {
 }
 
 export function serverError(err: unknown) {
-  console.error('Server error:', err);
   // NOTE: Supabase/PostgREST errors are NOT Error instances — they are plain
-  // objects shaped { message, code, details, hint }. `instanceof Error` alone
-  // misses them and the real cause used to be hidden behind the generic
-  // message. Unwrap every common shape so the actual error surfaces.
+  // objects shaped { message, code, details, hint }. Unwrap every common
+  // shape so the actual error surfaces IN THE SERVER LOG.
   let message = 'حدث خطأ في الخادم';
   let details: string | undefined;
   if (err instanceof Error && err.message) {
@@ -44,7 +42,24 @@ export function serverError(err: unknown) {
     if (typeof e.details === 'string' && e.details) details = e.details;
     else if (typeof e.hint === 'string' && e.hint) details = e.hint;
   }
-  return NextResponse.json({ success: false, message, ...(details ? { details } : {}) }, { status: 500 });
+
+  // Correlate the generic client response with the detailed server log entry.
+  const errorId = Math.random().toString(36).slice(2, 10);
+  console.error(`Server error [${errorId}]:`, message, details ? `| ${details}` : '', err);
+
+  // SECURITY: never leak DB/schema internals (PostgREST messages, column
+  // names, SQL hints) to the client in production. Full detail is only
+  // surfaced in non-production for developer convenience.
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json(
+      { success: false, message: 'حدث خطأ في الخادم', errorId },
+      { status: 500 }
+    );
+  }
+  return NextResponse.json(
+    { success: false, message, errorId, ...(details ? { details } : {}) },
+    { status: 500 }
+  );
 }
 
 export class AuthError extends Error {
@@ -60,6 +75,10 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
 
   const payload = verifyToken(token);
   if (!payload) throw new AuthError('غير مصرح به');
+
+  // Baseline rate limiting for every authenticated business route
+  // (auth routes have their own stricter DB-backed limiter).
+  await enforceRateLimit(request, `user:${payload.userId}`);
 
   const s = sb();
   // SECURITY FIX: Fetch role from database (source of truth) instead of JWT token.
@@ -205,11 +224,82 @@ export async function requireAdminAuth(request: Request): Promise<{ userId: stri
 
 export function handleApiError(err: unknown) {
   if (err instanceof AuthError) return error(err.message, 401);
+  if (err instanceof ValidationFailure) return validationError(err.errors ?? err.message);
+  if (err instanceof RateLimitExceeded) {
+    const res = error('عدد كبير جداً من الطلبات، حاول لاحقاً', 429);
+    res.headers.set('Retry-After', String(err.retryAfterSeconds));
+    return res;
+  }
   return serverError(err);
 }
 
+/** Thrown by enforceRateLimit; mapped to a 429 in handleApiError. */
+export class RateLimitExceeded extends Error {
+  retryAfterSeconds: number;
+  constructor(retryAfterSeconds: number) {
+    super('Rate limit exceeded');
+    this.name = 'RateLimitExceeded';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/**
+ * Per-user (or per-IP for anonymous callers) rate limiting for business
+ * routes. Reads get a higher budget than writes. Called automatically from
+ * requireApiAuth so every authenticated route is covered without per-handler
+ * wiring; can also be invoked directly for public endpoints.
+ */
+export async function enforceRateLimit(request: Request, principal: string): Promise<void> {
+  const { hitRateLimit, READ_LIMIT, WRITE_LIMIT } = await import('@/lib/memory-rate-limit');
+  const method = (request?.method || 'GET').toUpperCase();
+  const isWrite = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+  const limit = isWrite ? WRITE_LIMIT : READ_LIMIT;
+  const result = hitRateLimit(`${principal}:${isWrite ? 'w' : 'r'}`, limit);
+  if (!result.allowed) {
+    throw new RateLimitExceeded(result.retryAfterSeconds);
+  }
+}
+
 export async function parseBody<T = any>(request: Request): Promise<T> {
-  return request.json();
+  const body = await request.json();
+  // Harden: handlers universally treat the body as a plain object
+  // (`body.field`). Arrays / primitives / null silently produce `undefined`
+  // fields deep in business logic — reject them up-front instead.
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new ValidationFailure('صيغة الطلب غير صحيحة: يجب إرسال كائن JSON');
+  }
+  return body as T;
+}
+
+/** Thrown by parseBody / parseValidatedBody; mapped to a 422 in handleApiError. */
+export class ValidationFailure extends Error {
+  errors?: Record<string, string[]> | string;
+  constructor(message: string, errors?: Record<string, string[]> | string) {
+    super(message);
+    this.name = 'ValidationFailure';
+    this.errors = errors;
+  }
+}
+
+/**
+ * Parse the JSON body and validate it against a Zod schema in one step.
+ * Prefer this over bare `parseBody` for every new write handler:
+ *
+ *   const body = await parseValidatedBody(request, invoiceSchema);
+ */
+export async function parseValidatedBody<S extends { safeParse: (v: unknown) => any }>(
+  request: Request,
+  schema: S
+): Promise<S extends { safeParse: (v: unknown) => { success: true; data: infer D } | any } ? D : never> {
+  const raw = await parseBody(request);
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) {
+    const flat = typeof parsed.error?.flatten === 'function'
+      ? parsed.error.flatten().fieldErrors
+      : String(parsed.error);
+    throw new ValidationFailure('بيانات غير صالحة', flat);
+  }
+  return parsed.data;
 }
 
 export function checkCsrf(request: Request): boolean {

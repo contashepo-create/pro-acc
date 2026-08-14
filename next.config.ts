@@ -34,7 +34,13 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      // 'unsafe-eval' is required only by dev tooling (React Refresh) —
+      // never ship it to production. 'unsafe-inline' remains because Next.js
+      // emits inline bootstrap scripts; moving to a nonce-based CSP is
+      // tracked as a follow-up hardening step.
+      isDev
+        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+        : "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data: https:",

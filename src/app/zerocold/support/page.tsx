@@ -66,7 +66,7 @@ export default function AdminSupport() {
                     <div className="text-[10px] text-text-muted mt-1">{new Date(t.created_at).toLocaleString('ar-SA')}</div>
                   </div>
                   <div className="flex gap-2 flex-col">
-                    <span className={`px-2 py-1 rounded text-xs w-fit ${t.status==='open'?'bg-yellow-900/30 text-yellow-400':t.status==='in_progress'?'bg-blue-900/30 text-blue-400':t.status==='resolved'?'bg-green-900/30 text-green-400':'bg-gray-800 text-gray-400'}`}>
+                    <span className={`px-2 py-1 rounded text-xs w-fit ${t.status==='open'?'bg-warning-light text-warning font-semibold':t.status==='in_progress'?'bg-blue-900/30 text-blue-400':t.status==='resolved'?'bg-success-light text-success font-semibold':'bg-gray-800 text-gray-400'}`}>
                       {t.status==='open'?'مفتوحة':t.status==='in_progress'?'قيد المعالجة':t.status==='resolved'?'محلولة':'مغلقة'}
                     </span>
                     {t.status !== 'resolved' && t.status !== 'closed' && (

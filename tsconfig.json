@@ -8,8 +8,18 @@
     ],
     "allowJs": true,
     "skipLibCheck": true,
+    // Incremental path to "strict": true — every sub-flag that the codebase
+    // already satisfies is enabled and enforced by CI. Remaining work:
+    //   "noImplicitAny": ~158 errors, "strictNullChecks": ~104 errors.
+    // Fix those module-by-module, then replace this block with "strict": true.
     "strict": false,
     "noImplicitAny": false,
+    "noImplicitThis": true,
+    "strictBindCallApply": true,
+    "strictFunctionTypes": true,
+    "alwaysStrict": true,
+    "useUnknownInCatchVariables": true,
+    "noFallthroughCasesInSwitch": true,
     "noEmit": true,
     "esModuleInterop": true,
     "module": "esnext",

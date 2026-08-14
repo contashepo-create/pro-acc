@@ -93,7 +93,7 @@ export default function SubscriptionPageEnhanced() {
   const refreshAll = async () => {
     const [subData, payData, reqData, addonData, supData, expData] = await Promise.all([
       fetch('/api/auth/subscription').then(r=>r.json()),
-      fetch('/api/admin/payment-methods').then(r=>r.json()).catch(()=>({success:false})),
+      fetch('/api/payment-methods').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/subscription/upgrade-request').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/subscription/addon-request').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/support').then(r=>r.json()).catch(()=>({success:false})),
@@ -313,7 +313,7 @@ export default function SubscriptionPageEnhanced() {
       </div>
 
       {message && (
-        <div className={`rounded-xl p-4 text-sm flex items-center gap-2 ${message.type === 'success' ? 'bg-green-900/20 border border-green-800/30 text-green-300' : 'bg-red-900/20 border border-red-800/30 text-red-300'}`}>
+        <div className={`rounded-xl p-4 text-sm font-semibold flex items-center gap-2 border-2 ${message.type === 'success' ? 'bg-success-light border-success text-success' : 'bg-danger-light border-danger text-danger'}`}>
           {message.type === 'success' ? <Check size={18} /> : <AlertTriangle size={18} />} {message.text}
         </div>
       )}
@@ -329,7 +329,7 @@ export default function SubscriptionPageEnhanced() {
                   <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
                 </div>
               </div>
-              {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-yellow-900/20 border border-yellow-800/30 rounded-lg text-xs text-yellow-300 flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
+              {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-warning-light border border-warning rounded-lg text-xs font-semibold text-warning flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
             </Card>
           )}
 
@@ -342,7 +342,7 @@ export default function SubscriptionPageEnhanced() {
                       <div className="font-medium">{req.subscription_plans?.name || req.requested_plan_id} - {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
                       <div className="text-xs text-text-muted">{new Date(req.created_at).toLocaleDateString()} - {req.payment_method_code} - ${req.payment_amount}</div>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs ${req.status === 'pending' ? 'bg-yellow-900/30 text-yellow-400' : req.status === 'approved' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
+                    <span className={`px-2 py-1 rounded-full text-xs ${req.status === 'pending' ? 'bg-warning-light text-warning font-semibold' : req.status === 'approved' ? 'bg-success-light text-success font-semibold' : 'bg-danger-light text-danger font-semibold'}`}>{req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
                   </div>
                 ))}
               </div>
@@ -433,7 +433,7 @@ export default function SubscriptionPageEnhanced() {
               <button onClick={() => setDuration('yearly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'yearly' ? 'bg-accent text-white' : 'text-text-muted'}`}>سنوي - ${Math.round((selectedPlan.price_yearly || selectedPlan.price_monthly * 12 * 0.8))} (خصم {selectedPlan.yearly_discount_percent}%)</button>
             </div>
 
-            <div className="p-3 bg-blue-900/20 border border-blue-800/30 rounded-xl text-xs">
+            <div className="p-3 bg-info-light border border-info rounded-xl text-xs text-text-primary">
               <div className="font-bold mb-1">طرق الدفع المتاحة (يتحكم فيها الأدمن):</div>
               {paymentMethods.length === 0 ? (
                 <div>انستا باي، أورنج كاش، تحويل بنكي - حول المبلغ ثم ارفق الإيصال</div>
@@ -446,9 +446,13 @@ export default function SubscriptionPageEnhanced() {
               <div>
                 <label className="text-xs text-text-muted">طريقة الدفع</label>
                 <select value={form.payment_method} onChange={(e) => setForm({...form, payment_method: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-lg text-sm">
+                  {paymentMethods.length > 0 ? paymentMethods.map((pm) => (
+                    <option key={pm.code} value={pm.code}>{pm.name_ar}</option>
+                  )) : (<>
                   <option value="instapay">انستا باي</option>
                   <option value="orange_cash">أورنج كاش</option>
                   <option value="bank_transfer">تحويل بنكي</option>
+                  </>)}
                 </select>
               </div>
               <div>
@@ -519,7 +523,7 @@ export default function SubscriptionPageEnhanced() {
                       <div className="font-medium">{r.addon_type === 'extra_user' ? 'مستخدم إضافي' : r.addon_type === 'extra_branch' ? 'فرع/مستودع إضافي' : 'تخزين إضافي'} ×{r.quantity} - {r.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
                       <div className="text-xs text-text-muted">{new Date(r.created_at).toLocaleDateString()} - ${r.total_amount_usd}</div>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs ${r.status === 'pending' ? 'bg-yellow-900/30 text-yellow-400' : r.status === 'approved' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{r.status === 'pending' ? 'معلق' : r.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
+                    <span className={`px-2 py-1 rounded-full text-xs ${r.status === 'pending' ? 'bg-warning-light text-warning font-semibold' : r.status === 'approved' ? 'bg-success-light text-success font-semibold' : 'bg-danger-light text-danger font-semibold'}`}>{r.status === 'pending' ? 'معلق' : r.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
                   </div>
                 ))}
               </div>
@@ -550,7 +554,7 @@ export default function SubscriptionPageEnhanced() {
               {supportTickets.length === 0 ? <p className="text-sm text-text-muted">لا توجد رسائل سابقة.</p> :
                 supportTickets.map((t: any) => (
                   <div key={t.id} className="p-3 bg-bg-secondary rounded-lg text-sm">
-                    <div className="flex justify-between"><strong>{t.subject}</strong> <span className={`text-xs ${t.status === 'open' ? 'text-yellow-400' : t.status === 'resolved' ? 'text-green-400' : 'text-text-muted'}`}>{t.status === 'open' ? 'مفتوحة' : t.status === 'in_progress' ? 'قيد المعالجة' : t.status === 'resolved' ? 'تم الحل' : 'مغلقة'}</span></div>
+                    <div className="flex justify-between"><strong>{t.subject}</strong> <span className={`text-xs ${t.status === 'open' ? 'text-warning font-semibold' : t.status === 'resolved' ? 'text-success font-semibold' : 'text-text-muted'}`}>{t.status === 'open' ? 'مفتوحة' : t.status === 'in_progress' ? 'قيد المعالجة' : t.status === 'resolved' ? 'تم الحل' : 'مغلقة'}</span></div>
                     <div className="text-xs text-text-muted">{new Date(t.created_at).toLocaleDateString()}</div>
                   </div>
                 ))}
@@ -573,12 +577,14 @@ export default function SubscriptionPageEnhanced() {
                     <div className="font-medium">{new Date(ex.requested_at).toLocaleString()}</div>
                     <div className="text-xs text-text-muted">{ex.file_size_bytes ? `${Math.round(ex.file_size_bytes/1024)} KB` : ''}</div>
                   </div>
-                  {ex.status === 'ready' && ex.download_url ? (
-                    <a href={ex.download_url} download={`pro-acc-export-${ex.id}.json`} className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs">تحميل</a>
+                  {ex.status === 'ready' && ex.has_file ? (
+                    <a href={`/api/company/data-export/${ex.id}/download`} download={`pro-acc-export-${ex.id}.json`} className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium">تحميل</a>
                   ) : ex.status === 'failed' ? (
-                    <span className="text-xs text-red-400">فشل</span>
+                    <span className="text-xs font-semibold text-danger" title={ex.error_message || ''}>فشل التجهيز</span>
+                  ) : ex.status === 'expired' ? (
+                    <span className="text-xs font-semibold text-text-muted">انتهت الصلاحية</span>
                   ) : (
-                    <span className="text-xs text-yellow-400">قيد التجهيز...</span>
+                    <span className="text-xs font-semibold text-warning flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> قيد التجهيز...</span>
                   )}
                 </div>
               ))}
@@ -608,9 +614,13 @@ export default function SubscriptionPageEnhanced() {
             <div>
               <label className="text-xs text-text-muted">طريقة الدفع</label>
               <select value={addonForm.payment_method} onChange={e => setAddonForm({...addonForm, payment_method: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm">
+                {paymentMethods.length > 0 ? paymentMethods.map((pm) => (
+                  <option key={pm.code} value={pm.code}>{pm.name_ar}</option>
+                )) : (<>
                 <option value="instapay">انستا باي</option>
                 <option value="orange_cash">أورنج كاش</option>
                 <option value="bank_transfer">تحويل بنكي</option>
+                </>)}
               </select>
             </div>
             <div>

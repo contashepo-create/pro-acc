@@ -107,7 +107,7 @@ export default function CodesPage() {
             <h3 className="text-text-primary font-bold mb-4">توليد كود تفعيل جديد</h3>
             <div className="flex gap-3 items-end flex-wrap">
               <div className="flex-1 min-w-40">
-                <label className="block text-xs text-amber-400/60 mb-1">الخطة</label>
+                <label className="block text-xs text-text-secondary mb-1">الخطة</label>
                 <select value={planCode} onChange={(e) => setPlanCode(e.target.value)} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm">
                   <option value="trial">تجريبي</option>
                   <option value="monthly">شهري</option>
@@ -118,7 +118,7 @@ export default function CodesPage() {
                 </select>
               </div>
               <div className="w-32">
-                <label className="block text-xs text-amber-400/60 mb-1">المدة (أشهر)</label>
+                <label className="block text-xs text-text-secondary mb-1">المدة (أشهر)</label>
                 <input type="number" value={duration} onChange={(e) => setDuration(Number(e.target.value))} min={1} max={120} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm" />
               </div>
               <button onClick={generateCode} disabled={saving} className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-800 text-white rounded-xl text-sm flex items-center gap-2">{saving && <Loader2 size={16} className="animate-spin" />}توليد</button>
@@ -138,7 +138,7 @@ export default function CodesPage() {
           {codes.length === 0 ? (
             <div className="p-8 text-center">
               <Key size={32} className="text-amber-600/30 mx-auto mb-2" />
-              <p className="text-amber-600/50 text-sm">لا توجد أكواد تفعيل</p>
+              <p className="text-text-muted text-sm">لا توجد أكواد تفعيل</p>
             </div>
           ) : (
             <div className="divide-y divide-[#1f1725]">
@@ -146,10 +146,10 @@ export default function CodesPage() {
                 <div key={c.id} className="flex items-center gap-3 p-3 hover:bg-bg-secondary transition-all">
                   <Key size={16} className="text-amber-600 shrink-0" />
                   <code className="flex-1 text-amber-300/80 text-sm font-mono">{c.code}</code>
-                  <span className="text-xs text-amber-400/60">{c.plan_code}</span>
-                  <span className="text-xs text-amber-400/60">{c.duration_months} أشهر</span>
-                  <span className={`text-xs px-2 py-0.5 rounded ${c.is_used ? 'bg-amber-900/30 text-amber-400' : 'bg-green-900/30 text-green-400'}`}>{c.is_used ? 'مستخدم' : 'جديد'}</span>
-                  {c.company_name && <span className="text-xs text-amber-400/60">{c.company_name}</span>}
+                  <span className="text-xs text-text-secondary">{c.plan_code}</span>
+                  <span className="text-xs text-text-secondary">{c.duration_months} أشهر</span>
+                  <span className={`text-xs px-2 py-0.5 rounded ${c.is_used ? 'bg-amber-900/30 text-amber-400' : 'bg-success-light text-success font-semibold'}`}>{c.is_used ? 'مستخدم' : 'جديد'}</span>
+                  {c.company_name && <span className="text-xs text-text-secondary">{c.company_name}</span>}
                 </div>
               ))}
             </div>

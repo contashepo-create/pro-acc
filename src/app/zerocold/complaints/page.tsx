@@ -35,25 +35,41 @@ export default function AdminComplaintsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
+  const [actionError, setActionError] = useState('');
+
   const handleReply = async (id: string) => {
     if (!replyText.trim()) return;
-    await fetch('/api/admin/complaints', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, status: 'replied', adminReply: replyText.trim() }),
-    });
-    setReplyText('');
-    setReplyId(null);
-    loadData();
+    setActionError('');
+    try {
+      const res = await fetch('/api/admin/complaints', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status: 'replied', adminReply: replyText.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success) { setActionError(data.message || 'فشل إرسال الرد'); return; }
+      setReplyText('');
+      setReplyId(null);
+      loadData();
+    } catch {
+      setActionError('فشل الاتصال بالخادم');
+    }
   };
 
   const handleStatus = async (id: string, status: string) => {
-    await fetch('/api/admin/complaints', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, status }),
-    });
-    loadData();
+    setActionError('');
+    try {
+      const res = await fetch('/api/admin/complaints', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status }),
+      });
+      const data = await res.json();
+      if (!data.success) { setActionError(data.message || 'فشل تحديث الحالة'); return; }
+      loadData();
+    } catch {
+      setActionError('فشل الاتصال بالخادم');
+    }
   };
 
   const statusLabel: Record<string, string> = {
@@ -66,6 +82,12 @@ export default function AdminComplaintsPage() {
         <MessageSquareWarning size={24} className="text-accent" />
         <h1 className="text-2xl font-bold text-text-primary">الشكاوي والاقتراحات</h1>
       </div>
+
+      {actionError && (
+        <div className="mb-4 rounded-xl p-3 text-sm font-semibold bg-danger-light border border-danger text-danger">
+          {actionError}
+        </div>
+      )}
 
       <div className="flex gap-2 mb-6 flex-wrap">
         {['', 'pending', 'read', 'replied', 'closed'].map((s) => (

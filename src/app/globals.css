@@ -65,8 +65,8 @@
   --color-bg-hover: #1e293b;
   --color-bg-elevated: #111827;
   --color-text-primary: #f9fafb;
-  --color-text-secondary: #c5c8da; /* High contrast */
-  --color-text-muted: #8f92a8; /* High contrast */
+  --color-text-secondary: #d7dae8; /* WCAG AA on dark cards */
+  --color-text-muted: #a3a7bd; /* WCAG AA on dark cards */
   --color-text-inverse: #030712;
   --color-accent: #3b82f6;
   --color-accent-hover: #2563eb;
@@ -80,14 +80,14 @@
   --color-sidebar-active: rgba(59, 130, 246, 0.12);
   --color-header-bg: rgba(3, 7, 18, 0.85);
   
-  --color-success: #4a9b6f;
-  --color-success-light: rgba(74, 155, 111, 0.15);
-  --color-warning: #d4a84b;
-  --color-warning-light: rgba(212, 168, 75, 0.15);
-  --color-danger: #c25a5a;
-  --color-danger-light: rgba(194, 90, 90, 0.15);
-  --color-info: #5a8bc2;
-  --color-info-light: rgba(90, 139, 194, 0.15);
+  --color-success: #34d399;
+  --color-success-light: rgba(52, 211, 153, 0.14);
+  --color-warning: #fbbf24;
+  --color-warning-light: rgba(251, 191, 36, 0.14);
+  --color-danger: #f87171;
+  --color-danger-light: rgba(248, 113, 113, 0.14);
+  --color-info: #60a5fa;
+  --color-info-light: rgba(96, 165, 250, 0.14);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-dropdown: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
   --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
@@ -115,14 +115,14 @@
   --color-sidebar-active: rgba(37, 99, 235, 0.08);
   --color-header-bg: rgba(248, 250, 252, 0.85);
   
-  --color-success: #10b981;
-  --color-success-light: rgba(16, 185, 129, 0.1);
-  --color-warning: #f59e0b;
-  --color-warning-light: rgba(245, 158, 11, 0.1);
-  --color-danger: #ef4444;
-  --color-danger-light: rgba(239, 68, 68, 0.1);
-  --color-info: #3b82f6;
-  --color-info-light: rgba(59, 130, 246, 0.1);
+  --color-success: #047857;
+  --color-success-light: rgba(4, 120, 87, 0.1);
+  --color-warning: #b45309;
+  --color-warning-light: rgba(180, 83, 9, 0.1);
+  --color-danger: #b91c1c;
+  --color-danger-light: rgba(185, 28, 28, 0.08);
+  --color-info: #1d4ed8;
+  --color-info-light: rgba(29, 78, 216, 0.08);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
   --shadow-dropdown: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
   --shadow-modal: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.03);
@@ -139,8 +139,8 @@
   --color-bg-hover: #1a142c;
   --color-bg-elevated: #161025;
   --color-text-primary: #f4f3f6;
-  --color-text-secondary: #c4b9d0; /* High contrast */
-  --color-text-muted: #9689a7; /* High contrast */
+  --color-text-secondary: #d9d2e2; /* WCAG AA on dark cards */
+  --color-text-muted: #aca0bb; /* WCAG AA on dark cards */
   --color-text-inverse: #09080d;
   --color-accent: #d97706;
   --color-accent-hover: #b45309;
@@ -154,14 +154,14 @@
   --color-sidebar-active: rgba(217, 119, 6, 0.12);
   --color-header-bg: rgba(9, 8, 13, 0.85);
   
-  --color-success: #4a9b6f;
-  --color-success-light: rgba(74, 155, 111, 0.15);
-  --color-warning: #d4a84b;
-  --color-warning-light: rgba(212, 168, 75, 0.15);
-  --color-danger: #c25a5a;
-  --color-danger-light: rgba(194, 90, 90, 0.15);
-  --color-info: #5a8bc2;
-  --color-info-light: rgba(90, 139, 194, 0.15);
+  --color-success: #34d399;
+  --color-success-light: rgba(52, 211, 153, 0.14);
+  --color-warning: #fbbf24;
+  --color-warning-light: rgba(251, 191, 36, 0.14);
+  --color-danger: #f87171;
+  --color-danger-light: rgba(248, 113, 113, 0.14);
+  --color-info: #60a5fa;
+  --color-info-light: rgba(96, 165, 250, 0.14);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-dropdown: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
   --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
@@ -189,14 +189,14 @@
   --color-sidebar-active: rgba(180, 83, 9, 0.08);
   --color-header-bg: rgba(250, 249, 246, 0.85);
   
-  --color-success: #10b981;
-  --color-success-light: rgba(16, 185, 129, 0.1);
-  --color-warning: #f59e0b;
-  --color-warning-light: rgba(245, 158, 11, 0.1);
-  --color-danger: #ef4444;
-  --color-danger-light: rgba(239, 68, 68, 0.1);
-  --color-info: #3b82f6;
-  --color-info-light: rgba(59, 130, 246, 0.1);
+  --color-success: #047857;
+  --color-success-light: rgba(4, 120, 87, 0.1);
+  --color-warning: #b45309;
+  --color-warning-light: rgba(180, 83, 9, 0.1);
+  --color-danger: #b91c1c;
+  --color-danger-light: rgba(185, 28, 28, 0.08);
+  --color-info: #1d4ed8;
+  --color-info-light: rgba(29, 78, 216, 0.08);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
   --shadow-dropdown: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
   --shadow-modal: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.03);
@@ -213,8 +213,8 @@
   --color-bg-hover: #1d2c2b;
   --color-bg-elevated: #162220;
   --color-text-primary: #f0f4f3;
-  --color-text-secondary: #b0c5c2; /* High contrast */
-  --color-text-muted: #809491; /* High contrast */
+  --color-text-secondary: #cbdcd9; /* WCAG AA on dark cards */
+  --color-text-muted: #9db0ad; /* WCAG AA on dark cards */
   --color-text-inverse: #090c0c;
   --color-accent: #0d9488;
   --color-accent-hover: #0f766e;
@@ -228,14 +228,14 @@
   --color-sidebar-active: rgba(13, 148, 136, 0.12);
   --color-header-bg: rgba(9, 12, 12, 0.85);
   
-  --color-success: #4a9b6f;
-  --color-success-light: rgba(74, 155, 111, 0.15);
-  --color-warning: #d4a84b;
-  --color-warning-light: rgba(212, 168, 75, 0.15);
-  --color-danger: #c25a5a;
-  --color-danger-light: rgba(194, 90, 90, 0.15);
-  --color-info: #5a8bc2;
-  --color-info-light: rgba(90, 139, 194, 0.15);
+  --color-success: #34d399;
+  --color-success-light: rgba(52, 211, 153, 0.14);
+  --color-warning: #fbbf24;
+  --color-warning-light: rgba(251, 191, 36, 0.14);
+  --color-danger: #f87171;
+  --color-danger-light: rgba(248, 113, 113, 0.14);
+  --color-info: #60a5fa;
+  --color-info-light: rgba(96, 165, 250, 0.14);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-dropdown: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
   --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
@@ -263,14 +263,14 @@
   --color-sidebar-active: rgba(13, 148, 136, 0.08);
   --color-header-bg: rgba(242, 246, 245, 0.85);
   
-  --color-success: #10b981;
-  --color-success-light: rgba(16, 185, 129, 0.1);
-  --color-warning: #f59e0b;
-  --color-warning-light: rgba(245, 158, 11, 0.1);
-  --color-danger: #ef4444;
-  --color-danger-light: rgba(239, 68, 68, 0.1);
-  --color-info: #3b82f6;
-  --color-info-light: rgba(59, 130, 246, 0.1);
+  --color-success: #047857;
+  --color-success-light: rgba(4, 120, 87, 0.1);
+  --color-warning: #b45309;
+  --color-warning-light: rgba(180, 83, 9, 0.1);
+  --color-danger: #b91c1c;
+  --color-danger-light: rgba(185, 28, 28, 0.08);
+  --color-info: #1d4ed8;
+  --color-info-light: rgba(29, 78, 216, 0.08);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.03);
   --shadow-dropdown: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
   --shadow-modal: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.03);

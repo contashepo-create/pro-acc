@@ -71,7 +71,15 @@ export async function PATCH(request: NextRequest) {
     update.updated_at = new Date().toISOString();
 
     const s = sb();
-    const { error: updateErr } = await s.from('complaints').update(update).eq('id', body.id);
+    let { error: updateErr } = await s.from('complaints').update(update).eq('id', body.id);
+
+    // Resilience: live DBs created from older snapshots may lack updated_at
+    // (schema-cache error) — retry without it so "إغلاق شكوى" still works.
+    if (updateErr && /column|schema cache|Could not find|42703/i.test(`${updateErr.message} ${updateErr.code}`)) {
+      console.warn('[admin/complaints] updated_at missing — apply migration 044. Retrying without it.');
+      delete update.updated_at;
+      ({ error: updateErr } = await s.from('complaints').update(update).eq('id', body.id));
+    }
     if (updateErr) throw updateErr;
 
     return success({ ok: true });

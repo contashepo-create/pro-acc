@@ -62,6 +62,19 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [deniedNotice, setDeniedNotice] = useState(false);
+
+  useEffect(() => {
+    // Shown when the server-side RBAC gate bounced the user off an
+    // admin-only page (?denied=admin-only).
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('denied') === 'admin-only') {
+        setDeniedNotice(true);
+        window.history.replaceState({}, '', '/dashboard');
+      }
+    } catch {}
+  }, []);
 
   useEffect(() => {
     fetch('/api/dashboard')
@@ -103,6 +116,13 @@ export default function DashboardPage() {
         <h1>لوحة التحكم</h1>
         <p>نظرة عامة على أداء الشركة</p>
       </div>
+
+      {deniedNotice && (
+        <div className="rounded-xl p-4 text-sm font-semibold bg-warning-light border border-warning text-warning flex items-center gap-2">
+          <AlertTriangle size={18} />
+          هذه الصفحة متاحة لمدير النظام فقط. تم تحويلك إلى لوحة التحكم.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard title="إجمالي الإيرادات" value={currencyFormatter(summary.total_revenue)} icon={TrendingUp} color="var(--color-success)" />

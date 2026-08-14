@@ -93,7 +93,7 @@ export default function SubscriptionsPage() {
         {error && <div className="bg-red-950/40 border border-red-800/40 text-red-400 text-sm rounded-xl px-4 py-2.5 text-center mb-4">{error}</div>}
 
         {filtered.length === 0 ? (
-          <div className="bg-bg-card border border-border rounded-xl p-8 text-center"><Users size={32} className="text-amber-600/30 mx-auto mb-2" /><p className="text-amber-600/50 text-sm">لا توجد اشتراكات</p></div>
+          <div className="bg-bg-card border border-border rounded-xl p-8 text-center"><Users size={32} className="text-amber-600/30 mx-auto mb-2" /><p className="text-text-muted text-sm">لا توجد اشتراكات</p></div>
         ) : (
           <div className="space-y-3">
             {filtered.map(sub => (

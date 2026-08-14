@@ -1,33 +1,45 @@
 # دليل الميجريشنز (Database Migrations)
 
 ## المصدر الموحّد للتغييرات الهيكلية
-- **`src/migrations/`** هو المصدر المعتمد لتغييرات قاعدة البيانات، ويُطبَّق عبر المشغّل
+- **`src/migrations/`** هو المصدر **الوحيد** المعتمد لتغييرات قاعدة البيانات، ويُطبَّق عبر المشغّل
   **`src/migrations/run.ts`**.
 - طريقة التطبيق:
   ```bash
   npx tsx src/migrations/run.ts
   ```
-- المشغّل **idempotent بأمان**: يتتبّع ما طُبّق فعلاً في جدول `_migrations`، ويستخدم
-  `CREATE TABLE IF NOT EXISTS`، لذا يمكن تشغيله أكثر من مرة دون أثر جانبي.
+- المشغّل **idempotent بأمان**: يتتبّع ما طُبّق فعلاً في جدول `_migrations` (بالاسم الكامل للملف)،
+  ويستخدم `CREATE TABLE IF NOT EXISTS`، لذا يمكن تشغيله أكثر من مرة دون أثر جانبي.
 
-## ⚠️ تحذير: مجلد `supabase/migrations/` متباعد عن المصدر
-- مجلد `supabase/migrations/` (الملفّات `001`..`022`) **لا يحوي الجداول الأساسية**
-  (`users`, `companies`, `accounts`, `invoices`, `journal_entries`...) وهو منفصل عن `src/migrations/`.
-- **لا تستخدم `supabase db push` مع هذا المجلد** في الإنتاج لتجنّب نقص في الجداول أو تعارض
-  في المخطّط.
-- الملفّان `all-migrations.sql` و`supabase-full-schema.sql` هما **لقطات مرجعية (dumps)** وليسا
-  مصدر تغييرات قابلاً للتطبيق التزايدي.
+## قواعد إضافة ميجريشن جديد
+1. أنشئ ملفاً جديداً داخل `src/migrations/` باسم `NNN-وصف-قصير.sql` حيث `NNN` هو
+   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `043`).
+2. **يُمنع تكرار الأرقام**: المشغّل يفشل تلقائياً إذا اكتشف رقماً مكرراً جديداً
+   (انظر `assertNoNewDuplicateNumbers` في `run.ts`).
+3. اجعل كل ميجريشن idempotent (`IF NOT EXISTS` / `CREATE OR REPLACE`) قدر الإمكان.
 
-## التوصية
-- اعتبر `src/migrations/` المصدر الوحيد للهجرات. أضف أي تغيير هيكلي جديد في ملفّ جديد
-  بترقيم تصاعدي داخل `src/migrations/`.
-- لا تخلط بين نظامَي هجرات (Supabase CLI + `run.ts`) لتفادي تباعد المخطّط بين البيئات.
+## ⚠️ الأرقام المكررة التاريخية (مجمّدة — لا تُصلَح بإعادة التسمية)
+الملفات التالية تتشارك نفس الرقم لأسباب تاريخية. جدول `_migrations` يتتبع **بالاسم الكامل**،
+لذا إعادة تسميتها ستُعيد تشغيل SQL مطبّق فعلاً في الإنتاج. تبقى كما هي كاستثناء موثّق،
+والمشغّل يرتّبها أبجدياً بشكل حتمي:
+- `011-final-security-accounting.sql` + `011-fix-all-sequences-race-condition.sql`
+- `012-atomic-journal-entry-insert.sql` + `012-enhanced-custody-system.sql`
+- `015-branding-and-features.sql` + `015-fix-schema-mismatches.sql`
+- `016-approval-system.sql` + `016-payment-portal-contracts.sql`
 
-## 021-add-daily-worker.sql
+## الملفات المرجعية والأنظمة القديمة
+- `supabase-full-schema.sql` هو **لقطة مرجعية (dump)** للاطلاع فقط — ليس مصدر تغييرات.
+- الملفان القديمان `all-migrations.sql` و `supabase-apply-all-migrations.sql` **حُذفا**
+  لأنهما كانا نسخاً متضاربة من نفس الترحيلات (نظاما تطبيق مختلفان). المصدر الوحيد الآن هو
+  `src/migrations/` + `run.ts`.
+- مجلد `supabase/migrations/` (الملفات `001`..`022`) منفصل ولا يحوي الجداول الأساسية —
+  **لا تستخدم `supabase db push` معه في الإنتاج**.
+
+## ملاحظات ميجريشنات مهمة
+
+### 021-add-daily-worker.sql
 Allows `daily_worker` as a `contacts.type` value so the "عمال يومية" (Daily Workers) section is usable.
-Run via: `npx tsx src/migrations/run.ts` (idempotent) or apply directly in the DB.
 
-## 022-fix-journal-lines-company-id.sql
+### 022-fix-journal-lines-company-id.sql
 `journal_lines.company_id` is `NOT NULL`, but `create_journal_entry` and
 `create_invoice_with_journal` omitted it — every atomic journal insert failed
 with a not-null violation. This migration rewrites both RPCs to write
@@ -35,14 +47,6 @@ with a not-null violation. This migration rewrites both RPCs to write
 backfills those columns from `journal_entries` / `accounts` if a leftover
 application path still omits them.
 
-Apply in the Supabase SQL editor (or `npx tsx src/migrations/run.ts`) after
-deploying the matching app code.
-
-## 023-fix-child-rows-company-id.sql
-Same class of bug as 022, on **line/item tables**: `invoice_items`,
-`quotation_items`, `purchase_invoice_items`, `purchase_order_items`, etc.
-`company_id` is `NOT NULL` but several inserts (including
-`create_invoice_with_journal`) omitted it.
-
-This migration rewrites the invoice RPC and adds a `BEFORE INSERT` trigger
-that copies `company_id` from the parent document if the app forgot it.
+### 023-fix-child-rows-company-id.sql
+Same class of bug as 022, on line/item tables (`invoice_items`,
+`quotation_items`, `purchase_invoice_items`, `purchase_order_items`, ...).

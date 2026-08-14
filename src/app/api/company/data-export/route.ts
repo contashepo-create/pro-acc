@@ -22,13 +22,58 @@ export async function GET(req: NextRequest) {
     const { requireApiAuth } = await import('@/lib/api-helpers');
     const auth = await requireApiAuth(req, { skipModuleGuard: true });
     const s = sb();
+
+    // Self-healing: if an export got stuck in pending/processing (e.g. the
+    // serverless instance died mid-generation), retry it when the user
+    // refreshes the list. Without this, rows stayed "قيد التجهيز..." forever.
+    try {
+      const twoMinAgo = new Date(Date.now() - 2 * 60_000).toISOString();
+      const { data: stuck } = await s.from('company_data_exports')
+        .select('id')
+        .eq('company_id', auth.companyId)
+        .in('status', ['pending', 'processing'])
+        .lt('requested_at', twoMinAgo)
+        .limit(1);
+      if (stuck && stuck.length > 0) {
+        // Reset processing → pending so processPendingExports picks it up.
+        await s.from('company_data_exports')
+          .update({ status: 'pending' })
+          .eq('company_id', auth.companyId)
+          .eq('status', 'processing')
+          .lt('requested_at', twoMinAgo);
+        await processPendingExports();
+      }
+    } catch (e) {
+      console.warn('[data-export] stuck-export recovery failed:', e);
+    }
+
+    // NOTE: download_url was previously omitted from this select, so the UI
+    // rendered every export as "قيد التجهيز..." forever even after the file
+    // was ready. We avoid shipping the (potentially large) inline payload in
+    // the list; instead we expose a has_file flag and a dedicated download
+    // endpoint (GET /api/company/data-export/[id]/download).
     const { data, error: err } = await s.from('company_data_exports')
-      .select('id, status, requested_at, completed_at, expires_at, file_size_bytes, error_message')
+      .select('id, status, requested_at, completed_at, expires_at, file_size_bytes, error_message, download_url')
       .eq('company_id', auth.companyId)
       .order('requested_at', { ascending: false })
       .limit(10);
     if (err) throw err;
-    return success({ exports: data || [] });
+
+    const now = Date.now();
+    const exports = (data || []).map((e: Record<string, unknown>) => {
+      const expired = e.expires_at ? new Date(String(e.expires_at)).getTime() < now : false;
+      return {
+        id: e.id,
+        status: expired && e.status === 'ready' ? 'expired' : e.status,
+        requested_at: e.requested_at,
+        completed_at: e.completed_at,
+        expires_at: e.expires_at,
+        file_size_bytes: e.file_size_bytes,
+        error_message: e.error_message,
+        has_file: !!e.download_url && !expired,
+      };
+    });
+    return success({ exports });
   } catch (e) {
     return handleApiError(e);
   }
@@ -40,7 +85,7 @@ export async function POST(req: NextRequest) {
     const auth = await requireApiAuth(req, { skipModuleGuard: true });
     const s = sb();
 
-    // Rate-limit: at most one pending export per company at a time
+    // Rate-limit 1: at most one pending export per company at a time
     const { data: existing } = await s.from('company_data_exports')
       .select('id, status')
       .eq('company_id', auth.companyId)
@@ -49,6 +94,17 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
     if (existing) {
       return error('يوجد طلب تصدير قيد المعالجة حالياً. يرجى الانتظار حتى اكتماله.', 409);
+    }
+
+    // Rate-limit 2: at most 3 exports per company per 24h — previously a
+    // user could enqueue unlimited requests (each triggering a full DB dump).
+    const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const { count: recentCount } = await s.from('company_data_exports')
+      .select('*', { count: 'exact', head: true })
+      .eq('company_id', auth.companyId)
+      .gte('requested_at', dayAgo);
+    if ((recentCount || 0) >= 3) {
+      return error('تم الوصول للحد الأقصى (3 طلبات تصدير خلال 24 ساعة). حاول لاحقاً.', 429);
     }
 
     const { data: ticket, error: insErr } = await s.from('company_data_exports')

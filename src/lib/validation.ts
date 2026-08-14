@@ -17,6 +17,9 @@ export function isCommonPassword(password: string): boolean {
 
 /**
  * Central password policy for account-creation/change flows.
+ * THIS IS THE SINGLE SOURCE OF TRUTH for password requirements
+ * (the old, stricter-but-unused `password-security.ts` was removed to
+ * eliminate the conflicting 12-char policy).
  * NOTE: loginSchema intentionally stays permissive (min 6) so existing
  * users with legacy 6-char passwords are not locked out at sign-in.
  */
