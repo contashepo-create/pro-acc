@@ -341,7 +341,15 @@ export const receiptVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
-}).strict();
+}).strict().superRefine((voucher, ctx) => {
+  if ((voucher.receipt_type === 'client' || voucher.receipt_type === 'supplier_refund') && !voucher.contact_id) {
+    ctx.addIssue({ code: 'custom', path: ['contact_id'], message: 'الطرف مطلوب لهذا النوع من سند القبض' });
+  }
+  const ids = voucher.invoice_items?.map((item) => item.invoice_id) || [];
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: 'custom', path: ['invoice_items'], message: 'لا يمكن تخصيص الفاتورة نفسها أكثر من مرة في السند' });
+  }
+});
 
 /**
  * POST /api/vouchers/disbursement — سند صرف.
@@ -360,7 +368,19 @@ export const disbursementVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
-}).strict();
+}).strict().superRefine((voucher, ctx) => {
+  const contactRequired = ['supplier', 'subcontractor', 'client_refund'].includes(voucher.disbursement_type);
+  if (contactRequired && !voucher.contact_id) {
+    ctx.addIssue({ code: 'custom', path: ['contact_id'], message: 'الطرف مطلوب لهذا النوع من سند الصرف' });
+  }
+  if (voucher.disbursement_type === 'employee_advance' && !voucher.employee_id) {
+    ctx.addIssue({ code: 'custom', path: ['employee_id'], message: 'الموظف مطلوب لسلفة الموظف' });
+  }
+  const ids = voucher.invoice_items?.map((item) => item.invoice_id) || [];
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: 'custom', path: ['invoice_items'], message: 'لا يمكن تخصيص فاتورة الشراء نفسها أكثر من مرة في السند' });
+  }
+});
 
 // --------------- Inventory ---------------
 

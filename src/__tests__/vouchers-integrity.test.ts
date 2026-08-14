@@ -187,6 +187,37 @@ const updatesOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'upda
 
 // ---------------------------------------------------------------------------
 
+describe('Voucher validation — party and allocation integrity', () => {
+  test('rejects a client receipt without its required contact before any write', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await receiptPOST(authedRequest({
+      date: '2026-08-01', receipt_type: 'client', amount: 100, bank_safe_id: SAFE, reason: 'قبض',
+    }));
+    expect(res.status).toBe(400);
+    expect(insertsOf('voucher_receipts')).toHaveLength(0);
+  });
+
+  test('rejects duplicate invoice allocation ids before any financial write', async () => {
+    mockDb = makeDb(baseDb());
+    const invoiceId = '00000000-0000-4000-8000-000000000101';
+    const res = await receiptPOST(authedRequest({
+      date: '2026-08-01', receipt_type: 'client', contact_id: CLIENT, amount: 100, bank_safe_id: SAFE, reason: 'قبض',
+      invoice_items: [{ invoice_id: invoiceId, amount: 50 }, { invoice_id: invoiceId, amount: 50 }],
+    }));
+    expect(res.status).toBe(400);
+    expect(insertsOf('voucher_receipts')).toHaveLength(0);
+  });
+
+  test('requires an employee for employee-advance disbursements', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await disbPOST(authedRequest({
+      date: '2026-08-01', disbursement_type: 'employee_advance', amount: 100, bank_safe_id: SAFE, reason: 'سلفة',
+    }));
+    expect(res.status).toBe(400);
+    expect(insertsOf('voucher_disbursements')).toHaveLength(0);
+  });
+});
+
 describe('POST /api/vouchers/disbursement — JE direction (critical)', () => {
   test('supplier payment: debit AP / credit bank — never the reverse', async () => {
     const db = baseDb();
@@ -371,8 +402,8 @@ describe('Voucher PUT — reversal + new entry (original JE preserved)', () => {
       status: 'approved', journal_entry_id: 'je-old',
     });
     db.journal_lines.push(
-      { id: 'l1', journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'الخزينة', debit: 100, credit: 0 },
-      { id: 'l2', journal_entry_id: 'je-old', account_id: AR, account_code: '1130', account_name: 'العملاء', debit: 0, credit: 100 },
+      { id: 'l1', company_id: C1, journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'الخزينة', debit: 100, credit: 0 },
+      { id: 'l2', company_id: C1, journal_entry_id: 'je-old', account_id: AR, account_code: '1130', account_name: 'العملاء', debit: 0, credit: 100 },
     );
     mockDb = makeDb(db);
 
@@ -404,8 +435,8 @@ describe('Voucher PUT — reversal + new entry (original JE preserved)', () => {
       status: 'approved', journal_entry_id: 'je-old',
     });
     db.journal_lines.push(
-      { id: 'l1', journal_entry_id: 'je-old', account_id: AP, account_code: '2110', account_name: 'موردون', debit: 200, credit: 0 },
-      { id: 'l2', journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 0, credit: 200 },
+      { id: 'l1', company_id: C1, journal_entry_id: 'je-old', account_id: AP, account_code: '2110', account_name: 'موردون', debit: 200, credit: 0 },
+      { id: 'l2', company_id: C1, journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 0, credit: 200 },
       { company_id: C1, account_id: BANK_ACC, debit: 10000, credit: 0 }, // bank balance headroom
     );
     mockDb = makeDb(db);
@@ -431,8 +462,8 @@ describe('Voucher DELETE — soft-cancel with reversal & allocation revert', () 
       status: 'approved', journal_entry_id: 'je-old',
     });
     db.journal_lines.push(
-      { id: 'l1', journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 100, credit: 0 },
-      { id: 'l2', journal_entry_id: 'je-old', account_id: AR, account_code: '1130', account_name: 'عملاء', debit: 0, credit: 100 },
+      { id: 'l1', company_id: C1, journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 100, credit: 0 },
+      { id: 'l2', company_id: C1, journal_entry_id: 'je-old', account_id: AR, account_code: '1130', account_name: 'عملاء', debit: 0, credit: 100 },
     );
     db.receipt_invoice_items.push({ id: 'ri-1', voucher_receipt_id: 'vr-1', invoice_id: '00000000-0000-4000-8000-000000000101', amount: '100', journal_entry_id: 'je-old' });
     mockDb = makeDb(db);
@@ -466,8 +497,8 @@ describe('Voucher DELETE — soft-cancel with reversal & allocation revert', () 
       status: 'approved', journal_entry_id: 'je-old',
     });
     db.journal_lines.push(
-      { id: 'l1', journal_entry_id: 'je-old', account_id: AP, account_code: '2110', account_name: 'موردون', debit: 230, credit: 0 },
-      { id: 'l2', journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 0, credit: 230 },
+      { id: 'l1', company_id: C1, journal_entry_id: 'je-old', account_id: AP, account_code: '2110', account_name: 'موردون', debit: 230, credit: 0 },
+      { id: 'l2', company_id: C1, journal_entry_id: 'je-old', account_id: BANK_ACC, account_code: '1110-0001', account_name: 'خزينة', debit: 0, credit: 230 },
     );
     db.disbursement_invoice_items.push({ id: 'di-1', voucher_disbursement_id: 'vd-1', purchase_invoice_id: 'pi-1', amount: '230', journal_entry_id: 'je-old' });
     mockDb = makeDb(db);

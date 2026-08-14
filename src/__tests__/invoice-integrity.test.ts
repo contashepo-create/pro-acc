@@ -349,9 +349,9 @@ describe('PATCH /api/invoices/[id]', () => {
     const db = baseDb();
     db.invoices.push({ id: 'inv-1', company_id: C1, number: 3, total: 1150, paid_amount: 0, status: 'unpaid', journal_entry_id: 'je-1' });
     db.journal_lines.push(
-      { id: 'l1', journal_entry_id: 'je-1', account_id: AR, account_code: '1130', account_name: 'العملاء', debit: 1150, credit: 0, description: 'ذمم' },
-      { id: 'l2', journal_entry_id: 'je-1', account_id: REV, account_code: '4100', account_name: 'إيرادات', debit: 0, credit: 1000, description: 'إيراد' },
-      { id: 'l3', journal_entry_id: 'je-1', account_id: VAT, account_code: '2120', account_name: 'ضريبة', debit: 0, credit: 150, description: 'ضريبة' },
+      { id: 'l1', company_id: C1, journal_entry_id: 'je-1', account_id: AR, account_code: '1130', account_name: 'العملاء', debit: 1150, credit: 0, description: 'ذمم' },
+      { id: 'l2', company_id: C1, journal_entry_id: 'je-1', account_id: REV, account_code: '4100', account_name: 'إيرادات', debit: 0, credit: 1000, description: 'إيراد' },
+      { id: 'l3', company_id: C1, journal_entry_id: 'je-1', account_id: VAT, account_code: '2120', account_name: 'ضريبة', debit: 0, credit: 150, description: 'ضريبة' },
     );
     mockDb = makeDb(db);
 
