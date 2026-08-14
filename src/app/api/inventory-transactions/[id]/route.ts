@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -41,7 +41,7 @@ export async function PUT(
     const auth = await requireModulePermission(request, 'inventory_transactions', 'update');
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, unknown>>(request);
 
     const { data: existing } = await s.from('inventory_transactions')
       .select('id')
