@@ -304,6 +304,20 @@ describe('POST /api/invoices — tenant isolation', () => {
     expect(insertsOf('invoice_sequences')).toHaveLength(0);
   });
 
+  test('immediate collection requires a linked bank/safe and never silently ignores the amount', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await invoicesPOST(authedRequest(invoiceBody({ collected_amount: 10 })));
+    expect(res.status).toBe(400);
+    expect(insertsOf('invoices')).toHaveLength(0);
+  });
+
+  test('rejects collection above the computed server-side total', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await invoicesPOST(authedRequest(invoiceBody({ collected_amount: 999999, bank_safe_id: SAFE })));
+    expect(res.status).toBe(400);
+    expect(insertsOf('invoices')).toHaveLength(0);
+  });
+
   test('foreign bank_safe_id → 400 with zero writes', async () => {
     mockDb = makeDb(baseDb());
     const res = await invoicesPOST(authedRequest(invoiceBody({

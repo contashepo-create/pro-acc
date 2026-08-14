@@ -98,7 +98,12 @@ export async function POST(request: NextRequest) {
         return error(limitCheck.message || 'تم الوصول للحد الأقصى للفواتير المسموحة في باقتك', 403);
       }
     } catch (e) {
-      console.warn('Usage limit check failed for invoices:', e);
+      console.error('Usage limit check failed for invoices:', e);
+      // A failed entitlement lookup must not silently permit billable document
+      // creation in production. Development remains usable without the table.
+      if (process.env.NODE_ENV === 'production') {
+        return error('تعذر التحقق من حد الفواتير. حاول لاحقاً', 503);
+      }
     }
 
     const body = await parseBody(request);
@@ -167,8 +172,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // حساب الحالة والمدفوع بناء على التحصيل النقدي المباشر
-    const finalPaidAmount = collectedAmount > 0 ? Math.min(collectedAmount, computedTotal) : 0;
+    // التحصيل الفوري جزء من العملية المالية نفسها، لذلك نرفض القيم غير
+    // المنتهية أو الزائدة ولا نقصّها بصمت (القص الصامت يضلل المستخدم ويترك
+    // فرقاً بين ما أدخله وما رُحّل فعلياً).
+    if (!Number.isFinite(collectedAmount) || collectedAmount < 0 || Math.abs(collectedAmount * 100 - Math.round(collectedAmount * 100)) > 1e-8) {
+      return error('مبلغ التحصيل غير صالح');
+    }
+    if (collectedAmount > computedTotal + 0.005) return error('مبلغ التحصيل لا يمكن أن يتجاوز إجمالي الفاتورة');
+    if (collectedAmount > 0 && !bankSafeId) return error('اختر الخزينة أو البنك للتحصيل الفوري');
+    const finalPaidAmount = collectedAmount;
     const finalStatus = finalPaidAmount === 0 ? 'unpaid' : (finalPaidAmount >= computedTotal ? 'paid' : 'partial');
 
     let invoiceId: string | null = null;
@@ -183,6 +195,7 @@ export async function POST(request: NextRequest) {
         .select('id, account_id')
         .eq('id', bankSafeId).eq('company_id', auth.companyId).maybeSingle();
       if (!bs) return error('الخزينة/البنك المحدد غير موجود');
+      if (!(bs as { account_id?: string | null }).account_id) return error('الخزينة/البنك غير مرتبط بحساب أستاذ صالح');
       collectionBankSafe = bs as { id: string; account_id: string | null };
     }
 
