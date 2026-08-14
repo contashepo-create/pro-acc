@@ -136,6 +136,14 @@ export const journalEntryLineSchema = z.object({
   // Accounting rule: a journal line is either debit OR credit, never both.
   (line) => !(line.debit > 0 && line.credit > 0),
   { message: 'السطر الواحد لا يمكن أن يكون مديناً ودائناً معاً' }
+).refine(
+  // Ledger columns are NUMERIC(15,2): never let PostgreSQL silently round a
+  // balanced client payload into a different posted amount.
+  (line) => Number.isSafeInteger(Math.round(line.debit * 100)) && Number.isSafeInteger(Math.round(line.credit * 100)) &&
+    Math.abs(line.debit * 100 - Math.round(line.debit * 100)) < 1e-8 &&
+    Math.abs(line.credit * 100 - Math.round(line.credit * 100)) < 1e-8 &&
+    line.debit <= 9999999999999.99 && line.credit <= 9999999999999.99,
+  { message: 'المبلغ يجب أن يكون بمنزلتين عشريتين كحد أقصى وفي النطاق المسموح' }
 );
 
 export const journalEntrySchema = z.object({

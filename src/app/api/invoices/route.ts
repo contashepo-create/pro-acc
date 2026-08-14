@@ -224,20 +224,25 @@ export async function POST(request: NextRequest) {
         if (itemErr) throw itemErr;
       }
 
-      // قيد الفاتورة دائماً كامل الذمة (Open Items). التحصيل = سند قبض منفصل.
-      const { postSalesInvoiceJournal } = await import('@/lib/invoice-accounting');
-      journalEntryId = await postSalesInvoiceJournal({
-        companyId: auth.companyId,
-        userId: auth.userId,
-        invoiceId,
-        invoiceNumber: number,
-        date,
-        contactId: clientId,
-        projectId: projectId || null,
-        subtotal,
-        vatAmount: computedVat,
-        total: computedTotal,
-      });
+      // A zero-value invoice has no economic event and must not create a
+      // zero/zero journal entry (such lines are forbidden by the ledger).
+      // Non-zero invoices are always posted as full open items; collection is
+      // a separate receipt/allocation.
+      if (computedTotal > 0) {
+        const { postSalesInvoiceJournal } = await import('@/lib/invoice-accounting');
+        journalEntryId = await postSalesInvoiceJournal({
+          companyId: auth.companyId,
+          userId: auth.userId,
+          invoiceId,
+          invoiceNumber: number,
+          date,
+          contactId: clientId,
+          projectId: projectId || null,
+          subtotal,
+          vatAmount: computedVat,
+          total: computedTotal,
+        });
+      }
 
       if (finalPaidAmount > 0 && bankSafeId && collectionBankSafe?.account_id) {
         const { createJournalEntry } = await import('@/lib/journal-utils');

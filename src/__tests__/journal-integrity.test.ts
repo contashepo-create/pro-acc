@@ -187,6 +187,16 @@ describe('journalEntrySchema — double-entry rules', () => {
     expect(res.success).toBe(false);
   });
 
+  test('rejects precision that the NUMERIC(15,2) ledger would round', () => {
+    expect(journalEntrySchema.safeParse({
+      date: '2026-08-01', type: 'general',
+      lines: [
+        { accountCode: '1110', debit: 10.001, credit: 0 },
+        { accountCode: '4100', debit: 0, credit: 10.001 },
+      ],
+    }).success).toBe(false);
+  });
+
   test('rejects fewer than 2 lines, negative amounts and bad dates', () => {
     expect(journalEntrySchema.safeParse({
       date: '2026-08-01', type: 'general',
@@ -256,6 +266,16 @@ describe('SQL journal RPCs write company_id', () => {
   const fs = require('fs') as typeof import('fs');
   const path = require('path') as typeof import('path');
 
+  test('hardened journal RPC binds every account and related entity to its tenant', () => {
+    const sql = fs.readFileSync(path.join(__dirname, '../migrations/047-harden-atomic-journal-entry.sql'), 'utf8');
+    expect(sql).toMatch(/accounts[\s\S]*company_id = p_company_id/);
+    expect(sql).toMatch(/contacts[\s\S]*company_id = p_company_id/);
+    expect(sql).toMatch(/projects[\s\S]*company_id = p_company_id/);
+    expect(sql).toMatch(/COALESCE\(is_header, false\) = false/);
+    expect(sql).toMatch(/next_journal_number\(p_company_id/);
+    expect(sql).toMatch(/jsonb_array_length\(p_lines\) < 2/);
+  });
+
   test('create_journal_entry / create_invoice_with_journal INSERT lists include company_id', () => {
     const migrationsDir = path.join(__dirname, '../migrations');
     const files = [
@@ -282,6 +302,8 @@ describe('insertJournalLines', () => {
       journal_entry_id: 'je-1',
       account_id: '00000000-0000-4000-8000-00000000dead', // not in db
       debit: 100, credit: 0,
+    }, {
+      journal_entry_id: 'je-1', account_id: A2, debit: 0, credit: 100,
     }]);
     expect(error).toBeTruthy();
     expect(String(error.message)).toContain('تعذر العثور');
