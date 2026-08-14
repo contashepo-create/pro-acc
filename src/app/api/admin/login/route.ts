@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
 
     return response;
   } catch (err) {
-    console.error(`[ADMIN LOGIN CRITICAL FAILED at step ${step}]:`, err, err?.stack);
+    console.error(`[ADMIN LOGIN CRITICAL FAILED at step ${step}]:`, err, err instanceof Error ? err.stack : undefined);
     return new Response(
       JSON.stringify({
         success: false,

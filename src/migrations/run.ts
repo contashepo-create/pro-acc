@@ -42,10 +42,51 @@ function discoverMigrations(): Migration[] {
     .filter((f) => f.endsWith('.sql'))
     .sort();
 
+  assertNoNewDuplicateNumbers(files);
+
   return files.map((filename) => {
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, filename), 'utf-8');
     return { filename, sql };
   });
+}
+
+/**
+ * Historical files that share a numeric prefix. They are already applied in
+ * production under these exact filenames, and `_migrations` tracks by
+ * filename, so renaming them would re-run their SQL. They are frozen as
+ * documented exceptions; ANY new duplicate prefix aborts the runner.
+ */
+const LEGACY_DUPLICATE_PREFIXES: Record<string, string[]> = {
+  '011': ['011-final-security-accounting.sql', '011-fix-all-sequences-race-condition.sql'],
+  '012': ['012-atomic-journal-entry-insert.sql', '012-enhanced-custody-system.sql'],
+  '015': ['015-branding-and-features.sql', '015-fix-schema-mismatches.sql'],
+  '016': ['016-approval-system.sql', '016-payment-portal-contracts.sql'],
+};
+
+export function assertNoNewDuplicateNumbers(files: string[]): void {
+  const byPrefix = new Map<string, string[]>();
+  for (const f of files) {
+    const prefix = f.split('-')[0];
+    if (!/^\d+$/.test(prefix)) continue;
+    const list = byPrefix.get(prefix) || [];
+    list.push(f);
+    byPrefix.set(prefix, list);
+  }
+
+  for (const [prefix, list] of byPrefix) {
+    if (list.length < 2) continue;
+    const allowed = LEGACY_DUPLICATE_PREFIXES[prefix];
+    const isLegacy =
+      allowed &&
+      list.length === allowed.length &&
+      list.every((f) => allowed.includes(f));
+    if (!isLegacy) {
+      throw new Error(
+        `Duplicate migration number "${prefix}": ${list.join(', ')}. ` +
+          'Use the next free sequential number for new migrations.'
+      );
+    }
+  }
 }
 
 /**

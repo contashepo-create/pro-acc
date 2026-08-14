@@ -1,6 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+/**
+ * Categories page — REFERENCE IMPLEMENTATION for the shared React Query
+ * data-fetching hooks (`useApiList` / `useApiMutation` in
+ * `@/hooks/useApiList`). Other dashboard pages that still use the manual
+ * `useState + useEffect + fetch` pattern should migrate to this shape.
+ */
+
+import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -12,29 +19,24 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { useApiList } from '@/hooks/useApiList';
+import { apiFetch } from '@/lib/api-client';
+
+interface Category {
+  id: string;
+  name: string;
+  type: 'revenue' | 'expense';
+}
 
 export default function CategoriesPage() {
-  const [categories, setCategories] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { data, isLoading, error, refetch } = useApiList<{ categories: Category[] }>('/api/categories');
+  const categories = data?.categories ?? [];
+
   const [showModal, setShowModal] = useState(false);
-  const [editingCategory, setEditingCategory] = useState<any>(null);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', type: 'revenue' });
-
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const res = await fetch('/api/categories');
-      const json = await res.json();
-      if (json.success) setCategories(json.data?.categories || []);
-      else setError(json.message || 'فشل');
-    } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
-  };
-
-  useEffect(() => { fetchData(); }, []);
+  const [form, setForm] = useState<{ name: string; type: string }>({ name: '', type: 'revenue' });
 
   const handleSave = async () => {
     if (!form.name) { setSaveError('اسم الفئة مطلوب'); return; }
@@ -42,8 +44,8 @@ export default function CategoriesPage() {
     try {
       const url = editingCategory ? `/api/categories/${editingCategory.id}` : '/api/categories';
       const method = editingCategory ? 'PUT' : 'POST';
-      
-      const res = await fetch(url, {
+
+      const res = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
@@ -53,14 +55,14 @@ export default function CategoriesPage() {
         setShowModal(false);
         setEditingCategory(null);
         setForm({ name: '', type: 'revenue' });
-        fetchData();
+        refetch();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (category: any) => {
+  const handleEdit = async (category: Category) => {
     try {
-      const res = await fetch(`/api/categories/${category.id}`);
+      const res = await apiFetch(`/api/categories/${category.id}`);
       const json = await res.json();
       if (json.success) {
         setEditingCategory(category);
@@ -72,27 +74,27 @@ export default function CategoriesPage() {
     }
   };
 
-  const handleDelete = async (category: any) => {
+  const handleDelete = async (category: Category) => {
     try {
-      const res = await fetch(`/api/categories/${category.id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/categories/${category.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        fetchData();
+        refetch();
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
-    { key: 'type', label: 'النوع', sortable: true, render: (row: any) => <Badge variant={row.type === 'revenue' ? 'success' : 'danger'}>{row.type === 'revenue' ? 'إيراد' : 'مصروف'}</Badge> },
+    { key: 'type', label: 'النوع', sortable: true, render: (row: Category) => <Badge variant={row.type === 'revenue' ? 'success' : 'danger'}>{row.type === 'revenue' ? 'إيراد' : 'مصروف'}</Badge> },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: Category) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -102,8 +104,8 @@ export default function CategoriesPage() {
     },
   ];
 
-  if (loading) return <LoadingSkeleton variant="table" count={6} />;
-  if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
+  if (isLoading) return <LoadingSkeleton variant="table" count={6} />;
+  if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error.message}</div></div>;
 
   return (
     <div className="space-y-6">

@@ -60,7 +60,7 @@ export default function ZerocoldLoginPage() {
       router.push(`/zerocold/verify-telegram?email=${encodeURIComponent(body.data?.email?.toLowerCase() || email.toLowerCase())}`);
     } catch (err) {
       console.error('Login fetch error:', err);
-      setError(`حدث خطأ في الاتصال بالخادم: ${err?.message || 'فشل الشبكة'} - حاول تاني أو افتح /api/admin/debug`);
+      setError(`حدث خطأ في الاتصال بالخادم: ${err instanceof Error && err.message ? err.message : 'فشل الشبكة'} - حاول تاني أو افتح /api/admin/debug`);
     } finally {
       setLoading(false);
     }
