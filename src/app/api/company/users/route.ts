@@ -1,7 +1,8 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireAdmin, handleApiError, requireApiAuth } from '@/lib/api-helpers';
+import { success, error, requireAdmin, handleApiError, requireApiAuth, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword } from '@/lib/auth';
+import { passwordPolicy } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
@@ -76,7 +77,10 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAdmin(request);
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<{
+      email?: string; name?: string; password?: string; role?: string;
+      phone?: string; birth_date?: string; city?: string;
+    }>(request);
 
     const { email, name, password, role, phone, birth_date, city } = body as {
       email?: string;
@@ -94,8 +98,8 @@ export async function POST(request: NextRequest) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return error('صيغة البريد الإلكتروني غير صحيحة');
     }
-    if (password.length < 6) {
-      return error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
+    if (!passwordPolicy.safeParse(password).success) {
+      return error('كلمة المرور لا تفي بسياسة الأمان');
     }
     const validRoles = ['admin', 'accountant', 'manager', 'supervisor'];
     if (!role || !validRoles.includes(role)) {

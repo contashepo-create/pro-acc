@@ -1,7 +1,8 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireAdmin, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireAdmin, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword } from '@/lib/auth';
+import { passwordPolicy } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
@@ -44,18 +45,18 @@ export async function PUT(
     const auth = await requireAdmin(request);
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, any>>(request);
 
     const { data: targetUser } = await s
       .from('users')
-      .select('id, role, email, name, is_active')
+      .select('id, role, email, name, is_active, token_version')
       .eq('id', id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
     if (!targetUser) return notFound();
 
-    const target = targetUser as { id: string; role: string; email: string; name: string; is_active: boolean };
+    const target = targetUser as { id: string; role: string; email: string; name: string; is_active: boolean; token_version?: number };
     const updateData: Record<string, any> = {};
 
     if (id === auth.userId && body.role && body.role !== 'admin') {
@@ -108,10 +109,11 @@ export async function PUT(
     
     if (body.is_active !== undefined) updateData.is_active = body.is_active;
     if (body.password) {
-      if (body.password.length < 6) {
-        return error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
+      if (!passwordPolicy.safeParse(body.password).success) {
+        return error('كلمة المرور لا تفي بسياسة الأمان');
       }
       updateData.password_hash = await hashPassword(body.password);
+      updateData.token_version = (Number(target.token_version) || 0) + 1;
     }
     if (body.phone !== undefined) updateData.phone = body.phone || null;
     if (body.birth_date !== undefined) updateData.birth_date = body.birth_date || null;
