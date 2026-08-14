@@ -30,7 +30,8 @@ export async function GET(request: NextRequest) {
         banks_safes(name),
         contacts(name)
       `, { count: 'exact' })
-      .eq('company_id', auth.companyId);
+      .eq('company_id', auth.companyId)
+      .neq('status', 'cancelled');
 
     if (from) query = query.gte('date', from);
     if (to) query = query.lte('date', to);
