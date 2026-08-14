@@ -41,7 +41,22 @@ export async function POST(request: NextRequest) {
     if (users.length > 1) {
       console.error('[login] duplicate rows for email', normalizedEmail, '— migration 013 (email uniqueness) not applied?');
     }
-    const u = users[0] as { id: string; name: string; email: string; password_hash: string; role: string; is_active: boolean; company_id: string };
+
+    // BUGFIX (password change appears "not to stick"): when duplicate email
+    // rows exist, users[0] is arbitrary — a password change updates the row
+    // of the AUTHENTICATED user id, while login could read the OTHER row and
+    // keep accepting the old password. Pick the row whose hash matches the
+    // submitted password; fall back to users[0] for the failure path.
+    let u = users[0] as { id: string; name: string; email: string; password_hash: string; role: string; is_active: boolean; company_id: string };
+    if (users.length > 1) {
+      for (const candidate of users as typeof u[]) {
+        if (candidate.password_hash && candidate.password_hash.includes(':') &&
+            await verifyPassword(password, candidate.password_hash)) {
+          u = candidate;
+          break;
+        }
+      }
+    }
     if (!u.is_active) return error('هذا الحساب غير نشط. تواصل مع مدير النظام', 403);
 
     const { data: company, error: companyErr } = await s.from('companies')

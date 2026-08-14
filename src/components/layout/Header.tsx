@@ -231,16 +231,18 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
                     <User size={14} />
                     الملف الشخصي
                   </button>
-                  <button
-                    onClick={() => {
-                      router.push('/settings');
-                      setUserMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-hover rounded-lg transition-colors text-right"
-                  >
-                    <Settings size={14} />
-                    الإعدادات
-                  </button>
+                  {user?.role === 'admin' && (
+                    <button
+                      onClick={() => {
+                        router.push('/settings');
+                        setUserMenuOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-hover rounded-lg transition-colors text-right"
+                    >
+                      <Settings size={14} />
+                      الإعدادات
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setUserMenuOpen(false);

@@ -159,14 +159,14 @@ export default function ZerocoldDatabasePage() {
           <div className="bg-bg-card border border-border rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">
               <HardDrive size={16} className="text-text-secondary" />
-              <span className="text-xs text-amber-400/60 font-medium">حجم قاعدة البيانات</span>
+              <span className="text-xs text-text-secondary font-medium">حجم قاعدة البيانات</span>
             </div>
             <p className="text-lg font-bold text-text-primary font-mono">{dbInfo?.dbSize ?? '--'}</p>
           </div>
           <div className="bg-bg-card border border-border rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">
               <Table2 size={16} className="text-text-secondary" />
-              <span className="text-xs text-amber-400/60 font-medium">عدد الجداول</span>
+              <span className="text-xs text-text-secondary font-medium">عدد الجداول</span>
             </div>
             <p className="text-lg font-bold text-text-primary font-mono">{dbInfo?.tables?.length ?? 0}</p>
           </div>
@@ -177,7 +177,7 @@ export default function ZerocoldDatabasePage() {
               ) : (
                 <AlertTriangle size={16} className="text-amber-400" />
               )}
-              <span className="text-xs text-amber-400/60 font-medium">حالة قاعدة البيانات</span>
+              <span className="text-xs text-text-secondary font-medium">حالة قاعدة البيانات</span>
             </div>
             <p className="text-sm font-bold text-text-primary">
               {dbInfo?.healthStatus === 'good' ? 'سليمة' : dbInfo?.healthStatus === 'warning' ? 'تحذير' : '--'}
@@ -244,11 +244,11 @@ export default function ZerocoldDatabasePage() {
             <h2 className="text-sm font-bold text-amber-300/80 mb-3">مؤشرات قاعدة البيانات</h2>
             <div className="space-y-2">
               <div className="flex items-center justify-between p-2.5 rounded-lg bg-bg-secondary border border-border">
-                <span className="text-xs text-amber-400/60">إجمالي المؤشرات</span>
+                <span className="text-xs text-text-secondary">إجمالي المؤشرات</span>
                 <span className="text-xs font-mono text-amber-200">{dbInfo?.indexHealth?.total ?? 0}</span>
               </div>
               <div className="flex items-center justify-between p-2.5 rounded-lg bg-bg-secondary border border-border">
-                <span className="text-xs text-amber-400/60">مؤشرات مفقودة</span>
+                <span className="text-xs text-text-secondary">مؤشرات مفقودة</span>
                 <span className={`text-xs font-mono ${(dbInfo?.indexHealth?.missing ?? 0) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
                   {dbInfo?.indexHealth?.missing ?? 0}
                 </span>
@@ -284,10 +284,10 @@ export default function ZerocoldDatabasePage() {
                         <span className="text-xs text-amber-300/80 font-mono">{table.name}</span>
                       </td>
                       <td className="p-2.5 text-center">
-                        <span className="text-xs text-amber-400/60 font-mono">{table.row_count}</span>
+                        <span className="text-xs text-text-secondary font-mono">{table.row_count}</span>
                       </td>
                       <td className="p-2.5 text-left">
-                        <span className="text-xs text-amber-400/60 font-mono" dir="ltr">{table.size}</span>
+                        <span className="text-xs text-text-secondary font-mono" dir="ltr">{table.size}</span>
                       </td>
                     </tr>
                   ))}
@@ -308,10 +308,10 @@ export default function ZerocoldDatabasePage() {
             <div className="space-y-2">
               {dbInfo.slowQueries.map((sq, i) => (
                 <div key={i} className="p-2.5 rounded-lg bg-bg-secondary border border-border">
-                  <p className="text-[0.65rem] text-amber-400/60 font-mono truncate mb-1" dir="ltr">{sq.query}</p>
+                  <p className="text-[0.65rem] text-text-secondary font-mono truncate mb-1" dir="ltr">{sq.query}</p>
                   <div className="flex items-center gap-3">
                     <span className="text-[0.6rem] text-red-400/60">متوسط الوقت: {sq.avg_time}</span>
-                    <span className="text-[0.6rem] text-amber-400/60">العدد: {sq.count}</span>
+                    <span className="text-[0.6rem] text-text-secondary">العدد: {sq.count}</span>
                   </div>
                 </div>
               ))}

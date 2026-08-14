@@ -160,7 +160,7 @@ export default function ZerocoldDashboardPage() {
           {stats.map((stat) => (
             <div key={stat.label} className="bg-bg-card border border-border rounded-xl p-4 hover:border-[#3a2f1a] transition-all">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-[0.7rem] text-amber-400/60 font-medium">{stat.label}</span>
+                <span className="text-[0.7rem] text-text-secondary font-medium">{stat.label}</span>
                 <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${stat.color} flex items-center justify-center`}>
                   <stat.icon size={14} className="text-white" />
                 </div>
@@ -196,8 +196,8 @@ export default function ZerocoldDashboardPage() {
               {healthItems.length > 0 ? healthItems.map((item) => (
                 <div key={item.label} className="flex items-center justify-between p-2.5 rounded-lg bg-bg-secondary border border-border">
                   <div className="flex items-center gap-2">
-                    <Server size={14} className="text-amber-600/50" />
-                    <span className="text-xs text-amber-400/60">{item.label}</span>
+                    <Server size={14} className="text-text-muted" />
+                    <span className="text-xs text-text-secondary">{item.label}</span>
                   </div>
                   <span className={`text-xs font-medium ${item.color}`}>{item.value}</span>
                 </div>
@@ -267,7 +267,7 @@ export default function ZerocoldDashboardPage() {
                     <div className="min-w-0">
                       <p className="text-xs text-amber-300/80 truncate">{activity.action}</p>
                       {activity.details && (
-                        <p className="text-[0.7rem] text-amber-600/50 truncate">{activity.details}</p>
+                        <p className="text-[0.7rem] text-text-muted truncate">{activity.details}</p>
                       )}
                     </div>
                   </div>

@@ -102,16 +102,27 @@ export async function PUT(req: NextRequest) {
 
     const reqData = existing as Record<string, any>;
 
-    // تحديث حالة الطلب
-    const { error: updateErr } = await s.from('upgrade_requests')
-      .update({
-        status,
-        admin_notes: admin_notes || null,
-        reviewed_by: __admin.adminId,
-        reviewed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+    // تحديث حالة الطلب — resilient to live DBs missing optional columns
+    // (updated_at / admin_notes / reviewed_*): retry with the minimal patch
+    // instead of failing the whole approval with
+    // "Could not find the 'updated_at' column ... in the schema cache".
+    const fullPatch: Record<string, unknown> = {
+      status,
+      admin_notes: admin_notes || null,
+      reviewed_by: __admin.adminId,
+      reviewed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    let { error: updateErr } = await s.from('upgrade_requests')
+      .update(fullPatch)
       .eq('id', id);
+
+    if (updateErr && /column|schema cache|Could not find|42703/i.test(`${updateErr.message} ${updateErr.code}`)) {
+      console.warn('[upgrade-requests] optional columns missing — apply migration 044. Retrying with minimal patch.');
+      ({ error: updateErr } = await s.from('upgrade_requests')
+        .update({ status })
+        .eq('id', id));
+    }
 
     if (updateErr) {
       console.error('Error updating request status:', updateErr);

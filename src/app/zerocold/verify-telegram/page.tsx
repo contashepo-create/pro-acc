@@ -146,7 +146,7 @@ function VerifyTelegramPage() {
             <MessageCircle className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-text-primary">التحقق عبر التليجرام</h1>
-          <p className="text-amber-400/60 text-sm mt-2 leading-relaxed max-w-xs mx-auto">
+          <p className="text-text-secondary text-sm mt-2 leading-relaxed max-w-xs mx-auto">
             تم إرسال رمز تحقق مكون من 6 أرقام إلى بوت التليجرام الخاص بك
           </p>
         </div>
@@ -195,7 +195,7 @@ function VerifyTelegramPage() {
                 إعادة إرسال الرمز
               </button>
             ) : (
-              <p className="text-amber-600/50 text-sm">
+              <p className="text-text-muted text-sm">
                 إعادة الإرسال بعد {countdown} ثانية
               </p>
             )}

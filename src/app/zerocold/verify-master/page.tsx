@@ -146,7 +146,7 @@ function VerifyMasterPage() {
             <KeyRound className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-text-primary">كلمة السر الرئيسية</h1>
-          <p className="text-amber-400/60 text-sm mt-2 leading-relaxed max-w-xs mx-auto">
+          <p className="text-text-secondary text-sm mt-2 leading-relaxed max-w-xs mx-auto">
             أدخل كلمة السر الرئيسية للوحة المطور
           </p>
         </div>
@@ -204,7 +204,7 @@ function VerifyMasterPage() {
           </form>
 
           {attempts > 0 && attempts < MAX_ATTEMPTS && (
-            <p className="text-amber-600/50 text-xs text-center mt-3">
+            <p className="text-text-muted text-xs text-center mt-3">
               المحاولات الفاشلة: {attempts} / {MAX_ATTEMPTS}
             </p>
           )}

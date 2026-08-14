@@ -13,11 +13,18 @@ interface Message {
   company_name: string;
 }
 
+interface CompanyOption {
+  id: string;
+  name: string;
+  email: string | null;
+}
+
 export default function AdminMessagesPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [companyId, setCompanyId] = useState('');
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
@@ -29,6 +36,25 @@ export default function AdminMessagesPage() {
     if (data.success) setMessages(data.data);
     setLoading(false);
   };
+
+  // Load all companies once so the admin picks by NAME from a dropdown
+  // instead of hunting for a raw UUID.
+  const loadCompanies = async () => {
+    try {
+      const res = await fetch('/api/admin/companies?page=1&pageSize=500');
+      const data = await res.json();
+      if (data.success) {
+        const list = (data.data.companies || []) as CompanyOption[];
+        setCompanies(list.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ar')));
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadCompanies();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -73,14 +99,16 @@ export default function AdminMessagesPage() {
                   className="input-base pr-9 w-full"
                 />
               </div>
-              <input
-                type="text"
-                placeholder="شركة ID"
+              <select
                 value={companyId}
                 onChange={(e) => setCompanyId(e.target.value)}
-                className="input-base w-40"
-                dir="ltr"
-              />
+                className="input-base w-48"
+              >
+                <option value="">كل الشركات</option>
+                {companies.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
 
             {loading ? (
@@ -126,16 +154,20 @@ export default function AdminMessagesPage() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-text-secondary mb-1.5">معرف الشركة</label>
-                <input
-                  type="text"
+                <label className="block text-sm font-medium text-text-secondary mb-1.5">الشركة</label>
+                <select
                   value={companyId}
                   onChange={(e) => setCompanyId(e.target.value)}
                   className="input-base"
-                  placeholder="Company UUID"
-                  dir="ltr"
                   required
-                />
+                >
+                  <option value="">— اختر الشركة —</option>
+                  {companies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{c.email ? ` (${c.email})` : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-text-secondary mb-1.5">الموضوع</label>

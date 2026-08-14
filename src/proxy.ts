@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { passesOriginCheck } from '@/lib/csrf-origin';
-import { verifyToken, verifyAdminToken } from '@/lib/auth';
+import { verifyToken, verifyAdminToken, type TokenPayload } from '@/lib/auth';
 
 /**
  * Server-level request gate (Next.js 16 "proxy", formerly middleware).
@@ -36,18 +36,34 @@ const PUBLIC_ADMIN_PAGE_PREFIXES = [
   '/zerocold/verify-telegram',
 ];
 
+/**
+ * Pages restricted to company admins only. Mirrors the Sidebar filter —
+ * previously this was ONLY a UI filter, so any additional user could open
+ * /settings etc. directly (e.g. from the header dropdown or by typing the
+ * URL). Now enforced server-side before any HTML is served.
+ * NOTE: the JWT role is signed so it cannot be forged; the API layer still
+ * re-checks the authoritative DB role on every request.
+ */
+const ADMIN_ONLY_PAGE_PREFIXES = [
+  '/settings',
+  '/permissions',
+  '/users',
+  '/subscription',
+  '/fiscal',
+];
+
 function startsWithAny(pathname: string, prefixes: readonly string[]): boolean {
   return prefixes.some((p) => pathname === p || pathname.startsWith(p + '/'));
 }
 
-function safeVerifyUserToken(token: string | undefined): boolean {
-  if (!token) return false;
+function safeVerifyUserToken(token: string | undefined): TokenPayload | null {
+  if (!token) return null;
   try {
-    return verifyToken(token) !== null;
+    return verifyToken(token);
   } catch {
     // Missing TOKEN_SECRET or malformed env — treat as unauthenticated;
     // the login flow surfaces the real configuration error.
-    return false;
+    return null;
   }
 }
 
@@ -110,14 +126,31 @@ export function proxy(request: NextRequest) {
 
   // Everything else under the (dashboard) group requires a valid user JWT.
   const token = request.cookies.get('token')?.value;
-  if (!safeVerifyUserToken(token)) {
+  const payload = safeVerifyUserToken(token);
+  if (!payload) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     url.search = `redirect=${encodeURIComponent(pathname)}`;
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  // RBAC page gate: admin-only pages (settings, users, permissions,
+  // subscription, fiscal) bounce non-admin users back to the dashboard.
+  // Fixes the bypass where the header dropdown (or a typed URL) opened
+  // /settings for sub-users even though the sidebar hid it.
+  if (payload.role !== 'admin' && startsWithAny(pathname, ADMIN_ONLY_PAGE_PREFIXES)) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/dashboard';
+    url.search = 'denied=admin-only';
+    return NextResponse.redirect(url);
+  }
+
+  // Authenticated HTML must never be cached: prevents the browser
+  // back-button (or bfcache/disk cache) from showing tenant data after
+  // logout, and stale pages after switching accounts.
+  const res = NextResponse.next();
+  res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  return res;
 }
 
 export const config = {

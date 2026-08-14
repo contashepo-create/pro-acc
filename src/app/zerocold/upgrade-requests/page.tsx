@@ -86,17 +86,17 @@ export default function UpgradeRequestsPage() {
 
         <div className="space-y-4">
           {requests.length === 0 ? (
-            <div className="bg-bg-card border border-border rounded-2xl p-12 text-center text-amber-600/50">لا توجد طلبات {filter === 'pending' ? 'معلقة' : ''}</div>
+            <div className="bg-bg-card border border-border rounded-2xl p-12 text-center text-text-muted">لا توجد طلبات {filter === 'pending' ? 'معلقة' : ''}</div>
           ) : requests.map((req) => (
             <div key={req.id} className="bg-bg-card border border-border rounded-2xl p-5">
               <div className="flex justify-between items-start">
                 <div>
                   <h3 className="font-bold">{req.companies?.name || 'شركة'} - {req.subscription_plans?.name || req.requested_plan_id}</h3>
-                  <p className="text-xs text-amber-400/60">{req.users?.name} ({req.users?.email}) - {req.companies?.phone}</p>
+                  <p className="text-xs text-text-secondary">{req.users?.name} ({req.users?.email}) - {req.companies?.phone}</p>
                   <div className="flex gap-2 mt-2 text-xs">
                     <span className="bg-bg-secondary px-2 py-1 rounded">المدة: {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</span>
                     <span className="bg-bg-secondary px-2 py-1 rounded">الدفع: {req.payment_method_code}</span>
-                    <span className={`px-2 py-1 rounded ${req.status === 'pending' ? 'bg-yellow-900/30 text-yellow-400' : req.status === 'approved' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{req.status}</span>
+                    <span className={`px-2 py-1 rounded ${req.status === 'pending' ? 'bg-warning-light text-warning font-semibold' : req.status === 'approved' ? 'bg-success-light text-success font-semibold' : 'bg-danger-light text-danger font-semibold'}`}>{req.status}</span>
                   </div>
                 </div>
                 <div className="text-left text-xs text-text-muted">
@@ -122,7 +122,7 @@ export default function UpgradeRequestsPage() {
                   <button disabled={!!processing} onClick={() => handleAction(req.id, 'approved')} className="flex-1 py-2.5 bg-green-700 hover:bg-green-600 text-white rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                     {processing === req.id ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} قبول وترقية
                   </button>
-                  <button disabled={!!processing} onClick={() => { const reason = prompt('سبب الرفض:'); if (reason !== null) handleAction(req.id, 'rejected', reason); }} className="flex-1 py-2.5 bg-red-900/50 hover:bg-red-900/80 text-red-300 rounded-xl text-sm flex items-center justify-center gap-2">
+                  <button disabled={!!processing} onClick={() => { const reason = prompt('سبب الرفض:'); if (reason !== null) handleAction(req.id, 'rejected', reason); }} className="flex-1 py-2.5 bg-danger-light hover:bg-danger hover:text-white text-danger border border-danger rounded-xl text-sm flex items-center justify-center gap-2">
                     <X size={16} /> رفض
                   </button>
                 </div>

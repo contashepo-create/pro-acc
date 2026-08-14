@@ -186,7 +186,7 @@ export default function ZerocoldLogsPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
           <div className="relative">
-            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-600/50" />
+            <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted" />
             <input
               type="text"
               value={search}
@@ -196,7 +196,7 @@ export default function ZerocoldLogsPage() {
             />
           </div>
           <div className="relative">
-            <Filter size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-600/50 pointer-events-none" />
+            <Filter size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
             <select
               value={actionFilter}
               onChange={(e) => setActionFilter(e.target.value)}
@@ -208,7 +208,7 @@ export default function ZerocoldLogsPage() {
             </select>
           </div>
           <div className="relative">
-            <Calendar size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-600/50 pointer-events-none" />
+            <Calendar size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
             <input
               type="date"
               value={dateFrom}
@@ -217,7 +217,7 @@ export default function ZerocoldLogsPage() {
             />
           </div>
           <div className="relative">
-            <Calendar size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-600/50 pointer-events-none" />
+            <Calendar size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
             <input
               type="date"
               value={dateTo}
@@ -245,7 +245,7 @@ export default function ZerocoldLogsPage() {
         {filtered.length === 0 && !error ? (
           <div className="bg-bg-card border border-border rounded-xl p-8 text-center">
             <Activity size={32} className="text-amber-600/30 mx-auto mb-2" />
-            <p className="text-amber-600/50 text-sm">لا توجد أحداث مسجلة</p>
+            <p className="text-text-muted text-sm">لا توجد أحداث مسجلة</p>
           </div>
         ) : (
           <div className="bg-bg-card border border-border rounded-xl overflow-x-auto">
@@ -263,7 +263,7 @@ export default function ZerocoldLogsPage() {
                   {filtered.map((log) => (
                     <tr key={log.id} className="border-b border-[#1f1725] last:border-0 hover:bg-bg-secondary transition-all">
                       <td className="p-3">
-                        <span className="text-xs text-amber-400/60">{log.timestamp}</span>
+                        <span className="text-xs text-text-secondary">{log.timestamp}</span>
                       </td>
                       <td className="p-3">
                         <span className="text-xs text-amber-300/80">{actionLabels[log.action] || log.action}</span>
