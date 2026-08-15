@@ -303,24 +303,29 @@ export async function handleApprovalResponse(
     return { success: false, message: '❌ عذراً، هذا الحساب في تيليجرام غير مصرح له باعتماد هذه المعاملة مالياً' };
   }
 
-  if (transactionType === 'voucher_disbursement') {
-    const { data, error } = await s.rpc('respond_voucher_disbursement_approval', {
-      p_company_id: companyId,
-      p_approval_id: approvalId,
-      p_action: action,
-      p_approver_user_id: null,
-      p_approver_chat_id: String(approverChatId),
-      p_comments: '',
-    });
+  if (transactionType === 'voucher_disbursement' || transactionType === 'voucher_receipt') {
+    const isReceipt = transactionType === 'voucher_receipt';
+    const { data, error } = await s.rpc(
+      isReceipt ? 'respond_voucher_receipt_approval' : 'respond_voucher_disbursement_approval',
+      {
+        p_company_id: companyId,
+        p_approval_id: approvalId,
+        p_action: action,
+        p_approver_user_id: null,
+        p_approver_chat_id: String(approverChatId),
+        p_comments: '',
+      },
+    );
     if (error) {
-      console.error('Atomic Telegram disbursement approval failed:', error);
+      console.error('Atomic Telegram voucher approval failed:', error);
       return { success: false, message: String(error.message || 'فشل تنفيذ الاعتماد المالي') };
     }
+    const label = isReceipt ? 'سند القبض' : 'سند الصرف';
     return {
       success: true,
       message: (data as any)?.status === 'approved'
-        ? '✅ تم اعتماد سند الصرف وترحيله بنجاح!'
-        : '❌ تم رفض سند الصرف.',
+        ? `✅ تم اعتماد ${label} وترحيله بنجاح!`
+        : `❌ تم رفض ${label}.`,
     };
   }
   

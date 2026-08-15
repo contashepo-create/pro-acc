@@ -178,7 +178,7 @@ async function smokeAtomicWriters(ids) {
   assert.ok(directVoucher.rows[0].result.journal_entry_id);
   const salesInvoice='71000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,1,'2026-02-01','2026-03-01',$3,80,0,0,80,0,'unpaid')`,[salesInvoice,c,contact]);
-  const receipt=await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','client',$2,80,$3,'receipt',$4::jsonb,FALSE,$5) result`,
+  const receipt=await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','client',$2,80,$3,'receipt',$4::jsonb,FALSE,FALSE,$5) result`,
     [c,contact,b,JSON.stringify([{invoice_id:salesInvoice,amount:80}]),u]);
   assert.ok(receipt.rows[0].result.journal_entry_id);
   assert.equal((await db.query(`SELECT status FROM invoices WHERE id=$1`,[salesInvoice])).rows[0].status,'paid');
@@ -190,6 +190,16 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number(finalizedPayment.rows[0].result.customer_advance),20);
   const replayPayment=await db.query(`SELECT finalize_gateway_payment($1,$2,'paid','{}',$3) result`,[c,paymentRecord,u]);
   assert.equal(replayPayment.rows[0].result.already_processed,true);
+  const approvalInvoice='71000000-0000-4000-8000-000000000003';
+  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,3,'2026-02-01','2026-03-01',$3,100,0,0,100,0,'unpaid')`,[approvalInvoice,c,contact]);
+  const pendingReceipt=(await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-03','client',$2,60,$3,'pending receipt',$4::jsonb,FALSE,TRUE,$5) result`,[c,contact,b,JSON.stringify([{invoice_id:approvalInvoice,amount:60}]),u])).rows[0].result;
+  assert.ok(pendingReceipt.approval_id);
+  assert.equal((await db.query(`SELECT journal_entry_id FROM voucher_receipts WHERE id=$1`,[pendingReceipt.id])).rows[0].journal_entry_id,null);
+  assert.equal(Number((await db.query(`SELECT paid_amount FROM invoices WHERE id=$1`,[approvalInvoice])).rows[0].paid_amount),0);
+  const approvedReceipt=(await db.query(`SELECT respond_voucher_receipt_approval($1,$2,'approve',$3,NULL,'ok') result`,[c,pendingReceipt.approval_id,u])).rows[0].result;
+  assert.ok(approvedReceipt.journal_entry_id);
+  assert.equal(Number((await db.query(`SELECT paid_amount FROM invoices WHERE id=$1`,[approvalInvoice])).rows[0].paid_amount),60);
+  await assert.rejects(()=>db.query(`SELECT respond_voucher_receipt_approval($1,$2,'approve',$3,NULL,'again')`,[c,pendingReceipt.approval_id,u]));
 
   const supplier='73000000-0000-4000-8000-000000000001', warehouse='74000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Atomic supplier','supplier')`,[supplier,c]);

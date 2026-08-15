@@ -28,8 +28,12 @@ export async function PUT(
       return error('لست المخول بالاعتماد على هذا الطلب', 403);
     }
 
-    if ((req.entity_type || req.transaction_type) === 'voucher_disbursement') {
-      const { data, error: decisionErr } = await s.rpc('respond_voucher_disbursement_approval', {
+    const voucherApprovalType = req.entity_type || req.transaction_type;
+    if (voucherApprovalType === 'voucher_disbursement' || voucherApprovalType === 'voucher_receipt') {
+      const rpcName = voucherApprovalType === 'voucher_disbursement'
+        ? 'respond_voucher_disbursement_approval'
+        : 'respond_voucher_receipt_approval';
+      const { data, error: decisionErr } = await s.rpc(rpcName, {
         p_company_id: auth.companyId,
         p_approval_id: id,
         p_action: action,

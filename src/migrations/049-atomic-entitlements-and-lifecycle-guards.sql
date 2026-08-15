@@ -1533,13 +1533,15 @@ GRANT EXECUTE ON FUNCTION public.respond_voucher_disbursement_approval(UUID,UUID
 CREATE UNIQUE INDEX IF NOT EXISTS uq_receipt_invoice_allocation ON receipt_invoice_items(company_id,voucher_receipt_id,invoice_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_voucher_receipt_journal ON voucher_receipts(journal_entry_id) WHERE journal_entry_id IS NOT NULL;
 
+ALTER TABLE voucher_receipts ADD COLUMN IF NOT EXISTS auto_allocate_fifo BOOLEAN NOT NULL DEFAULT FALSE;
+
 CREATE OR REPLACE FUNCTION public.create_voucher_receipt_atomic(
  p_company_id UUID,p_date DATE,p_receipt_type TEXT,p_contact_id UUID,p_amount NUMERIC,p_bank_safe_id UUID,
- p_reason TEXT,p_allocations JSONB,p_auto_fifo BOOLEAN,p_user_id UUID
+ p_reason TEXT,p_allocations JSONB,p_auto_fifo BOOLEAN,p_request_approval BOOLEAN,p_user_id UUID
 ) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
 DECLARE v_bank banks_safes%ROWTYPE; v_receipt voucher_receipts%ROWTYPE; v_number INTEGER; v_counterpart UUID;
  v_journal JSONB; v_journal_id UUID; v_item JSONB; v_invoice invoices%ROWTYPE; v_alloc NUMERIC;
- v_alloc_total NUMERIC:=0; v_applied NUMERIC:=0; v_remaining NUMERIC; v_new_paid NUMERIC;
+ v_alloc_total NUMERIC:=0; v_applied NUMERIC:=0; v_remaining NUMERIC; v_new_paid NUMERIC; v_approval approval_requests%ROWTYPE;
 BEGIN
  IF p_date IS NULL OR p_receipt_type NOT IN ('client','supplier_refund','general') OR p_amount<=0 OR p_amount<>ROUND(p_amount,2)
   OR NULLIF(BTRIM(p_reason),'') IS NULL OR LENGTH(p_reason)>500 OR jsonb_typeof(p_allocations)<>'array' OR jsonb_array_length(p_allocations)>100 THEN RAISE EXCEPTION 'بيانات سند القبض غير صالحة'; END IF;
@@ -1561,8 +1563,22 @@ BEGIN
  END LOOP;
  IF v_alloc_total>p_amount+0.005 THEN RAISE EXCEPTION 'مجموع التخصيصات يتجاوز مبلغ السند'; END IF;
  v_number:=next_voucher_number(p_company_id,'voucher_receipts');
- INSERT INTO voucher_receipts(company_id,number,date,receipt_type,contact_id,amount,bank_safe_id,reason,created_by,status)
- VALUES(p_company_id,v_number,p_date,p_receipt_type,p_contact_id,p_amount,p_bank_safe_id,BTRIM(p_reason),p_user_id,'approved') RETURNING * INTO v_receipt;
+ INSERT INTO voucher_receipts(company_id,number,date,receipt_type,contact_id,amount,bank_safe_id,reason,created_by,status,auto_allocate_fifo)
+ VALUES(p_company_id,v_number,p_date,p_receipt_type,p_contact_id,p_amount,p_bank_safe_id,BTRIM(p_reason),p_user_id,
+   CASE WHEN p_request_approval THEN 'pending' ELSE 'approved' END,COALESCE(p_auto_fifo,FALSE)) RETURNING * INTO v_receipt;
+
+ IF p_request_approval THEN
+  INSERT INTO approval_requests(company_id,transaction_type,transaction_id,entity_type,entity_id,amount,requester_id,status,message,description)
+  VALUES(p_company_id,'voucher_receipt',v_receipt.id::TEXT,'voucher_receipt',v_receipt.id,p_amount,p_user_id,'pending',BTRIM(p_reason),BTRIM(p_reason)) RETURNING * INTO v_approval;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+   INSERT INTO receipt_invoice_items(company_id,voucher_receipt_id,invoice_id,amount,journal_entry_id)
+   VALUES(p_company_id,v_receipt.id,(v_item->>'invoice_id')::UUID,(v_item->>'amount')::NUMERIC,NULL);
+  END LOOP;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'request_approval','voucher_receipt',v_receipt.id,jsonb_build_object('approval_id',v_approval.id,'amount',p_amount));
+  RETURN to_jsonb(v_receipt)||jsonb_build_object('requires_approval',TRUE,'approval_id',v_approval.id);
+ END IF;
+
  v_journal:=create_journal_entry(p_company_id,p_date,'general','سند قبض رقم '||v_number||': '||BTRIM(p_reason),p_user_id,jsonb_build_array(
   jsonb_build_object('accountId',v_bank.account_id,'debit',p_amount,'credit',0),
   jsonb_build_object('accountId',v_counterpart,'debit',0,'credit',p_amount,'contactId',p_contact_id)));
@@ -1588,11 +1604,82 @@ BEGIN
  END IF;
  UPDATE voucher_receipts SET journal_entry_id=v_journal_id WHERE id=v_receipt.id RETURNING * INTO v_receipt;
  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,p_user_id,'post','voucher_receipt',v_receipt.id,to_jsonb(v_receipt));
- RETURN to_jsonb(v_receipt)||jsonb_build_object('allocated_amount',ROUND(v_applied,2),'unapplied_amount',ROUND(p_amount-v_applied,2));
+ RETURN to_jsonb(v_receipt)||jsonb_build_object('requires_approval',FALSE,'allocated_amount',ROUND(v_applied,2),'unapplied_amount',ROUND(p_amount-v_applied,2));
 END;
 $$;
-REVOKE ALL ON FUNCTION public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.respond_voucher_receipt_approval(
+ p_company_id UUID,p_approval_id UUID,p_action TEXT,p_approver_user_id UUID,p_approver_chat_id TEXT,p_comments TEXT
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_request approval_requests%ROWTYPE; v_receipt voucher_receipts%ROWTYPE; v_bank banks_safes%ROWTYPE; v_counterpart UUID;
+ v_journal JSONB; v_journal_id UUID; v_link receipt_invoice_items%ROWTYPE; v_invoice invoices%ROWTYPE;
+ v_alloc NUMERIC; v_new_paid NUMERIC; v_remaining NUMERIC; v_actor UUID;
+BEGIN
+ IF p_action NOT IN ('approve','reject') OR LENGTH(COALESCE(p_comments,''))>2000 THEN RAISE EXCEPTION 'قرار الاعتماد غير صالح'; END IF;
+ SELECT * INTO v_request FROM approval_requests WHERE id=p_approval_id AND company_id=p_company_id FOR UPDATE;
+ IF NOT FOUND OR v_request.status<>'pending' OR v_request.transaction_type<>'voucher_receipt' THEN RAISE EXCEPTION 'طلب الاعتماد غير موجود أو تمت معالجته'; END IF;
+ IF p_approver_user_id IS NOT NULL THEN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_approver_user_id AND company_id=p_company_id AND is_active=TRUE
+    AND (role='admin' OR p_approver_user_id=v_request.approver_id)) THEN RAISE EXCEPTION 'المستخدم غير مخول بالاعتماد'; END IF;
+  v_actor:=p_approver_user_id;
+ ELSIF NULLIF(p_approver_chat_id,'') IS NOT NULL THEN
+  IF NOT EXISTS(SELECT 1 FROM company_telegram_configs WHERE company_id=p_company_id AND approvals_enabled=TRUE AND chat_id=p_approver_chat_id) THEN RAISE EXCEPTION 'حساب تيليجرام غير مخول'; END IF;
+  v_actor:=v_request.requester_id;
+ ELSE RAISE EXCEPTION 'هوية المعتمد مطلوبة'; END IF;
+ SELECT * INTO v_receipt FROM voucher_receipts WHERE id=COALESCE(v_request.entity_id,v_request.transaction_id::UUID) AND company_id=p_company_id FOR UPDATE;
+ IF NOT FOUND OR v_receipt.status<>'pending' OR v_receipt.journal_entry_id IS NOT NULL THEN RAISE EXCEPTION 'سند القبض ليس معلقاً'; END IF;
+ IF p_action='reject' THEN
+  UPDATE voucher_receipts SET status='rejected' WHERE id=v_receipt.id;
+  UPDATE approval_requests SET status='rejected',approved_by=p_approver_user_id,approver_chat_id=p_approver_chat_id,approved_at=NOW(),approval_comments=NULLIF(BTRIM(p_comments),''),updated_at=NOW() WHERE id=p_approval_id;
+  INSERT INTO notifications(company_id,user_id,type,title,message,entity_type,entity_id) VALUES(p_company_id,v_request.requester_id,'warning','تم رفض طلبك','سند قبض - تم الرفض','approval_request',p_approval_id);
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,v_actor,'reject_approval','approval_request',p_approval_id,jsonb_build_object('voucher_id',v_receipt.id,'chat_id',p_approver_chat_id));
+  RETURN jsonb_build_object('status','rejected','voucher_id',v_receipt.id,'requester_id',v_request.requester_id);
+ END IF;
+ SELECT * INTO v_bank FROM banks_safes WHERE id=v_receipt.bank_safe_id AND company_id=p_company_id AND is_active=TRUE FOR UPDATE;
+ IF NOT FOUND OR v_bank.account_id IS NULL THEN RAISE EXCEPTION 'البنك أو الخزينة غير صالح'; END IF;
+ SELECT id INTO v_counterpart FROM accounts WHERE company_id=p_company_id AND code=CASE v_receipt.receipt_type WHEN 'client' THEN '1130' WHEN 'supplier_refund' THEN '2110' ELSE '4200' END
+  AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+ IF v_counterpart IS NULL OR v_counterpart=v_bank.account_id THEN RAISE EXCEPTION 'الحساب المقابل غير صالح'; END IF;
+ FOR v_link IN SELECT * FROM receipt_invoice_items WHERE company_id=p_company_id AND voucher_receipt_id=v_receipt.id FOR UPDATE LOOP
+  SELECT * INTO v_invoice FROM invoices WHERE id=v_link.invoice_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND OR v_invoice.status IN ('cancelled','paid') OR (v_receipt.contact_id IS NOT NULL AND v_invoice.contact_id<>v_receipt.contact_id)
+    OR v_invoice.paid_amount+v_link.amount>v_invoice.total+0.005 THEN RAISE EXCEPTION 'تعذر تطبيق تخصيص فاتورة البيع'; END IF;
+ END LOOP;
+ v_journal:=create_journal_entry(p_company_id,v_receipt.date,'general','سند قبض رقم '||v_receipt.number||': '||v_receipt.reason,v_request.requester_id,jsonb_build_array(
+  jsonb_build_object('accountId',v_bank.account_id,'debit',v_receipt.amount,'credit',0),
+  jsonb_build_object('accountId',v_counterpart,'debit',0,'credit',v_receipt.amount,'contactId',v_receipt.contact_id)));
+ v_journal_id:=(v_journal->>'id')::UUID;
+ UPDATE journal_entries SET reference_type='voucher_receipt',reference_id=v_receipt.id WHERE id=v_journal_id AND company_id=p_company_id;
+ FOR v_link IN SELECT * FROM receipt_invoice_items WHERE company_id=p_company_id AND voucher_receipt_id=v_receipt.id FOR UPDATE LOOP
+  SELECT * INTO v_invoice FROM invoices WHERE id=v_link.invoice_id AND company_id=p_company_id FOR UPDATE;
+  v_new_paid:=ROUND(v_invoice.paid_amount+v_link.amount,2);
+  UPDATE invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_invoice.total-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+  UPDATE receipt_invoice_items SET journal_entry_id=v_journal_id WHERE id=v_link.id;
+ END LOOP;
+ IF NOT EXISTS(SELECT 1 FROM receipt_invoice_items WHERE company_id=p_company_id AND voucher_receipt_id=v_receipt.id)
+   AND v_receipt.auto_allocate_fifo AND v_receipt.receipt_type='client' AND v_receipt.contact_id IS NOT NULL THEN
+  v_remaining:=v_receipt.amount;
+  FOR v_invoice IN SELECT * FROM invoices WHERE company_id=p_company_id AND contact_id=v_receipt.contact_id AND status NOT IN ('cancelled','paid') ORDER BY date,number FOR UPDATE LOOP
+   EXIT WHEN v_remaining<=0.005; v_alloc:=LEAST(v_remaining,ROUND(v_invoice.total-v_invoice.paid_amount,2)); CONTINUE WHEN v_alloc<=0;
+   v_new_paid:=ROUND(v_invoice.paid_amount+v_alloc,2);
+   UPDATE invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_invoice.total-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+   INSERT INTO receipt_invoice_items(company_id,voucher_receipt_id,invoice_id,amount,journal_entry_id) VALUES(p_company_id,v_receipt.id,v_invoice.id,v_alloc,v_journal_id);
+   v_remaining:=v_remaining-v_alloc;
+  END LOOP;
+ END IF;
+ UPDATE voucher_receipts SET status='approved',journal_entry_id=v_journal_id WHERE id=v_receipt.id RETURNING * INTO v_receipt;
+ UPDATE approval_requests SET status='approved',approved_by=p_approver_user_id,approver_chat_id=p_approver_chat_id,approved_at=NOW(),approval_comments=NULLIF(BTRIM(p_comments),''),updated_at=NOW() WHERE id=p_approval_id;
+ INSERT INTO notifications(company_id,user_id,type,title,message,entity_type,entity_id) VALUES(p_company_id,v_request.requester_id,'success','تم اعتماد طلبك','سند قبض - تم الاعتماد بنجاح','approval_request',p_approval_id);
+ INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,v_actor,'approve_approval','approval_request',p_approval_id,jsonb_build_object('voucher_id',v_receipt.id,'journal_entry_id',v_journal_id,'chat_id',p_approver_chat_id));
+ RETURN jsonb_build_object('status','approved','voucher_id',v_receipt.id,'journal_entry_id',v_journal_id,'requester_id',v_request.requester_id);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,BOOLEAN,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.respond_voucher_receipt_approval(UUID,UUID,TEXT,UUID,TEXT,TEXT) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,BOOLEAN,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.respond_voucher_receipt_approval(UUID,UUID,TEXT,UUID,TEXT,TEXT) TO service_role;
+
 
 CREATE OR REPLACE FUNCTION public.deactivate_bank_safe(p_company_id UUID,p_bank_safe_id UUID,p_user_id UUID)
 RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$

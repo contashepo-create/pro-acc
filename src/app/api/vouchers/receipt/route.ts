@@ -4,7 +4,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { hydratePartyNames } from '@/lib/voucher-utils';
 import { receiptVoucherCreateSchema } from '@/lib/validation';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
-import { checkApprovalThreshold } from '@/lib/notifications';
+import { checkApprovalThreshold, sendApprovalRequestNotification } from '@/lib/notifications';
 
 const sb = () => getSupabase();
 
@@ -111,12 +111,9 @@ export async function POST(request: NextRequest) {
     const { date, receipt_type, contact_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
 
     const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
-    if (!canBypass) {
-      const threshold = await checkApprovalThreshold(auth.companyId, amount, 'voucher_receipt', auth.userId);
-      // Receipt approval posting is deliberately blocked until it is migrated
-      // to the same atomic pending lifecycle as disbursements.
-      if (threshold.requiresApproval) return error('هذه العملية تتطلب اعتماداً قبل الترحيل', 409);
-    }
+    const threshold = canBypass
+      ? { requiresApproval: false }
+      : await checkApprovalThreshold(auth.companyId, amount, 'voucher_receipt', auth.userId);
 
     let autoFifo = false;
     if ((!invoice_items || invoice_items.length === 0) && receipt_type === 'client' && contact_id) {
@@ -138,10 +135,33 @@ export async function POST(request: NextRequest) {
       p_reason: reason,
       p_allocations: invoice_items || [],
       p_auto_fifo: autoFifo,
+      p_request_approval: threshold.requiresApproval,
       p_user_id: auth.userId,
     });
     if (createErr) throw createErr;
-    return success(data, 201);
+    const voucher = data as Record<string, any>;
+    if (voucher.requires_approval) {
+      let notificationSent = true;
+      try {
+        await sendApprovalRequestNotification(
+          auth.companyId, amount, 'voucher_receipt', voucher.id,
+          auth.userId, voucher.approval_id,
+        );
+      } catch (notifyErr) {
+        notificationSent = false;
+        console.error('Receipt approval persisted but Telegram delivery failed:', notifyErr);
+      }
+      return success({
+        requiresApproval: true,
+        blocked: true,
+        message: notificationSent
+          ? 'تم إرسال طلب الاعتماد. العملية محظورة حتى الموافقة.'
+          : 'تم حفظ طلب الاعتماد، لكن تعذر إرسال إشعار تيليجرام؛ يمكن اعتماده من شاشة الموافقات.',
+        transactionId: voucher.id,
+        approvalId: voucher.approval_id,
+      }, 201);
+    }
+    return success(voucher, 201);
   } catch (err) {
     console.error('Receipt creation error:', err);
     return handleApiError(err);
