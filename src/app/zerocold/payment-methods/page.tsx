@@ -69,12 +69,12 @@ export default function PaymentMethodsPage() {
   };
 
   const deleteMethod = async (m: PaymentMethod) => {
-    if (!confirm(`هل أنت متأكد من الحذف النهائي لطريقة الدفع "${m.name_ar}"؟ لا يمكن التراجع.`)) return;
+    if (!confirm(`هل تريد إلغاء تفعيل طريقة الدفع "${m.name_ar}"؟ سيبقى سجل الطلبات السابقة محفوظاً.`)) return;
     setFeedback(null);
     const res = await fetch(`/api/admin/payment-methods?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' });
     const data = await res.json();
     if (data.success) {
-      setFeedback({ type: 'success', text: 'تم حذف طريقة الدفع نهائياً' });
+      setFeedback({ type: 'success', text: 'تم إلغاء تفعيل طريقة الدفع مع حفظ السجل السابق' });
       fetchMethods();
     } else {
       setFeedback({ type: 'error', text: data.message || 'فشل الحذف' });

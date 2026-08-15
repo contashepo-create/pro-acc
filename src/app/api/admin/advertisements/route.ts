@@ -1,163 +1,192 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, parseBody } from '@/lib/api-helpers';
 
-const sb = () => getSupabase();
+const AD_TYPES = new Set(['announcement','banner','promotion','upgrade','alert','info','feature','premium']);
+const DISPLAY_MODES = new Set(['top_bar','banner','popup','modal','inline']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function safeUrl(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string' || value.length > 2000) return undefined;
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
+function safeDate(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string' || value.length > 40 || Number.isNaN(Date.parse(value))) return undefined;
+  return new Date(value).toISOString();
+}
 
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin(req);
-    const s = sb();
     const activeParam = req.nextUrl.searchParams.get('active');
     const displayMode = req.nextUrl.searchParams.get('display_mode');
     const q = req.nextUrl.searchParams.get('q') || '';
+    if (displayMode && !DISPLAY_MODES.has(displayMode)) return error('نوع العرض غير صالح');
 
-    // Admin listing: select only display columns (no internal fields beyond what UI needs)
-    let query = s.from('advertisements')
+    let query = getSupabase().from('advertisements')
       .select('id, title, body, type, display_mode, priority, link_url, link_text, is_active, starts_at, expires_at, show_until, created_at, updated_at');
-
     if (activeParam === 'true') query = query.eq('is_active', true);
     else if (activeParam === 'false') query = query.eq('is_active', false);
     if (displayMode) query = query.eq('display_mode', displayMode);
 
-    const { data: ads, error: err } = await query
+    const { data: ads, error: queryError } = await query
       .order('priority', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(200);
-
-    if (err) {
-      if (err.code === '42P01') return success([]);
-      throw err;
+    if (queryError) {
+      if (queryError.code === '42P01') return success([]);
+      throw queryError;
     }
 
     let result = ads || [];
-    if (q) {
-      const needle = q.replace(/[%_]/g, '').toLowerCase().slice(0, 64);
-      if (needle) {
-        result = result.filter((a: any) =>
-          String(a.title || '').toLowerCase().includes(needle) ||
-          String(a.body || '').toLowerCase().includes(needle)
-        );
-      }
+    const needle = q.replace(/[%_]/g, '').toLowerCase().slice(0, 64);
+    if (needle) {
+      result = result.filter((ad: any) =>
+        String(ad.title || '').toLowerCase().includes(needle) ||
+        String(ad.body || '').toLowerCase().includes(needle)
+      );
     }
-
     return success(result);
-  } catch (e: any) {
-    return adminJsonError(e);
+  } catch (err) {
+    return adminJsonError(err);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const admin = await requireAdmin(req);
-    const body = await parseBody(req);
-    const { title, body: bodyText, type, display_mode, priority, linkUrl, linkText, showDuration, expiresAt } = body;
+    const input = await parseBody<Record<string, unknown>>(req);
+    const title = typeof input.title === 'string' ? input.title.trim() : '';
+    const body = typeof input.body === 'string' ? input.body.trim() : '';
+    const type = typeof input.type === 'string' ? input.type : 'announcement';
+    const displayMode = typeof input.display_mode === 'string' ? input.display_mode : 'top_bar';
+    if (!title || title.length > 300 || !body || body.length > 5000) return error('العنوان والنص مطلوبان ضمن الحدود المسموحة');
+    if (!AD_TYPES.has(type)) return error('نوع الإعلان غير صالح');
+    if (!DISPLAY_MODES.has(displayMode)) return error('نوع العرض غير صالح');
 
-    if (!title || typeof title !== 'string' || !bodyText || typeof bodyText !== 'string') {
-      return error('العنوان والنص مطلوبان');
-    }
-    if (title.length > 300) return error('العنوان طويل جداً');
-    if (bodyText.length > 5000) return error('نص الإعلان طويل جداً');
-    if (linkUrl) {
-      try {
-        const u = new URL(String(linkUrl));
-        if (!['http:', 'https:'].includes(u.protocol)) return error('رابط غير صالح');
-      } catch {
-        return error('رابط غير صالح');
-      }
-    }
-    if (display_mode && !['top_bar', 'banner', 'popup', 'modal', 'inline'].includes(display_mode)) {
-      return error('نوع العرض غير صالح');
-    }
+    const linkUrl = safeUrl(input.linkUrl);
+    if (input.linkUrl !== undefined && linkUrl === undefined) return error('رابط غير صالح');
+    if (input.linkText !== undefined && (typeof input.linkText !== 'string' || input.linkText.length > 200)) return error('نص الرابط طويل جداً');
+    const priority = input.priority === undefined ? 0 : Number(input.priority);
+    if (!Number.isInteger(priority) || priority < -1000 || priority > 1000) return error('أولوية الإعلان غير صالحة');
 
-    // حساب تاريخ انتهاء العرض بناءً على مدة العرض
-    let finalExpiresAt = expiresAt || null;
-    if (!finalExpiresAt && showDuration) {
-      const durationDays = parseInt(showDuration) || 7;
-      const endDate = new Date();
-      endDate.setDate(endDate.getDate() + durationDays);
-      finalExpiresAt = endDate.toISOString().split('T')[0];
+    let expiresAt = safeDate(input.expiresAt);
+    if (input.expiresAt !== undefined && expiresAt === undefined) return error('تاريخ الانتهاء غير صالح');
+    if (expiresAt === undefined && input.showDuration !== undefined) {
+      const days = Number(input.showDuration);
+      if (!Number.isInteger(days) || days < 1 || days > 365) return error('مدة العرض غير صالحة');
+      expiresAt = new Date(Date.now() + days * 86400000).toISOString();
     }
 
-    const s = sb();
-    const { data, error: insertErr } = await s.from('advertisements').insert({
-      title: title.trim(),
-      body: bodyText.trim(),
-      type: type || 'announcement',
-      display_mode: display_mode || 'top_bar',
-      priority: priority || 0,
-      link_url: linkUrl || null,
-      link_text: linkText || null,
-      is_active: true,
-      expires_at: finalExpiresAt,
-      show_until: finalExpiresAt,
-    }).select().single();
-
-    if (insertErr) throw insertErr;
-    return success(data);
-  } catch (e: any) {
-    return adminJsonError(e);
+    const { data, error: createError } = await getSupabase().rpc('admin_manage_advertisement', {
+      p_admin_id: admin.adminId,
+      p_action: 'create',
+      p_ad_id: null,
+      p_payload: {
+        title, body, type, display_mode: displayMode, priority,
+        link_url: linkUrl ?? null,
+        link_text: typeof input.linkText === 'string' ? input.linkText.trim() : null,
+        is_active: true,
+        expires_at: expiresAt ?? null,
+      },
+    });
+    if (createError) throw createError;
+    return success(data, 201);
+  } catch (err) {
+    return adminJsonError(err);
   }
 }
 
 export async function PATCH(req: NextRequest) {
   try {
-    await requireAdmin(req);
-    const body = await parseBody(req);
-    const { id, isActive, title, body: bodyText, type, display_mode, priority, linkUrl, linkText, expiresAt } = body;
+    const admin = await requireAdmin(req);
+    const input = await parseBody<Record<string, unknown>>(req);
+    const id = typeof input.id === 'string' ? input.id : '';
+    if (!UUID.test(id)) return error('id غير صالح');
 
-    if (!id || typeof id !== 'string' || id.length > 64) return error('id غير صالح');
-    // Validate URL if provided
-    if (linkUrl !== undefined && linkUrl !== null && linkUrl !== '') {
-      try {
-        const u = new URL(String(linkUrl));
-        if (!['http:', 'https:'].includes(u.protocol)) return error('رابط غير صالح');
-      } catch {
-        return error('رابط غير صالح');
-      }
+    const patch: Record<string, unknown> = {};
+    if (input.title !== undefined) {
+      if (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 300) return error('العنوان غير صالح');
+      patch.title = input.title.trim();
     }
-
-    const updateData: any = { updated_at: new Date().toISOString() };
-    if (isActive !== undefined) updateData.is_active = isActive;
-    if (title !== undefined) updateData.title = title.trim();
-    if (bodyText !== undefined) updateData.body = bodyText.trim();
-    if (type !== undefined) updateData.type = type;
-    if (display_mode !== undefined) updateData.display_mode = display_mode;
-    if (priority !== undefined) updateData.priority = priority;
-    if (linkUrl !== undefined) updateData.link_url = linkUrl;
-    if (linkText !== undefined) updateData.link_text = linkText;
-    if (expiresAt !== undefined) {
-      updateData.expires_at = expiresAt;
-      updateData.show_until = expiresAt;
+    if (input.body !== undefined) {
+      if (typeof input.body !== 'string' || !input.body.trim() || input.body.trim().length > 5000) return error('النص غير صالح');
+      patch.body = input.body.trim();
     }
+    if (input.type !== undefined) {
+      if (typeof input.type !== 'string' || !AD_TYPES.has(input.type)) return error('نوع الإعلان غير صالح');
+      patch.type = input.type;
+    }
+    if (input.display_mode !== undefined) {
+      if (typeof input.display_mode !== 'string' || !DISPLAY_MODES.has(input.display_mode)) return error('نوع العرض غير صالح');
+      patch.display_mode = input.display_mode;
+    }
+    if (input.priority !== undefined) {
+      const priority = Number(input.priority);
+      if (!Number.isInteger(priority) || priority < -1000 || priority > 1000) return error('الأولوية غير صالحة');
+      patch.priority = priority;
+    }
+    if (input.isActive !== undefined) {
+      if (typeof input.isActive !== 'boolean') return error('حالة الإعلان غير صالحة');
+      patch.is_active = input.isActive;
+    }
+    if (input.linkUrl !== undefined) {
+      const linkUrl = safeUrl(input.linkUrl);
+      if (linkUrl === undefined) return error('رابط غير صالح');
+      patch.link_url = linkUrl;
+    }
+    if (input.linkText !== undefined) {
+      if (input.linkText !== null && (typeof input.linkText !== 'string' || input.linkText.length > 200)) return error('نص الرابط غير صالح');
+      patch.link_text = typeof input.linkText === 'string' ? input.linkText.trim() : null;
+    }
+    if (input.expiresAt !== undefined) {
+      const expiresAt = safeDate(input.expiresAt);
+      if (expiresAt === undefined) return error('تاريخ الانتهاء غير صالح');
+      patch.expires_at = expiresAt;
+    }
+    if (!Object.keys(patch).length) return error('لا توجد حقول قابلة للتحديث');
 
-    const { data, error: updateErr } = await sb().from('advertisements')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (updateErr) throw updateErr;
+    const { data, error: updateError } = await getSupabase().rpc('admin_manage_advertisement', {
+      p_admin_id: admin.adminId,
+      p_action: 'update',
+      p_ad_id: id,
+      p_payload: patch,
+    });
+    if (updateError) throw updateError;
+    if ((data as any)?.not_found) return error('الإعلان غير موجود', 404);
     return success(data);
-  } catch (e: any) {
-    return adminJsonError(e);
+  } catch (err) {
+    return adminJsonError(err);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
-    const __admin = await requireAdmin(req);
-    const body = await parseBody(req);
-    const { id } = body;
-
-    if (!id) return error('id مطلوب');
-
-    await sb().from('advertisements').delete().eq('id', id);
+    const admin = await requireAdmin(req);
+    const input = await parseBody<Record<string, unknown>>(req);
+    const id = typeof input.id === 'string' ? input.id : '';
+    if (!UUID.test(id)) return error('id غير صالح');
+    const { data, error: deleteError } = await getSupabase().rpc('admin_manage_advertisement', {
+      p_admin_id: admin.adminId,
+      p_action: 'delete',
+      p_ad_id: id,
+      p_payload: {},
+    });
+    if (deleteError) throw deleteError;
+    if ((data as any)?.not_found) return error('الإعلان غير موجود', 404);
     return success({ deleted: true });
-  } catch (e: any) {
-    return adminJsonError(e);
+  } catch (err) {
+    return adminJsonError(err);
   }
 }

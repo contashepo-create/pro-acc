@@ -59,18 +59,12 @@ export function adminJsonError(err: unknown) {
   if (err instanceof AdminAuthError) {
     return NextResponse.json({ success: false, message: err.message }, { status: err.status });
   }
-  console.error('[admin] error:', err);
-  let message = 'حدث خطأ في الخادم';
-  let details: string | undefined;
-  if (err instanceof Error && err.message) message = err.message;
-  else if (err && typeof err === 'object') {
-    const e = err as Record<string, any>;
-    if (typeof e.message === 'string') message = e.message;
-    if (typeof e.details === 'string') details = e.details;
-    else if (typeof e.hint === 'string') details = e.hint;
-  }
+  // Never expose PostgREST messages, SQL hints, constraint names or schema
+  // details to the browser. Keep a correlation id for the detailed server log.
+  const errorId = Math.random().toString(36).slice(2, 10);
+  console.error(`[admin] error [${errorId}]:`, err);
   return NextResponse.json(
-    { success: false, message, ...(details ? { details } : {}) },
+    { success: false, message: 'حدث خطأ في الخادم', errorId },
     { status: 500 }
   );
 }

@@ -96,6 +96,39 @@ async function smokeAdminOtp() {
   assert.equal(cooldown.rows[0].result.status,'cooldown');
 }
 
+async function smokeAdminGlobalConfiguration() {
+  const adminId='90000000-0000-4000-8000-000000000001';
+  const settings=await db.query(`SELECT admin_upsert_app_settings($1,$2::jsonb) result`,[
+    adminId,JSON.stringify({app_name:'Runtime Pro Acc',support_email:'runtime@example.test'}),
+  ]);
+  assert.equal(Number(settings.rows[0].result.updated),2);
+  assert.equal((await db.query(`SELECT value FROM app_settings WHERE key='app_name'`)).rows[0].value,'Runtime Pro Acc');
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM admin_audit_log WHERE admin_id=$1 AND action='update_app_settings'`,[adminId])).rows[0].count),1);
+
+  const ad=(await db.query(`SELECT admin_manage_advertisement($1,'create',NULL,$2::jsonb) result`,[
+    adminId,JSON.stringify({title:'Runtime ad',body:'Audited body',type:'upgrade',display_mode:'modal',priority:4,is_active:true}),
+  ])).rows[0].result;
+  assert.equal(ad.type,'upgrade');
+  assert.equal(ad.display_mode,'modal');
+  await db.query(`SELECT admin_manage_advertisement($1,'update',$2,$3::jsonb)`,[adminId,ad.id,JSON.stringify({is_active:false})]);
+  assert.equal((await db.query(`SELECT is_active FROM advertisements WHERE id=$1`,[ad.id])).rows[0].is_active,false);
+  await db.query(`SELECT admin_manage_advertisement($1,'delete',$2,'{}'::jsonb)`,[adminId,ad.id]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM advertisements WHERE id=$1`,[ad.id])).rows[0].count),0);
+
+  const method=(await db.query(`SELECT admin_manage_payment_method($1,'create',NULL,$2::jsonb) result`,[
+    adminId,JSON.stringify({code:'runtime_pay',name_ar:'دفع اختباري',is_active:true,sort_order:99}),
+  ])).rows[0].result;
+  const deactivated=(await db.query(`SELECT admin_manage_payment_method($1,'deactivate',$2,'{}'::jsonb) result`,[adminId,method.id])).rows[0].result;
+  assert.equal(deactivated.deactivated,true);
+  assert.equal((await db.query(`SELECT is_active FROM payment_methods WHERE id=$1`,[method.id])).rows[0].is_active,false);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM payment_methods WHERE id=$1`,[method.id])).rows[0].count),1);
+
+  const inactive='90000000-0000-4000-8000-000000000099';
+  await db.query(`INSERT INTO admin_users(id,email,password_hash,master_password_hash,telegram_chat_id,telegram_bot_token,name,is_active)
+    VALUES($1,'inactive@example.test','x','y','1','token','Inactive',FALSE)`,[inactive]);
+  await assert.rejects(()=>db.query(`SELECT admin_upsert_app_settings($1,'{"app_name":"blocked"}'::jsonb)`,[inactive]));
+}
+
 async function seedLedger() {
   const ids = {
     company: '00000000-0000-4000-8000-000000000001',
@@ -140,6 +173,18 @@ async function seedLedger() {
     ]),
   ]);
   return ids;
+}
+
+async function smokeAdminSupport(ids) {
+  const adminId='90000000-0000-4000-8000-000000000001';
+  const ticketId='91000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO support_tickets(id,company_id,user_id,subject,message,category,status)
+    VALUES($1,$2,$3,'Runtime support','A runtime support message','technical','open')`,[ticketId,ids.company,ids.user]);
+  const updated=(await db.query(`SELECT admin_update_support_ticket($1,$2,'resolved','Completed',TRUE) result`,[adminId,ticketId])).rows[0].result;
+  assert.equal(updated.status,'resolved');
+  assert.equal((await db.query(`SELECT status FROM support_tickets WHERE id=$1`,[ticketId])).rows[0].status,'resolved');
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND type='support'`,[ids.company])).rows[0].count),1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM admin_audit_log WHERE admin_id=$1 AND target_id=$2`,[adminId,ticketId])).rows[0].count),1);
 }
 
 async function smokeAtomicWriters(ids) {
@@ -589,7 +634,9 @@ try {
   await applyMigrations();
   await smokeInitialSetup();
   await smokeAdminOtp();
+  await smokeAdminGlobalConfiguration();
   const ids = await seedLedger();
+  await smokeAdminSupport(ids);
   await smokeAtomicWriters(ids);
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
