@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
     const s = sb();
-    const { message, context } = await request.json() as { message: string; context?: string };
+    const { message } = await parseBody<{ message?: string }>(request);
 
     if (!message) {
       return success({ response: 'كيف يمكنني مساعدتك؟' });
@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
     if (lowerMsg.includes('ميزان') || lowerMsg.includes('أرباح') || lowerMsg.includes('خسائر') || lowerMsg.includes('profit')) {
       const { data: jeData } = await s.from('journal_lines')
         .select('debit, credit')
+        .eq('company_id', auth.companyId)
         .in('account_id', (
           await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('type', 'revenue')
         ).data?.map((a: { id: string }) => a.id) || []);
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest) {
       
       const { data: expenseData } = await s.from('journal_lines')
         .select('debit, credit')
+        .eq('company_id', auth.companyId)
         .in('account_id', (
           await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('type', 'expense')
         ).data?.map((a: { id: string }) => a.id) || []);
