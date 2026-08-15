@@ -103,6 +103,7 @@ const AP_ACC = '00000000-0000-4000-8000-000000002110';
 function baseDb() {
   return {
     users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    companies: [{ id: C1, is_active: true }],
     contacts: [
       { id: SUPPLIER, company_id: C1, name: 'مورد' },
       { id: FOREIGN_SUPPLIER, company_id: C2, name: 'مورد أجنبي' },

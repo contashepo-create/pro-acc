@@ -138,7 +138,7 @@ function baseDb() {
       { id: 'parent-1110', company_id: C1, code: '1110', name: 'النقدية' },
     ],
     banks_safes: [{ id: SAFE, company_id: C1, name: 'الخزينة', type: 'safe', account_id: BANK_ACC, opening_balance: '0' }],
-    companies: [],
+    companies: [{ id: C1, is_active: true }],
     company_telegram_configs: [],
     voucher_receipts: [] as Row[],
     voucher_disbursements: [] as Row[],

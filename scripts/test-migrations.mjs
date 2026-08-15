@@ -119,7 +119,7 @@ async function seedLedger() {
     ['3200', 'Retained earnings', 'equity', false], ['1230',  'Assets', 'asset', true], ['1290', 'Accumulated depreciation', 'asset', true],
     ['1130', 'Receivables', 'asset', false], ['1135', 'Accrued revenue', 'asset', false], ['4100', 'Revenue', 'revenue', false], ['4200', 'Other revenue', 'revenue', false], ['5100', 'Expense', 'expense', false],
     ['5210', 'Salaries', 'expense', false], ['5400', 'General expense', 'expense', false],
-    ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2160', 'Retentions', 'liability', false], ['2180', 'Customer advances', 'liability', false],
+    ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2150', 'Subcontractor payables', 'liability', false], ['2160', 'Retentions', 'liability', false], ['2180', 'Customer advances', 'liability', false],
     ['1160', 'Advances', 'asset', false], ['1150', 'Custodies', 'asset', false],
     ['1180', 'VAT input', 'asset', false], ['2120', 'VAT output', 'liability', false],
   ];
@@ -233,6 +233,21 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number((await db.query(`SELECT remaining_amount FROM custodies WHERE id=$1`,[custodyFile])).rows[0].remaining_amount),150);
   assert.equal((await db.query(`SELECT cancel_purchase_invoice_atomic($1,$2,'',$3) result`,[c,custodyPurchase.id,u])).rows[0].result.status,'cancelled');
   assert.equal(Number((await db.query(`SELECT remaining_amount FROM custodies WHERE id=$1`,[custodyFile])).rows[0].remaining_amount),200);
+
+  const subcontract='68000000-0000-4000-8000-000000000010';
+  await db.query(`INSERT INTO subcontractor_contracts(id,company_id,contact_id,project_id,contract_number,contract_value,start_date,status)
+    VALUES($1,$2,$3,$4,'SC-1',1000,'2026-01-01','active')`,[subcontract,c,contact,project]);
+  const certificate=(await db.query(`SELECT create_subcontractor_certificate_atomic($1,$2,'2026-02-05',1,'Runtime certificate',1000,0.1,$3) result`,[c,subcontract,u])).rows[0].result;
+  assert.ok(certificate.journal_entry_id);
+  assert.equal(Number(certificate.net_amount),900);
+  const paymentRace=await Promise.allSettled([
+    db.query(`SELECT create_subcontractor_payment_atomic($1,$2,$3,600,'2026-02-06',$4,'first',$5)`,[c,subcontract,certificate.id,b,u]),
+    db.query(`SELECT create_subcontractor_payment_atomic($1,$2,$3,600,'2026-02-06',$4,'second',$5)`,[c,subcontract,certificate.id,b,u]),
+  ]);
+  assert.equal(paymentRace.filter((r)=>r.status==='fulfilled').length,1);
+  await db.query(`SELECT create_subcontractor_payment_atomic($1,$2,$3,300,'2026-02-07',$4,'remainder',$5)`,[c,subcontract,certificate.id,b,u]);
+  assert.equal((await db.query(`SELECT status FROM subcontractor_certificates WHERE id=$1`,[certificate.id])).rows[0].status,'paid');
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='subcontractor_payment'`,[c])).rows[0].count),2);
 
   const terminal='68000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO pos_terminals(id,company_id,code,name,bank_safe_id) VALUES($1,$2,'T1','Terminal',$3)`,[terminal,c,b]);
@@ -405,6 +420,41 @@ async function smokeAtomicWriters(ids) {
   const trialAfter=(await db.query(`SELECT end_date,trial_extended FROM subscriptions WHERE company_id=$1 ORDER BY created_at DESC LIMIT 1`,[c2])).rows[0];
   assert.equal((new Date(trialAfter.end_date)-new Date(trialBefore))/86400000,7);
   assert.equal(trialAfter.trial_extended,true);
+
+  const restrictedSubscription=(await db.query(`UPDATE subscriptions SET extra_users=5,extra_branches=3,extra_storage_gb=10
+    WHERE company_id=$1 RETURNING id`,[c2])).rows[0].id;
+  await Promise.allSettled([
+    db.query(`SELECT restrict_subscription_atomic($1,$2,NULL,NULL,2,NULL,NULL,'race two')`,[restrictedSubscription,'90000000-0000-4000-8000-000000000001']),
+    db.query(`SELECT restrict_subscription_atomic($1,$2,NULL,NULL,4,NULL,NULL,'race four')`,[restrictedSubscription,'90000000-0000-4000-8000-000000000001']),
+  ]);
+  assert.equal(Number((await db.query(`SELECT extra_users FROM subscriptions WHERE id=$1`,[restrictedSubscription])).rows[0].extra_users),2);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM admin_audit_log WHERE target_id=$1 AND action='restrict_subscription'`,[restrictedSubscription])).rows[0].count)>=1,true);
+  await assert.rejects(()=>db.query(`SELECT restrict_subscription_atomic($1,$2,NULL,NULL,3,NULL,NULL,'regrant')`,[restrictedSubscription,'90000000-0000-4000-8000-000000000001']));
+
+  const adminId='90000000-0000-4000-8000-000000000001';
+  const activationPlaintext='RUNTIME-ACTIVATION-CODE';
+  const activationHash=createHash('sha256').update(activationPlaintext).digest('hex');
+  await db.query(`SELECT create_activation_code_batch_atomic($1,'start',1,$2,CURRENT_DATE+7,NULL,NULL,'runtime',$3::jsonb)`,
+    [adminId,c2,JSON.stringify([activationHash])]);
+  // PGlite's test-only digest shim uses MD5 because pgcrypto is unavailable;
+  // production PostgreSQL keeps the SHA-256 value inserted above.
+  await db.query(`UPDATE activation_codes SET code_hash=$1 WHERE code_hash=$2`,
+    [createHash('md5').update(activationPlaintext).digest('hex'),activationHash]);
+  const activationResult=(await db.query(`SELECT redeem_activation_code($1,$2,$3) result`,[c2,u2,activationPlaintext])).rows[0].result;
+  assert.equal(activationResult.type,'plan');
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND user_id=$2 AND action='redeem_activation_code'`,[c2,u2])).rows[0].count),1);
+  await assert.rejects(()=>db.query(`SELECT redeem_activation_code($1,$2,$3)`,[c2,u2,activationPlaintext]));
+
+  await db.query(`SELECT set_company_status_atomic($1,$2,FALSE)`,[c2,adminId]);
+  assert.equal((await db.query(`SELECT is_active FROM companies WHERE id=$1`,[c2])).rows[0].is_active,false);
+  await db.query(`SELECT set_company_status_atomic($1,$2,TRUE)`,[c2,adminId]);
+  const disposablePlan='61000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO subscription_plans(id,code,name,duration_days) VALUES($1,'disposable','Disposable',30)`,[disposablePlan]);
+  await db.query(`SELECT delete_unused_subscription_plan_atomic($1,$2)`,[disposablePlan,adminId]);
+  await assert.rejects(()=>db.query(`SELECT delete_unused_subscription_plan_atomic(plan_id,$1) FROM subscriptions WHERE id=$2`,[adminId,restrictedSubscription]));
+
+  await assert.rejects(()=>db.query(`SELECT create_subcontractor_certificate_atomic($1,$2,CURRENT_DATE,2,'cross',10,0,$3)`,[c2,subcontract,u2]));
+  await assert.rejects(()=>db.query(`SELECT create_subcontractor_payment_atomic($1,$2,$3,1,CURRENT_DATE,$4,'cross',$5)`,[c2,subcontract,certificate.id,b,u2]));
   await assert.rejects(()=>db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,CURRENT_DATE,CURRENT_DATE,$3::jsonb,0,FALSE,'',0,NULL,$4)`,[
     c,contact2,JSON.stringify([{description:'Cross tenant',quantity:1,unitPrice:10,discount:0}]),u,
   ]));

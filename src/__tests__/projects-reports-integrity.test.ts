@@ -109,6 +109,7 @@ const FOREIGN_PROJ = '00000000-0000-4000-8000-000000000p99';
 function baseDb() {
   return {
     users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    companies: [{ id: C1, is_active: true }],
     contacts: [
       { id: CLIENT, company_id: C1, name: 'عميل', type: 'client', account_id: null },
       { id: FOREIGN_CLIENT, company_id: C2, name: 'أجنبي', type: 'client' },

@@ -78,15 +78,12 @@ export async function DELETE(request: NextRequest) {
     const valid = await verifyMasterPassword(__admin.adminId, body.masterPassword);
     if (!valid) return error('كلمة السر الرئيسية غير صحيحة', 401);
 
-    const s = sb();
-    // Never delete the seed/system entries — safer to truncate by time (older than now).
-    // Use delete with `id` is not null to delete all rows (PostgREST requires a filter).
-    const { error: deleteErr } = await s.from('admin_audit_log').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-    if (deleteErr) throw deleteErr;
-
-    await auditLog(__admin.adminId, 'clear_logs', 'Audit logs cleared by admin');
-
-    return success({ message: 'تم مسح السجلات بنجاح' });
+    // Audit evidence is append-only. Destructive clearing would let an
+    // administrator erase the evidence of prior entitlement and tenant
+    // changes. Retention/archival must be an audited infrastructure policy,
+    // never an interactive API operation.
+    await auditLog(__admin.adminId, 'clear_logs_blocked', 'Blocked attempt to delete append-only admin audit evidence');
+    return error('سجلات التدقيق غير قابلة للحذف من واجهة التطبيق', 403);
   } catch (err) {
     return adminJsonError(err);
   }

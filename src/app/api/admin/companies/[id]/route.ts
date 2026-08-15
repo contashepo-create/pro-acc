@@ -79,20 +79,18 @@ export async function PATCH(
 
     // Determine action
     if (body.action === 'toggle_status') {
-      // Toggle status - requires master password
       const masterHeader = request.headers.get('x-master-password');
       if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
       const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
+      if (typeof body.is_active !== 'boolean') return error('حالة الشركة غير صالحة');
 
-      const { error: updateErr } = await s.from('companies')
-        .update({ is_active: body.is_active, updated_at: new Date().toISOString() })
-        .eq('id', id);
+      const { error: updateErr } = await s.rpc('set_company_status_atomic', {
+        p_company_id: id,
+        p_admin_id: __admin.adminId,
+        p_is_active: body.is_active,
+      });
       if (updateErr) throw updateErr;
-
-      await auditLog(__admin.adminId, body.is_active ? 'activate_company' : 'deactivate_company',
-        JSON.stringify({ companyName: company.name }), 'company', id);
-
       return success({ message: body.is_active ? 'تم تفعيل الشركة' : 'تم إيقاف الشركة' });
     }
 
@@ -147,9 +145,17 @@ export async function PATCH(
 
       if (!sub) return error('لا يوجد اشتراك');
 
-      await s.from('subscriptions')
-        .update({ status: 'cancelled', auto_renew: false })
-        .eq('id', (sub as any).id);
+      const { error: cancelError } = await s.rpc('restrict_subscription_atomic', {
+        p_subscription_id: (sub as any).id,
+        p_admin_id: __admin.adminId,
+        p_status: 'cancelled',
+        p_end_date: null,
+        p_extra_users: null,
+        p_extra_branches: null,
+        p_extra_storage_gb: null,
+        p_notes: 'cancelled from company administration',
+      });
+      if (cancelError) throw cancelError;
 
       try {
         await s.from('notifications').insert({
@@ -160,9 +166,6 @@ export async function PATCH(
           is_read: false,
         });
       } catch {}
-
-      await auditLog(__admin.adminId, 'cancel_subscription',
-        JSON.stringify({ companyName: company.name }), 'company', id);
 
       return success({ message: 'تم إلغاء الاشتراك' });
     }

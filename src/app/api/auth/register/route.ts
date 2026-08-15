@@ -29,6 +29,10 @@ function isDisposableEmail(email: string): boolean {
 const CAPTCHA_ENABLED = process.env.CAPTCHA_ENABLED !== 'false';
 
 export async function GET(request: NextRequest) {
+  if (process.env.NODE_ENV === 'production'
+    && (!process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY)) {
+    return error('التسجيل غير مهيأ بأمان. يجب إعداد Cloudflare Turnstile.', 503);
+  }
   // If Turnstile is configured, frontend should use it instead
   if (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) {
     return success({ 
@@ -81,6 +85,13 @@ export function verifyCaptchaToken(token: string, userAnswer: number): boolean {
 
 export async function POST(request: NextRequest) {
   try {
+    // The stateless math challenge is intentionally development-only: it can
+    // be replayed until expiry. Production registration requires Turnstile so
+    // one solved challenge cannot be reused for bulk tenant creation.
+    if (process.env.NODE_ENV === 'production'
+      && (!process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY)) {
+      return error('التسجيل غير مهيأ بأمان. يجب إعداد Cloudflare Turnstile.', 503);
+    }
     const body = await parseBody<any>(request);
     const parsed = registerSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
@@ -90,7 +101,7 @@ export async function POST(request: NextRequest) {
 
     // CAPTCHA is MANDATORY when enabled. Previously omitting the captcha
     // fields entirely skipped verification (bot-registration bypass).
-    if (CAPTCHA_ENABLED) {
+    if (CAPTCHA_ENABLED || process.env.NODE_ENV === 'production') {
       if (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) {
         // Turnstile configured — require and verify the token
         const turnstileToken = body.turnstileToken;

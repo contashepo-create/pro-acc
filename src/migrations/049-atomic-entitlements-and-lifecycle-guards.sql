@@ -2612,6 +2612,9 @@ BEGIN
     UPDATE activation_codes
     SET is_used = true, used_by = p_company_id, used_at = now(), code = NULL
     WHERE id = v_code.id;
+    INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+    VALUES(p_company_id,p_user_id,'redeem_activation_code','activation_code',v_code.id,
+      jsonb_build_object('type','addon','addon_type',v_code.addon_type,'quantity',v_qty));
 
     RETURN jsonb_build_object(
       'type', 'addon', 'addon_type', v_code.addon_type, 'quantity', v_qty
@@ -2647,6 +2650,9 @@ BEGIN
   UPDATE activation_codes
   SET is_used = true, used_by = p_company_id, used_at = now(), code = NULL
   WHERE id = v_code.id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'redeem_activation_code','activation_code',v_code.id,
+    jsonb_build_object('type','plan','plan_code',v_plan.code,'duration_months',v_months,'end_date',v_end));
 
   RETURN jsonb_build_object(
     'type', 'plan', 'plan_code', v_plan.code, 'plan_name', v_plan.name,

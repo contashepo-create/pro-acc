@@ -2,6 +2,7 @@ import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { verifyMasterPassword } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
 
@@ -158,49 +159,31 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const __admin = await requireAdmin(req);
+    const admin = await requireAdmin(req);
     const { id } = await params;
-    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الباقة غير صالح', 400);
-    const s = sb();
-    const url = new URL(req.url);
-    const migrateTo = url.searchParams.get('migrate_to');
-
-    // Check for existing subscribers
-    const { count: subscriberCount } = await s.from('subscriptions')
-      .select('*', { count: 'exact', head: true })
-      .eq('plan_id', id);
-
-    if (subscriberCount && subscriberCount > 0) {
-      if (!migrateTo) {
-        return error(`لا يمكن حذف الباقة — يوجد ${subscriberCount} مشترك. حدد باقة بديلة عبر migrate_to`, 400);
-      }
-
-      // Verify migration target exists
-      const { data: targetPlan } = await s.from('subscription_plans')
-        .select('id, name, code')
-        .eq('id', migrateTo)
-        .maybeSingle();
-
-      if (!targetPlan) return error('الباقة البديلة غير موجودة', 404);
-
-      // Migrate all subscribers
-      const { error: migrateErr } = await s.from('subscriptions')
-        .update({ plan_id: migrateTo, plan_code: (targetPlan as any).code || null })
-        .eq('plan_id', id);
-
-      if (migrateErr) return error('فشل ترحيل المشتركين: ' + migrateErr.message, 500);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      return error('معرّف الباقة غير صالح', 400);
+    }
+    const masterPassword = req.headers.get('x-master-password');
+    if (!masterPassword) return error('كلمة المرور الرئيسية مطلوبة', 401);
+    if (!await verifyMasterPassword(admin.adminId, masterPassword)) {
+      return error('كلمة المرور الرئيسية غير صحيحة', 401);
     }
 
-    const { data, error: delErr } = await s.from('subscription_plans')
-      .delete()
-      .eq('id', id)
-      .select('id')
-      .maybeSingle();
-
-    if (delErr) return error('فشل حذف الباقة: ' + delErr.message, 500);
-    if (!data) return error('الباقة غير موجودة', 404);
-
-    return success({ deleted: true, migrated: subscriberCount || 0 });
+    // Historical subscriptions keep their original plan relationship. Moving
+    // them en masse during a plan deletion would silently rewrite paid
+    // entitlements without payment evidence. Used plans can only be disabled.
+    const { data, error: deleteError } = await sb().rpc('delete_unused_subscription_plan_atomic', {
+      p_plan_id: id,
+      p_admin_id: admin.adminId,
+    });
+    if (deleteError) {
+      const message = String(deleteError.message || '');
+      if (message.includes('الباقة غير موجودة')) return error(message, 404);
+      if (message.includes('اشتراكات تاريخية')) return error(message, 409);
+      throw deleteError;
+    }
+    return success(data);
   } catch (e: any) {
     return adminJsonError(e);
   }

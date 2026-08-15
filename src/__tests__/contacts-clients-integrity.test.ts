@@ -114,6 +114,7 @@ const REVENUE = '00000000-0000-4000-8000-000000004100';
 function baseDb() {
   return {
     users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    companies: [{ id: C1, is_active: true }],
     contacts: [
       { id: CLIENT, company_id: C1, name: 'عميل', type: 'client', account_id: null },
       { id: CLIENT2, company_id: C1, name: 'عميل 2', type: 'client', account_id: null },

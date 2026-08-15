@@ -1724,3 +1724,363 @@ ALTER TABLE tenders DROP CONSTRAINT IF EXISTS tenders_project_id_fkey;
 ALTER TABLE tenders ADD CONSTRAINT tenders_project_id_fkey FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL;
 ALTER TABLE projects DROP CONSTRAINT IF EXISTS projects_tender_id_fkey;
 ALTER TABLE projects ADD CONSTRAINT projects_tender_id_fkey FOREIGN KEY(tender_id) REFERENCES tenders(id) ON DELETE SET NULL;
+
+-- Administrative subscription restrictions must be serialized. Without a
+-- row lock, two concurrent reductions based on the same stale snapshot can
+-- accidentally re-grant an entitlement that another administrator revoked.
+CREATE OR REPLACE FUNCTION public.restrict_subscription_atomic(
+  p_subscription_id UUID,
+  p_admin_id UUID,
+  p_status TEXT DEFAULT NULL,
+  p_end_date DATE DEFAULT NULL,
+  p_extra_users INTEGER DEFAULT NULL,
+  p_extra_branches INTEGER DEFAULT NULL,
+  p_extra_storage_gb INTEGER DEFAULT NULL,
+  p_notes TEXT DEFAULT NULL
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_old subscriptions%ROWTYPE;
+  v_new subscriptions%ROWTYPE;
+  v_changed BOOLEAN:=FALSE;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM admin_users WHERE id=p_admin_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'inactive admin'; END IF;
+
+  SELECT * INTO v_old FROM subscriptions WHERE id=p_subscription_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الاشتراك غير موجود'; END IF;
+
+  IF p_status IS NOT NULL THEN
+    IF p_status NOT IN ('cancelled','expired') THEN
+      RAISE EXCEPTION 'لا يمكن منح حالة اشتراك مدفوعة من هذا المسار';
+    END IF;
+    v_changed:=v_changed OR p_status IS DISTINCT FROM v_old.status;
+  END IF;
+  IF p_end_date IS NOT NULL THEN
+    IF v_old.end_date IS NULL OR p_end_date>v_old.end_date THEN
+      RAISE EXCEPTION 'تمديد الاشتراك يتطلب دفعاً معتمداً';
+    END IF;
+    v_changed:=v_changed OR p_end_date IS DISTINCT FROM v_old.end_date;
+  END IF;
+  IF p_extra_users IS NOT NULL THEN
+    IF p_extra_users<0 OR p_extra_users>COALESCE(v_old.extra_users,0) THEN
+      RAISE EXCEPTION 'لا يمكن زيادة المستخدمين الإضافيين من هذا المسار';
+    END IF;
+    v_changed:=v_changed OR p_extra_users IS DISTINCT FROM COALESCE(v_old.extra_users,0);
+  END IF;
+  IF p_extra_branches IS NOT NULL THEN
+    IF p_extra_branches<0 OR p_extra_branches>COALESCE(v_old.extra_branches,0) THEN
+      RAISE EXCEPTION 'لا يمكن زيادة الفروع الإضافية من هذا المسار';
+    END IF;
+    v_changed:=v_changed OR p_extra_branches IS DISTINCT FROM COALESCE(v_old.extra_branches,0);
+  END IF;
+  IF p_extra_storage_gb IS NOT NULL THEN
+    IF p_extra_storage_gb<0 OR p_extra_storage_gb>COALESCE(v_old.extra_storage_gb,0) THEN
+      RAISE EXCEPTION 'لا يمكن زيادة التخزين الإضافي من هذا المسار';
+    END IF;
+    v_changed:=v_changed OR p_extra_storage_gb IS DISTINCT FROM COALESCE(v_old.extra_storage_gb,0);
+  END IF;
+  IF NOT v_changed THEN RAISE EXCEPTION 'لا توجد تغييرات مسموحة'; END IF;
+
+  UPDATE subscriptions SET
+    status=COALESCE(p_status,status),
+    auto_renew=CASE WHEN p_status='cancelled' THEN FALSE ELSE auto_renew END,
+    end_date=COALESCE(p_end_date,end_date),
+    extra_users=COALESCE(p_extra_users,extra_users),
+    extra_branches=COALESCE(p_extra_branches,extra_branches),
+    extra_storage_gb=COALESCE(p_extra_storage_gb,extra_storage_gb),
+    updated_at=NOW()
+  WHERE id=p_subscription_id RETURNING * INTO v_new;
+
+  IF p_extra_users IS NOT NULL AND p_extra_users IS DISTINCT FROM COALESCE(v_old.extra_users,0) THEN
+    INSERT INTO addon_grant_audit(company_id,admin_id,addon_type,quantity,months_granted,
+      previous_extra_users,previous_extra_branches,new_extra_users,new_extra_branches,note)
+    VALUES(v_old.company_id,p_admin_id,'extra_user',COALESCE(v_old.extra_users,0)-p_extra_users,0,
+      COALESCE(v_old.extra_users,0),COALESCE(v_old.extra_branches,0),p_extra_users,COALESCE(v_new.extra_branches,0),LEFT(p_notes,2000));
+  END IF;
+  IF p_extra_branches IS NOT NULL AND p_extra_branches IS DISTINCT FROM COALESCE(v_old.extra_branches,0) THEN
+    INSERT INTO addon_grant_audit(company_id,admin_id,addon_type,quantity,months_granted,
+      previous_extra_users,previous_extra_branches,new_extra_users,new_extra_branches,note)
+    VALUES(v_old.company_id,p_admin_id,'extra_branch',COALESCE(v_old.extra_branches,0)-p_extra_branches,0,
+      COALESCE(v_old.extra_users,0),COALESCE(v_old.extra_branches,0),COALESCE(v_new.extra_users,0),p_extra_branches,LEFT(p_notes,2000));
+  END IF;
+  IF p_extra_storage_gb IS NOT NULL AND p_extra_storage_gb IS DISTINCT FROM COALESCE(v_old.extra_storage_gb,0) THEN
+    INSERT INTO addon_grant_audit(company_id,admin_id,addon_type,quantity,months_granted,
+      previous_extra_users,previous_extra_branches,new_extra_users,new_extra_branches,note)
+    VALUES(v_old.company_id,p_admin_id,'storage_gb',COALESCE(v_old.extra_storage_gb,0)-p_extra_storage_gb,0,
+      COALESCE(v_old.extra_users,0),COALESCE(v_old.extra_branches,0),COALESCE(v_new.extra_users,0),COALESCE(v_new.extra_branches,0),LEFT(p_notes,2000));
+  END IF;
+
+  INSERT INTO admin_audit_log(admin_id,action,details,target_type,target_id)
+  VALUES(p_admin_id,'restrict_subscription',LEFT(jsonb_build_object(
+    'before',to_jsonb(v_old),'after',to_jsonb(v_new),'notes',p_notes)::TEXT,2000),
+    'subscription',p_subscription_id::TEXT);
+  RETURN to_jsonb(v_new);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.restrict_subscription_atomic(UUID,UUID,TEXT,DATE,INTEGER,INTEGER,INTEGER,TEXT) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.restrict_subscription_atomic(UUID,UUID,TEXT,DATE,INTEGER,INTEGER,INTEGER,TEXT) TO service_role;
+
+-- Central-admin status changes are serialized with their audit evidence. This
+-- prevents two concurrent requests from disabling every tenant administrator
+-- after each observes another active administrator.
+CREATE OR REPLACE FUNCTION public.set_company_user_status_atomic(
+  p_user_id UUID,p_admin_id UUID,p_is_active BOOLEAN
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_old users%ROWTYPE; v_new users%ROWTYPE;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM admin_users WHERE id=p_admin_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'inactive admin'; END IF;
+  IF p_is_active IS NULL THEN RAISE EXCEPTION 'invalid status'; END IF;
+  SELECT * INTO v_old FROM users WHERE id=p_user_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المستخدم غير موجود'; END IF;
+  PERFORM 1 FROM users WHERE company_id=v_old.company_id AND role='admin' ORDER BY id FOR UPDATE;
+  IF NOT p_is_active AND v_old.is_active AND v_old.role='admin' AND
+    (SELECT count(*) FROM users WHERE company_id=v_old.company_id AND role='admin' AND is_active=TRUE)<=1
+  THEN RAISE EXCEPTION 'لا يمكن تعطيل آخر مدير نشط للشركة'; END IF;
+  UPDATE users SET is_active=p_is_active,
+    token_version=CASE WHEN NOT p_is_active AND COALESCE(is_active,FALSE)
+      THEN COALESCE(token_version,0)+1 ELSE token_version END,
+    updated_at=NOW()
+  WHERE id=p_user_id RETURNING * INTO v_new;
+  INSERT INTO admin_audit_log(admin_id,action,details,target_type,target_id)
+  VALUES(p_admin_id,CASE WHEN p_is_active THEN 'activate_user' ELSE 'deactivate_user' END,
+    LEFT(jsonb_build_object('company_id',v_old.company_id,'email',v_old.email,
+      'previous_state',v_old.is_active,'new_state',v_new.is_active)::TEXT,2000),'user',p_user_id::TEXT);
+  RETURN jsonb_build_object('id',v_new.id,'company_id',v_new.company_id,'is_active',v_new.is_active);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.set_company_user_status_atomic(UUID,UUID,BOOLEAN) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.set_company_user_status_atomic(UUID,UUID,BOOLEAN) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.set_company_status_atomic(
+  p_company_id UUID,p_admin_id UUID,p_is_active BOOLEAN
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_old companies%ROWTYPE; v_new companies%ROWTYPE;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM admin_users WHERE id=p_admin_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'inactive admin'; END IF;
+  IF p_is_active IS NULL THEN RAISE EXCEPTION 'invalid status'; END IF;
+  SELECT * INTO v_old FROM companies WHERE id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الشركة غير موجودة'; END IF;
+  UPDATE companies SET is_active=p_is_active,updated_at=NOW()
+    WHERE id=p_company_id RETURNING * INTO v_new;
+  INSERT INTO admin_audit_log(admin_id,action,details,target_type,target_id)
+  VALUES(p_admin_id,CASE WHEN p_is_active THEN 'activate_company' ELSE 'deactivate_company' END,
+    LEFT(jsonb_build_object('name',v_old.name,'previous_state',v_old.is_active,'new_state',v_new.is_active)::TEXT,2000),
+    'company',p_company_id::TEXT);
+  RETURN jsonb_build_object('id',v_new.id,'is_active',v_new.is_active);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.set_company_status_atomic(UUID,UUID,BOOLEAN) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.set_company_status_atomic(UUID,UUID,BOOLEAN) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.delete_unused_subscription_plan_atomic(
+  p_plan_id UUID,p_admin_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_plan subscription_plans%ROWTYPE;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM admin_users WHERE id=p_admin_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'inactive admin'; END IF;
+  SELECT * INTO v_plan FROM subscription_plans WHERE id=p_plan_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الباقة غير موجودة'; END IF;
+  PERFORM 1 FROM subscriptions WHERE plan_id=p_plan_id FOR UPDATE;
+  IF EXISTS(SELECT 1 FROM subscriptions WHERE plan_id=p_plan_id) THEN
+    RAISE EXCEPTION 'لا يمكن حذف باقة لها اشتراكات تاريخية؛ عطّلها بدلاً من ذلك';
+  END IF;
+  DELETE FROM subscription_plans WHERE id=p_plan_id;
+  INSERT INTO admin_audit_log(admin_id,action,details,target_type,target_id)
+  VALUES(p_admin_id,'delete_subscription_plan',LEFT(to_jsonb(v_plan)::TEXT,2000),'subscription_plan',p_plan_id::TEXT);
+  RETURN jsonb_build_object('id',p_plan_id,'deleted',TRUE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.delete_unused_subscription_plan_atomic(UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_unused_subscription_plan_atomic(UUID,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.create_activation_code_batch_atomic(
+  p_admin_id UUID,p_plan_code TEXT,p_duration_months INTEGER,p_company_id UUID,
+  p_expires_at DATE,p_addon_type TEXT,p_addon_quantity INTEGER,p_notes TEXT,p_hashes JSONB
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_hash JSONB; v_count INTEGER;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM admin_users WHERE id=p_admin_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'inactive admin'; END IF;
+  IF jsonb_typeof(p_hashes)<>'array' THEN RAISE EXCEPTION 'invalid code batch'; END IF;
+  v_count:=jsonb_array_length(p_hashes);
+  IF v_count<1 OR v_count>50 OR
+    (SELECT count(DISTINCT value#>>'{}') FROM jsonb_array_elements(p_hashes))<>v_count
+  THEN RAISE EXCEPTION 'invalid code batch'; END IF;
+  IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_hashes) h
+    WHERE (h#>>'{}') !~ '^[0-9a-f]{64}$') THEN RAISE EXCEPTION 'invalid code hash'; END IF;
+  IF p_company_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM companies WHERE id=p_company_id)
+  THEN RAISE EXCEPTION 'target company not found'; END IF;
+  IF p_expires_at IS NOT NULL AND p_expires_at<=CURRENT_DATE THEN RAISE EXCEPTION 'invalid expiry'; END IF;
+
+  IF p_addon_type IS NULL THEN
+    IF p_duration_months IS NULL OR p_duration_months<1 OR p_duration_months>120
+      OR NOT EXISTS(SELECT 1 FROM subscription_plans WHERE code=p_plan_code AND is_active=TRUE)
+    THEN RAISE EXCEPTION 'activation plan is unavailable'; END IF;
+  ELSE
+    IF p_addon_type NOT IN('extra_user','extra_branch','storage_gb')
+      OR p_addon_quantity IS NULL OR p_addon_quantity<1 OR p_addon_quantity>10000
+    THEN RAISE EXCEPTION 'invalid add-on'; END IF;
+  END IF;
+
+  FOR v_hash IN SELECT value FROM jsonb_array_elements(p_hashes) LOOP
+    INSERT INTO activation_codes(code,code_hash,plan_code,duration_months,plan_duration_months,
+      target_company_id,expires_at,addon_type,addon_quantity,notes,is_used,one_time)
+    VALUES(NULL,v_hash#>>'{}',CASE WHEN p_addon_type IS NULL THEN p_plan_code ELSE NULL END,
+      CASE WHEN p_addon_type IS NULL THEN p_duration_months ELSE NULL END,
+      CASE WHEN p_addon_type IS NULL THEN p_duration_months ELSE NULL END,p_company_id,p_expires_at,
+      p_addon_type,CASE WHEN p_addon_type IS NULL THEN NULL ELSE p_addon_quantity END,
+      NULLIF(LEFT(BTRIM(p_notes),1000),''),FALSE,TRUE);
+  END LOOP;
+  INSERT INTO admin_audit_log(admin_id,action,details,target_type,target_id)
+  VALUES(p_admin_id,'create_activation_codes',LEFT(jsonb_build_object('count',v_count,
+    'plan_code',p_plan_code,'addon_type',p_addon_type,'target_company_id',p_company_id)::TEXT,2000),
+    'activation_code_batch',NULL);
+  RETURN jsonb_build_object('count',v_count);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.create_activation_code_batch_atomic(UUID,TEXT,INTEGER,UUID,DATE,TEXT,INTEGER,TEXT,JSONB) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_activation_code_batch_atomic(UUID,TEXT,INTEGER,UUID,DATE,TEXT,INTEGER,TEXT,JSONB) TO service_role;
+
+-- Complete the subcontractor payment schema used by the API. Older schemas
+-- had no source safe or explanatory note, making cash-ledger reconciliation
+-- impossible.
+ALTER TABLE subcontractor_payments ADD COLUMN IF NOT EXISTS bank_safe_id UUID REFERENCES banks_safes(id);
+ALTER TABLE subcontractor_payments ADD COLUMN IF NOT EXISTS notes TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_subcontractor_certificate_journal
+  ON subcontractor_certificates(journal_entry_id) WHERE journal_entry_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_subcontractor_payment_journal
+  ON subcontractor_payments(journal_entry_id) WHERE journal_entry_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.create_subcontractor_certificate_atomic(
+  p_company_id UUID,p_contract_id UUID,p_date DATE,p_certificate_number INTEGER,
+  p_description TEXT,p_gross_amount NUMERIC,p_retention_rate NUMERIC,p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_contract subcontractor_contracts%ROWTYPE; v_cert subcontractor_certificates%ROWTYPE;
+  v_cost UUID; v_payable UUID; v_retention_account UUID; v_retention NUMERIC; v_net NUMERIC;
+  v_claimed NUMERIC; v_lines JSONB; v_journal JSONB; v_journal_id UUID;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  IF p_date IS NULL OR p_certificate_number IS NULL OR p_certificate_number<=0
+    OR p_gross_amount IS NULL OR p_gross_amount<=0 OR p_gross_amount<>ROUND(p_gross_amount,2)
+    OR p_retention_rate IS NULL OR p_retention_rate<0 OR p_retention_rate>1
+    OR p_retention_rate<>ROUND(p_retention_rate,2) OR LENGTH(COALESCE(p_description,''))>2000
+  THEN RAISE EXCEPTION 'بيانات الشهادة غير صالحة'; END IF;
+  SELECT * INTO v_contract FROM subcontractor_contracts
+    WHERE id=p_contract_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'العقد غير موجود'; END IF;
+  IF v_contract.status<>'active' THEN RAISE EXCEPTION 'العقد غير نشط'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM contacts WHERE id=v_contract.contact_id AND company_id=p_company_id)
+    OR (v_contract.project_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM projects WHERE id=v_contract.project_id AND company_id=p_company_id))
+  THEN RAISE EXCEPTION 'ارتباطات العقد لا تنتمي إلى الشركة'; END IF;
+  PERFORM 1 FROM subcontractor_certificates WHERE contract_id=p_contract_id AND company_id=p_company_id FOR UPDATE;
+  SELECT COALESCE(SUM(amount),0) INTO v_claimed FROM subcontractor_certificates
+    WHERE contract_id=p_contract_id AND company_id=p_company_id AND status IN('pending','approved','paid');
+  IF COALESCE(v_contract.contract_value,0)<=0 OR v_claimed+p_gross_amount>v_contract.contract_value+0.005
+  THEN RAISE EXCEPTION 'قيمة الشهادة تتجاوز المتبقي من العقد'; END IF;
+
+  SELECT id INTO v_cost FROM accounts WHERE company_id=p_company_id AND code='5100'
+    AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE FOR UPDATE;
+  SELECT id INTO v_payable FROM accounts WHERE company_id=p_company_id AND code='2150'
+    AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE FOR UPDATE;
+  IF v_cost IS NULL OR v_payable IS NULL THEN RAISE EXCEPTION 'حسابات تكلفة أو ذمم مقاولي الباطن غير موجودة'; END IF;
+  v_retention:=ROUND(p_gross_amount*p_retention_rate,2); v_net:=p_gross_amount-v_retention;
+  IF v_retention>0 THEN
+    SELECT id INTO v_retention_account FROM accounts WHERE company_id=p_company_id AND code='2160'
+      AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE FOR UPDATE;
+    IF v_retention_account IS NULL THEN RAISE EXCEPTION 'حساب محجوزات الضمان غير موجود'; END IF;
+  END IF;
+
+  INSERT INTO subcontractor_certificates(company_id,contract_id,number,amount,retention,net_amount,date,status,
+    journal_entry_id,description,retention_amount,retention_rate)
+  VALUES(p_company_id,p_contract_id,p_certificate_number,p_gross_amount,v_retention,v_net,p_date,'approved',
+    NULL,NULLIF(BTRIM(p_description),''),v_retention,p_retention_rate) RETURNING * INTO v_cert;
+  v_lines:=jsonb_build_array(
+    jsonb_build_object('accountId',v_cost,'debit',p_gross_amount,'credit',0,'description','شهادة مقاول باطن '||p_certificate_number,'projectId',v_contract.project_id,'contactId',v_contract.contact_id),
+    jsonb_build_object('accountId',v_payable,'debit',0,'credit',v_net,'description','ذمم شهادة مقاول باطن '||p_certificate_number,'projectId',v_contract.project_id,'contactId',v_contract.contact_id));
+  IF v_retention>0 THEN v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+    'accountId',v_retention_account,'debit',0,'credit',v_retention,'description','محجوز ضمان شهادة '||p_certificate_number,
+    'projectId',v_contract.project_id,'contactId',v_contract.contact_id)); END IF;
+  v_journal:=create_journal_entry(p_company_id,p_date,'general','شهادة مقاول باطن: '||p_certificate_number,p_user_id,v_lines);
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='subcon_certificate',reference_id=v_cert.id
+    WHERE id=v_journal_id AND company_id=p_company_id;
+  UPDATE subcontractor_certificates SET journal_entry_id=v_journal_id WHERE id=v_cert.id RETURNING * INTO v_cert;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','subcontractor_certificate',v_cert.id,to_jsonb(v_cert));
+  RETURN to_jsonb(v_cert)||jsonb_build_object('certificate_number',v_cert.number,'gross_amount',v_cert.amount);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.create_subcontractor_certificate_atomic(UUID,UUID,DATE,INTEGER,TEXT,NUMERIC,NUMERIC,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_subcontractor_certificate_atomic(UUID,UUID,DATE,INTEGER,TEXT,NUMERIC,NUMERIC,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.create_subcontractor_payment_atomic(
+  p_company_id UUID,p_contract_id UUID,p_certificate_id UUID,p_amount NUMERIC,p_date DATE,
+  p_bank_safe_id UUID,p_notes TEXT,p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_contract subcontractor_contracts%ROWTYPE; v_cert subcontractor_certificates%ROWTYPE;
+  v_payment subcontractor_payments%ROWTYPE; v_bank_account UUID; v_payable UUID; v_available NUMERIC;
+  v_balance NUMERIC; v_lines JSONB; v_journal JSONB; v_journal_id UUID;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  IF p_date IS NULL OR p_amount IS NULL OR p_amount<=0 OR p_amount<>ROUND(p_amount,2)
+    OR LENGTH(COALESCE(p_notes,''))>2000 THEN RAISE EXCEPTION 'بيانات الدفعة غير صالحة'; END IF;
+  SELECT * INTO v_contract FROM subcontractor_contracts
+    WHERE id=p_contract_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'العقد غير موجود'; END IF;
+  IF v_contract.status='cancelled' THEN RAISE EXCEPTION 'العقد ملغى'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM contacts WHERE id=v_contract.contact_id AND company_id=p_company_id)
+  THEN RAISE EXCEPTION 'مقاول العقد لا ينتمي إلى الشركة'; END IF;
+  SELECT account_id INTO v_bank_account FROM banks_safes WHERE id=p_bank_safe_id AND company_id=p_company_id
+    AND COALESCE(is_active,TRUE)=TRUE FOR UPDATE;
+  IF v_bank_account IS NULL THEN RAISE EXCEPTION 'الخزينة أو البنك غير صالح'; END IF;
+  PERFORM 1 FROM accounts WHERE id=v_bank_account AND company_id=p_company_id FOR UPDATE;
+  SELECT id INTO v_payable FROM accounts WHERE company_id=p_company_id AND code='2150'
+    AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE FOR UPDATE;
+  IF v_payable IS NULL THEN RAISE EXCEPTION 'حساب ذمم مقاولي الباطن غير موجود'; END IF;
+
+  PERFORM 1 FROM subcontractor_certificates WHERE contract_id=p_contract_id AND company_id=p_company_id ORDER BY id FOR UPDATE;
+  PERFORM 1 FROM subcontractor_payments WHERE contract_id=p_contract_id AND company_id=p_company_id ORDER BY id FOR UPDATE;
+  IF p_certificate_id IS NOT NULL THEN
+    SELECT * INTO v_cert FROM subcontractor_certificates WHERE id=p_certificate_id AND contract_id=p_contract_id
+      AND company_id=p_company_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'الشهادة غير موجودة أو لا تخص العقد'; END IF;
+    IF v_cert.status NOT IN('approved','paid') THEN RAISE EXCEPTION 'الشهادة غير معتمدة'; END IF;
+    SELECT v_cert.net_amount-COALESCE(SUM(amount),0) INTO v_available FROM subcontractor_payments
+      WHERE certificate_id=p_certificate_id AND company_id=p_company_id AND COALESCE(status,'paid')='paid';
+  ELSE
+    SELECT COALESCE(SUM(net_amount),0) INTO v_available FROM subcontractor_certificates
+      WHERE contract_id=p_contract_id AND company_id=p_company_id AND status IN('approved','paid');
+    v_available:=v_available-COALESCE((SELECT SUM(amount) FROM subcontractor_payments
+      WHERE contract_id=p_contract_id AND company_id=p_company_id AND COALESCE(status,'paid')='paid'),0);
+  END IF;
+  IF v_available+0.005<p_amount THEN RAISE EXCEPTION 'قيمة الدفعة تتجاوز الرصيد المستحق'; END IF;
+  v_balance:=get_account_balance(p_company_id,v_bank_account,NULL,NULL);
+  IF v_balance+0.005<p_amount THEN RAISE EXCEPTION 'رصيد الخزينة أو البنك غير كاف'; END IF;
+
+  INSERT INTO subcontractor_payments(company_id,certificate_id,contract_id,amount,date,type,journal_entry_id,
+    bank_safe_id,notes,created_by,approved_at,status)
+  VALUES(p_company_id,p_certificate_id,p_contract_id,p_amount,p_date,'payment',NULL,p_bank_safe_id,
+    NULLIF(BTRIM(p_notes),''),p_user_id,NOW(),'paid') RETURNING * INTO v_payment;
+  v_lines:=jsonb_build_array(
+    jsonb_build_object('accountId',v_payable,'debit',p_amount,'credit',0,'description','دفعة مقاول باطن','projectId',v_contract.project_id,'contactId',v_contract.contact_id),
+    jsonb_build_object('accountId',v_bank_account,'debit',0,'credit',p_amount,'description','صرف دفعة مقاول باطن','projectId',v_contract.project_id,'contactId',v_contract.contact_id));
+  v_journal:=create_journal_entry(p_company_id,p_date,'general','دفعة مقاول باطن',p_user_id,v_lines);
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='subcontractor_payment',reference_id=v_payment.id
+    WHERE id=v_journal_id AND company_id=p_company_id;
+  UPDATE subcontractor_payments SET journal_entry_id=v_journal_id WHERE id=v_payment.id RETURNING * INTO v_payment;
+  IF p_certificate_id IS NOT NULL AND ABS(v_available-p_amount)<=0.005 THEN
+    UPDATE subcontractor_certificates SET status='paid' WHERE id=p_certificate_id AND company_id=p_company_id;
+  END IF;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','subcontractor_payment',v_payment.id,to_jsonb(v_payment));
+  RETURN to_jsonb(v_payment);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.create_subcontractor_payment_atomic(UUID,UUID,UUID,NUMERIC,DATE,UUID,TEXT,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_subcontractor_payment_atomic(UUID,UUID,UUID,NUMERIC,DATE,UUID,TEXT,UUID) TO service_role;
