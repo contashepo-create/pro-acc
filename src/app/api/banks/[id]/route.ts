@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getAccountBalanceFromJournal, insertJournalHeader, insertJournalLines } from '@/lib/journal-utils';
 
@@ -69,7 +69,7 @@ export async function PUT(
     const auth = await requireModulePermission(request, 'banks', 'update');
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, any>>(request);
 
     const { data: bankRes } = await s.from('banks_safes')
       .select('*')
@@ -218,6 +218,7 @@ export async function DELETE(
 
     const { data: txDep } = await s.from('cash_transactions')
       .select('id')
+      .eq('company_id', auth.companyId)
       .eq('bank_safe_id', id)
       .limit(1);
     if (txDep && txDep.length > 0) {
@@ -226,6 +227,7 @@ export async function DELETE(
 
     const { data: vouchDep } = await s.from('voucher_receipts')
       .select('id')
+      .eq('company_id', auth.companyId)
       .eq('bank_safe_id', id)
       .limit(1);
     if (vouchDep && vouchDep.length > 0) {
@@ -234,6 +236,7 @@ export async function DELETE(
 
     const { data: vouchDisDep } = await s.from('voucher_disbursements')
       .select('id')
+      .eq('company_id', auth.companyId)
       .eq('bank_safe_id', id)
       .limit(1);
     if (vouchDisDep && vouchDisDep.length > 0) {

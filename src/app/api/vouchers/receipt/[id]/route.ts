@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { createJournalEntry } from '@/lib/journal-utils';
 import { resolveAccountId, postReversalEntry, revertInvoiceAllocations } from '@/lib/voucher-utils';
@@ -66,7 +66,7 @@ export async function PUT(
     const ctx = await requireManagerOrAbove(request);
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody(request);
 
     const parsed = voucherUpdateSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);

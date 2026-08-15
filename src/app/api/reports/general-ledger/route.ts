@@ -74,6 +74,7 @@ export async function GET(request: NextRequest) {
     // Get lines for these entries, filtered by account if specified
     let linesQuery = s.from('journal_lines')
       .select('id, journal_entry_id, account_id, account_code, debit, credit, description, cost_center_id, branch_id, accounts(name)')
+      .eq('company_id', auth.companyId)
       .in('journal_entry_id', entryIds)
       .order('id');
 
@@ -108,6 +109,7 @@ export async function GET(request: NextRequest) {
       if (openingIds.length > 0) {
         const { data: openingLines } = await s.from('journal_lines')
           .select('debit, credit')
+          .eq('company_id', auth.companyId)
           .eq('account_id', account.id)
           .in('journal_entry_id', openingIds);
 

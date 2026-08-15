@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
       if (revIds.length > 0) {
         const { data: revLines } = await s.from('journal_lines')
           .select('credit')
+          .eq('company_id', auth.companyId)
           .in('account_id', revIds)
           .gte('created_at', `${monthStr}-01`)
           .lt('created_at', m === 11 ? `${currentYear + 1}-01-01` : `${currentYear}-${String(m + 2).padStart(2, '0')}-01`);
@@ -45,6 +46,7 @@ export async function GET(request: NextRequest) {
       if (expIds.length > 0) {
         const { data: expLines } = await s.from('journal_lines')
           .select('debit')
+          .eq('company_id', auth.companyId)
           .in('account_id', expIds)
           .gte('created_at', `${monthStr}-01`)
           .lt('created_at', m === 11 ? `${currentYear + 1}-01-01` : `${currentYear}-${String(m + 2).padStart(2, '0')}-01`);

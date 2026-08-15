@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextVoucherNumber } from '@/lib/numbering';
 import { createJournalEntry } from '@/lib/journal-utils';
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'receipts', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, unknown>>(request);
 
     // توافقية مزدوجة: camelCase → snake_case قبل التحقق
     const normalized = {

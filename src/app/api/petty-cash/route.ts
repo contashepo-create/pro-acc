@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, getPaginationParams, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -43,6 +43,7 @@ export async function GET(request: NextRequest) {
     const boxesWithBalance = await Promise.all((boxes || []).map(async (box: any) => {
       const { data: txs } = await s.from('petty_cash_transactions')
         .select('type, amount')
+        .eq('company_id', auth.companyId)
         .eq('box_id', box.id);
 
       const inflow = (txs || [])
@@ -77,7 +78,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'petty_cash', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, any>>(request);
 
     if (!body.box_id || !body.type || !body.amount || !body.reason) {
       return error('الصندوق والنوع والمبلغ والسبب مطلوبة');
@@ -87,8 +88,9 @@ export async function POST(request: NextRequest) {
       return error('النوع يجب أن يكون deposit أو withdrawal');
     }
 
-    if (body.amount <= 0) {
-      return error('المبلغ يجب أن يكون أكبر من صفر');
+    const amount = Number(body.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) {
+      return error('المبلغ غير صالح');
     }
 
     // عزل مستأجرين: الصندوق والمشروع (إن وُجد) يجب أن ينتميا لهذه الشركة
@@ -110,6 +112,7 @@ export async function POST(request: NextRequest) {
       const today = new Date().toISOString().split('T')[0];
       const { data: todayTxs } = await s.from('petty_cash_transactions')
         .select('amount')
+        .eq('company_id', auth.companyId)
         .eq('box_id', body.box_id)
         .eq('type', 'withdrawal')
         .eq('date', today);
@@ -117,9 +120,15 @@ export async function POST(request: NextRequest) {
       const todayTotal = (todayTxs || []).reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
 
       const limit = parseFloat((box as any).daily_limit || 0);
-      if (limit > 0 && todayTotal + body.amount > limit) {
+      if (limit > 0 && todayTotal + amount > limit) {
         return error(`تجاوزت الحد اليومي للسحب (${limit} ر.س). المتبقي اليوم: ${(limit - todayTotal).toFixed(2)} ر.س`);
       }
+      const { data: allTxs } = await s.from('petty_cash_transactions')
+        .select('type, amount').eq('company_id', auth.companyId).eq('box_id', body.box_id);
+      const deposits = (allTxs || []).filter((t: any) => t.type === 'deposit').reduce((sum: number, t: any) => sum + (Number(t.amount) || 0), 0);
+      const withdrawals = (allTxs || []).filter((t: any) => t.type === 'withdrawal').reduce((sum: number, t: any) => sum + (Number(t.amount) || 0), 0);
+      const available = (Number((box as any).initial_balance) || 0) + deposits - withdrawals;
+      if (amount > available + 0.005) return error('رصيد الصندوق غير كافٍ للسحب');
     }
 
     const txId = generateId();
@@ -129,7 +138,7 @@ export async function POST(request: NextRequest) {
         company_id: auth.companyId,
         box_id: body.box_id,
         type: body.type,
-        amount: body.amount,
+        amount,
         reason: body.reason,
         category: body.category || 'general', // general, transport, supplies, meals, misc
         project_id: body.project_id || null,

@@ -44,8 +44,8 @@ export async function GET(request: NextRequest) {
         const endDate = new Date(sub.end_date);
         const diffTime = endDate.getTime() - today.getTime();
         daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        isExpired = daysRemaining <= 0;
-        isExpiringSoon = daysRemaining > 0 && daysRemaining <= 7;
+        isExpired = daysRemaining <= 0 || sub.status === 'pending' || sub.status === 'cancelled';
+        isExpiringSoon = !isExpired && daysRemaining > 0 && daysRemaining <= 7;
       }
 
       // Effective limits = plan base + add-ons

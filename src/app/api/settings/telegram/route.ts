@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, parseBody, requireAdmin } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { checkModuleAccess } from '@/lib/usage-limits';
 
@@ -61,7 +61,9 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'telegram', 'create');
+    // Changing the approved Telegram chat controls financial approvals and
+    // destructive reset confirmations; it is company-admin-only.
+    const auth = await requireAdmin(request);
     
     // 1. التحقق من الصلاحية للباقة
     const isAllowed = await checkModuleAccess(auth.companyId, 'telegram_integration');

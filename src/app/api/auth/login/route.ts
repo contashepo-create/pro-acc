@@ -87,13 +87,13 @@ export async function POST(request: NextRequest) {
     try {
       const { data: uv } = await s.from('users').select('email_verified').eq('id', u.id).single();
       if (uv && uv.email_verified === false) {
-        // Allow login if SMTP is not configured (can't verify email anyway)
-        const smtpConfigured = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS;
-        if (smtpConfigured) {
+        // A production account is not active until its mailbox is proven. A
+        // missing mail configuration is an operational failure, not a reason
+        // to silently downgrade account-verification security.
+        if (process.env.NODE_ENV === 'production') {
           return error('يرجى تأكيد بريدك الإلكتروني أولاً', 403);
         }
-        // If SMTP not configured, allow login but warn
-        console.warn('Email verification bypassed — SMTP not configured');
+        console.warn('Email verification bypassed outside production — configure email before deployment');
       }
     } catch {}
 
@@ -113,7 +113,7 @@ export async function POST(request: NextRequest) {
     // an activation code, or buy an add-on. The subscription guard already
     // blocks WRITES on expired accounts; here we just surface state so the UI
     // can show the banner and disable write actions.
-    let subscriptionStatus: 'active' | 'trial' | 'expired' | 'trial_expired' | 'cancelled' | 'missing' = 'active';
+    let subscriptionStatus: 'active' | 'trial' | 'pending' | 'expired' | 'trial_expired' | 'cancelled' | 'missing' = 'active';
     let subscriptionMessage = '';
     let endDateStr: string | null = null;
     let daysRemaining = 0;
@@ -150,7 +150,7 @@ export async function POST(request: NextRequest) {
       },
       subscription: {
         status: subscriptionStatus,
-        is_expired: subscriptionStatus === 'expired' || subscriptionStatus === 'trial_expired' || subscriptionStatus === 'cancelled' || subscriptionStatus === 'missing',
+        is_expired: subscriptionStatus === 'pending' || subscriptionStatus === 'expired' || subscriptionStatus === 'trial_expired' || subscriptionStatus === 'cancelled' || subscriptionStatus === 'missing',
         message: subscriptionMessage || null,
         end_date: endDateStr,
         days_remaining: daysRemaining,

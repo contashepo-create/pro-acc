@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, getPaginationParams, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -69,11 +69,13 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'approvals', 'approve');
     const s = sb();
-    const body = await request.json();
-    const { entity_type, entity_id, amount, description } = body;
+    const { entity_type, entity_id, amount, description } = await parseBody<{
+      entity_type?: string; entity_id?: string; amount?: number; description?: string;
+    }>(request);
 
-    if (!entity_type || !entity_id) {
-      return error('entity_type و entity_id مطلوبان');
+    if (!entity_type || !entity_id || entity_type.length > 64 || entity_id.length > 128 ||
+        (amount !== undefined && (!Number.isFinite(amount) || amount < 0))) {
+      return error('بيانات طلب الاعتماد غير صالحة');
     }
 
     // Determine the approver based on amount and type

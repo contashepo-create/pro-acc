@@ -6,12 +6,14 @@ function cleanEnv(s: string): string {
 
 // Lazy evaluation: check TOKEN_SECRET at usage time, not import time.
 // This allows the module to be imported during Next.js build even without env vars.
-function getTokenSecret(): string {
-  const rawSecret = process.env.TOKEN_SECRET;
-  if (!rawSecret) {
-    throw new Error('TOKEN_SECRET environment variable is required');
+export function getTokenSecret(): string {
+  const secret = cleanEnv(process.env.TOKEN_SECRET || '');
+  // HMAC keys shorter than 256 bits undermine the security of every session.
+  // Fail closed instead of silently accepting an accidental placeholder.
+  if (secret.length < 32) {
+    throw new Error('TOKEN_SECRET must be set to a random value of at least 32 characters');
   }
-  return cleanEnv(rawSecret);
+  return secret;
 }
 
 /**
@@ -79,6 +81,12 @@ function verifyJwt(token: string, secret: string, requiredRole?: string): TokenP
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [header, payload, signature] = parts;
+    const decodedHeader: unknown = JSON.parse(Buffer.from(header, 'base64url').toString('utf8'));
+    if (!decodedHeader || typeof decodedHeader !== 'object' || Array.isArray(decodedHeader)) return null;
+    const jwtHeader = decodedHeader as Record<string, unknown>;
+    // Explicitly bind verification to the one algorithm this implementation
+    // supports. Never accept an algorithm claim merely because an HMAC matches.
+    if (jwtHeader.alg !== 'HS256' || jwtHeader.typ !== 'JWT') return null;
 
     const expectedSig = createHmac('sha256', secret)
       .update(`${header}.${payload}`)
@@ -93,11 +101,22 @@ function verifyJwt(token: string, secret: string, requiredRole?: string): TokenP
       return null;
     }
 
-    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
-    if (data.exp && data.exp < Math.floor(Date.now() / 1000)) return null;
+    const decodedPayload: unknown = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!decodedPayload || typeof decodedPayload !== 'object' || Array.isArray(decodedPayload)) return null;
+    const data = decodedPayload as Record<string, unknown>;
+    const now = Math.floor(Date.now() / 1000);
+    // A signed token without an expiry is still unsafe after a secret leak or
+    // user deactivation. Reject malformed/legacy unbounded claims outright.
+    if (
+      typeof data.sub !== 'string' || !data.sub ||
+      typeof data.role !== 'string' || !data.role ||
+      typeof data.iat !== 'number' || !Number.isInteger(data.iat) ||
+      typeof data.exp !== 'number' || !Number.isInteger(data.exp) ||
+      data.exp <= now || data.iat > now + 60 || data.exp <= data.iat
+    ) return null;
     if (requiredRole && data.role !== requiredRole) return null;
 
-    return { userId: data.sub, role: data.role, ver: typeof data.ver === 'number' ? data.ver : 0 };
+    return { userId: data.sub, role: data.role, ver: typeof data.ver === 'number' && Number.isInteger(data.ver) && data.ver >= 0 ? data.ver : 0 };
   } catch {
     return null;
   }

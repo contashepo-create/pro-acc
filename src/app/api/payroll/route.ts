@@ -36,8 +36,15 @@ export async function POST(req: NextRequest) {
     const s = sb();
     const data = await parseBody(req);
     const { date, employee_ids } = data;
-    if (!date || !employee_ids || employee_ids.length === 0)
+    if (!date || !Array.isArray(employee_ids) || employee_ids.length === 0)
       return error('date, employee_ids are required');
+    if (new Set(employee_ids).size !== employee_ids.length) return error('لا يمكن تكرار الموظف في دفعة الرواتب');
+
+    const { data: existingPayroll } = await s.from('payroll')
+      .select('employee_id').eq('company_id', auth.companyId).eq('date', date).in('employee_id', employee_ids);
+    if (existingPayroll && existingPayroll.length > 0) {
+      return error('تم إنشاء راتب لأحد الموظفين في هذا التاريخ مسبقاً');
+    }
 
     // حل الحسابات قبل أي كتابة — القيد إلزامي متوازن
     const { data: salAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.SALARIES_EXPENSE).maybeSingle();
@@ -90,8 +97,10 @@ export async function POST(req: NextRequest) {
     if (je.error || !je.journalId) throw je.error || new Error('فشل قيد الرواتب');
     const jeId = je.journalId;
 
-    // الآن اكتب سجلات الرواتب وخفض أرصدة السلف
+    // الآن اكتب سجلات الرواتب وخفض أرصدة السلف. نحتفظ بالأرصدة الأصلية
+    // كي يكون التراجع كاملاً إذا فشل إدخال موظف لاحق في الدفعة.
     const created: any[] = [];
+    const deductedAdvances: Array<{ id: string; remaining: number }> = [];
     try {
       for (const r of rows) {
         const { data: pr, error: prErr } = await s.from('payroll')
@@ -113,18 +122,26 @@ export async function POST(req: NextRequest) {
             if (left <= 0) break;
             const rem = parseFloat(adv.remaining_amount) || 0;
             const deduct = Math.min(rem, left);
-            await s.from('employee_advances')
+            const { error: advanceUpdateError } = await s.from('employee_advances')
               .update({ remaining_amount: rem - deduct })
               .eq('id', adv.id)
               .eq('company_id', auth.companyId);
+            if (advanceUpdateError) throw advanceUpdateError;
+            deductedAdvances.push({ id: adv.id, remaining: rem });
             left -= deduct;
           }
         }
       }
     } catch (writeErr) {
-      // تراجع كامل: احذف سجلات الرواتب والقيد عند أي فشل
+      // تراجع كامل: استعد أرصدة السلف ثم احذف سجلات الرواتب والقيد.
+      for (const advance of deductedAdvances.reverse()) {
+        await s.from('employee_advances')
+          .update({ remaining_amount: advance.remaining })
+          .eq('id', advance.id)
+          .eq('company_id', auth.companyId);
+      }
       await s.from('payroll').delete().eq('journal_entry_id', jeId).eq('company_id', auth.companyId);
-      await s.from('journal_lines').delete().eq('journal_entry_id', jeId);
+      await s.from('journal_lines').delete().eq('journal_entry_id', jeId).eq('company_id', auth.companyId);
       await s.from('journal_entries').delete().eq('id', jeId).eq('company_id', auth.companyId);
       throw writeErr;
     }

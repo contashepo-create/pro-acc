@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
       // حساب الرصيد من journal_lines
       const { data: lines } = await s.from('journal_lines')
         .select('debit, credit')
+        .eq('company_id', auth.companyId)
         .eq('account_id', a.id);
 
       const totalDebit = (lines || []).reduce((sum: number, l: any) => 
@@ -167,11 +168,13 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'fiscal', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<{ accountId?: string; proposedDebit?: number; proposedCredit?: number }>(request);
     const { accountId, proposedDebit, proposedCredit } = body;
 
-    if (!accountId || proposedDebit === undefined || proposedCredit === undefined) {
-      return error('accountId, proposedDebit, proposedCredit مطلوبة');
+    if (!accountId || proposedDebit === undefined || proposedCredit === undefined ||
+        !Number.isFinite(Number(proposedDebit)) || !Number.isFinite(Number(proposedCredit)) ||
+        Number(proposedDebit) < 0 || Number(proposedCredit) < 0) {
+      return error('accountId, proposedDebit, proposedCredit مطلوبة وبقيم غير سالبة صالحة');
     }
 
     // الحصول على معلومات الحساب
@@ -190,6 +193,7 @@ export async function POST(request: NextRequest) {
     // حساب الرصيد الحالي
     const { data: lines } = await s.from('journal_lines')
       .select('debit, credit')
+      .eq('company_id', auth.companyId)
       .eq('account_id', accountId);
 
     const totalDebit = (lines || []).reduce((sum: number, l: any) => 
@@ -200,7 +204,7 @@ export async function POST(request: NextRequest) {
     const currentBalance = totalDebit - totalCredit;
 
     // حساب الرصيد المقترح بعد القيد
-    const proposedBalance = currentBalance + (parseFloat(proposedDebit) || 0) - (parseFloat(proposedCredit) || 0);
+    const proposedBalance = currentBalance + Number(proposedDebit) - Number(proposedCredit);
 
     // التحقق من القواعد
     let isValid = true;

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { randomInt } from 'crypto';
+import { randomInt, randomBytes, timingSafeEqual } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -21,7 +21,9 @@ export async function POST(request: NextRequest) {
     const secretToken = request.headers.get('x-telegram-bot-api-secret-token');
     const expectedSecretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
 
-    if (!expectedSecretToken || secretToken !== expectedSecretToken) {
+    const supplied = secretToken || '';
+    if (!expectedSecretToken || supplied.length !== expectedSecretToken.length ||
+        !timingSafeEqual(Buffer.from(supplied), Buffer.from(expectedSecretToken))) {
       console.warn('[Telegram Webhook Bypass Attack Blocked]: Missing or invalid secret token header.');
       return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
     }
@@ -167,8 +169,9 @@ export async function POST(request: NextRequest) {
           try {
             code = String(randomInt(0, 1000000)).padStart(6, '0');
           } catch {
-            // fallback — يجب ألا يحدث أبداً، ولكن للأمان فقط
-            code = String(Math.floor(100000 + Math.random() * 900000));
+            // Keep the fallback cryptographically secure too; Math.random is
+            // predictable and must never generate a destructive-operation OTP.
+            code = String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, '0');
           }
           const updatedSession = {
             step: 'approved_and_code_sent',

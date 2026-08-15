@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { timingSafeEqual } from 'crypto';
 import { handleApprovalResponse } from '@/lib/notifications';
+
+function hasValidTelegramSecret(request: NextRequest): boolean {
+  const expected = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+  const supplied = request.headers.get('x-telegram-bot-api-secret-token') || '';
+  if (!expected || supplied.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+}
 
 /**
  * POST /api/telegram/callback
@@ -8,6 +16,11 @@ import { handleApprovalResponse } from '@/lib/notifications';
  */
 export async function POST(request: NextRequest) {
   try {
+    // This legacy endpoint performs financial approvals, so it must use the
+    // same Telegram secret-token authentication as the primary webhook.
+    if (!hasValidTelegramSecret(request)) {
+      return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
+    }
     const body = await request.json();
     
     // التحقق من أن الطلب هو callback_query

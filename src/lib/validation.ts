@@ -62,7 +62,9 @@ export const resendVerificationSchema = z.object({
 });
 
 export const resetPasswordSchema = z.object({
-  token: z.string().min(1, 'الرمز مطلوب'),
+  // Reset links are 256-bit hexadecimal capabilities. Enforcing the exact
+  // representation avoids expensive hash/database work for arbitrary input.
+  token: z.string().regex(/^[a-f0-9]{64}$/i, 'الرمز غير صالح'),
   password: passwordPolicy,
 });
 
@@ -134,6 +136,14 @@ export const journalEntryLineSchema = z.object({
   // Accounting rule: a journal line is either debit OR credit, never both.
   (line) => !(line.debit > 0 && line.credit > 0),
   { message: 'السطر الواحد لا يمكن أن يكون مديناً ودائناً معاً' }
+).refine(
+  // Ledger columns are NUMERIC(15,2): never let PostgreSQL silently round a
+  // balanced client payload into a different posted amount.
+  (line) => Number.isSafeInteger(Math.round(line.debit * 100)) && Number.isSafeInteger(Math.round(line.credit * 100)) &&
+    Math.abs(line.debit * 100 - Math.round(line.debit * 100)) < 1e-8 &&
+    Math.abs(line.credit * 100 - Math.round(line.credit * 100)) < 1e-8 &&
+    line.debit <= 9999999999999.99 && line.credit <= 9999999999999.99,
+  { message: 'المبلغ يجب أن يكون بمنزلتين عشريتين كحد أقصى وفي النطاق المسموح' }
 );
 
 export const journalEntrySchema = z.object({
@@ -331,7 +341,15 @@ export const receiptVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
-}).strict();
+}).strict().superRefine((voucher, ctx) => {
+  if ((voucher.receipt_type === 'client' || voucher.receipt_type === 'supplier_refund') && !voucher.contact_id) {
+    ctx.addIssue({ code: 'custom', path: ['contact_id'], message: 'الطرف مطلوب لهذا النوع من سند القبض' });
+  }
+  const ids = voucher.invoice_items?.map((item) => item.invoice_id) || [];
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: 'custom', path: ['invoice_items'], message: 'لا يمكن تخصيص الفاتورة نفسها أكثر من مرة في السند' });
+  }
+});
 
 /**
  * POST /api/vouchers/disbursement — سند صرف.
@@ -350,7 +368,19 @@ export const disbursementVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
-}).strict();
+}).strict().superRefine((voucher, ctx) => {
+  const contactRequired = ['supplier', 'subcontractor', 'client_refund'].includes(voucher.disbursement_type);
+  if (contactRequired && !voucher.contact_id) {
+    ctx.addIssue({ code: 'custom', path: ['contact_id'], message: 'الطرف مطلوب لهذا النوع من سند الصرف' });
+  }
+  if (voucher.disbursement_type === 'employee_advance' && !voucher.employee_id) {
+    ctx.addIssue({ code: 'custom', path: ['employee_id'], message: 'الموظف مطلوب لسلفة الموظف' });
+  }
+  const ids = voucher.invoice_items?.map((item) => item.invoice_id) || [];
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: 'custom', path: ['invoice_items'], message: 'لا يمكن تخصيص فاتورة الشراء نفسها أكثر من مرة في السند' });
+  }
+});
 
 // --------------- Inventory ---------------
 

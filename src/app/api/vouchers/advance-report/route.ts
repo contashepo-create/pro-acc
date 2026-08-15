@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
 
     const { data: lines } = await s.from('journal_lines')
       .select('contact_id, debit, credit')
+      .eq('company_id', auth.companyId)
       .eq('account_id', advAccountId)
       .in('journal_entry_id', jeIdList)
       .not('contact_id', 'is', null);
@@ -57,6 +58,7 @@ export async function GET(request: NextRequest) {
         const { data: contact } = await s.from('contacts')
           .select('name')
           .eq('id', cid)
+          .eq('company_id', auth.companyId)
           .maybeSingle();
         balances[cid] = {
           contact_id: cid,

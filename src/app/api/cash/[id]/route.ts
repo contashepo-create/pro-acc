@@ -3,6 +3,7 @@ import { success, error, notFound, requireApiAuth, requireModulePermission, requ
 import type { } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
+import { postReversalEntry } from '@/lib/voucher-utils';
 
 const sb = () => getSupabase();
 
@@ -151,16 +152,19 @@ export async function DELETE(
 
     const tx = txRes as Record<string, any>;
 
-    if (tx.journal_entry_id) {
-      const { error: lErr } = await s.from('journal_lines')
-        .delete()
-        .eq('journal_entry_id', tx.journal_entry_id);
-      if (lErr) throw lErr;
+    if (tx.status === 'cancelled') return error('الحركة ملغاة مسبقاً');
 
-      const { error: jeErr } = await s.from('journal_entries')
-        .delete()
-        .eq('id', tx.journal_entry_id).eq('company_id', auth.companyId);
-      if (jeErr) throw jeErr;
+    // Financial history is immutable: reverse the original posting instead of
+    // deleting journal lines/headers and destroying the audit trail.
+    if (tx.journal_entry_id) {
+      const { error: reversalError } = await postReversalEntry(auth.companyId, {
+        journalEntryId: tx.journal_entry_id,
+        referenceType: 'cash_transaction_reversal',
+        referenceId: id,
+        description: `عكس حركة نقدية: ${tx.reason || id}`,
+        userId: auth.userId,
+      });
+      if (reversalError) throw reversalError;
     }
 
     const auditId = generateId();
@@ -174,12 +178,12 @@ export async function DELETE(
       old_values: tx,
     });
 
-    const { error: deleteError } = await s.from('cash_transactions')
-      .delete()
+    const { error: cancelError } = await s.from('cash_transactions')
+      .update({ status: 'cancelled' })
       .eq('id', id).eq('company_id', auth.companyId);
-    if (deleteError) throw deleteError;
+    if (cancelError) throw cancelError;
 
-    return success({ deleted: true });
+    return success({ cancelled: true });
   } catch (err) {
     return handleApiError(err);
   }

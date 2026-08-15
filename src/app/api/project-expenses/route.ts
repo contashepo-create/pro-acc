@@ -57,7 +57,9 @@ export async function POST(req: NextRequest) {
     }
 
     const expenseAmount = Number(amount);
-    if (!(expenseAmount > 0)) return error('المبلغ يجب أن يكون موجباً');
+    if (!Number.isFinite(expenseAmount) || expenseAmount <= 0 || Math.abs(expenseAmount * 100 - Math.round(expenseAmount * 100)) > 1e-8) {
+      return error('المبلغ يجب أن يكون موجباً وبمنزلتين عشريتين كحد أقصى');
+    }
 
     if (!PROJECT_EXPENSE_CODES[expense_type]) {
       return error('expense_type must be one of: materials, labor, subcontractor, equipment, other');
@@ -115,8 +117,9 @@ export async function POST(req: NextRequest) {
     if (!paymentAccountId) return error('لم يتم العثور على حساب النقدية أو البنك');
 
     // VAT calculation (input VAT)
-    const vRate = (tax_enabled && tax_rate) ? Number(tax_rate) : 0;
-    const taxAmount = expenseAmount * vRate;
+    const vRate = (tax_enabled && tax_rate !== undefined) ? Number(tax_rate) : 0;
+    if (!Number.isFinite(vRate) || vRate < 0 || vRate > 1) return error('نسبة الضريبة غير صالحة');
+    const taxAmount = Math.round((expenseAmount * vRate + Number.EPSILON) * 100) / 100;
     const totalPayment = expenseAmount + taxAmount;
 
     // Build journal lines: debit expense (net) + debit VAT_PURCHASES + credit cash (total)

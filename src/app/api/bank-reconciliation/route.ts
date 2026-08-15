@@ -24,8 +24,13 @@ export async function POST(req: NextRequest) {
     const { bankSafeId, date, closingBalance, items } = await parseBody(req);
     if (!bankSafeId || !date || closingBalance === undefined)
       return error('bankSafeId, date, closingBalance are required');
-    if (isNaN(parseFloat(closingBalance)))
-      return error('الرصيد الختامي يجب أن يكون رقماً');
+    const normalizedClosingBalance = Number(closingBalance);
+    if (!Number.isFinite(normalizedClosingBalance) || Math.abs(normalizedClosingBalance * 100 - Math.round(normalizedClosingBalance * 100)) > 1e-8)
+      return error('الرصيد الختامي يجب أن يكون رقماً بمنزلتين عشريتين كحد أقصى');
+    if (items !== undefined && !Array.isArray(items)) return error('بنود المطابقة غير صالحة');
+    if (Array.isArray(items) && items.some((item) => !item || typeof item !== 'object' || !Number.isFinite(Number(item.amount)) || Number(item.amount) < 0)) {
+      return error('أحد بنود المطابقة غير صالح');
+    }
 
     // TENANT CHECK: الخزينة/البنك المطابَق يجب أن ينتمي لهذه الشركة
     const { data: bankSafe } = await s.from('banks_safes')

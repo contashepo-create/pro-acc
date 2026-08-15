@@ -30,6 +30,7 @@ const sb = () => getSupabase();
 export type SubscriptionStatus =
   | 'missing'
   | 'trial'
+  | 'pending'
   | 'trial_expired'
   | 'active'
   | 'expired'
@@ -64,6 +65,7 @@ const EXPIRED_WRITE_WHITELIST: (path: string) => boolean = (() => {
     '/api/auth/me',            // change password / fetch self
     '/api/auth/subscription',  // read own plan
     '/api/auth/subscription-status',
+    '/api/auth/subscribe',              // initiate a payment; never activates a paid plan
     '/api/subscription/upgrade-request',    // submit payment proof
     '/api/subscription/activate-code',      // enter activation code
     '/api/support',
@@ -83,8 +85,8 @@ const EXPIRED_WRITE_WHITELIST: (path: string) => boolean = (() => {
 })();
 
 /** Routes that should be accessible even when the company is inactive (very narrow). */
-export function isSubscriptionReadOnlyMethod(method: string): boolean {
-  const m = method.toUpperCase();
+export function isSubscriptionReadOnlyMethod(method: string | undefined): boolean {
+  const m = (method || 'GET').toUpperCase();
   return m === 'GET' || m === 'HEAD' || m === 'OPTIONS';
 }
 
@@ -230,6 +232,12 @@ export async function getSubscriptionAccess(companyId: string): Promise<Subscrip
       status = 'active';
       isExpired = false;
     }
+  } else if (subr.status === 'pending') {
+    // A paid checkout exists but the payment provider has not confirmed it.
+    // It must never grant write access before an authenticated webhook does.
+    status = 'pending';
+    isExpired = true;
+    reason = 'payment_pending';
   } else {
     // inactive or unexpected
     status = 'expired';

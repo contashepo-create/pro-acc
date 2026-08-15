@@ -82,9 +82,12 @@ export async function postReversalEntry(
 ): Promise<{ error: any | null }> {
   const s = sb();
 
+  // Scope the source lines as well as the header: this utility is reused by
+  // several financial modules and must not trust a caller-provided journal id.
   const { data: oldLines } = await s.from('journal_lines')
     .select('account_id, debit, credit, description, contact_id, project_id')
-    .eq('journal_entry_id', opts.journalEntryId);
+    .eq('journal_entry_id', opts.journalEntryId)
+    .eq('company_id', companyId);
 
   if (!oldLines || oldLines.length === 0) return { error: null };
 
@@ -142,6 +145,13 @@ export async function applyInvoiceAllocations(
   const linkVoucherCol = isReceipt ? 'voucher_receipt_id' : 'voucher_disbursement_id';
   const linkInvoiceCol = isReceipt ? 'invoice_id' : 'purchase_invoice_id';
 
+  if (!Number.isFinite(voucherAmount) || voucherAmount <= 0 ||
+      allocations.some((a) => !a.invoice_id || !Number.isFinite(a.amount) || a.amount <= 0 || Math.abs(a.amount * 100 - Math.round(a.amount * 100)) > 1e-8)) {
+    return { error: 'بيانات تخصيص الفواتير غير صالحة', applied: 0 };
+  }
+  if (new Set(allocations.map((a) => a.invoice_id)).size !== allocations.length) {
+    return { error: 'لا يمكن تخصيص الفاتورة نفسها أكثر من مرة في السند', applied: 0 };
+  }
   const totalAllocated = round2(allocations.reduce((sum, a) => sum + a.amount, 0));
   if (totalAllocated > voucherAmount + 0.001) {
     return { error: 'مجموع التخصيصات أكبر من مبلغ السند', applied: 0 };

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -29,17 +29,25 @@ export async function POST(request: NextRequest) {
   try {
     // تغيير شعار الشركة (هوية بصرية) — يقتصر على المدير فأعلى
     const auth = await requireManagerOrAbove(request);
-    const body = await request.json();
+    const body = await parseBody<{ logo_url?: string }>(request);
     const s = sb();
 
-    if (!body.logo_url || typeof body.logo_url !== 'string') return error('logo_url is required');
+    if (!body.logo_url || typeof body.logo_url !== 'string' || body.logo_url.length > 2048) return error('logo_url is required');
+    let logoUrl: string;
+    try {
+      const parsed = new URL(body.logo_url);
+      if (!['https:', 'http:'].includes(parsed.protocol)) return error('رابط الشعار غير صالح');
+      logoUrl = parsed.toString();
+    } catch {
+      return error('رابط الشعار غير صالح');
+    }
 
     await s.from('companies').update({
-      logo_url: body.logo_url,
+      logo_url: logoUrl,
       updated_at: new Date().toISOString(),
     }).eq('id', auth.companyId);
 
-    return success({ logo_url: body.logo_url });
+    return success({ logo_url: logoUrl });
   } catch (err) {
     return handleApiError(err);
   }

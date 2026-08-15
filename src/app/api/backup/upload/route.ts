@@ -1,11 +1,10 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireAdmin, handleApiError, error, success } from '@/lib/api-helpers';
+import { requireAdmin, handleApiError, error, success, parseBody } from '@/lib/api-helpers';
 import { createHmac } from 'crypto';
+import { getBackupSecret } from '@/lib/backup-integrity';
 
 const sb = () => getSupabase();
-
-const BACKUP_SECRET = process.env.BACKUP_SECRET || process.env.TOKEN_SECRET || 'backup-secret';
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,8 +12,7 @@ export async function POST(request: NextRequest) {
     const auth = await requireAdmin(request);
     const s = sb();
 
-    const body = await request.json();
-    const { backupData, fileHash } = body;
+    const { backupData, fileHash } = await parseBody<{ backupData?: Record<string, any>; fileHash?: string }>(request);
 
     if (!backupData || !fileHash) {
       return error('بيانات النسخ الاحتياطي مفقودة');
@@ -40,7 +38,7 @@ export async function POST(request: NextRequest) {
 
     // Verify HMAC signature to ensure not tampered
     const jsonString = JSON.stringify(backupData, null, 2);
-    const expectedFullHmac = createHmac('sha256', BACKUP_SECRET).update(jsonString).digest('hex');
+    const expectedFullHmac = createHmac('sha256', getBackupSecret()).update(jsonString).digest('hex');
     const expectedHash = expectedFullHmac.substring(0, 16);
     
     // Secure verification: search database logs for a record matching the CALCULATED full hmac signature of the actual uploaded content.
@@ -55,12 +53,20 @@ export async function POST(request: NextRequest) {
       return error('النسخة الاحتياطية غير صالحة أو تم التلاعب بها. يجب أن تكون نفس الملف المحمل بدون تعديل', 400);
     }
 
-    // Verify no data leakage - ensure only this company's data
-    // All data must have company_id == auth.companyId
+    // Verify no data leakage and reject unexpected tables/types. Restore is
+    // intentionally limited to the small, documented set below.
+    const restoreOrder = ['accounts', 'contacts', 'projects', 'banks_safes', 'inventory_items', 'employees'] as const;
+    const allowedBackupTables = new Set<string>([
+      'accounts', 'journal_entries', 'journal_lines', 'invoices', 'invoice_items',
+      'contacts', 'clients', 'projects', 'banks_safes', 'cash_transactions',
+      'inventory_items', 'employees', 'payroll',
+    ]);
     for (const [table, rows] of Object.entries(backupData.data || {})) {
-      const arr = rows as any[];
-      for (const row of arr) {
-        if (row.company_id && row.company_id !== auth.companyId) {
+      if (!allowedBackupTables.has(table)) return error(`الجدول ${table} غير مسموح به في النسخة`, 400);
+      if (!Array.isArray(rows)) return error(`بيانات الجدول ${table} غير صالحة`, 400);
+      for (const row of rows) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) return error(`سجل غير صالح في جدول ${table}`, 400);
+        if ((row as Record<string, unknown>).company_id && (row as Record<string, unknown>).company_id !== auth.companyId) {
           return error(`النسخة تحتوي على بيانات شركة أخرى في جدول ${table}`, 400);
         }
       }
@@ -77,8 +83,6 @@ export async function POST(request: NextRequest) {
 
     // Perform restore - only for this company's data, with transaction-like safety
     // For safety, we only restore non-critical tables and prevent overwriting with empty
-    const restoreOrder = ['accounts', 'contacts', 'projects', 'banks_safes', 'inventory_items', 'employees'];
-
     for (const table of restoreOrder) {
       const rows = backupData.data[table];
       if (!rows || !Array.isArray(rows) || rows.length === 0) continue;
@@ -94,11 +98,8 @@ export async function POST(request: NextRequest) {
         delete safeRow.created_at;
         delete safeRow.updated_at;
         
-        try {
-          await s.from(table).upsert(safeRow, { onConflict: 'id' });
-        } catch (e) {
-          console.warn(`Failed to restore row in ${table}:`, e);
-        }
+        const { error: restoreError } = await s.from(table).upsert(safeRow, { onConflict: 'id' });
+        if (restoreError) throw restoreError;
       }
     }
 

@@ -74,20 +74,10 @@ export async function POST(request: NextRequest) {
         });
 
       if (uploadError) {
-        // If bucket doesn't exist, fallback to base64 storage in DB
-        console.warn('Storage upload failed, fallback to DB:', uploadError.message);
-        const base64 = buffer.toString('base64');
-        const dataUrl = `data:${file.type};base64,${base64}`;
-        
-        // Store in a temporary table or return data URL
-        return success({
-          url: dataUrl,
-          fileName,
-          size: file.size,
-          type: file.type,
-          storage: 'base64',
-          message: 'تم رفع الإيصال (مخزن مؤقتاً)',
-        });
+        // Do not return an untracked data: URL. It defeats storage accounting,
+        // can leak a receipt through client state/logs, and is not durable.
+        console.error('Storage upload failed:', uploadError.message);
+        return error('تعذر حفظ الملف في التخزين الآمن. حاول لاحقاً.', 503);
       }
 
       // Get public URL
@@ -110,16 +100,7 @@ export async function POST(request: NextRequest) {
       });
     } catch (storageErr) {
       console.error('Storage error:', storageErr);
-      // Fallback to base64
-      const base64 = buffer.toString('base64');
-      const dataUrl = `data:${file.type};base64,${base64}`;
-      return success({
-        url: dataUrl,
-        fileName,
-        size: file.size,
-        type: file.type,
-        storage: 'base64_fallback',
-      });
+      return error('تعذر حفظ الملف في التخزين الآمن. حاول لاحقاً.', 503);
     }
   } catch (err) {
     return handleApiError(err);

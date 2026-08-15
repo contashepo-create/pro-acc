@@ -3,6 +3,7 @@ import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword, createToken } from '@/lib/auth';
 import { isCommonPassword } from '@/lib/validation';
+import { timingSafeEqual } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -42,12 +43,19 @@ export async function POST(request: NextRequest) {
     }
 
     const setupToken = setup_token || request.nextUrl.searchParams.get('setup_token');
-    // SETUP_TOKEN stays server-side. The public name is accepted temporarily for
-    // existing deployments, but should be replaced because it exposes the value
-    // to client bundles.
-    const expectedSetupToken = process.env.SETUP_TOKEN || process.env.NEXT_PUBLIC_SETUP_TOKEN;
-    if (expectedSetupToken && setupToken !== expectedSetupToken) {
-      return error('رمز الإعداد غير صحيح', 403);
+    // Initial bootstrap is an administrator creation endpoint. It must never
+    // be anonymously reachable on a production deployment, even when the DB
+    // is currently empty.
+    const expectedSetupToken = (process.env.SETUP_TOKEN || '').trim();
+    if (process.env.NODE_ENV === 'production' && expectedSetupToken.length < 32) {
+      return error('الإعداد الأولي غير مهيأ بأمان', 503);
+    }
+    if (expectedSetupToken) {
+      const provided = Buffer.from(setupToken || '');
+      const expected = Buffer.from(expectedSetupToken);
+      if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+        return error('رمز الإعداد غير صحيح', 403);
+      }
     }
 
     // Create company

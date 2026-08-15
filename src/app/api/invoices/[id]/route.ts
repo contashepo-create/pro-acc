@@ -65,7 +65,8 @@ export async function GET(
     if (inv.journal_entry_id) {
       const { data: jl } = await s.from('journal_lines')
         .select('id, account_id, account_code, account_name, debit, credit, description')
-        .eq('journal_entry_id', inv.journal_entry_id);
+        .eq('journal_entry_id', inv.journal_entry_id)
+        .eq('company_id', auth.companyId);
       journalLines = jl || [];
     }
 

@@ -44,14 +44,16 @@ export async function loadReportJournalLines(
       .select('journal_entry_id, account_id, account_code, debit, credit')
       .in('journal_entry_id', chunk)
       .eq('company_id', companyId);
-    if (res.error || !(res.data || []).length) {
+    // Only fall back when a legacy schema truly lacks company_id. Falling back
+    // after an empty response or a transient error would remove the tenant
+    // predicate and could turn an availability problem into data disclosure.
+    if (res.error && /company_id|42703|Could not find/i.test(res.error.message || '')) {
       const retry = await supabase
         .from('journal_lines')
-        .select('journal_entry_id, account_id, account_code, debit, credit')
+        .select('journal_entry_id, account_id, account_code, debit, credit, company_id')
         .in('journal_entry_id', chunk);
-      // Keep company-scoped rows when the column exists; otherwise take all for these JEs.
       res = {
-        data: (retry.data || []).filter((l: any) => !l.company_id || l.company_id === companyId),
+        data: (retry.data || []).filter((l: any) => l.company_id === undefined || l.company_id === companyId),
         error: retry.error,
       };
     }

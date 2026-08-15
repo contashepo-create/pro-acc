@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { insertJournalLines } from '@/lib/journal-utils';
@@ -20,8 +20,11 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'fiscal', 'approve');
     const s = sb();
-    const body = await request.json();
-    const { originalEntryId, reverseDate, description } = body;
+    const { originalEntryId, reverseDate, description } = await parseBody<{
+      originalEntryId?: string;
+      reverseDate?: string;
+      description?: string;
+    }>(request);
 
     if (!originalEntryId) {
       return error('originalEntryId مطلوب');
@@ -39,11 +42,13 @@ export async function POST(request: NextRequest) {
     }
 
     const oe = originalEntry as any;
+    if (oe.reversed_by) return error('تم إنشاء قيد عكسي لهذا القيد مسبقاً', 409);
 
-    // الحصول على سطور القيد الأصلي
+    // الحصول على سطور القيد الأصلي ضمن الشركة نفسها.
     const { data: originalLines } = await s.from('journal_lines')
       .select('*')
-      .eq('journal_entry_id', originalEntryId);
+      .eq('journal_entry_id', originalEntryId)
+      .eq('company_id', auth.companyId);
 
     if (!originalLines || originalLines.length === 0) {
       return error('القيد الأصلي لا يحتوي على سطور');

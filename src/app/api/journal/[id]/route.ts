@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -49,7 +49,9 @@ export async function GET(
 
     const { data: linesRes } = await s.from('journal_lines')
       .select('id, account_code, accounts(name, type), debit, credit, description')
-      .eq('journal_entry_id', id).order('id');
+      .eq('journal_entry_id', id)
+      .eq('company_id', auth.companyId)
+      .order('id');
 
     const lines = (linesRes || []).map((l: any) => ({
       id: l.id, account_code: l.account_code, account_name: (l.accounts as any)?.name || null,
@@ -74,7 +76,7 @@ export async function PUT(
     const auth = await requireModulePermission(request, 'journal', 'update');
     const { id } = await paramsPromise;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody(request);
 
     const { data: existing } = await s.from('journal_entries')
       .select('id, number')

@@ -11,13 +11,14 @@ function bucketFor(days: number) {
   return '90+';
 }
 
-async function unappliedReceiptsByContact(s: any, companyId: string): Promise<Map<string, number>> {
+async function unappliedReceiptsByContact(s: any, companyId: string, asOf: string): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   const { data: receipts } = await s.from('voucher_receipts')
     .select('id, contact_id, amount')
     .eq('company_id', companyId)
     .eq('receipt_type', 'client')
-    .neq('status', 'cancelled');
+    .neq('status', 'cancelled')
+    .lte('date', asOf);
   const receiptIds = (receipts || []).map((r: any) => r.id);
   const allocated = new Map<string, number>();
   if (receiptIds.length > 0) {
@@ -43,17 +44,21 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const type = url.searchParams.get('type') || 'ar';
     const asOf = url.searchParams.get('asOf') || url.searchParams.get('to') || new Date().toISOString().split('T')[0];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf) || Number.isNaN(new Date(`${asOf}T00:00:00Z`).getTime())) {
+      return error('تاريخ asOf غير صالح', 400);
+    }
     const s = sb();
-    const asOfTime = new Date(asOf).getTime();
+    const asOfTime = new Date(`${asOf}T00:00:00Z`).getTime();
 
     if (type === 'ar') {
       const { data: invoices } = await s.from('invoices')
         .select('id, number, contact_id, date, due_date, total, paid_amount, status, contacts(name)')
         .eq('company_id', auth.companyId)
         .neq('status', 'cancelled')
-        .neq('status', 'paid');
+        .neq('status', 'paid')
+        .lte('date', asOf);
 
-      const unappliedByContact = await unappliedReceiptsByContact(s, auth.companyId);
+      const unappliedByContact = await unappliedReceiptsByContact(s, auth.companyId, asOf);
 
       const byContact = new Map<string, any>();
       for (const inv of invoices || []) {
@@ -134,7 +139,8 @@ export async function GET(req: NextRequest) {
         .select('id, number, supplier_id, date, due_date, total, paid_amount, status, contacts:supplier_id(name)')
         .eq('company_id', auth.companyId)
         .neq('status', 'cancelled')
-        .neq('status', 'paid');
+        .neq('status', 'paid')
+        .lte('date', asOf);
 
       const byContact = new Map<string, any>();
       for (const inv of invoices || []) {

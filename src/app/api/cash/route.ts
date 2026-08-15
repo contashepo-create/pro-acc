@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { createJournalEntry } from '@/lib/journal-utils';
 import { ACCOUNT_CODES } from '@/lib/constants';
@@ -30,7 +30,8 @@ export async function GET(request: NextRequest) {
         banks_safes(name),
         contacts(name)
       `, { count: 'exact' })
-      .eq('company_id', auth.companyId);
+      .eq('company_id', auth.companyId)
+      .neq('status', 'cancelled');
 
     if (from) query = query.gte('date', from);
     if (to) query = query.lte('date', to);
@@ -74,9 +75,9 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'cash', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, unknown>>(request);
 
     const {
       date,
@@ -91,7 +92,7 @@ export async function POST(request: NextRequest) {
       description,
       tax_rate,
       tax_enabled,
-    } = body;
+    } = body as Record<string, any>;
 
     const normalizedType = type === 'receipt' ? 'revenue' : type;
     if (!date || !normalizedType || !amount || !reason) {
@@ -102,8 +103,12 @@ export async function POST(request: NextRequest) {
       return error('نوع الحركة يجب أن يكون قبض أو صرف', 400);
     }
 
-    if (parseFloat(amount) <= 0) {
-      return error('المبلغ يجب أن يكون أكبر من صفر', 400);
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || Math.abs(parsedAmount * 100 - Math.round(parsedAmount * 100)) > 1e-8) {
+      return error('المبلغ يجب أن يكون أكبر من صفر وبمنزلتين عشريتين كحد أقصى', 400);
+    }
+    if (!bankSafeId) {
+      return error('الخزينة أو البنك مطلوب للحركة النقدية', 400);
     }
 
     const txnType = normalizedType;
@@ -132,21 +137,33 @@ export async function POST(request: NextRequest) {
       bankSafeInfo = data;
     }
 
-    // Check bank balance if bank safe provided
-    if (bankSafeInfo && bankSafeInfo.account_id) {
-      const balance = await checkBankBalance(
-        bankSafeInfo.id,
-        parseFloat(amount),
-        auth.companyId
-      );
-      if (!balance.allowed) {
-        return error(balance.message || 'الرصيد غير كافٍ للصرف هذا المبلغ', 400);
-      }
+    if (!bankSafeInfo?.account_id) {
+      return error('الخزينة/البنك غير مرتبط بحساب أستاذ صالح', 400);
+    }
+    // Only expenses consume cash. Applying this check to revenue rejects a
+    // legitimate receipt when the cash account starts with a zero balance.
+    if (txnType === 'expense') {
+      const balance = await checkBankBalance(bankSafeInfo.id, parsedAmount, auth.companyId);
+      if (!balance.allowed) return error(balance.message || 'الرصيد غير كافٍ للصرف هذا المبلغ', 400);
+    }
+
+    if (contactId) {
+      const { data: contact } = await s.from('contacts').select('id')
+        .eq('id', contactId).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف المحدد غير موجود', 404);
+    }
+    if (projectId) {
+      const { data: project } = await s.from('projects').select('id')
+        .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+      if (!project) return error('المشروع المحدد غير موجود', 404);
     }
 
     // Determine counterpart account based on transaction type
-    const vRate = (tax_enabled && tax_rate) ? Number(tax_rate) : 0;
-    const baseAmount = parseFloat(amount);
+    const vRate = (tax_enabled && tax_rate !== undefined) ? Number(tax_rate) : 0;
+    if (!Number.isFinite(vRate) || vRate < 0 || vRate > 1 || Math.abs(vRate * 10000 - Math.round(vRate * 10000)) > 1e-8) {
+      return error('نسبة الضريبة غير صالحة', 400);
+    }
+    const baseAmount = parsedAmount;
     const taxAmount = txnType === 'revenue' ? baseAmount * vRate / (1 + vRate) : 0;
     const expenseTaxAmount = txnType === 'expense' ? baseAmount * vRate : 0;
     const totalPayment = txnType === 'expense' ? baseAmount + expenseTaxAmount : baseAmount;
@@ -166,6 +183,9 @@ export async function POST(request: NextRequest) {
 
     if (!cashAccountId || !counterpartAccountId) {
       return error('الحسابات المحاسبية للحركة غير مكتملة (النقدية أو الحساب المقابل) — راجع شجرة الحسابات', 400);
+    }
+    if (cashAccountId === counterpartAccountId) {
+      return error('لا يمكن أن يكون حساب النقدية هو الحساب المقابل للحركة', 400);
     }
 
     // حسابات الضريبة إلزامية عند احتسابها — وإلا قيد غير متوازن

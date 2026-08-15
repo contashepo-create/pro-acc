@@ -107,6 +107,9 @@ export async function POST(request: NextRequest) {
         code,
         step: 'code_sent',
         codeSent: false,
+        otpExpiresAt: Date.now() + 5 * 60 * 1000,
+        attempts: 0,
+        lastResendAt: Date.now(),
         expiresAt: Date.now() + 30 * 60 * 1000,
       });
     } catch (e) {

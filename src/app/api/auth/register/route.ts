@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
-import { hashPassword, createToken } from '@/lib/auth';
+import { hashPassword, createToken, getTokenSecret } from '@/lib/auth';
 import { registerSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
 import { sendEmail } from '@/lib/email';
-import { randomBytes, createHmac } from 'crypto';
+import { randomBytes, createHmac, createHash } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
   // FIXED: Store in Supabase instead of memory Map for serverless compatibility
   // For now, embed answer in HMAC signed token to avoid server state
   const { createHmac } = await import('crypto');
-  const secret = process.env.TOKEN_SECRET || 'fallback-secret';
+  const secret = getTokenSecret();
   const expires = Date.now() + 5 * 60 * 1000;
   const payload = `${a}:${b}:${answer}:${expires}`;
   const sig = createHmac('sha256', secret).update(payload).digest('hex');
@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
 
 export function verifyCaptchaToken(token: string, userAnswer: number): boolean {
   try {
-    const secret = process.env.TOKEN_SECRET || 'fallback-secret';
+    const secret = getTokenSecret();
     const decoded = Buffer.from(token, 'base64url').toString();
     const parts = decoded.split(':');
     if (parts.length !== 5) return false;
@@ -167,7 +167,10 @@ export async function POST(request: NextRequest) {
     // Actually name duplication is allowed globally, but we check for suspicious bot pattern
 
     const passwordHash = await hashPassword(password);
+    // Store only a digest; a database disclosure must not turn verification
+    // links into immediately usable account capabilities.
     const verificationToken = randomBytes(32).toString('hex');
+    const verificationTokenHash = createHash('sha256').update(verificationToken).digest('hex');
 
     // Get country config
     const { getCountryConfig } = await import('@/lib/countries');
@@ -207,7 +210,7 @@ export async function POST(request: NextRequest) {
     };
     let user = null;
     const { data: u1, error: e1 } = await s.from('users')
-      .insert({ ...insertData, email_verified: false, email_verification_token: verificationToken, email_verification_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })
+      .insert({ ...insertData, email_verified: false, email_verification_token: verificationTokenHash, email_verification_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })
       .select('id, name, email, role').single();
     if (e1) {
       // Column doesn't exist — create without email_verified

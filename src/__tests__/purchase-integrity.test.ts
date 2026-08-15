@@ -299,9 +299,9 @@ describe('PUT /api/purchases/invoices/[id] — cancel with reversal', () => {
       status: 'unpaid', journal_entry_id: 'je-1', purchase_order_id: null,
     });
     db.journal_lines.push(
-      { id: 'l1', journal_entry_id: 'je-1', account_id: INV_ACC, account_code: '1170', account_name: 'المخزون', debit: 200, credit: 0, description: 'مشتريات' },
-      { id: 'l2', journal_entry_id: 'je-1', account_id: VAT_ACC, account_code: '1180', account_name: 'ضريبة', debit: 30, credit: 0, description: 'ضريبة' },
-      { id: 'l3', journal_entry_id: 'je-1', account_id: AP_ACC, account_code: '2110', account_name: 'ذمم', debit: 0, credit: 230, description: 'ذمم' },
+      { id: 'l1', company_id: C1, journal_entry_id: 'je-1', account_id: INV_ACC, account_code: '1170', account_name: 'المخزون', debit: 200, credit: 0, description: 'مشتريات' },
+      { id: 'l2', company_id: C1, journal_entry_id: 'je-1', account_id: VAT_ACC, account_code: '1180', account_name: 'ضريبة', debit: 30, credit: 0, description: 'ضريبة' },
+      { id: 'l3', company_id: C1, journal_entry_id: 'je-1', account_id: AP_ACC, account_code: '2110', account_name: 'ذمم', debit: 0, credit: 230, description: 'ذمم' },
     );
     mockDb = makeDb(db);
 

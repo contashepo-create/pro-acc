@@ -122,6 +122,7 @@ async function getActualSpending(s: any, companyId: string, projectId: string, c
     // Get actual spending from journal lines linked to this project
     const { data: lines } = await s.from('journal_lines')
       .select('debit')
+      .eq('company_id', companyId)
       .eq('project_id', projectId)
       .in('account_id', accountIds);
 

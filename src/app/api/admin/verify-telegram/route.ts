@@ -32,8 +32,11 @@ export async function POST(request: NextRequest) {
       return error('البريد الإلكتروني غير متطابق مع الجلسة', 401);
     }
 
-    if (session.step !== 'code_sent') {
-      return error('حالة الجلسة غير صالحة', 400);
+    if (session.step !== 'code_sent' || !session.codeSent || Date.now() > session.otpExpiresAt) {
+      return error('رمز التحقق منتهي الصلاحية أو حالة الجلسة غير صالحة', 400);
+    }
+    if ((session.attempts || 0) >= 5) {
+      return error('تم تجاوز عدد محاولات رمز التحقق. يرجى تسجيل الدخول مجدداً', 429);
     }
 
     // Constant-time code comparison to mitigate timing attacks
@@ -41,10 +44,12 @@ export async function POST(request: NextRequest) {
     const a = String(session.code);
     const b = String(code);
     if (a.length !== b.length) {
+      await updateSession(adminId, { attempts: (session.attempts || 0) + 1 });
       return error('رمز التحقق غير صحيح', 401);
     }
     for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
     if (diff !== 0) {
+      await updateSession(adminId, { attempts: (session.attempts || 0) + 1 });
       return error('رمز التحقق غير صحيح', 401);
     }
 

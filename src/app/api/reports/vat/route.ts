@@ -119,8 +119,11 @@ export async function GET(request: NextRequest) {
 
     const purchaseVatTotal = (purchaseInvoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.tax_amount) || 0), 0);
 
-    const effectiveVatCollected = vatCollected > 0 ? vatCollected : invoiceVatTotal;
-    const effectiveVatPaid = vatPaid > 0 ? vatPaid : purchaseVatTotal;
+    // The ledger is authoritative when a VAT control account exists. Falling
+    // back merely because its net movement is zero double-counts reversed or
+    // credited tax documents and overstates the statutory payable.
+    const effectiveVatCollected = vatSalesAcc ? vatCollected : invoiceVatTotal;
+    const effectiveVatPaid = vatPurchasesAcc ? vatPaid : purchaseVatTotal;
     const vatPayable = effectiveVatCollected - effectiveVatPaid;
 
     return success({

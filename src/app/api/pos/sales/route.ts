@@ -20,7 +20,13 @@ export async function POST(req: NextRequest) {
     const s = sb();
     const body = await parseBody(req);
     const { terminal_id, total, payment_method } = body;
-    if (!total) return error('total required');
+    const saleTotal = Number(total);
+    if (!Number.isFinite(saleTotal) || saleTotal <= 0 || Math.abs(saleTotal * 100 - Math.round(saleTotal * 100)) > 1e-8) {
+      return error('إجمالي البيع غير صالح');
+    }
+    if (payment_method !== undefined && !['cash', 'card', 'transfer', 'credit'].includes(String(payment_method))) {
+      return error('طريقة الدفع غير صالحة');
+    }
 
     // عزل مستأجرين: الطرفية (إن حُددت) يجب أن تنتمي لهذه الشركة
     if (terminal_id) {
@@ -43,18 +49,22 @@ export async function POST(req: NextRequest) {
       company_id: auth.companyId,
       terminal_id: terminal_id || null,
       number,
-      total,
+      total: saleTotal,
       payment_method: payment_method || 'cash',
       status: 'completed',
     }).select().single();
 
     if (err) throw err;
 
-    const { data: cashAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1110').maybeSingle();
+    // POS collections must post to a real cash/bank leaf account, never the
+    // 1110 group header. Require an active mapped safe until terminals gain
+    // their own settlement-account column.
+    const { data: settlementSafe } = await s.from('banks_safes').select('account_id')
+      .eq('company_id', auth.companyId).eq('is_active', true).limit(1).maybeSingle();
     const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
-    if (!cashAcc || !revAcc) {
+    if (!settlementSafe?.account_id || !revAcc) {
       await s.from('pos_sales').delete().eq('id', data.id).eq('company_id', auth.companyId);
-      return error('حسابات الصندوق أو الإيراد مفقودة — راجع دليل الحسابات', 400);
+      return error('يلزم ربط خزينة أو بنك نشط وحساب إيراد قبل إتمام مبيعات POS', 400);
     }
     const saleDate = new Date().toISOString().split('T')[0];
     const { journalId, error: jeErr } = await createJournalEntry(auth.companyId, {
@@ -65,8 +75,8 @@ export async function POST(req: NextRequest) {
       reference_id: data.id,
       created_by: auth.userId,
       lines: [
-        { account_id: cashAcc.id, debit: total, credit: 0, description: `مبيعات POS ${number}` },
-        { account_id: revAcc.id, debit: 0, credit: total, description: `إيراد POS ${number}` },
+        { account_id: settlementSafe.account_id, debit: saleTotal, credit: 0, description: `مبيعات POS ${number}` },
+        { account_id: revAcc.id, debit: 0, credit: saleTotal, description: `إيراد POS ${number}` },
       ],
     });
     if (jeErr || !journalId) {

@@ -52,6 +52,7 @@ export async function POST(
     if (entryIds.length > 0) {
       const { data: lines } = await s.from('journal_lines')
         .select('debit, credit, accounts(code, name, type)')
+        .eq('company_id', auth.companyId)
         .in('journal_entry_id', entryIds);
 
       for (const line of lines || []) {
@@ -91,6 +92,7 @@ export async function POST(
         for (const revAcc of revenueAccounts) {
           const { data: revLines } = await s.from('journal_lines')
             .select('debit, credit')
+            .eq('company_id', auth.companyId)
             .in('journal_entry_id', entryIds)
             .eq('account_id', (revAcc as any).id);
 
@@ -112,6 +114,7 @@ export async function POST(
         for (const expAcc of expenseAccounts) {
           const { data: expLines } = await s.from('journal_lines')
             .select('debit, credit')
+            .eq('company_id', auth.companyId)
             .in('journal_entry_id', entryIds)
             .eq('account_id', (expAcc as any).id);
 

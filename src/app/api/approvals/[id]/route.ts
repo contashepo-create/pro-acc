@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -17,11 +17,10 @@ export async function PUT(
     const auth = await requireModulePermission(request, 'approvals', 'update');
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
-    const { action, comments } = body; // action: 'approve' | 'reject'
+    const { action, comments } = await parseBody<{ action?: string; comments?: string }>(request); // action: 'approve' | 'reject'
 
-    if (!action || !['approve', 'reject'].includes(action)) {
-      return error('action يجب أن يكون approve أو reject');
+    if (!action || !['approve', 'reject'].includes(action) || (comments !== undefined && comments.length > 2000)) {
+      return error('بيانات الاعتماد غير صالحة');
     }
 
     // Fetch the approval request

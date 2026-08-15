@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { postReversalEntry } from '@/lib/voucher-utils';
 
 const sb = () => getSupabase();
 
@@ -33,7 +34,7 @@ export async function PUT(
     const auth = await requireModulePermission(request, 'fixed_assets', 'update');
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, unknown>>(request);
 
     const { data: existing } = await s.from('fixed_assets')
       .select('id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
@@ -80,7 +81,8 @@ export async function DELETE(
       return error('لا يمكن حذف أصل له سجل إهلاك — عطّله بدلاً من الحذف');
     }
 
-    // احذف قيد الشراء المرتبط (إن وُجد) حتى لا يبقى قيد يتيم
+    // Financial records are immutable: reverse the acquisition entry and mark
+    // the asset disposed instead of deleting ledger history.
     const { data: je } = await s.from('journal_entries')
       .select('id')
       .eq('reference_type', 'fixed_asset')
@@ -88,13 +90,21 @@ export async function DELETE(
       .eq('company_id', auth.companyId)
       .maybeSingle();
     if (je) {
-      await s.from('journal_lines').delete().eq('journal_entry_id', (je as any).id);
-      await s.from('journal_entries').delete().eq('id', (je as any).id).eq('company_id', auth.companyId);
+      const { error: reversalError } = await postReversalEntry(auth.companyId, {
+        journalEntryId: (je as any).id,
+        referenceType: 'fixed_asset_disposal_reversal',
+        referenceId: id,
+        description: 'عكس قيد شراء أصل ثابت عند استبعاده',
+        userId: auth.userId,
+      });
+      if (reversalError) throw reversalError;
     }
 
-    const { error: delErr } = await s.from('fixed_assets').delete().eq('id', id).eq('company_id', auth.companyId);
-    if (delErr) throw delErr;
-    return success({ deleted: true });
+    const { error: disposeError } = await s.from('fixed_assets')
+      .update({ status: 'disposed' })
+      .eq('id', id).eq('company_id', auth.companyId);
+    if (disposeError) throw disposeError;
+    return success({ disposed: true });
   } catch (err) {
     return handleApiError(err);
   }
