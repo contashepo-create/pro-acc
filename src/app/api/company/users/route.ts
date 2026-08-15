@@ -98,9 +98,6 @@ export async function POST(request: NextRequest) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return error('صيغة البريد الإلكتروني غير صحيحة');
     }
-    if (!passwordPolicy.safeParse(password).success) {
-      return error('كلمة المرور لا تفي بسياسة الأمان');
-    }
     const validRoles = ['admin', 'accountant', 'manager', 'supervisor'];
     if (!role || !validRoles.includes(role)) {
       return error(`الدور غير صالح. الأدوار المتاحة: ${validRoles.join('، ')}`);
@@ -116,6 +113,10 @@ export async function POST(request: NextRequest) {
       if (adminCount && adminCount > 0) {
         return error('لا يمكن إنشاء أكثر من حساب مدير واحد للشركة. يرجى اختيار دور مدير (manager) أو محاسب للمستخدم الجديد لمنع تخطي الصلاحيات حماية للنظام ماليًا.', 403);
       }
+    }
+
+    if (!passwordPolicy.safeParse(password).success) {
+      return error('كلمة المرور لا تفي بسياسة الأمان');
     }
 
     const { count: currentCount } = await s
