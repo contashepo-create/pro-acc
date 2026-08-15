@@ -119,7 +119,7 @@ async function seedLedger() {
     ['3200', 'Retained earnings', 'equity', false], ['1230',  'Assets', 'asset', true], ['1290', 'Accumulated depreciation', 'asset', true],
     ['1130', 'Receivables', 'asset', false], ['4100', 'Revenue', 'revenue', false], ['4200', 'Other revenue', 'revenue', false], ['5100', 'Expense', 'expense', false],
     ['5210', 'Salaries', 'expense', false], ['5400', 'General expense', 'expense', false],
-    ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false],
+    ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2180', 'Customer advances', 'liability', false],
     ['1160', 'Advances', 'asset', false], ['1150', 'Custodies', 'asset', false],
     ['1180', 'VAT input', 'asset', false], ['2120', 'VAT output', 'liability', false],
   ];
@@ -182,6 +182,14 @@ async function smokeAtomicWriters(ids) {
     [c,contact,b,JSON.stringify([{invoice_id:salesInvoice,amount:80}]),u]);
   assert.ok(receipt.rows[0].result.journal_entry_id);
   assert.equal((await db.query(`SELECT status FROM invoices WHERE id=$1`,[salesInvoice])).rows[0].status,'paid');
+  const gatewayInvoice='71000000-0000-4000-8000-000000000002';
+  const paymentRecord='72000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,2,'2026-02-01','2026-03-01',$3,100,0,0,100,0,'unpaid')`,[gatewayInvoice,c,contact]);
+  await db.query(`INSERT INTO payment_records(id,company_id,invoice_id,payment_gateway_id,amount,status,created_by,settlement_account_id) VALUES($1,$2,$3,'gateway-1',120,'pending',$4,$5)`,[paymentRecord,c,gatewayInvoice,u,a['1110']]);
+  const finalizedPayment=await db.query(`SELECT finalize_gateway_payment($1,$2,'paid','{}',$3) result`,[c,paymentRecord,u]);
+  assert.equal(Number(finalizedPayment.rows[0].result.customer_advance),20);
+  const replayPayment=await db.query(`SELECT finalize_gateway_payment($1,$2,'paid','{}',$3) result`,[c,paymentRecord,u]);
+  assert.equal(replayPayment.rows[0].result.already_processed,true);
 
   await db.query(`SELECT create_employee_advance($1,$2,'2026-02-01',100,'advance',$3,$4)`, [c, e, b, u]);
   await db.query(`SELECT post_payroll_batch($1,'2026-02-01',$2::uuid[],$3)`, [c, [e], u]);

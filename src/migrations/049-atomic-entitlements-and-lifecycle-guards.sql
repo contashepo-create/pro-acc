@@ -1611,6 +1611,56 @@ $$;
 REVOKE ALL ON FUNCTION public.deactivate_bank_safe(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.deactivate_bank_safe(UUID,UUID,UUID) TO service_role;
 
+ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS settlement_account_id UUID REFERENCES accounts(id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_gateway_id ON payment_records(payment_gateway_id) WHERE payment_gateway_id IS NOT NULL AND payment_gateway_id NOT LIKE 'manual_%';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_record_journal ON payment_records(journal_entry_id) WHERE journal_entry_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.finalize_gateway_payment(
+ p_company_id UUID,p_payment_record_id UUID,p_final_status TEXT,p_gateway_response TEXT,p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_payment payment_records%ROWTYPE; v_invoice invoices%ROWTYPE; v_settlement UUID; v_ar UUID; v_advance UUID;
+ v_remaining NUMERIC; v_applied NUMERIC; v_excess NUMERIC; v_new_paid NUMERIC; v_lines JSONB; v_journal JSONB; v_journal_id UUID;
+BEGIN
+ IF p_final_status NOT IN ('authorized','paid','failed','cancelled') OR LENGTH(COALESCE(p_gateway_response,''))>100000 THEN RAISE EXCEPTION 'حالة الدفع غير صالحة'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+ SELECT * INTO v_payment FROM payment_records WHERE id=p_payment_record_id AND company_id=p_company_id FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION 'سجل الدفع غير موجود'; END IF;
+ IF v_payment.status='paid' AND v_payment.journal_entry_id IS NOT NULL THEN RETURN to_jsonb(v_payment)||jsonb_build_object('already_processed',TRUE); END IF;
+ IF v_payment.status IN ('refunded','cancelled') THEN RAISE EXCEPTION 'لا يمكن تغيير حالة سجل دفع نهائي'; END IF;
+ IF p_final_status<>'paid' THEN
+  UPDATE payment_records SET status=p_final_status,gateway_response=p_gateway_response,updated_at=NOW() WHERE id=v_payment.id RETURNING * INTO v_payment;
+  RETURN to_jsonb(v_payment)||jsonb_build_object('already_processed',FALSE);
+ END IF;
+ SELECT * INTO v_invoice FROM invoices WHERE id=v_payment.invoice_id AND company_id=p_company_id FOR UPDATE;
+ IF NOT FOUND OR v_invoice.status='cancelled' THEN RAISE EXCEPTION 'الفاتورة غير موجودة أو ملغاة'; END IF;
+ SELECT id INTO v_settlement FROM accounts WHERE company_id=p_company_id AND id=COALESCE(v_payment.settlement_account_id,
+  (SELECT id FROM accounts WHERE company_id=p_company_id AND code='1110' LIMIT 1)) AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE FOR UPDATE;
+ SELECT id INTO v_ar FROM accounts WHERE company_id=p_company_id AND code='1130' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+ IF v_settlement IS NULL OR v_ar IS NULL OR v_payment.amount<=0 THEN RAISE EXCEPTION 'حسابات تحصيل الدفع غير مكتملة'; END IF;
+ v_remaining:=GREATEST(ROUND(v_invoice.total-v_invoice.paid_amount,2),0);
+ v_applied:=LEAST(v_payment.amount,v_remaining); v_excess:=ROUND(v_payment.amount-v_applied,2);
+ v_lines:=jsonb_build_array(jsonb_build_object('accountId',v_settlement,'debit',v_payment.amount,'credit',0,'description','سداد إلكتروني','contactId',v_invoice.contact_id));
+ IF v_applied>0 THEN v_lines:=v_lines||jsonb_build_array(jsonb_build_object('accountId',v_ar,'debit',0,'credit',v_applied,'description','سداد فاتورة','contactId',v_invoice.contact_id)); END IF;
+ IF v_excess>0 THEN
+  SELECT id INTO v_advance FROM accounts WHERE company_id=p_company_id AND code='2180' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  IF v_advance IS NULL THEN RAISE EXCEPTION 'حساب دفعات العملاء المقدمة غير موجود لمعالجة الزيادة'; END IF;
+  v_lines:=v_lines||jsonb_build_array(jsonb_build_object('accountId',v_advance,'debit',0,'credit',v_excess,'description','دفعة عميل زائدة','contactId',v_invoice.contact_id));
+ END IF;
+ v_journal:=create_journal_entry(p_company_id,CURRENT_DATE,'general','سداد إلكتروني — فاتورة '||v_invoice.number,p_user_id,v_lines);
+ v_journal_id:=(v_journal->>'id')::UUID;
+ UPDATE journal_entries SET reference_type='payment',reference_id=v_payment.id WHERE id=v_journal_id AND company_id=p_company_id;
+ v_new_paid:=ROUND(v_invoice.paid_amount+v_applied,2);
+ UPDATE invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_invoice.total-0.005 THEN 'paid' WHEN v_new_paid>0 THEN 'partial' ELSE 'unpaid' END,
+  paid_at=CASE WHEN v_new_paid>=v_invoice.total-0.005 THEN NOW() ELSE paid_at END WHERE id=v_invoice.id;
+ UPDATE payment_records SET status='paid',gateway_response=p_gateway_response,journal_entry_id=v_journal_id,updated_at=NOW()
+  WHERE id=v_payment.id RETURNING * INTO v_payment;
+ INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,p_user_id,'finalize','payment_record',v_payment.id,jsonb_build_object('status','paid','journal_entry_id',v_journal_id,'invoice_applied',v_applied,'customer_advance',v_excess));
+ RETURN to_jsonb(v_payment)||jsonb_build_object('already_processed',FALSE,'invoice_applied',v_applied,'customer_advance',v_excess);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.finalize_gateway_payment(UUID,UUID,TEXT,TEXT,UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.finalize_gateway_payment(UUID,UUID,TEXT,TEXT,UUID) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.register_company(
   p_company_name TEXT, p_email TEXT, p_phone TEXT, p_country TEXT, p_country_code TEXT,
   p_currency_code TEXT, p_currency_symbol TEXT, p_locale TEXT, p_vat_rate NUMERIC,
