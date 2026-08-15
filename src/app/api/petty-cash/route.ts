@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, getPaginationParams, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
 
 const sb = () => getSupabase();
 
@@ -23,11 +22,12 @@ export async function GET(request: NextRequest) {
 
     if (boxId) boxQuery = boxQuery.eq('id', boxId);
 
-    const { data: boxes } = await boxQuery;
+    const { data: boxes, error: boxesErr } = await boxQuery;
+    if (boxesErr) throw boxesErr;
 
     // Get transactions
     let txQuery = s.from('petty_cash_transactions')
-      .select('*, petty_cash_boxes(name)')
+      .select('*, petty_cash_boxes(name)', { count: 'exact' })
       .eq('company_id', auth.companyId);
 
     if (boxId) txQuery = txQuery.eq('box_id', boxId);
@@ -39,23 +39,16 @@ export async function GET(request: NextRequest) {
 
     if (qErr) throw qErr;
 
-    // Calculate current balance for each box
-    const boxesWithBalance = await Promise.all((boxes || []).map(async (box: any) => {
-      const { data: txs } = await s.from('petty_cash_transactions')
-        .select('type, amount')
-        .eq('box_id', box.id);
-
-      const inflow = (txs || [])
-        .filter((t: any) => t.type === 'deposit')
-        .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
-      const outflow = (txs || [])
-        .filter((t: any) => t.type === 'withdrawal')
-        .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
-
-      return {
-        ...box,
-        current_balance: parseFloat(box.initial_balance || 0) + inflow - outflow,
-      };
+    // Aggregate in PostgreSQL so balances are not truncated by API row limits.
+    const { data: balances, error: balanceErr } = await s.rpc('get_petty_cash_balances', {
+      p_company_id: auth.companyId,
+      p_box_id: boxId || null,
+    });
+    if (balanceErr) throw balanceErr;
+    const balanceMap = new Map((balances || []).map((row: any) => [row.box_id, Number(row.current_balance) || 0]));
+    const boxesWithBalance = (boxes || []).map((box: any) => ({
+      ...box,
+      current_balance: balanceMap.get(box.id) ?? Number(box.initial_balance || 0),
     }));
 
     return success({
@@ -77,7 +70,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'petty_cash', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, any>>(request);
 
     if (!body.box_id || !body.type || !body.amount || !body.reason) {
       return error('الصندوق والنوع والمبلغ والسبب مطلوبة');
@@ -87,61 +80,35 @@ export async function POST(request: NextRequest) {
       return error('النوع يجب أن يكون deposit أو withdrawal');
     }
 
-    if (body.amount <= 0) {
-      return error('المبلغ يجب أن يكون أكبر من صفر');
+    const amount = Number(body.amount);
+    if (!Number.isFinite(amount) || amount <= 0 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) {
+      return error('المبلغ غير صالح');
     }
 
-    // عزل مستأجرين: الصندوق والمشروع (إن وُجد) يجب أن ينتميا لهذه الشركة
-    const { data: box } = await s.from('petty_cash_boxes')
-      .select('id, daily_limit')
-      .eq('id', body.box_id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (!box) return error('الصندوق غير موجود', 404);
-
-    if (body.project_id) {
-      const { data: proj } = await s.from('projects')
-        .select('id').eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!proj) return error('المشروع غير موجود', 404);
+    const date = body.date || today();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || typeof body.reason !== 'string' || body.reason.length > 1000 ||
+        (body.receipt_url !== undefined && body.receipt_url !== null && typeof body.receipt_url !== 'string') ||
+        (body.reference_number !== undefined && body.reference_number !== null && typeof body.reference_number !== 'string')) {
+      return error('بيانات حركة الصندوق غير صالحة', 422);
     }
 
-    // Check daily limit for withdrawals
-    if (body.type === 'withdrawal') {
-      const today = new Date().toISOString().split('T')[0];
-      const { data: todayTxs } = await s.from('petty_cash_transactions')
-        .select('amount')
-        .eq('box_id', body.box_id)
-        .eq('type', 'withdrawal')
-        .eq('date', today);
-
-      const todayTotal = (todayTxs || []).reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
-
-      const limit = parseFloat((box as any).daily_limit || 0);
-      if (limit > 0 && todayTotal + body.amount > limit) {
-        return error(`تجاوزت الحد اليومي للسحب (${limit} ر.س). المتبقي اليوم: ${(limit - todayTotal).toFixed(2)} ر.س`);
-      }
-    }
-
-    const txId = generateId();
-    const { data, error: insertErr } = await s.from('petty_cash_transactions')
-      .insert({
-        id: txId,
-        company_id: auth.companyId,
-        box_id: body.box_id,
-        type: body.type,
-        amount: body.amount,
-        reason: body.reason,
-        category: body.category || 'general', // general, transport, supplies, meals, misc
-        project_id: body.project_id || null,
-        receipt_url: body.receipt_url || null,
-        reference_number: body.reference_number || null,
-        date: body.date || today(),
-        created_by: auth.userId,
-      })
-      .select('*, petty_cash_boxes(name)')
-      .single();
-
-    if (insertErr) throw insertErr;
+    // Box lock, tenant/project/account validation, daily limit, available
+    // balance, transaction, journal and audit all commit atomically.
+    const { data, error: postErr } = await s.rpc('post_petty_cash_transaction', {
+      p_company_id: auth.companyId,
+      p_box_id: body.box_id,
+      p_type: body.type,
+      p_amount: amount,
+      p_reason: body.reason,
+      p_category: body.category || 'general',
+      p_project_id: body.project_id || null,
+      p_receipt_url: body.receipt_url || '',
+      p_reference_number: body.reference_number || '',
+      p_date: date,
+      p_counterpart_account_id: body.account_id || null,
+      p_user_id: auth.userId,
+    });
+    if (postErr) throw postErr;
     return success(data, 201);
   } catch (err) {
     return handleApiError(err);

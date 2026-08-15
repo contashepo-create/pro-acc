@@ -1,9 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { createJournalEntry } from '@/lib/journal-utils';
-import { ACCOUNT_CODES } from '@/lib/constants';
-import { checkBankBalance } from '@/lib/notifications';
 
 const sb = () => getSupabase();
 
@@ -30,7 +27,8 @@ export async function GET(request: NextRequest) {
         banks_safes(name),
         contacts(name)
       `, { count: 'exact' })
-      .eq('company_id', auth.companyId);
+      .eq('company_id', auth.companyId)
+      .neq('status', 'cancelled');
 
     if (from) query = query.gte('date', from);
     if (to) query = query.lte('date', to);
@@ -44,10 +42,7 @@ export async function GET(request: NextRequest) {
       .order('date', { ascending: false })
       .range(offset, offset + pageSize - 1);
 
-    if (result.error) {
-      console.error('Cash fetch error:', result.error);
-      return success({ transactions: [], rows: [], total: 0, page, pageSize, totalPages: 0 });
-    }
+    if (result.error) throw result.error;
 
     const transactions = (result.data || []).map((t: any) => ({
       ...t,
@@ -74,9 +69,9 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'cash', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, unknown>>(request);
 
     const {
       date,
@@ -91,162 +86,48 @@ export async function POST(request: NextRequest) {
       description,
       tax_rate,
       tax_enabled,
-    } = body;
+    } = body as Record<string, any>;
 
     const normalizedType = type === 'receipt' ? 'revenue' : type;
-    if (!date || !normalizedType || !amount || !reason) {
-      return error('التاريخ، النوع، المبلغ، والسبب مطلوبة', 400);
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !normalizedType || !amount || typeof reason!=='string' || !reason.trim() || reason.length>1000) {
+      return error('التاريخ، النوع، المبلغ، والسبب مطلوبة وصحيحة', 400);
     }
 
     if (normalizedType !== 'revenue' && normalizedType !== 'expense') {
       return error('نوع الحركة يجب أن يكون قبض أو صرف', 400);
     }
 
-    if (parseFloat(amount) <= 0) {
-      return error('المبلغ يجب أن يكون أكبر من صفر', 400);
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0 || Math.abs(parsedAmount * 100 - Math.round(parsedAmount * 100)) > 1e-8) {
+      return error('المبلغ يجب أن يكون أكبر من صفر وبمنزلتين عشريتين كحد أقصى', 400);
+    }
+    if (!bankSafeId) {
+      return error('الخزينة أو البنك مطلوب للحركة النقدية', 400);
     }
 
     const txnType = normalizedType;
-
-    // Get account info if specified — عزل مستأجرين صارم
-    let accountInfo: any = null;
-    if (accountId) {
-      const { data } = await s.from('accounts')
-        .select('id, name, type, name_en, current_balance')
-        .eq('id', accountId)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-      if (!data) return error('الحساب المحدد غير موجود', 404);
-      accountInfo = data;
+    const vRate=(tax_enabled && tax_rate!==undefined) ? Number(tax_rate) : 0;
+    if (!Number.isFinite(vRate) || vRate<0 || vRate>1 || Math.abs(vRate*10000-Math.round(vRate*10000))>1e-8) {
+      return error('نسبة الضريبة غير صالحة');
     }
-
-    // Get bank safe info if specified — عزل مستأجرين صارم
-    let bankSafeInfo: any = null;
-    if (bankSafeId) {
-      const { data } = await s.from('banks_safes')
-        .select('id, name, type, account_id')
-        .eq('id', bankSafeId)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-      if (!data) return error('الخزينة/البنك المحدد غير موجود', 404);
-      bankSafeInfo = data;
-    }
-
-    // Check bank balance if bank safe provided
-    if (bankSafeInfo && bankSafeInfo.account_id) {
-      const balance = await checkBankBalance(
-        bankSafeInfo.id,
-        parseFloat(amount),
-        auth.companyId
-      );
-      if (!balance.allowed) {
-        return error(balance.message || 'الرصيد غير كافٍ للصرف هذا المبلغ', 400);
-      }
-    }
-
-    // Determine counterpart account based on transaction type
-    const vRate = (tax_enabled && tax_rate) ? Number(tax_rate) : 0;
-    const baseAmount = parseFloat(amount);
-    const taxAmount = txnType === 'revenue' ? baseAmount * vRate / (1 + vRate) : 0;
-    const expenseTaxAmount = txnType === 'expense' ? baseAmount * vRate : 0;
-    const totalPayment = txnType === 'expense' ? baseAmount + expenseTaxAmount : baseAmount;
-
-    // النقدية (الطرف النقدي) — الخزينة/البنك إن وُجد وإلا الحساب المحدد
-    const cashAccountId = bankSafeInfo?.account_id || accountId || null;
-
-    // الحساب المقابل (إيراد/مصروف) — حساب مختار من الواجهة أو حساب تحكم
-    let counterpartAccountId: string | null = accountId || null;
-    if (txnType === 'revenue' && !accountId) {
-      const { data: revAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).eq('company_id', auth.companyId).maybeSingle();
-      counterpartAccountId = revAcc?.id || null;
-    } else if (txnType === 'expense' && !accountId) {
-      const { data: expAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.DIRECT_COSTS).eq('company_id', auth.companyId).maybeSingle();
-      counterpartAccountId = expAcc?.id || null;
-    }
-
-    if (!cashAccountId || !counterpartAccountId) {
-      return error('الحسابات المحاسبية للحركة غير مكتملة (النقدية أو الحساب المقابل) — راجع شجرة الحسابات', 400);
-    }
-
-    // حسابات الضريبة إلزامية عند احتسابها — وإلا قيد غير متوازن
-    let vatSalesAccId: string | null = null;
-    let vatPurchAccId: string | null = null;
-    if (taxAmount > 0) {
-      const { data: vatSalesAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.VAT_SALES).eq('company_id', auth.companyId).maybeSingle();
-      if (!vatSalesAcc) return error('حساب ضريبة المبيعات (2120) غير موجود');
-      vatSalesAccId = vatSalesAcc.id;
-    }
-    if (expenseTaxAmount > 0) {
-      const { data: vatPurchAcc } = await s.from('accounts').select('id').eq('code', ACCOUNT_CODES.VAT_PURCHASES).eq('company_id', auth.companyId).maybeSingle();
-      if (!vatPurchAcc) return error('حساب ضريبة المشتريات (1180) غير موجود');
-      vatPurchAccId = vatPurchAcc.id;
-    }
-
-    // Insert cash transaction record
-    const { data: transaction, error: insertErr } = await s.from('cash_transactions')
-      .insert({
-        company_id: auth.companyId,
-        date,
-        type: txnType,
-        amount: baseAmount,
-        account_id: counterpartAccountId,
-        bank_safe_id: bankSafeId || null,
-        contact_id: contactId || null,
-        project_id: projectId || null,
-        category_id: categoryId || null,
-        reason,
-        created_by: auth.userId,
-        tax_rate: vRate,
-        tax_amount: taxAmount || expenseTaxAmount,
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
-
-    // القيد المحاسبي إلزامي متوازن — فشله يلغي الحركة بالكامل
-    const journalLines: any[] = [];
-    if (txnType === 'revenue') {
-      // قبض: مدين النقدية (بالمبلغ الشامل) / دائن الإيراد (الصافي) + ضريبة مخرجات
-      const netRevenue = baseAmount - taxAmount;
-      journalLines.push({ account_id: cashAccountId, debit: baseAmount, credit: 0, description: description || reason, project_id: projectId || null, contact_id: contactId || null });
-      journalLines.push({ account_id: counterpartAccountId, debit: 0, credit: netRevenue, description: description || reason, project_id: projectId || null, contact_id: contactId || null });
-      if (taxAmount > 0 && vatSalesAccId) {
-        journalLines.push({ account_id: vatSalesAccId, debit: 0, credit: taxAmount, description: `ضريبة مخرجات: ${description || reason}`, project_id: projectId || null, contact_id: contactId || null });
-      }
-    } else {
-      // صرف: مدين المصروف (الصافي) + ضريبة مدخلات / دائن النقدية (الشامل)
-      journalLines.push({ account_id: counterpartAccountId, debit: baseAmount, credit: 0, description: description || reason, project_id: projectId || null, contact_id: contactId || null });
-      journalLines.push({ account_id: cashAccountId, debit: 0, credit: totalPayment, description: description || reason, project_id: projectId || null, contact_id: contactId || null });
-      if (expenseTaxAmount > 0 && vatPurchAccId) {
-        journalLines.push({ account_id: vatPurchAccId, debit: expenseTaxAmount, credit: 0, description: `ضريبة مدخلات: ${description || reason}`, project_id: projectId || null, contact_id: contactId || null });
-      }
-    }
-
-    const je = await createJournalEntry(auth.companyId, {
-      date,
-      type: 'general',
-      description: description || reason,
-      lines: journalLines,
-      reference_type: 'cash_transaction',
-      reference_id: (transaction as any).id,
-      created_by: auth.userId,
+    if (description!==undefined && (typeof description!=='string' || description.length>2000)) return error('الوصف غير صالح');
+    const { data: transaction, error: rpcErr } = await s.rpc('post_cash_transaction', {
+      p_company_id: auth.companyId,
+      p_date: date,
+      p_type: txnType,
+      p_amount: parsedAmount,
+      p_account_id: accountId || null,
+      p_category_id: categoryId || null,
+      p_bank_safe_id: bankSafeId,
+      p_contact_id: contactId || null,
+      p_project_id: projectId || null,
+      p_reason: reason.trim(),
+      p_description: typeof description==='string' ? description.trim() : '',
+      p_tax_rate: vRate,
+      p_created_by: auth.userId,
     });
-
-    if (je.error || !je.journalId) {
-      await s.from('cash_transactions').delete().eq('id', (transaction as any).id).eq('company_id', auth.companyId);
-      throw je.error || new Error('فشل قيد الحركة النقدية');
-    }
-
-    const { data: linked, error: linkErr } = await s.from('cash_transactions')
-      .update({ journal_entry_id: je.journalId })
-      .eq('id', (transaction as any).id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-    if (linkErr) throw linkErr;
-
-    return success(linked, 201);
+    if (rpcErr) throw rpcErr;
+    return success(transaction,201);
   } catch (err) {
     return handleApiError(err);
   }

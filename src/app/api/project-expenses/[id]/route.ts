@@ -1,8 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { deleteJournalEntry } from '@/lib/journal-utils';
-import { ACCOUNT_CODES, PROJECT_EXPENSE_CODES } from '@/lib/constants';
+import { PROJECT_EXPENSE_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 
@@ -53,6 +52,17 @@ export async function PUT(
     if (!existing) return notFound();
 
     const oldExpense = existing as any;
+    if (oldExpense.journal_entry_id && Object.keys(body).some((field) => field!=='notes')) {
+      return error('لا يمكن تعديل بيانات مصروف مرحّل؛ ألغِه بقيد عكسي وأنشئ مصروفاً جديداً', 409);
+    }
+    if (body.notes!==undefined && (typeof body.notes!=='string' || body.notes.length>2000)) return error('الملاحظات غير صالحة');
+    if (body.amount !== undefined && (!Number.isFinite(Number(body.amount)) || Number(body.amount) <= 0 || Math.abs(Number(body.amount) * 100 - Math.round(Number(body.amount) * 100)) > 1e-8)) return error('المبلغ غير صالح');
+    if (body.date !== undefined && !Number.isFinite(Date.parse(body.date))) return error('التاريخ غير صالح');
+    if (body.contact_id) {
+      const { data: contact } = await s.from('contacts').select('id')
+        .eq('id', body.contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف غير موجود', 404);
+    }
     const updateData: any = {};
 
     if (body.description !== undefined) updateData.description = body.description;
@@ -61,10 +71,12 @@ export async function PUT(
     if (body.contact_id !== undefined) updateData.contact_id = body.contact_id;
     if (body.notes !== undefined) updateData.notes = body.notes;
 
-    if (body.expense_type !== undefined && PROJECT_EXPENSE_CODES[body.expense_type]) {
+    if (body.expense_type !== undefined) {
+      if (!PROJECT_EXPENSE_CODES[body.expense_type]) return error('نوع المصروف غير صالح');
       updateData.expense_type = body.expense_type;
       updateData.account_code = PROJECT_EXPENSE_CODES[body.expense_type];
     }
+    if (Object.keys(updateData).length===0) return error('لا توجد حقول صالحة للتعديل');
 
     const { data: updated, error: updateErr } = await s.from('project_expenses')
       .update(updateData)
@@ -73,62 +85,6 @@ export async function PUT(
       .single();
 
     if (updateErr) throw updateErr;
-
-    if (body.amount !== undefined && oldExpense.journal_entry_id) {
-      await deleteJournalEntry(auth.companyId, oldExpense.journal_entry_id);
-
-      const accountCode = body.expense_type
-        ? PROJECT_EXPENSE_CODES[body.expense_type]
-        : oldExpense.account_code;
-
-      const { data: expenseAcc } = await s.from('accounts')
-        .select('id')
-        .eq('code', accountCode)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-
-      const { data: cashAcc } = await s.from('accounts')
-        .select('id')
-        .eq('code', ACCOUNT_CODES.CASH)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-
-      if (expenseAcc && cashAcc) {
-        const { createJournalEntry } = await import('@/lib/journal-utils');
-        const je = await createJournalEntry(auth.companyId, {
-          date: body.date || oldExpense.date,
-          type: 'general',
-          description: `تعديل مصروف مشروع: ${body.description || oldExpense.description}`,
-          lines: [
-            {
-              account_id: (expenseAcc as any).id,
-              debit: body.amount,
-              credit: 0,
-              description: body.description || oldExpense.description,
-              project_id: oldExpense.project_id,
-              contact_id: body.contact_id || oldExpense.contact_id,
-            },
-            {
-              account_id: (cashAcc as any).id,
-              debit: 0,
-              credit: body.amount,
-              description: `دفع مصروف مشروع`,
-              project_id: oldExpense.project_id,
-              contact_id: body.contact_id || oldExpense.contact_id,
-            },
-          ],
-          reference_type: 'project_expense',
-          reference_id: id,
-          created_by: auth.userId,
-        });
-
-        if (!je.error) {
-          await s.from('project_expenses')
-            .update({ journal_entry_id: je.journalId })
-            .eq('id', id).eq('company_id', auth.companyId);
-        }
-      }
-    }
 
     return success(updated);
   } catch (err) {
@@ -155,12 +111,21 @@ export async function DELETE(
 
     const expense = existing as any;
 
+    if (expense.status === 'rejected') return error('المصروف ملغى بالفعل', 409);
     if (expense.journal_entry_id) {
-      await deleteJournalEntry(auth.companyId, expense.journal_entry_id);
+      const { data: cancelled, error: rpcErr } = await s.rpc('cancel_project_expense', {
+        p_company_id: auth.companyId,
+        p_expense_id: id,
+        p_user_id: auth.userId,
+      });
+      if (rpcErr) throw rpcErr;
+      return success(cancelled);
     }
 
-    await s.from('project_expenses').delete().eq('id', id).eq('company_id', auth.companyId);
-
+    if (expense.status !== 'draft') return error('لا يمكن حذف مصروف دخل دورة الموافقة', 409);
+    const { error: deleteError } = await s.from('project_expenses').delete()
+      .eq('id', id).eq('company_id', auth.companyId).eq('status', 'draft');
+    if (deleteError) throw deleteError;
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);

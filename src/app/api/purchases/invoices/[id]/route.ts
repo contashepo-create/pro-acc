@@ -27,11 +27,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const { data: items } = await s.from('purchase_invoice_items')
       .select('*')
       .eq('purchase_invoice_id', id)
+      .eq('company_id', auth.companyId)
       .order('id');
 
     const { data: paid } = await s.from('disbursement_invoice_items')
       .select('amount')
-      .eq('purchase_invoice_id', id);
+      .eq('purchase_invoice_id', id)
+      .eq('company_id', auth.companyId);
 
     const paidAmount = (paid || []).reduce(
       (sum: number, p: any) => sum + (parseFloat(p.amount) || 0), 0
@@ -90,7 +92,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       // لا إلغاء لفاتورة عليها سندات صرف — عكس المدفوعات مسؤولية قسم السندات
       const { data: pays } = await s.from('disbursement_invoice_items')
         .select('amount')
-        .eq('purchase_invoice_id', id);
+        .eq('purchase_invoice_id', id)
+        .eq('company_id', auth.companyId);
       const paidAmount = (pays || []).reduce(
         (sum: number, p: any) => sum + (parseFloat(p.amount) || 0), 0
       );
@@ -153,6 +156,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const { data: pays } = await s.from('disbursement_invoice_items')
       .select('id')
       .eq('purchase_invoice_id', id)
+      .eq('company_id', auth.companyId)
       .limit(1);
     if (pays && pays.length > 0) {
       return error('لا يمكن حذف فاتورة عليها سندات صرف — اعكس السندات أو ألغِ الفاتورة');
@@ -161,8 +165,11 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     if ((inv as Record<string, any>).journal_entry_id) {
       return error('لا يمكن حذف فاتورة مُرحَّلة — استخدم الإلغاء لعكس القيد المحاسبي');
     }
+    if ((inv as Record<string, any>).purchase_order_id) {
+      return error('لا يمكن حذف فاتورة مرتبطة بأمر شراء أو تحديث مخزون', 409);
+    }
 
-    await s.from('purchase_invoice_items').delete().eq('purchase_invoice_id', id);
+    await s.from('purchase_invoice_items').delete().eq('purchase_invoice_id', id).eq('company_id', auth.companyId);
     await s.from('purchase_invoices')
       .delete()
       .eq('id', id)

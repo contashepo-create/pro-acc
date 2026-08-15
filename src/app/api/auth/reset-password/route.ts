@@ -5,73 +5,26 @@ import { hashPassword } from '@/lib/auth';
 import { resetPasswordSchema } from '@/lib/validation';
 import { createHash } from 'crypto';
 
-const sb = () => getSupabase();
-
 export async function POST(request: NextRequest) {
   try {
-    const body = await parseBody<{ token: string; password: string }>(request);
-    const parsed = resetPasswordSchema.safeParse(body);
+    const parsed = resetPasswordSchema.safeParse(await parseBody<{ token: string; password: string }>(request));
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { token, password } = parsed.data;
-    const s = sb();
-
-    // Hash incoming token to match stored hash
-    const hashedToken = createHash('sha256').update(token).digest('hex');
-
-    // Try both hashed and plain for backward compatibility during migration
-    let tokenData = null;
-    let tokenError = null;
-
-    // First try hashed
-    const { data: hashedData, error: hashedErr } = await s.from('password_reset_tokens')
-      .select('id, user_id, expires_at, used')
-      .eq('token', hashedToken)
-      .maybeSingle();
-
-    if (hashedData) {
-      tokenData = hashedData;
-    } else {
-      // Fallback to plain (for tokens created before fix)
-      const { data: plainData, error: plainErr } = await s.from('password_reset_tokens')
-        .select('id, user_id, expires_at, used')
-        .eq('token', token)
-        .maybeSingle();
-      tokenData = plainData;
-      tokenError = plainErr;
-      if (hashedErr && plainErr) tokenError = hashedErr;
+    const tokenHash = createHash('sha256').update(parsed.data.token).digest('hex');
+    const passwordHash = await hashPassword(parsed.data.password);
+    // Token lock/consumption, password update, session-version bump and all-link
+    // revocation commit together. Two concurrent requests cannot both win.
+    const { error: resetErr } = await getSupabase().rpc('consume_password_reset_token', {
+      p_token_hash: tokenHash,
+      p_password_hash: passwordHash,
+    });
+    if (resetErr) {
+      const message = String(resetErr.message || '');
+      if (resetErr.code === 'P0001' || message.includes('الرمز') || message.includes('المستخدم')) {
+        return error(message.includes('انتهت') ? 'انتهت صلاحية الرمز. يرجى طلب رابط جديد' : 'الرمز غير صالح أو مستخدم', 400);
+      }
+      throw resetErr;
     }
-
-    if (tokenError || !tokenData) return error('الرمز غير صالح', 400);
-
-    if (tokenData.used) return error('تم استخدام هذا الرمز مسبقاً', 400);
-
-    if (new Date(tokenData.expires_at) < new Date()) {
-      return error('انتهت صلاحية الرمز. يرجى طلب رابط جديد', 400);
-    }
-
-    const passwordHash = await hashPassword(password);
-
-    // SECURITY: Bump token_version so every previously-issued JWT for this
-    // user (old sessions on any device) becomes invalid immediately.
-    const { data: cur } = await s.from('users')
-      .select('token_version')
-      .eq('id', tokenData.user_id)
-      .maybeSingle();
-    const nextVersion = (Number((cur as Record<string, any>)?.token_version) || 0) + 1;
-
-    await s.from('users')
-      .update({
-        password_hash: passwordHash,
-        token_version: nextVersion,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', tokenData.user_id);
-
-    await s.from('password_reset_tokens')
-      .update({ used: true })
-      .eq('id', tokenData.id);
-
     return success({ message: 'تم تغيير كلمة المرور بنجاح' });
   } catch (err) {
     return serverError(err);

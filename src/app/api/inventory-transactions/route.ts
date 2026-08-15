@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { applyStockMovement } from '@/lib/stock-movements';
 import { inventoryMovementSchema } from '@/lib/validation';
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'inventory_transactions', 'create');
-    const body = await request.json();
+    const body = await parseBody(request);
 
     const parsed = inventoryMovementSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);

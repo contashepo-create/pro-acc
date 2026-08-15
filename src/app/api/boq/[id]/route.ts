@@ -42,20 +42,37 @@ export async function PUT(
     const body = await parseBody(req);
 
     const { data: existing } = await s.from('boq_items')
-      .select('id')
+      .select('id, project_id, quantity, unit_price')
       .eq('id', id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
     if (!existing) return notFound();
+    const { data: project } = await s.from('projects')
+      .select('status').eq('id', (existing as any).project_id).eq('company_id', auth.companyId).maybeSingle();
+    if (!project || ['completed', 'cancelled'].includes((project as any).status)) return error('لا يمكن تعديل كميات مشروع مغلق');
 
     const updateData: any = {};
-    if (body.item_code !== undefined) updateData.item_code = body.item_code;
-    if (body.code !== undefined) updateData.item_code = body.code;
-    if (body.description !== undefined) updateData.description = body.description;
-    if (body.unit !== undefined) updateData.unit = body.unit;
-    if (body.quantity !== undefined) updateData.quantity = body.quantity;
-    if (body.unit_price !== undefined) updateData.unit_price = body.unit_price;
+    if (body.item_code !== undefined || body.code !== undefined) {
+      const code = body.item_code ?? body.code;
+      if (typeof code !== 'string' || !code.trim() || code.length > 80) return error('كود البند غير صالح');
+      updateData.item_code = code.trim();
+    }
+    if (body.description !== undefined) {
+      if (typeof body.description !== 'string' || !body.description.trim() || body.description.length > 1000) return error('وصف البند غير صالح');
+      updateData.description = body.description.trim();
+    }
+    if (body.unit !== undefined) {
+      if (typeof body.unit !== 'string' || !body.unit.trim() || body.unit.length > 40) return error('وحدة القياس غير صالحة');
+      updateData.unit = body.unit.trim();
+    }
+    const quantity = body.quantity !== undefined ? Number(body.quantity) : Number((existing as any).quantity);
+    const unitPrice = body.unit_price !== undefined ? Number(body.unit_price) : Number((existing as any).unit_price);
+    if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0) return error('الكمية أو السعر غير صالح');
+    if (body.quantity !== undefined) updateData.quantity = quantity;
+    if (body.unit_price !== undefined) updateData.unit_price = unitPrice;
+    if (body.quantity !== undefined || body.unit_price !== undefined) updateData.total = Math.round(quantity * unitPrice * 100) / 100;
+    if (Object.keys(updateData).length === 0) return error('لا توجد تغييرات');
 
     const { data: updated, error: updateErr } = await s.from('boq_items')
       .update(updateData)

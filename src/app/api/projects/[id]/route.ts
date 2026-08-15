@@ -22,7 +22,7 @@ export async function GET(
     if (!project) return notFound();
 
     const { data: boq } = await s.from('boq_items')
-      .select('*').eq('project_id', id).order('id');
+      .select('*').eq('project_id', id).eq('company_id', auth.companyId).order('id');
 
     const p = project as any;
     return success({

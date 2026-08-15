@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error } from '@/lib/api-helpers';
+import { success, error, requireAdmin, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -23,8 +23,11 @@ export async function POST(request: NextRequest) {
     if (!allowVisitorHit(ip)) {
       return error('تم تجاوز حد تسجيل الزيارات', 429);
     }
-    const ua = request.headers.get('user-agent') || '';
-    const { path } = await request.json().catch(() => ({ path: '/' }));
+    const ua = (request.headers.get('user-agent') || '').slice(0, 512);
+    const raw = await request.json().catch(() => ({ path: '/' })) as { path?: unknown };
+    const path = typeof raw.path === 'string' && raw.path.startsWith('/')
+      ? raw.path.slice(0, 512)
+      : '/';
     const s = sb();
 
     await s.from('visitor_logs').insert({
@@ -68,8 +71,9 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    await requireAdmin(request);
     const s = sb();
     const todayStr = new Date().toISOString().split('T')[0];
 
@@ -95,13 +99,7 @@ export async function GET() {
       totalVisits: totalVisits || 0,
       weekly: weekly || [],
     });
-  } catch {
-    return success({
-      today: { visits: 0, unique_visitors: 0 },
-      visits: 0,
-      unique_visitors: 0,
-      totalVisits: 0,
-      weekly: [],
-    });
+  } catch (err) {
+    return handleApiError(err);
   }
 }

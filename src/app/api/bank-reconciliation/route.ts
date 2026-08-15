@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -24,28 +24,30 @@ export async function POST(req: NextRequest) {
     const { bankSafeId, date, closingBalance, items } = await parseBody(req);
     if (!bankSafeId || !date || closingBalance === undefined)
       return error('bankSafeId, date, closingBalance are required');
-    if (isNaN(parseFloat(closingBalance)))
-      return error('الرصيد الختامي يجب أن يكون رقماً');
-
-    // TENANT CHECK: الخزينة/البنك المطابَق يجب أن ينتمي لهذه الشركة
-    const { data: bankSafe } = await s.from('banks_safes')
-      .select('id').eq('id', bankSafeId).eq('company_id', auth.companyId).maybeSingle();
-    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
-
-    const { data: rec, error: recErr } = await s.from('bank_reconciliation')
-      .insert({ company_id: auth.companyId, bank_safe_id: bankSafeId, date, closing_balance: parseFloat(closingBalance) })
-      .select('*').single();
-    if (recErr) throw recErr;
-
-    if (items && items.length > 0) {
-      for (const item of items) {
-        await s.from('bank_reconciliation_items').insert({
-          company_id: auth.companyId, reconciliation_id: rec.id,
-          transaction_type: item.transactionType, amount: item.amount,
-          date: item.date ?? date, is_cleared: item.isCleared ?? false,
-        });
-      }
+    const normalizedClosingBalance = Number(closingBalance);
+    if (!Number.isFinite(normalizedClosingBalance) || Math.abs(normalizedClosingBalance * 100 - Math.round(normalizedClosingBalance * 100)) > 1e-8)
+      return error('الرصيد الختامي يجب أن يكون رقماً بمنزلتين عشريتين كحد أقصى');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date))) return error('تاريخ المطابقة غير صالح');
+    if (items !== undefined && (!Array.isArray(items) || items.length > 1000)) return error('بنود المطابقة غير صالحة');
+    if (Array.isArray(items) && items.some((item) => !item || typeof item !== 'object'
+      || typeof item.transactionType !== 'string' || !item.transactionType.trim() || item.transactionType.length > 100
+      || !Number.isFinite(Number(item.amount)) || Number(item.amount) < 0
+      || (item.date !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(item.date) || !Number.isFinite(Date.parse(item.date))))
+      || (item.isCleared !== undefined && typeof item.isCleared !== 'boolean'))) {
+      return error('أحد بنود المطابقة غير صالح');
     }
-    return success(rec);
+
+    // Bank lock, ledger snapshot, duplicate-date check, header, items and
+    // audit are one transaction; no cleanup-on-error path is needed.
+    const { data: rec, error: recErr } = await s.rpc('create_bank_reconciliation', {
+      p_company_id: auth.companyId,
+      p_bank_safe_id: bankSafeId,
+      p_date: date,
+      p_closing_balance: normalizedClosingBalance,
+      p_items: items || [],
+      p_user_id: auth.userId,
+    });
+    if (recErr) throw recErr;
+    return success(rec, 201);
   } catch (err) { return handleApiError(err); }
 }

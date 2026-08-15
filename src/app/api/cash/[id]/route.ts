@@ -1,8 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
-import type { } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
 
 const sb = () => getSupabase();
 
@@ -20,13 +18,6 @@ export async function GET(
       .eq('id', id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
-    if (queryError) {
-      const fallback = await s.from('cash_transactions')
-        .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-      data = fallback.data;
-      queryError = fallback.error;
-    }
-
     if (queryError) {
       const fallback = await s.from('cash_transactions')
         .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
@@ -61,70 +52,18 @@ export async function PUT(
     const s = sb();
     const body = await request.json();
 
-    const { data: txRes } = await s.from('cash_transactions')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!txRes) {
-      return notFound();
+    if (Object.keys(body).some((key) => key!=='reason')) {
+      return error('الحركة المرحلة لا تقبل إلا تعديل البيان؛ اعكسها وسجل حركة جديدة لتغيير القيم المحاسبية');
     }
-
-    const existing = txRes as Record<string, any>;
-
-    // حركة مُرحَّلة (لها قيد) لا تُعدَّل حقولها المالية — وإلا يفترق القيد عن الحركة
-    if (existing.journal_entry_id) {
-      const financialKeys = ['type', 'amount', 'account_id', 'bank_safe_id', 'tax_rate', 'tax_amount'];
-      if (financialKeys.some((k) => body[k] !== undefined)) {
-        return error('لا يمكن تعديل مبلغ/نوع/حسابات حركة مُرحَّلة — اعكسها وسجّل حركة جديدة');
-      }
-    }
-
-    const updateData: Record<string, any> = {};
-    if (body.date !== undefined) updateData.date = body.date;
-    if (body.type !== undefined) updateData.type = body.type;
-    if (body.amount !== undefined) updateData.amount = body.amount;
-    if (body.account_id !== undefined) updateData.account_id = body.account_id;
-    if (body.bank_safe_id !== undefined) updateData.bank_safe_id = body.bank_safe_id;
-    if (body.contact_id !== undefined) updateData.contact_id = body.contact_id;
-    if (body.project_id !== undefined) updateData.project_id = body.project_id;
-    if (body.category_id !== undefined) updateData.category_id = body.category_id;
-    if (body.reason !== undefined) updateData.reason = body.reason;
-
-    if (Object.keys(updateData).length > 0) {
-      const { error: updateError } = await s.from('cash_transactions')
-        .update(updateData)
-        .eq('id', id)
-        .eq('company_id', auth.companyId);
-      if (updateError) throw updateError;
-    }
-
-    const auditId = generateId();
-    await s.from('audit_log').insert({
-      id: auditId,
-      company_id: auth.companyId,
-      user_id: auth.userId,
-      action: 'update',
-      entity_type: 'cash_transaction',
-      entity_id: id,
-      old_values: existing,
-      new_values: body,
+    if (typeof body.reason!=='string' || !body.reason.trim() || body.reason.length>1000) return error('البيان غير صالح');
+    const { data: updated, error: rpcErr } = await s.rpc('update_cash_transaction_note', {
+      p_company_id: auth.companyId,
+      p_transaction_id: id,
+      p_reason: body.reason.trim(),
+      p_user_id: auth.userId,
     });
-
-    const { data: updated, error: fetchError } = await s.from('cash_transactions')
-      .select('*, journal_entries(number)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .single();
-
-    if (fetchError) throw fetchError;
-
-    const result = updated as Record<string, any>;
-    return success({
-      ...result,
-      journal_entry_number: result.journal_entries?.number || null,
-    });
+    if (rpcErr) throw rpcErr;
+    return success(updated);
   } catch (err) {
     return handleApiError(err);
   }
@@ -139,47 +78,13 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    const { data: txRes } = await s.from('cash_transactions')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!txRes) {
-      return notFound();
-    }
-
-    const tx = txRes as Record<string, any>;
-
-    if (tx.journal_entry_id) {
-      const { error: lErr } = await s.from('journal_lines')
-        .delete()
-        .eq('journal_entry_id', tx.journal_entry_id);
-      if (lErr) throw lErr;
-
-      const { error: jeErr } = await s.from('journal_entries')
-        .delete()
-        .eq('id', tx.journal_entry_id).eq('company_id', auth.companyId);
-      if (jeErr) throw jeErr;
-    }
-
-    const auditId = generateId();
-    await s.from('audit_log').insert({
-      id: auditId,
-      company_id: auth.companyId,
-      user_id: auth.userId,
-      action: 'delete',
-      entity_type: 'cash_transaction',
-      entity_id: id,
-      old_values: tx,
+    const { data: cancelled, error: rpcErr } = await s.rpc('cancel_cash_transaction', {
+      p_company_id: auth.companyId,
+      p_transaction_id: id,
+      p_user_id: auth.userId,
     });
-
-    const { error: deleteError } = await s.from('cash_transactions')
-      .delete()
-      .eq('id', id).eq('company_id', auth.companyId);
-    if (deleteError) throw deleteError;
-
-    return success({ deleted: true });
+    if (rpcErr) throw rpcErr;
+    return success(cancelled);
   } catch (err) {
     return handleApiError(err);
   }

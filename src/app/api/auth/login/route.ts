@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { data: users, error: userErr } = await s.from('users')
-      .select('id, name, email, password_hash, role, is_active, company_id, token_version')
+      .select('id, name, email, password_hash, role, is_active, company_id, token_version, email_verified')
       .eq('email', normalizedEmail).limit(2);
 
     if (userErr) {
@@ -35,33 +35,27 @@ export async function POST(request: NextRequest) {
       return serverError(userErr);
     }
     if (!users || users.length === 0) {
-      console.warn('[login] 401: no user with email', normalizedEmail, '— (wrong email أو قاعدة البيانات فارغة/غير مزامنة)');
+      const { error: attemptErr } = await s.from('login_attempts').insert({
+        email: normalizedEmail, ip_address: ip, success: false,
+        attempted_at: new Date().toISOString(),
+      });
+      if (attemptErr) throw attemptErr;
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
     if (users.length > 1) {
-      console.error('[login] duplicate rows for email', normalizedEmail, '— migration 013 (email uniqueness) not applied?');
+      // A uniqueness invariant violation must not make authentication choose an
+      // arbitrary identity based on row order.
+      throw new Error('Duplicate normalized user email');
     }
 
-    // BUGFIX (password change appears "not to stick"): when duplicate email
-    // rows exist, users[0] is arbitrary — a password change updates the row
-    // of the AUTHENTICATED user id, while login could read the OTHER row and
-    // keep accepting the old password. Pick the row whose hash matches the
-    // submitted password; fall back to users[0] for the failure path.
-    let u = users[0] as { id: string; name: string; email: string; password_hash: string; role: string; is_active: boolean; company_id: string };
-    if (users.length > 1) {
-      for (const candidate of users as typeof u[]) {
-        if (candidate.password_hash && candidate.password_hash.includes(':') &&
-            await verifyPassword(password, candidate.password_hash)) {
-          u = candidate;
-          break;
-        }
-      }
-    }
+    const u = users[0] as { id: string; name: string; email: string; password_hash: string; role: string; is_active: boolean; company_id: string; token_version: number; email_verified: boolean };
+
     if (!u.is_active) return error('هذا الحساب غير نشط. تواصل مع مدير النظام', 403);
 
     const { data: company, error: companyErr } = await s.from('companies')
       .select('id, name, commercial_registration, tax_number, address, phone, email, is_active')
       .eq('id', u.company_id).single();
+    if (companyErr) throw companyErr;
     const c = company as { id: string; is_active: boolean; name: string } | null;
     if (!c || !c.is_active) return error('الشركة غير نشطة. تواصل مع مدير النظام', 403);
 
@@ -71,49 +65,45 @@ export async function POST(request: NextRequest) {
     }
     const valid = await verifyPassword(password, u.password_hash);
     if (!valid) {
-      console.warn('[login] 401: password mismatch for user', u.id);
-      // Log failed attempt for rate limiting
-      try {
-        await s.from('login_attempts').insert({
-          email: normalizedEmail,
-          ip_address: ip,
-          success: false,
-          attempted_at: new Date().toISOString(),
-        });
-      } catch {}
+      // Recording failures is part of rate-limit enforcement; fail closed if
+      // the backing table cannot accept the attempt.
+      const { error: attemptErr } = await s.from('login_attempts').insert({
+        email: normalizedEmail,
+        ip_address: ip,
+        success: false,
+        attempted_at: new Date().toISOString(),
+      });
+      if (attemptErr) throw attemptErr;
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
-    try {
-      const { data: uv } = await s.from('users').select('email_verified').eq('id', u.id).single();
-      if (uv && uv.email_verified === false) {
-        // Allow login if SMTP is not configured (can't verify email anyway)
-        const smtpConfigured = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS;
-        if (smtpConfigured) {
-          return error('يرجى تأكيد بريدك الإلكتروني أولاً', 403);
-        }
-        // If SMTP not configured, allow login but warn
-        console.warn('Email verification bypassed — SMTP not configured');
+    if (u.email_verified === false) {
+      // Development may expose mail preview links, but production never issues
+      // a session before mailbox ownership is proven.
+      if (process.env.NODE_ENV === 'production') {
+        return error('يرجى تأكيد بريدك الإلكتروني أولاً', 403);
       }
-    } catch {}
+      console.warn('Email verification bypassed outside production — configure email before deployment');
+    }
 
-    try { 
-      await s.from('users').update({ last_login: new Date().toISOString() }).eq('id', u.id);
-      // Log successful attempt
-      await s.from('login_attempts').insert({
-        email: normalizedEmail,
-        ip_address: ip,
-        success: true,
-        attempted_at: new Date().toISOString(),
-      });
-    } catch {}
+    const loginAt = new Date().toISOString();
+    const { error: lastLoginErr } = await s.from('users')
+      .update({ last_login: loginAt }).eq('id', u.id).eq('company_id', u.company_id);
+    if (lastLoginErr) throw lastLoginErr;
+    const { error: successAttemptErr } = await s.from('login_attempts').insert({
+      email: normalizedEmail,
+      ip_address: ip,
+      success: true,
+      attempted_at: loginAt,
+    });
+    if (successAttemptErr) throw successAttemptErr;
 
     // Subscription-status check: do NOT block login entirely when expired.
     // Users must still be able to sign in to view data, contact support, enter
     // an activation code, or buy an add-on. The subscription guard already
     // blocks WRITES on expired accounts; here we just surface state so the UI
     // can show the banner and disable write actions.
-    let subscriptionStatus: 'active' | 'trial' | 'expired' | 'trial_expired' | 'cancelled' | 'missing' = 'active';
+    let subscriptionStatus: 'active' | 'trial' | 'pending' | 'expired' | 'trial_expired' | 'cancelled' | 'missing' = 'active';
     let subscriptionMessage = '';
     let endDateStr: string | null = null;
     let daysRemaining = 0;
@@ -134,7 +124,8 @@ export async function POST(request: NextRequest) {
                 : 'انتهت صلاحية الاشتراك. يمكنك التجديد أو إدخال كود تفعيل أو التواصل مع الدعم.';
       }
     } catch (e) {
-      console.warn('[login] subscription access check failed:', e);
+      console.error('[login] subscription access check failed:', e);
+      throw e;
     }
 
     const token = createToken(u.id, u.role, Number((u as any).token_version) || 0);
@@ -150,7 +141,7 @@ export async function POST(request: NextRequest) {
       },
       subscription: {
         status: subscriptionStatus,
-        is_expired: subscriptionStatus === 'expired' || subscriptionStatus === 'trial_expired' || subscriptionStatus === 'cancelled' || subscriptionStatus === 'missing',
+        is_expired: subscriptionStatus === 'pending' || subscriptionStatus === 'expired' || subscriptionStatus === 'trial_expired' || subscriptionStatus === 'cancelled' || subscriptionStatus === 'missing',
         message: subscriptionMessage || null,
         end_date: endDateStr,
         days_remaining: daysRemaining,

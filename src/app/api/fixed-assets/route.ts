@@ -1,10 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { ACCOUNT_CODES } from '@/lib/constants';
-import { createAutoAccount } from '@/lib/auto-account';
-import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -37,110 +33,34 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'fixed_assets', 'create');
     const s = sb();
     const data = await parseBody(req);
-    const { name, code, category, purchase_date, purchase_cost, useful_life_years, depreciation_method, location, notes } = data;
-
-    if (!name || !code || !category || !purchase_date || !purchase_cost || !useful_life_years)
-      return error('name, code, category, purchase_date, purchase_cost, useful_life_years are required');
-
-    // إنشاء حساب الأصل تلقائياً
-    const assetCode = `1230-${code}`;
-    const assetAccount = await createAutoAccount({
-      companyId: auth.companyId,
-      code: assetCode,
-      name: name,
-      type: 'asset',
-      parentCode: '1230', // الآلات والمعدات
+    const { name, code, category, purchase_date, purchase_cost, useful_life_years, depreciation_method, location, notes, bank_safe_id } = data;
+    const cost = Number(purchase_cost);
+    const life = Number(useful_life_years);
+    const method = depreciation_method || 'straight_line';
+    if (typeof name!=='string' || !name.trim() || name.length>200 || typeof code!=='string' || !/^[A-Za-z0-9_-]{1,20}$/.test(code)
+      || typeof category!=='string' || !category.trim() || category.length>100
+      || !/^\d{4}-\d{2}-\d{2}$/.test(purchase_date || '') || !Number.isFinite(cost) || cost<=0
+      || Math.abs(cost*100-Math.round(cost*100))>1e-8 || !Number.isInteger(life) || life<1 || life>100
+      || !['straight_line','declining_balance'].includes(method) || !bank_safe_id) return error('بيانات الأصل أو حساب الدفع غير صالحة');
+    if ((location && (typeof location!=='string' || location.length>500)) || (notes && (typeof notes!=='string' || notes.length>2000))) return error('بيانات وصف الأصل طويلة جداً');
+    const { data: asset, error: rpcErr } = await s.rpc('create_fixed_asset', {
+      p_company_id: auth.companyId,
+      p_name: name.trim(),
+      p_code: code.toUpperCase(),
+      p_category: category.trim(),
+      p_purchase_date: purchase_date,
+      p_purchase_cost: cost,
+      p_useful_life_years: life,
+      p_depreciation_method: method,
+      p_location: typeof location==='string' ? location.trim() : '',
+      p_notes: typeof notes==='string' ? notes.trim() : '',
+      p_bank_safe_id: bank_safe_id,
+      p_created_by: auth.userId,
     });
-
-    // إنشاء حساب الإهلاك تلقائياً
-    const deprCode = `1290-${code}`;
-    const deprAccount = await createAutoAccount({
-      companyId: auth.companyId,
-      code: deprCode,
-      name: `مجمع إهلاك ${name}`,
-      type: 'asset',
-      parentCode: '1290', // مجمع إهلاك الأصول الثابتة
-    });
-
-    const rate = depreciation_method === 'declining_balance' ? (2 / useful_life_years) : (1 / useful_life_years);
-
-    // حفظ الأصل مع ربطه بالحسابات
-    const { data: asset, error: assetErr } = await s.from('fixed_assets')
-      .insert({ 
-        company_id: auth.companyId, 
-        name, 
-        code, 
-        category, 
-        purchase_date, 
-        purchase_cost, 
-        useful_life_years, 
-        depreciation_rate: rate, 
-        depreciation_method: depreciation_method || 'straight_line', 
-        accumulated_depreciation: 0, 
-        status: 'active', 
-        location: location || null, 
-        notes: notes || null,
-        asset_account_id: assetAccount?.id || null,
-        depreciation_account_id: deprAccount?.id || null,
-      })
-      .select('*')
-      .single();
-
-    if (assetErr) throw assetErr;
-
-    // إنشاء قيد الشراء — إلزامي متوازن (لا أصل بلا قيد)
-    const { data: bankAcc } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.BANKS)
-      .maybeSingle();
-
-    if (!assetAccount?.id || !bankAcc?.id) {
-      // تراجع: لا أصل يتيم بدون قيد شراء
-      await s.from('fixed_assets').delete().eq('id', asset.id).eq('company_id', auth.companyId);
-      return error('تعذر إنشاء قيد شراء الأصل (حساب الأصل/البنك غير موجود) — راجع دليل الحسابات');
-    }
-
-    const jeNum = await getNextJournalNumber(auth.companyId, purchase_date || new Date().toISOString());
-    const { data: je } = await s.from('journal_entries')
-      .insert({ 
-        company_id: auth.companyId, 
-        number: jeNum, 
-        date: purchase_date, 
-        type: 'general', 
-        description: `شراء أصل ثابت: ${name}`,
-        reference_type: 'fixed_asset',
-        reference_id: asset.id,
-        created_by: auth.userId 
-      })
-      .select('id')
-      .single();
-
-    const { error: jlErr } = await insertJournalLines(auth.companyId, [
-      {
-        journal_entry_id: je.id,
-        account_id: assetAccount.id,
-        debit: purchase_cost,
-        credit: 0,
-      },
-      {
-        journal_entry_id: je.id,
-        account_id: bankAcc.id,
-        debit: 0,
-        credit: purchase_cost,
-      },
-    ]);
-    if (jlErr) {
-      await s.from('journal_entries').delete().eq('id', je.id).eq('company_id', auth.companyId);
-      await s.from('fixed_assets').delete().eq('id', asset.id).eq('company_id', auth.companyId);
-      throw jlErr;
-    }
-
-    return success(asset, 201);
-  } catch (err) { 
-    return handleApiError(err); 
-  }
+    if (rpcErr) throw rpcErr;
+    return success(asset,201);
+  } catch (err) { return handleApiError(err); }
 }

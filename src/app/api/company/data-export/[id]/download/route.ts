@@ -19,6 +19,7 @@ export async function GET(
   try {
     const { requireApiAuth } = await import('@/lib/api-helpers');
     const auth = await requireApiAuth(req, { skipModuleGuard: true });
+    if (auth.role !== 'admin') return error('تحميل تصدير الشركة متاح لمدير الشركة فقط', 403);
     const { id } = await params;
     const s = sb();
 
@@ -38,27 +39,34 @@ export async function GET(
       return error('انتهت صلاحية رابط التحميل. اطلب تصديراً جديداً.', 410);
     }
 
-    // download_url is stored as data:application/json;...;base64,<payload>
-    let jsonText: string;
-    const marker = ';base64,';
-    const idx = e.download_url.indexOf(marker);
-    if (e.download_url.startsWith('data:') && idx !== -1) {
-      jsonText = Buffer.from(e.download_url.slice(idx + marker.length), 'base64').toString('utf8');
-    } else if (/^https?:\/\//.test(e.download_url)) {
-      // Future-proof: if exports move to object storage, redirect.
-      return NextResponse.redirect(e.download_url);
-    } else {
-      jsonText = e.download_url;
+    if (e.download_url.startsWith('storage:company-exports/')) {
+      const objectPath = e.download_url.slice('storage:company-exports/'.length);
+      if (!objectPath.startsWith(`${auth.companyId}/`) || objectPath.includes('..')) {
+        return error('مرجع ملف التصدير غير صالح', 500);
+      }
+      const { data: signed, error: signError } = await s.storage
+        .from('company-exports')
+        .createSignedUrl(objectPath, 60);
+      if (signError || !signed?.signedUrl) return error('تعذر إنشاء رابط تحميل آمن', 503);
+      return NextResponse.redirect(signed.signedUrl, { status: 303 });
     }
 
-    return new NextResponse(jsonText, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Content-Disposition': `attachment; filename="pro-acc-export-${id}.json"`,
-        'Cache-Control': 'no-store',
-      },
-    });
+    // One-release compatibility for exports generated before migration 049.
+    // They are streamed and never exposed in a query string or redirect.
+    const marker = ';base64,';
+    const idx = e.download_url.indexOf(marker);
+    if (e.download_url.startsWith('data:application/json') && idx !== -1) {
+      const jsonText = Buffer.from(e.download_url.slice(idx + marker.length), 'base64').toString('utf8');
+      return new NextResponse(jsonText, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="pro-acc-export-${id}.json"`,
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+    return error('مرجع ملف التصدير غير صالح', 500);
   } catch (e) {
     return handleApiError(e);
   }

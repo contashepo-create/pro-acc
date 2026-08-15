@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireApiAuth, handleApiError, success, error, parseBody, requireModulePermission } from '@/lib/api-helpers';
+import { trustedReceiptReference } from '@/lib/safe-input';
 
 const sb = () => getSupabase();
 
@@ -42,9 +43,12 @@ export async function POST(request: NextRequest) {
       notes
     } = body;
 
-    if (!requested_plan_id || !duration_type || !payment_method_code) {
-      return error('الحقول المطلوبة مفقودة: الباقة، المدة، طريقة الدفع');
+    if (!requested_plan_id || !['monthly', 'yearly'].includes(duration_type) || !payment_method_code) {
+      return error('الحقول المطلوبة مفقودة أو غير صالحة: الباقة، المدة، طريقة الدفع');
     }
+    const receiptReference = trustedReceiptReference(receipt_image_url, auth.companyId);
+    if (!receiptReference) return error('يجب رفع إيصال الدفع عبر التخزين الآمن أولاً');
+    if (notes !== undefined && (typeof notes !== 'string' || notes.length > 2000)) return error('الملاحظات طويلة جداً');
 
     // Check current subscription
     const { data: currentSub } = await s.from('subscriptions')
@@ -74,6 +78,14 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (!plan) return error('الباقة المطلوبة غير موجودة', 404);
+    const expectedAmount = Number(duration_type === 'yearly'
+      ? (plan as any).price_yearly
+      : (plan as any).price_monthly);
+    if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) return error('سعر الباقة غير صالح، تواصل مع الإدارة');
+    if (!Number.isFinite(Number(payment_amount)) || Math.abs(Number(payment_amount) - expectedAmount) > 0.01) {
+      return error(`مبلغ الدفع يجب أن يطابق سعر الباقة (${expectedAmount.toFixed(2)})`);
+    }
+    if (!payment_date || !/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) return error('تاريخ الدفع مطلوب وغير صالح');
 
     // Validate payment method
     const { data: paymentMethod } = await s.from('payment_methods')
@@ -92,16 +104,17 @@ export async function POST(request: NextRequest) {
         requested_plan_id,
         duration_type,
         payment_method_code,
-        payment_amount,
+        payment_amount: expectedAmount,
         payment_date,
-        payment_time,
-        receipt_image_url,
-        notes,
+        payment_time: typeof payment_time === 'string' ? payment_time.slice(0, 16) : null,
+        receipt_image_url: receiptReference,
+        notes: typeof notes === 'string' ? notes.trim() : null,
         status: 'pending',
       })
       .select()
       .single();
 
+    if (insertErr?.code === '23505') return error('لديك طلب ترقية معلق بالفعل', 409);
     if (insertErr) throw insertErr;
 
     // Send to Telegram bot if configured

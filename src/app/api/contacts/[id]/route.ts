@@ -89,6 +89,7 @@ export async function PUT(
     const { data: updated, error: fetchError } = await s.from('contacts')
       .select('*, accounts(code, name)')
       .eq('id', id)
+      .eq('company_id',auth.companyId)
       .maybeSingle();
 
     if (fetchError) throw fetchError;

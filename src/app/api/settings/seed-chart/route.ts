@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, requireAdmin, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { createDefaultChartOfAccounts } from '@/lib/default-accounts';
 
@@ -7,7 +7,7 @@ const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'settings', 'create');
+    const auth = await requireAdmin(request);
     const s = sb();
     const created = await createDefaultChartOfAccounts(s, auth.companyId);
     return success({ created, message: 'تم إنشاء شجرة الحسابات الافتراضية للشركة' });

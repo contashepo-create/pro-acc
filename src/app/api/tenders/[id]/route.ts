@@ -25,7 +25,8 @@ export async function GET(
     // Get cost breakdown
     const { data: costItems } = await s.from('tender_cost_items')
       .select('*')
-      .eq('tender_id', id);
+      .eq('tender_id', id)
+      .eq('company_id', auth.companyId);
 
     const t = tender as any;
     const totalCost = (costItems || []).reduce((sum: number, item: any) => sum + (parseFloat(item.amount) || 0), 0);
@@ -59,7 +60,15 @@ export async function PUT(
     // Handle status change
     if (action === 'update_status') {
       const { status, notes } = body;
-      if (!status) return error('الحالة مطلوبة');
+      const { data: current } = await s.from('tenders').select('id, status')
+        .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      if (!current) return notFound();
+      const transitions: Record<string, string[]> = {
+        draft: ['preparing', 'submitted', 'cancelled'], preparing: ['submitted', 'cancelled'],
+        submitted: ['won', 'lost', 'cancelled'], won: [], lost: [], cancelled: [],
+      };
+      if (!(transitions[(current as any).status] || []).includes(String(status))) return error('انتقال حالة المناقصة غير صالح', 409);
+      if (notes !== undefined && (typeof notes !== 'string' || notes.length > 2000)) return error('الملاحظات طويلة جداً');
 
       const { data, error: updateErr } = await s.from('tenders')
         .update({ status, notes: notes || null, updated_at: new Date().toISOString() })
@@ -84,6 +93,7 @@ export async function PUT(
       const t = tender as any;
 
       if (t.status !== 'won') return error('يمكن تحويل العطاءات الرابحة فقط إلى مشروع');
+      if (t.project_id) return error('تم تحويل هذه المناقصة إلى مشروع مسبقاً', 409);
 
       // Create project from tender
       const projectId = generateId();
@@ -118,6 +128,23 @@ export async function PUT(
     }
 
     // Regular update
+    const { data: currentTender } = await s.from('tenders').select('id, status')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!currentTender) return notFound();
+    if (!['draft', 'preparing'].includes((currentTender as any).status)) {
+      return error('لا يمكن تعديل بيانات مناقصة بعد تقديمها', 409);
+    }
+    if (body.contact_id) {
+      const { data: contact } = await s.from('contacts').select('id')
+        .eq('id', body.contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!contact) return error('الطرف المحدد غير موجود', 404);
+    }
+    for (const numericField of ['estimated_value', 'bid_bond_amount', 'project_duration_months', 'win_probability']) {
+      if (body[numericField] !== undefined && (!Number.isFinite(Number(body[numericField])) || Number(body[numericField]) < 0)) {
+        return error(`القيمة ${numericField} غير صالحة`);
+      }
+    }
+    if (body.win_probability !== undefined && Number(body.win_probability) > 100) return error('احتمال الفوز يجب ألا يتجاوز 100');
     const allowedFields = ['title', 'client_name', 'contact_id', 'reference_number', 'description',
       'estimated_value', 'bid_bond_amount', 'submission_deadline', 'opening_date',
       'project_location', 'project_duration_months', 'win_probability', 'notes'];
@@ -151,9 +178,19 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    await s.from('tender_cost_items').delete().eq('tender_id', id);
-    await s.from('tenders').delete().eq('id', id).eq('company_id', auth.companyId);
+    const { data: tender } = await s.from('tenders')
+      .select('id, status, project_id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!tender) return notFound();
+    if ((tender as any).status !== 'draft' || (tender as any).project_id) {
+      return error('لا يمكن حذف مناقصة دخلت دورة العمل؛ ألغِها للحفاظ على السجل', 409);
+    }
+    const { data: bonds } = await s.from('bonds').select('id')
+      .eq('tender_id', id).eq('company_id', auth.companyId).limit(1);
+    if (bonds?.length) return error('لا يمكن حذف مناقصة مرتبطة بضمان', 409);
 
+    await s.from('tender_cost_items').delete().eq('tender_id', id).eq('company_id', auth.companyId);
+    const { error: deleteError } = await s.from('tenders').delete().eq('id', id).eq('company_id', auth.companyId);
+    if (deleteError) throw deleteError;
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);
@@ -173,9 +210,15 @@ export async function POST(
     const s = sb();
     const body = await request.json();
 
-    if (!body.category || !body.amount) {
-      return error('الفئة والمبلغ مطلوبان');
+    const amount = Number(body.amount);
+    const categories = ['materials', 'labor', 'equipment', 'subcontractor', 'overhead', 'other'];
+    if (!categories.includes(body.category) || !Number.isFinite(amount) || amount <= 0) {
+      return error('الفئة والمبلغ غير صالحين');
     }
+    const { data: tender } = await s.from('tenders').select('id, status')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!tender) return notFound();
+    if (!['draft', 'preparing'].includes((tender as any).status)) return error('لا يمكن تعديل تكاليف مناقصة بعد تقديمها', 409);
 
     const itemId = generateId();
     const { data, error: insertErr } = await s.from('tender_cost_items')
@@ -185,7 +228,7 @@ export async function POST(
         company_id: auth.companyId,
         category: body.category, // materials, labor, equipment, subcontractor, overhead, other
         description: body.description || null,
-        amount: body.amount,
+        amount,
         notes: body.notes || null,
         created_by: auth.userId,
       })

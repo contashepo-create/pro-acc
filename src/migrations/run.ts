@@ -111,20 +111,30 @@ export async function runMigrations(targetFilename?: string): Promise<void> {
   }
 
   for (const migration of pending) {
+    // Bootstrap migration 000 records the historical 001–006 files itself.
+    // Re-check inside the loop so the pending snapshot taken before 000 does
+    // not immediately re-run those non-idempotent schemas on a clean database.
+    if ((await getAppliedMigrations()).has(migration.filename)) {
+      console.log(`Skipping already applied: ${migration.filename}`);
+      continue;
+    }
     console.log(`Applying: ${migration.filename}...`);
 
     try {
       await transaction(async (client) => {
-        // Split on statement-level COMMIT so we can run the entire file
-        // inside our own transaction wrapper.
-        const statements = migration.sql
-          .split(';')
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0 && !s.toUpperCase().startsWith('COMMIT'));
+        // PostgreSQL function/trigger bodies contain semicolons inside $$...$$.
+        // Splitting SQL on `;` corrupts those bodies and made a clean install
+        // fail as soon as it reached a PL/pgSQL migration. `pg` supports a
+        // complete multi-statement script, so execute the file as one unit.
+        // Historical files sometimes contain their own top-level BEGIN/COMMIT;
+        // strip only standalone transaction-control lines because the runner
+        // already owns the transaction (function-body lines are untouched).
+        const sql = migration.sql
+          .replace(/^\s*BEGIN\s*;\s*$/gim, '')
+          .replace(/^\s*COMMIT\s*;\s*$/gim, '')
+          .trim();
 
-        for (const stmt of statements) {
-          await client.query(stmt);
-        }
+        if (sql) await client.query(sql);
 
         await client.query(
           'INSERT INTO _migrations (filename) VALUES ($1)',

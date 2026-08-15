@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
+import { success, error, serverError, requireApiAuth, handleApiError, parseBody, enforceRateLimit } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -18,8 +18,13 @@ export async function GET(request: NextRequest) {
 
     // الحالة 1: تتبع شكوى محددة علناً بالمعرف (Tracking ID)
     if (trackingId) {
+      const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+      await enforceRateLimit(request, `complaint-track:${ip}`);
+      if (!/^[0-9a-fA-F-]{8,}$/.test(trackingId)) return error('لم يتم العثور على الشكوى بموجب هذا المعرّف', 404);
       const { data: complaint, error: queryErr } = await s.from('complaints')
-        .select('id, type, subject, body, status, admin_reply, created_at, updated_at')
+        // Public tracking deliberately excludes the original body because it
+        // may contain visitor names, email addresses and support details.
+        .select('id, type, subject, status, admin_reply, created_at, updated_at')
         .eq('id', trackingId)
         .maybeSingle();
 
@@ -61,26 +66,20 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const s = sb();
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    await enforceRateLimit(request, `complaint-create:${ip}`);
     const body = await parseBody<any>(request);
 
-    // محاولة استخراج توكن المصادقة إن وُجد لتسجيل الشكوى تحت حساب الشركة والملف الشخصي
-    const { extractToken, verifyToken } = await import('@/lib/auth');
+    // If a session is presented it must pass the full active-user/token-version
+    // checks. Invalid/stale sessions do not silently downgrade to anonymous.
+    const { extractToken } = await import('@/lib/auth');
     const token = extractToken(request);
     let companyId: string | null = null;
     let userId: string | null = null;
-
     if (token) {
-      const payload = verifyToken(token);
-      if (payload) {
-        const { data: user } = await s.from('users')
-          .select('company_id')
-          .eq('id', payload.userId)
-          .maybeSingle();
-        if (user) {
-          companyId = user.company_id;
-          userId = payload.userId;
-        }
-      }
+      const auth = await requireApiAuth(request, { checkSubscription: false });
+      companyId = auth.companyId;
+      userId = auth.userId;
     }
 
     // موائمة بيانات الواجهة الأمامية العامة مع حقول قاعدة البيانات
@@ -99,8 +98,10 @@ export async function POST(request: NextRequest) {
       detailBody = `اسم المرسل: ${body.name || 'غير معروف'}\nبريد المرسل: ${body.email || 'غير معروف'}\n\nالرسالة:\n${detailBody}`;
     }
 
-    if (!subject.trim()) return error('العنوان مطلوب');
-    if (!detailBody.trim()) return error('نص الشكوى أو الاقتراح مطلوب');
+    if (typeof subject !== 'string' || !subject.trim() || subject.length > 200) return error('العنوان مطلوب وبحد أقصى 200 حرف');
+    if (typeof detailBody !== 'string' || !detailBody.trim() || detailBody.length > 5000) return error('نص الشكوى مطلوب وبحد أقصى 5000 حرف');
+    if (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > 120)) return error('اسم المرسل غير صالح');
+    if (body.email !== undefined && (typeof body.email !== 'string' || body.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email))) return error('البريد الإلكتروني غير صالح');
 
     const { data: result, error: insertError } = await s.from('complaints')
       .insert({

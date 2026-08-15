@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { trustedReceiptReference } from '@/lib/safe-input';
 
 const sb = () => getSupabase();
 
@@ -56,13 +57,22 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(quantity) || quantity < 1 || quantity > 100) return error('الكمية بين 1 و100');
     if (duration_type !== 'monthly' && duration_type !== 'yearly') return error('نوع المدة غير صالح');
     if (!body.payment_method_code) return error('طريقة الدفع مطلوبة');
+    const receiptReference = trustedReceiptReference(body.receipt_image_url, auth.companyId);
+    if (!receiptReference) return error('يجب رفع إيصال الدفع عبر التخزين الآمن أولاً');
+    if (!body.payment_date || !/^\d{4}-\d{2}-\d{2}$/.test(body.payment_date)) return error('تاريخ الدفع مطلوب وغير صالح');
+    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) return error('الملاحظات طويلة جداً');
 
     const unit = ADDON_PRICING[addon_type];
     const unitPrice = duration_type === 'monthly' ? unit.monthly : unit.yearly;
     const total = Number((unitPrice * quantity).toFixed(2));
 
-    // Prevent duplicate pending requests of same type
     const s = sb();
+    const { data: paymentMethod } = await s.from('payment_methods')
+      .select('code').eq('code', body.payment_method_code).eq('is_active', true).maybeSingle();
+    if (!paymentMethod) return error('طريقة الدفع غير صالحة');
+
+    // Prevent duplicate pending requests of same type (the database partial
+    // unique index remains authoritative under concurrency).
     const { data: existing } = await s.from('addon_requests')
       .select('id')
       .eq('company_id', auth.companyId)
@@ -82,15 +92,17 @@ export async function POST(req: NextRequest) {
         unit_price_usd: unitPrice,
         total_amount_usd: total,
         payment_method_code: body.payment_method_code,
-        payment_amount: body.payment_amount ?? total,
-        payment_date: body.payment_date || new Date().toISOString().split('T')[0],
-        payment_time: body.payment_time || null,
-        receipt_image_url: body.receipt_image_url || null,
-        notes: body.notes || null,
+        // The server-computed catalogue total is authoritative.
+        payment_amount: total,
+        payment_date: body.payment_date,
+        payment_time: typeof body.payment_time === 'string' ? body.payment_time.slice(0, 16) : null,
+        receipt_image_url: receiptReference,
+        notes: typeof body.notes === 'string' ? body.notes.trim() : null,
         status: 'pending',
       })
       .select('id')
       .single();
+    if (insErr?.code === '23505') return error('يوجد طلب إضافة من نفس النوع معلق بالفعل', 409);
     if (insErr) throw insErr;
 
     // Notify admin

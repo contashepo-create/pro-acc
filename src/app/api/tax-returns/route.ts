@@ -1,177 +1,122 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
 const sb = () => getSupabase();
+const number = (value: unknown) => Number(value) || 0;
 
-/**
- * GET /api/tax-returns — Generate VAT return for a period
- * Calculates output VAT (sales), input VAT (purchases), and net amount due
- */
+function validPeriod(from: unknown, to: unknown): from is string {
+  return typeof from === 'string' && typeof to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(from)
+    && /^\d{4}-\d{2}-\d{2}$/.test(to) && Number.isFinite(Date.parse(from))
+    && Number.isFinite(Date.parse(to)) && from <= to;
+}
+
+async function loadSummary(companyId: string, from: string, to: string) {
+  const { data, error: queryError } = await sb().rpc('get_vat_return_summary', {
+    p_company_id: companyId, p_from: from, p_to: to,
+  });
+  if (queryError) throw queryError;
+  return (data || {}) as Record<string, unknown>;
+}
+
+/** Generate a VAT return from posted VAT control-account movements. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'tax_returns', 'read');
     const s = sb();
     const url = new URL(request.url);
-
     const periodFrom = url.searchParams.get('from');
     const periodTo = url.searchParams.get('to');
+    if (!validPeriod(periodFrom, periodTo)) return error('فترة الضريبة غير صالحة');
 
-    if (!periodFrom || !periodTo) {
-      return error('تاريخ بداية ونهاية الفترة مطلوبان (from, to)');
-    }
+    const fromTime = Date.parse(`${periodFrom}T00:00:00Z`);
+    const toTime = Date.parse(`${periodTo}T00:00:00Z`);
+    const inclusiveDays = Math.floor((toTime - fromTime) / 86400000) + 1;
+    const previousToDate = new Date(fromTime - 86400000);
+    const previousFromDate = new Date(fromTime - inclusiveDays * 86400000);
+    const previousFrom = previousFromDate.toISOString().slice(0, 10);
+    const previousTo = previousToDate.toISOString().slice(0, 10);
 
-    // 1. Output VAT (Sales VAT) — from invoices issued in the period
-    const { data: salesInvoices } = await s.from('invoices')
-      .select('id, number, date, total, vat_amount, status')
-      .eq('company_id', auth.companyId)
-      .gte('date', periodFrom)
-      .lte('date', periodTo)
-      .in('status', ['paid', 'partial']);
+    const [summary, previous, salesResult, purchasesResult] = await Promise.all([
+      loadSummary(auth.companyId, periodFrom, periodTo),
+      loadSummary(auth.companyId, previousFrom, previousTo),
+      s.from('invoices').select('id, number, date, subtotal, tax_amount, total, status', { count: 'exact' })
+        .eq('company_id', auth.companyId).gte('date', periodFrom).lte('date', periodTo)
+        .neq('status', 'cancelled').is('deleted_at', null).order('date').range(0, 499),
+      s.from('purchase_invoices').select('id, number, date, subtotal, tax_amount, total, status', { count: 'exact' })
+        .eq('company_id', auth.companyId).gte('date', periodFrom).lte('date', periodTo)
+        .neq('status', 'cancelled').order('date').range(0, 499),
+    ]);
+    if (salesResult.error) throw salesResult.error;
+    if (purchasesResult.error) throw purchasesResult.error;
 
-    const outputVAT = (salesInvoices || []).reduce(
-      (sum: number, inv: any) => sum + (parseFloat(inv.vat_amount) || 0), 0
-    );
-    const totalSales = (salesInvoices || []).reduce(
-      (sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0
-    );
-
-    // 2. Input VAT (Purchase VAT) — from purchase invoices in the period
-    const { data: purchaseInvoices } = await s.from('purchase_invoices')
-      .select('id, invoice_number, date, total, vat_amount, status')
-      .eq('company_id', auth.companyId)
-      .gte('date', periodFrom)
-      .lte('date', periodTo)
-      .in('status', ['paid', 'partial']);
-
-    const inputVAT = (purchaseInvoices || []).reduce(
-      (sum: number, inv: any) => sum + (parseFloat(inv.vat_amount) || 0), 0
-    );
-    const totalPurchases = (purchaseInvoices || []).reduce(
-      (sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0
-    );
-
-    // 3. Zero-rated and exempt sales
-    const { data: exemptSales } = await s.from('invoices')
-      .select('id, number, total, vat_amount')
-      .eq('company_id', auth.companyId)
-      .gte('date', periodFrom)
-      .lte('date', periodTo)
-      .eq('vat_rate', 0);
-
-    const zeroRatedSales = (exemptSales || []).reduce(
-      (sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0
-    );
-
-    // 4. Calculate net VAT
+    const outputVAT = number(summary.outputVat);
+    const inputVAT = number(summary.inputVat);
+    const totalSales = number(summary.totalSales);
+    const totalPurchases = number(summary.totalPurchases);
+    const zeroRatedSales = number(summary.zeroRatedSales);
     const netVAT = outputVAT - inputVAT;
-    const isPayable = netVAT > 0;
-
-    // 5. Previous period comparison (if exists)
-    const periodDays = (new Date(periodTo).getTime() - new Date(periodFrom).getTime()) / 86400000;
-    const prevFrom = new Date(new Date(periodFrom).getTime() - periodDays * 86400000).toISOString().split('T')[0];
-    const prevTo = periodFrom;
-
-    const { data: prevInvoices } = await s.from('invoices')
-      .select('total, vat_amount')
-      .eq('company_id', auth.companyId)
-      .gte('date', prevFrom)
-      .lt('date', prevTo)
-      .in('status', ['paid', 'partial']);
-
-    const prevOutputVAT = (prevInvoices || []).reduce(
-      (sum: number, inv: any) => sum + (parseFloat(inv.vat_amount) || 0), 0
-    );
-    const prevNetVAT = prevOutputVAT; // simplified
-
-    // 6. Build ZATCA return form
-    const vatReturn = {
-      // Part 1: Sales
-      standardRatedSalesInSAR: totalSales - zeroRatedSales,
-      standardRatedVAT: outputVAT,
-      zeroRatedSales: zeroRatedSales,
-
-      // Part 2: Purchases
-      standardRatedPurchasesInSAR: totalPurchases,
-      standardRatedPurchaseVAT: inputVAT,
-
-      // Part 3: Adjustments
-      adjustments: 0, // Manual adjustments
-
-      // Part 4: Net VAT
-      totalVATDue: outputVAT,
-      totalVATRecoverable: inputVAT,
-      netVATDue: netVAT,
-      isPayable,
-
-      // Meta
-      period: { from: periodFrom, to: periodTo },
-      invoiceCount: (salesInvoices || []).length,
-      purchaseCount: (purchaseInvoices || []).length,
-      generatedAt: new Date().toISOString(),
-
-      // Comparison
-      previousPeriod: {
-        netVAT: prevNetVAT,
-        change: prevNetVAT > 0 ? netVAT - prevNetVAT : 0,
-        changePercent: prevNetVAT > 0 ? ((netVAT - prevNetVAT) / prevNetVAT * 100).toFixed(1) : null,
-      },
-    };
-
-    // 7. Deadline calculation (end of month following the quarter)
-    const periodEndDate = new Date(periodTo);
-    const quarter = Math.ceil((periodEndDate.getMonth() + 1) / 3);
-    const deadlineMonth = quarter * 3; // 3, 6, 9, 12
-    const deadline = new Date(periodEndDate.getFullYear(), deadlineMonth, 0); // Last day of the quarter month
-    deadline.setDate(deadline.getDate() + 28); // Usually 28 days after quarter end
+    const previousNetVAT = number(previous.outputVat) - number(previous.inputVat);
+    const periodEnd = new Date(`${periodTo}T00:00:00Z`);
+    const quarterEndMonth = Math.ceil((periodEnd.getUTCMonth() + 1) / 3) * 3;
+    const quarterEnd = new Date(Date.UTC(periodEnd.getUTCFullYear(), quarterEndMonth, 0));
+    const deadline = new Date(quarterEnd.getTime() + 28 * 86400000);
 
     return success({
-      vatReturn,
-      filingDeadline: deadline.toISOString().split('T')[0],
-      salesDetails: salesInvoices || [],
-      purchaseDetails: purchaseInvoices || [],
+      vatReturn: {
+        standardRatedSalesInSAR: Math.max(0, totalSales - zeroRatedSales),
+        standardRatedVAT: outputVAT,
+        zeroRatedSales,
+        standardRatedPurchasesInSAR: totalPurchases,
+        standardRatedPurchaseVAT: inputVAT,
+        adjustments: 0,
+        totalVATDue: outputVAT,
+        totalVATRecoverable: inputVAT,
+        netVATDue: netVAT,
+        isPayable: netVAT > 0,
+        period: { from: periodFrom, to: periodTo },
+        invoiceCount: number(summary.invoiceCount),
+        purchaseCount: number(summary.purchaseCount),
+        generatedAt: new Date().toISOString(),
+        previousPeriod: {
+          from: previousFrom, to: previousTo, netVAT: previousNetVAT,
+          change: netVAT - previousNetVAT,
+          changePercent: previousNetVAT !== 0 ? (((netVAT - previousNetVAT) / Math.abs(previousNetVAT)) * 100).toFixed(1) : null,
+        },
+      },
+      filingDeadline: deadline.toISOString().slice(0, 10),
+      salesDetails: salesResult.data || [],
+      purchaseDetails: purchasesResult.data || [],
+      detailsTruncated: (salesResult.count || 0) > 500 || (purchasesResult.count || 0) > 500,
     });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * POST /api/tax-returns — Save a VAT return filing record
- */
+/** Save an immutable server-calculated VAT filing snapshot. */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'tax_returns', 'create');
-    const s = sb();
-    const body = await request.json();
+    const body = await parseBody<any>(request);
+    if (!validPeriod(body.period_from, body.period_to)) return error('فترة الضريبة غير صالحة');
+    if (body.status && !['draft', 'filed'].includes(body.status)) return error('حالة الإقرار غير صالحة');
+    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) return error('الملاحظات طويلة جداً');
 
-    if (!body.period_from || !body.period_to || body.net_vat === undefined) {
-      return error('الفترة وصافي الضريبة مطلوبان');
-    }
-
-    const filingId = generateId();
-    const { data, error: insertErr } = await s.from('vat_return_filings')
-      .insert({
-        id: filingId,
-        company_id: auth.companyId,
-        period_from: body.period_from,
-        period_to: body.period_to,
-        output_vat: body.output_vat || 0,
-        input_vat: body.input_vat || 0,
-        net_vat: body.net_vat,
-        total_sales: body.total_sales || 0,
-        total_purchases: body.total_purchases || 0,
-        status: body.status || 'draft', // draft, filed, paid
-        filed_at: body.status === 'filed' ? new Date().toISOString() : null,
-        filed_by: body.status === 'filed' ? auth.userId : null,
-        notes: body.notes || null,
-        created_by: auth.userId,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
+    const summary = await loadSummary(auth.companyId, body.period_from, body.period_to);
+    const outputVat = number(summary.outputVat);
+    const inputVat = number(summary.inputVat);
+    const status = body.status || 'draft';
+    const { data, error: insertErr } = await sb().from('vat_return_filings').insert({
+      id: generateId(), company_id: auth.companyId,
+      period_from: body.period_from, period_to: body.period_to,
+      output_vat: outputVat, input_vat: inputVat, net_vat: outputVat - inputVat,
+      total_sales: number(summary.totalSales), total_purchases: number(summary.totalPurchases),
+      status, filed_at: status === 'filed' ? new Date().toISOString() : null,
+      filed_by: status === 'filed' ? auth.userId : null,
+      notes: body.notes?.trim() || null, created_by: auth.userId,
+    }).select().single();
     if (insertErr) throw insertErr;
     return success(data, 201);
   } catch (err) {

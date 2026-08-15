@@ -71,9 +71,13 @@ export async function POST(request: NextRequest) {
       status?: string;
     }>(request);
 
-    if (!body.title || !body.start_date || !body.end_date) {
+    if (!body.title?.trim() || body.title.length > 200 || !body.start_date || !body.end_date) {
       return error('العنوان وتاريخ البدء والانتهاء مطلوبة');
     }
+    if (new Date(body.start_date).getTime() > new Date(body.end_date).getTime()) return error('تاريخ نهاية العقد يسبق بدايته');
+    const contractValue = Number(body.value || 0);
+    if (!Number.isFinite(contractValue) || contractValue < 0) return error('قيمة العقد غير صالحة');
+    if (body.status && !['draft', 'active'].includes(body.status)) return error('حالة العقد الابتدائية غير صالحة');
 
     // عزل مستأجرين: المشروع والطرف (إن وُجدا) يجب أن ينتميا لهذه الشركة
     if (body.project_id) {
@@ -92,13 +96,13 @@ export async function POST(request: NextRequest) {
       .insert({
         id: contractId,
         company_id: auth.companyId,
-        title: body.title,
+        title: body.title.trim(),
         type: body.type || 'general',
         project_id: body.project_id || null,
         contact_id: body.contact_id || null,
         start_date: body.start_date,
         end_date: body.end_date,
-        value: body.value || 0,
+        value: contractValue,
         description: body.description || null,
         status: body.status || 'active',
         created_by: auth.userId,

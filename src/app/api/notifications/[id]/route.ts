@@ -11,7 +11,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const s = sb();
     const body = await parseBody(req);
     const { data: result, error: updateError } = await s.from('notifications')
-      .update({ is_read: body.isRead ?? true }).eq('id', id).eq('company_id', auth.companyId).select('*').maybeSingle();
+      .update({ is_read: body.isRead ?? true })
+      .eq('id', id)
+      .eq('company_id', auth.companyId)
+      .eq('user_id', auth.userId)
+      .select('*').maybeSingle();
     if (updateError) throw updateError;
     if (!result) return error('Not found', 404);
     return success(result);

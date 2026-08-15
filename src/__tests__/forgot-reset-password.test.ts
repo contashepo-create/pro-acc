@@ -131,7 +131,7 @@ describe('reset-password — validation & token checks', () => {
 
   test('rejects a weak password via schema', async () => {
     expect(resetPasswordSchema.safeParse({ token: 't', password: 'short' }).success).toBe(false);
-    const res = await resetPOST(req({ token: 'some-token', password: 'weak' }));
+    const res = await resetPOST(req({ token: 'c'.repeat(64), password: 'weak' }));
     expect(res.status).toBe(400);
   });
 
@@ -145,7 +145,7 @@ describe('reset-password — validation & token checks', () => {
 
   test('rejects a used token', async () => {
     setResult('password_reset_tokens', 'maybeSingle', { id: 't1', user_id: 'u1', expires_at: new Date(Date.now() + 600000).toISOString(), used: true });
-    const res = await resetPOST(req({ token: 'used-token', password: 'Str0ng!Pass' }));
+    const res = await resetPOST(req({ token: 'd'.repeat(64), password: 'Str0ng!Pass' }));
     expect(res.status).toBe(400);
     const j = await res.json();
     expect(j.message).toContain('مسبقاً');
@@ -153,7 +153,7 @@ describe('reset-password — validation & token checks', () => {
 
   test('rejects an expired token', async () => {
     setResult('password_reset_tokens', 'maybeSingle', { id: 't1', user_id: 'u1', expires_at: new Date(Date.now() - 60000).toISOString(), used: false });
-    const res = await resetPOST(req({ token: 'expired-token', password: 'Str0ng!Pass' }));
+    const res = await resetPOST(req({ token: 'e'.repeat(64), password: 'Str0ng!Pass' }));
     expect(res.status).toBe(400);
     const j = await res.json();
     expect(j.message).toContain('انتهت');
@@ -165,7 +165,7 @@ describe('reset-password — validation & token checks', () => {
     setResult('users', 'update', null);
     setResult('password_reset_tokens', 'update', null);
 
-    await resetPOST(req({ token: 'raw-token-in-url', password: 'Str0ng!Pass' }));
+    await resetPOST(req({ token: 'a'.repeat(64), password: 'Str0ng!Pass' }));
 
     // Find the .eq('token', ...) filter within the password_reset_tokens query.
     const eqCalls = callsForTable('password_reset_tokens')
@@ -173,8 +173,8 @@ describe('reset-password — validation & token checks', () => {
       .filter((o) => o.op === 'eq' && o.args[0] === 'token');
     expect(eqCalls.length).toBe(1); // hashed path only (found) — no plain fallback
     // The filter value is the sha256 hash of the raw token, NOT the raw token.
-    expect(eqCalls[0].args[1]).toBe(createHash('sha256').update('raw-token-in-url').digest('hex'));
-    expect(eqCalls[0].args[1]).not.toBe('raw-token-in-url');
+    expect(eqCalls[0].args[1]).toBe(createHash('sha256').update('a'.repeat(64)).digest('hex'));
+    expect(eqCalls[0].args[1]).not.toBe('a'.repeat(64));
   });
 });
 
@@ -187,7 +187,7 @@ describe('reset-password — password change & session invalidation', () => {
     setResult('users', 'update', null);
     setResult('password_reset_tokens', 'update', null);
 
-    const res = await resetPOST(req({ token: 'some-valid-token', password: 'NewStr0ng!Pass' }));
+    const res = await resetPOST(req({ token: 'b'.repeat(64), password: 'NewStr0ng!Pass' }));
     expect(res.status).toBe(200);
 
     const userUpdate = findOp('users', 'update')!;
@@ -205,7 +205,7 @@ describe('reset-password — password change & session invalidation', () => {
     setResult('users', 'update', null);
     setResult('password_reset_tokens', 'update', null);
 
-    await resetPOST(req({ token: 'some-token', password: 'NewStr0ng!Pass' }));
+    await resetPOST(req({ token: 'c'.repeat(64), password: 'NewStr0ng!Pass' }));
     const userUpdate = findOp('users', 'update')!;
     expect((userUpdate.args[0] as any).token_version).toBe(1);
   });

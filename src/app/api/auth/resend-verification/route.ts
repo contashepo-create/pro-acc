@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { resendVerificationSchema } from '@/lib/validation';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { sendEmail } from '@/lib/email';
 
 const sb = () => getSupabase();
@@ -21,25 +21,20 @@ export async function POST(request: NextRequest) {
     // Rate limiting: prevent attackers from flooding inboxes with
     // verification emails (email bombing). Counts real requests via the
     // password_reset_requests table so repeated resends are throttled.
-    try {
-      const { checkPasswordResetRateLimit } = await import('@/lib/rate-limit');
-      const rateLimit = await checkPasswordResetRateLimit(normalizedEmail, ip);
-      if (!rateLimit.allowed) {
-        return error(`عدد الطلبات كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
-      }
-    } catch {}
+    const { checkPasswordResetRateLimit, recordPasswordResetRequest } = await import('@/lib/rate-limit');
+    const rateLimit = await checkPasswordResetRateLimit(normalizedEmail, ip);
+    if (!rateLimit.allowed) {
+      return error(`عدد الطلبات كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
+    }
 
-    // Record the request for throttling + delivery diagnostics.
-    let requestId: string | null = null;
-    try {
-      const { recordPasswordResetRequest } = await import('@/lib/rate-limit');
-      requestId = await recordPasswordResetRequest(normalizedEmail, ip);
-    } catch {}
+    // Recording is part of enforcement and therefore fails closed.
+    const requestId = await recordPasswordResetRequest(normalizedEmail, ip);
 
-    const { data: user } = await s.from('users')
+    const { data: user, error: userErr } = await s.from('users')
       .select('id, name, email_verified, is_active')
       .eq('email', normalizedEmail)
       .maybeSingle();
+    if (userErr) throw userErr;
 
     // Generic message to avoid leaking whether an account exists.
     const genericMsg = 'إذا كان البريد الإلكتروني مسجلاً وغير مؤكد، سنرسل رابط التأكيد';
@@ -49,20 +44,27 @@ export async function POST(request: NextRequest) {
     }
     const u = user as Record<string, any>;
     if (u.email_verified === true) {
-      return success({ message: 'تم تأكيد هذا البريد الإلكتروني مسبقاً' });
+      return success({ message: genericMsg });
     }
 
     const verificationToken = randomBytes(32).toString('hex');
-    await s.from('users')
+    const verificationTokenHash = createHash('sha256').update(verificationToken).digest('hex');
+    const { error: updateErr } = await s.from('users')
       .update({
-        email_verification_token: verificationToken,
+        email_verification_token: verificationTokenHash,
         email_verification_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
         updated_at: new Date().toISOString(),
       })
-      .eq('id', u.id);
+      .eq('id', u.id)
+      .eq('is_active', true)
+      .eq('email_verified', false);
+    if (updateErr) throw updateErr;
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://pro-acc.vercel.app';
-    const verifyUrl = `${appUrl}/verify-email?token=${verificationToken}`;
+    const configuredUrl = (process.env.NEXT_PUBLIC_APP_URL || '').trim();
+    if (process.env.NODE_ENV === 'production' && !configuredUrl) throw new Error('NEXT_PUBLIC_APP_URL is required');
+    const appUrl = configuredUrl ? new URL(configuredUrl) : request.nextUrl;
+    if (process.env.NODE_ENV === 'production' && appUrl.protocol !== 'https:') throw new Error('NEXT_PUBLIC_APP_URL must use HTTPS');
+    const verifyUrl = `${appUrl.origin}/verify-email?token=${verificationToken}`;
     const safeName = String(u.name || '')
       .replace(/[&<>"']/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m] as string));
 
@@ -92,11 +94,9 @@ export async function POST(request: NextRequest) {
     if (!emailSent && process.env.NODE_ENV !== 'production') {
       return success({ message: 'لم يتم تكوين خادم البريد. استخدم الرابط أدناه', resetUrl: verifyUrl });
     }
-    if (!emailSent) {
-      return success({ message: 'تعذر إرسال رابط التأكيد حالياً. يرجى المحاولة لاحقاً أو التواصل مع مدير النظام' });
-    }
-
-    return success({ message: 'تم إرسال رابط التأكيد إلى بريدك الإلكتروني' });
+    // Production always returns the same response for absent, already-verified,
+    // delivered and failed-delivery accounts to prevent enumeration.
+    return success({ message: genericMsg });
   } catch (err) {
     return serverError(err);
   }

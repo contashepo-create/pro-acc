@@ -59,45 +59,61 @@ export async function POST(request: NextRequest) {
     const body = await parseBody(request);
     const { invoice_id, project_id, contact_id, reason, items, date } = body;
 
-    if (!reason) return error('السبب مطلوب');
-    if (!items || !Array.isArray(items) || items.length === 0) return error('يجب إضافة بند واحد على الأقل');
+    if (typeof reason !== 'string' || !reason.trim() || reason.length > 1000) return error('السبب مطلوب');
+    if (!Array.isArray(items) || items.length === 0 || items.length > 200) return error('يجب إضافة بند واحد على الأقل');
+    const normalizedItems = items.map((item: any) => ({
+      description: typeof item.description === 'string' ? item.description.trim() : '',
+      quantity: Number(item.quantity), unit_price: Number(item.unit_price),
+    }));
+    if (normalizedItems.some((item: any) => !item.description || item.description.length > 500 || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unit_price) || item.unit_price < 0)) return error('أحد بنود الإشعار غير صالح');
 
-    // Get linked invoice's tax rate if invoice_id provided
-    let taxRate = body.tax_rate || 0;
+    let taxRate = Number(body.tax_rate || 0);
     let linkedContactId = contact_id || null;
-
+    let linkedProjectId = project_id || null;
+    let invoiceTotal: number | null = null;
     if (invoice_id) {
       const { data: linkedInvoice } = await s.from('invoices')
-        .select('tax_rate, contact_id, project_id')
+        .select('tax_rate, contact_id, project_id, total, status')
         .eq('id', invoice_id).eq('company_id', auth.companyId).maybeSingle();
-
-      if (linkedInvoice) {
-        const inv = linkedInvoice as any;
-        taxRate = parseFloat(inv.tax_rate) || 0;
-        if (inv.contact_id) linkedContactId = inv.contact_id;
-        if (inv.project_id && !project_id) {
-          // inherit project from invoice
-        }
+      if (!linkedInvoice) return error('الفاتورة غير موجودة', 404);
+      const inv = linkedInvoice as any;
+      if (inv.status === 'cancelled') return error('لا يمكن إصدار إشعار لفاتورة ملغاة', 409);
+      taxRate = Number(inv.tax_rate) || 0;
+      linkedContactId = inv.contact_id || null;
+      linkedProjectId = inv.project_id || null;
+      invoiceTotal = Number(inv.total) || 0;
+    } else {
+      if (linkedContactId) {
+        const { data: contact } = await s.from('contacts').select('id').eq('id', linkedContactId).eq('company_id', auth.companyId).maybeSingle();
+        if (!contact) return error('الطرف غير موجود', 404);
+      }
+      if (linkedProjectId) {
+        const { data: project } = await s.from('projects').select('id').eq('id', linkedProjectId).eq('company_id', auth.companyId).maybeSingle();
+        if (!project) return error('المشروع غير موجود', 404);
       }
     }
-
-    const subtotal = items.reduce((sum: number, it: any) => sum + (it.quantity * it.unit_price || 0), 0);
-    const taxAmount = subtotal * taxRate;
-    const total = subtotal + taxAmount;
-
-    // Generate credit note number (own sequence, not invoice sequence)
-    const year = new Date().getFullYear();
-    let number: number;
-    const { data: seqData } = await s.from('credit_note_sequences')
-      .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
-
-    if (seqData) {
-      number = (seqData as any).last_number + 1;
-      await s.from('credit_note_sequences').update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
-    } else {
-      number = 1;
-      await s.from('credit_note_sequences').insert({ company_id: auth.companyId, year, last_number: 1 });
+    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) return error('نسبة الضريبة غير صالحة');
+    const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+    const computedItems = normalizedItems.map((item: any) => ({ ...item, total: round2(item.quantity * item.unit_price) }));
+    const subtotal = round2(computedItems.reduce((sum: number, it: any) => sum + it.total, 0));
+    const taxAmount = round2(subtotal * taxRate);
+    const total = round2(subtotal + taxAmount);
+    if (total <= 0) return error('إجمالي الإشعار يجب أن يكون موجباً');
+    if (invoice_id && invoiceTotal !== null) {
+      const { data: priorCredits } = await s.from('credit_notes').select('total')
+        .eq('company_id', auth.companyId).eq('invoice_id', invoice_id).eq('status', 'approved').is('deleted_at', null);
+      const credited = (priorCredits || []).reduce((sum: number, row: any) => sum + Number(row.total || 0), 0);
+      if (total > invoiceTotal - credited + 0.005) return error('يتجاوز الإشعار الرصيد المتبقي للفاتورة', 409);
     }
+
+    const effectiveDate = date || new Date().toISOString().split('T')[0];
+    if (!Number.isFinite(Date.parse(effectiveDate))) return error('تاريخ الإشعار غير صالح');
+    const year = Number(effectiveDate.slice(0, 4));
+    const { data: nextNumber, error: numberError } = await s.rpc('next_credit_note_number', {
+      p_company_id: auth.companyId, p_year: year,
+    });
+    if (numberError || nextNumber == null) throw numberError || new Error('تعذر إنشاء رقم الإشعار');
+    const number = Number(nextNumber);
 
     // حل الحسابات قبل أي كتابة — القيد العكسي إلزامي متوازن
     const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE).maybeSingle();
@@ -116,12 +132,12 @@ export async function POST(request: NextRequest) {
     const { data: cn, error: cnErr } = await s.from('credit_notes')
       .insert({
         company_id: auth.companyId,
-        number: `CN-${number}`,
+        number,
         invoice_id: invoice_id || null,
-        project_id: project_id || null,
+        project_id: linkedProjectId,
         contact_id: linkedContactId,
-        date: date || new Date().toISOString().split('T')[0],
-        reason,
+        date: effectiveDate,
+        reason: reason.trim(),
         subtotal,
         tax_rate: taxRate,
         tax_amount: taxAmount,
@@ -133,30 +149,25 @@ export async function POST(request: NextRequest) {
 
     if (cnErr) throw cnErr;
 
-    // Insert items
-    for (const item of items) {
-      const { error: itemErr } = await s.from('credit_note_items').insert({
-        company_id: auth.companyId,
-        credit_note_id: cn.id,
-        description: item.description,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        total: item.quantity * item.unit_price,
-      });
-      if (itemErr) throw itemErr;
+    const { error: itemErr } = await s.from('credit_note_items').insert(
+      computedItems.map((item: any) => ({ company_id: auth.companyId, credit_note_id: cn.id, ...item })),
+    );
+    if (itemErr) {
+      await s.from('credit_notes').delete().eq('id', cn.id).eq('company_id', auth.companyId);
+      throw itemErr;
     }
 
     // Create reversal journal entry — فشله يلغي الإشعار بالكامل
     const journalLines: any[] = [
-      { account_id: revAccount.id, debit: subtotal, credit: 0, description: `إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId },
-      { account_id: arAccount.id, debit: 0, credit: total, description: `إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId },
+      { account_id: revAccount.id, debit: subtotal, credit: 0, description: `إشعار دائن: ${reason}`, project_id: linkedProjectId, contact_id: linkedContactId },
+      { account_id: arAccount.id, debit: 0, credit: total, description: `إشعار دائن: ${reason}`, project_id: linkedProjectId, contact_id: linkedContactId },
     ];
     if (taxAmount > 0 && vatAccountId) {
-      journalLines.push({ account_id: vatAccountId, debit: taxAmount, credit: 0, description: `ضريبة إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId });
+      journalLines.push({ account_id: vatAccountId, debit: taxAmount, credit: 0, description: `ضريبة إشعار دائن: ${reason}`, project_id: linkedProjectId, contact_id: linkedContactId });
     }
 
     const je = await createJournalEntry(auth.companyId, {
-      date: date || new Date().toISOString().split('T')[0],
+      date: effectiveDate,
       type: 'general',
       description: `إشعار دائن ${cn.number} - ${reason}`,
       lines: journalLines,
@@ -177,7 +188,13 @@ export async function POST(request: NextRequest) {
       .eq('company_id', auth.companyId)
       .select('*')
       .single();
-    if (linkErr) throw linkErr;
+    if (linkErr) {
+      await s.from('journal_lines').delete().eq('journal_entry_id', je.journalId).eq('company_id', auth.companyId);
+      await s.from('journal_entries').delete().eq('id', je.journalId).eq('company_id', auth.companyId);
+      await s.from('credit_note_items').delete().eq('credit_note_id', cn.id).eq('company_id', auth.companyId);
+      await s.from('credit_notes').delete().eq('id', cn.id).eq('company_id', auth.companyId);
+      throw linkErr;
+    }
 
     return success(linked, 201);
   } catch (err) {

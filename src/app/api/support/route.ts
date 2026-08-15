@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
     const { data, error: err } = await s.from('support_tickets')
       .select('id, subject, category, status, created_at, updated_at, admin_notes')
       .eq('company_id', auth.companyId)
+      .eq('user_id', auth.userId)
       .order('created_at', { ascending: false })
       .limit(50);
     if (err) throw err;

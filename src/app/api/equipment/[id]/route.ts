@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -26,12 +26,14 @@ export async function GET(
     const { data: maintenanceLog } = await s.from('equipment_maintenance')
       .select('*')
       .eq('equipment_id', id)
+      .eq('company_id', auth.companyId)
       .order('maintenance_date', { ascending: false });
 
     // Get usage log
     const { data: usageLog } = await s.from('equipment_usage')
       .select('*, projects(name)')
       .eq('equipment_id', id)
+      .eq('company_id', auth.companyId)
       .order('date', { ascending: false })
       .limit(30);
 
@@ -58,6 +60,21 @@ export async function PUT(
     const { id } = await params;
     const s = sb();
     const body = await request.json();
+    const { data: existing } = await s.from('equipment').select('id')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!existing) return notFound();
+    if (body.assigned_project_id) {
+      const { data: project } = await s.from('projects').select('id').eq('id', body.assigned_project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!project) return error('المشروع غير موجود',404);
+    }
+    if (body.assigned_operator_id) {
+      const { data: operator } = await s.from('employees').select('id').eq('id', body.assigned_operator_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!operator) return error('المشغل غير موجود',404);
+    }
+    for (const field of ['hourly_rate','maintenance_interval_days','year_of_manufacture']) {
+      if (body[field]!==undefined && (!Number.isFinite(Number(body[field])) || Number(body[field])<0)) return error('قيمة رقمية غير صالحة');
+    }
+    if (body.status && !['available','in_use','maintenance','decommissioned','sold'].includes(body.status)) return error('حالة المعدة غير صالحة');
 
     const allowedFields = [
       'name', 'type', 'model', 'manufacturer', 'year_of_manufacture',
@@ -95,10 +112,21 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    await s.from('equipment_maintenance').delete().eq('equipment_id', id);
-    await s.from('equipment_usage').delete().eq('equipment_id', id);
-    await s.from('equipment').delete().eq('id', id).eq('company_id', auth.companyId);
-
+    const { data: equipment } = await s.from('equipment').select('id, status')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!equipment) return notFound();
+    const [{ data: maintenance }, { data: usage }] = await Promise.all([
+      s.from('equipment_maintenance').select('id').eq('equipment_id', id).eq('company_id', auth.companyId).limit(1),
+      s.from('equipment_usage').select('id').eq('equipment_id', id).eq('company_id', auth.companyId).limit(1),
+    ]);
+    if (maintenance?.length || usage?.length) {
+      const { error: updateError } = await s.from('equipment').update({ status: 'decommissioned', updated_at: new Date().toISOString() })
+        .eq('id', id).eq('company_id', auth.companyId);
+      if (updateError) throw updateError;
+      return success({ decommissioned: true });
+    }
+    const { error: deleteError } = await s.from('equipment').delete().eq('id', id).eq('company_id', auth.companyId);
+    if (deleteError) throw deleteError;
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);
@@ -118,9 +146,16 @@ export async function POST(
     const s = sb();
     const body = await request.json();
 
-    if (!body.maintenance_date || !body.description) {
-      return error('تاريخ الصيانة والوصف مطلوبان');
+    if (!body.maintenance_date || !/^\d{4}-\d{2}-\d{2}$/.test(body.maintenance_date) || typeof body.description!=='string' || !body.description.trim() || body.description.length>2000) {
+      return error('تاريخ الصيانة والوصف غير صالحين');
     }
+    if (body.type && !['routine','repair','inspection','overhaul'].includes(body.type)) return error('نوع الصيانة غير صالح');
+    const cost=Number(body.cost||0);
+    if (!Number.isFinite(cost) || cost<0 || Math.abs(cost*100-Math.round(cost*100))>1e-8) return error('تكلفة الصيانة غير صالحة');
+    const { data: equipment } = await s.from('equipment').select('id, status')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!equipment) return notFound();
+    if ((equipment as any).status==='sold' || (equipment as any).status==='decommissioned') return error('لا يمكن تسجيل صيانة لمعدة مستبعدة',409);
 
     const logId = generateId();
     const { data, error: insertErr } = await s.from('equipment_maintenance')
@@ -131,7 +166,7 @@ export async function POST(
         maintenance_date: body.maintenance_date,
         type: body.type || 'routine', // routine, repair, inspection, overhaul
         description: body.description,
-        cost: body.cost || 0,
+        cost,
         performed_by: body.performed_by || null,
         next_maintenance_date: body.next_maintenance_date || null,
         parts_replaced: body.parts_replaced || null,
@@ -151,37 +186,4 @@ export async function POST(
   } catch (err) {
     return handleApiError(err);
   }
-}
-
-/**
- * PUT with action=record_usage — Log equipment usage hours
- */
-async function recordUsage(s: any, equipmentId: string, companyId: string, userId: string, body: any) {
-  if (!body.date || !body.hours) {
-    throw new Error('التاريخ وعدد الساعات مطلوبان');
-  }
-
-  const usageId = generateId();
-  const hourlyRate = body.hourly_rate || 0;
-  const totalCost = parseFloat(body.hours) * parseFloat(hourlyRate);
-
-  const { data, error: insertErr } = await s.from('equipment_usage')
-    .insert({
-      id: usageId,
-      equipment_id: equipmentId,
-      company_id: companyId,
-      date: body.date,
-      hours: body.hours,
-      project_id: body.project_id || null,
-      operator_id: body.operator_id || null,
-      description: body.description || null,
-      hourly_rate: hourlyRate,
-      total_cost: totalCost,
-      created_by: userId,
-    })
-    .select()
-    .single();
-
-  if (insertErr) throw insertErr;
-  return data;
 }

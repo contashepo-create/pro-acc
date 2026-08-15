@@ -66,6 +66,27 @@ export default function SubscriptionPageEnhanced() {
   const [addonDuration, setAddonDuration] = useState<'monthly'|'yearly'>('monthly');
   const [addonForm, setAddonForm] = useState({ payment_method: 'instapay', amount: '5', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
   const [addonSubmitting, setAddonSubmitting] = useState(false);
+  const [receiptUploading, setReceiptUploading] = useState<'upgrade'|'addon'|null>(null);
+
+  const uploadReceipt = async (file: File, target: 'upgrade'|'addon') => {
+    setReceiptUploading(target);
+    setMessage(null);
+    try {
+      const payload = new FormData();
+      payload.append('file', file);
+      const response = await fetch('/api/upload/receipt', { method: 'POST', body: payload });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.message || 'فشل رفع الإيصال');
+      const reference = json.data.reference || json.data.fileName;
+      if (target === 'upgrade') setForm((current) => ({ ...current, receipt_url: reference }));
+      else setAddonForm((current) => ({ ...current, receipt_url: reference }));
+      setMessage({ type: 'success', text: 'تم رفع إيصال الدفع إلى التخزين الآمن.' });
+    } catch (uploadError) {
+      setMessage({ type: 'error', text: uploadError instanceof Error ? uploadError.message : 'فشل رفع الإيصال' });
+    } finally {
+      setReceiptUploading(null);
+    }
+  };
 
   // Activation code state
   const [activationCode, setActivationCode] = useState('');
@@ -470,8 +491,19 @@ export default function SubscriptionPageEnhanced() {
             </div>
 
             <div>
-              <label className="text-xs text-text-muted">رابط صورة الإيصال (ارفع الصورة على أي موقع وانسخ الرابط أو اتركه فارغ وأرسل الصورة للدعم)</label>
-              <Input placeholder="https://..." value={form.receipt_url} onChange={(e:any)=>setForm({...form, receipt_url: e.target.value})} />
+              <label className="text-xs text-text-muted">صورة إيصال الدفع (JPG أو PNG أو PDF، حتى 5MB)</label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,application/pdf"
+                disabled={receiptUploading !== null}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void uploadReceipt(file, 'upgrade');
+                }}
+                className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm"
+              />
+              {receiptUploading === 'upgrade' && <p className="text-xs text-text-muted mt-1">جاري رفع الإيصال...</p>}
+              {form.receipt_url && <p className="text-xs text-emerald-400 mt-1">تم إرفاق الإيصال بأمان</p>}
             </div>
 
             <div>
@@ -484,7 +516,7 @@ export default function SubscriptionPageEnhanced() {
               <div className="mt-1">بعد التحويل، ارفق قيمة التحويل وتاريخه ووقته وصورة الإيصال. سيصل الطلب للإدارة عبر البوت وسيتم تنبيه الإدارة في لوحة التحكم.</div>
             </div>
 
-            <Button onClick={submitUpgrade} disabled={submitting} className="w-full" leftIcon={submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>
+            <Button onClick={submitUpgrade} disabled={submitting || receiptUploading !== null || !form.receipt_url} className="w-full" leftIcon={submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>
               {submitting ? 'جاري الإرسال...' : 'رفع طلب ترقية'}
             </Button>
           </div>
@@ -631,10 +663,21 @@ export default function SubscriptionPageEnhanced() {
             <div><label className="text-xs text-text-muted">الوقت</label><Input type="time" value={addonForm.time} onChange={(e:any)=>setAddonForm({...addonForm, time: e.target.value})} /></div>
           </div>
           <div>
-            <label className="text-xs text-text-muted">رابط إيصال الدفع</label>
-            <Input placeholder="https://..." value={addonForm.receipt_url} onChange={(e:any)=>setAddonForm({...addonForm, receipt_url: e.target.value})} />
+            <label className="text-xs text-text-muted">إيصال الدفع (JPG أو PNG أو PDF، حتى 5MB)</label>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,application/pdf"
+              disabled={receiptUploading !== null}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void uploadReceipt(file, 'addon');
+              }}
+              className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm"
+            />
+            {receiptUploading === 'addon' && <p className="text-xs text-text-muted mt-1">جاري رفع الإيصال...</p>}
+            {addonForm.receipt_url && <p className="text-xs text-emerald-400 mt-1">تم إرفاق الإيصال بأمان</p>}
           </div>
-          <Button onClick={submitAddon} disabled={addonSubmitting} className="w-full" leftIcon={addonSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>{addonSubmitting ? 'جاري الإرسال...' : 'رفع طلب الإضافة'}</Button>
+          <Button onClick={submitAddon} disabled={addonSubmitting || receiptUploading !== null || !addonForm.receipt_url} className="w-full" leftIcon={addonSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>{addonSubmitting ? 'جاري الإرسال...' : 'رفع طلب الإضافة'}</Button>
         </div>
       </Modal>
     </div>

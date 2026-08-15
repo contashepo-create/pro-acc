@@ -6,7 +6,7 @@ interface AnalyticsData {
   revenueChart: Array<{ month: string; revenue: number; expenses: number }>;
   agingReport: Array<{ range: string; count: number; amount: number }>;
   topClients: Array<{ name: string; revenue: number; invoiceCount: number }>;
-  projectProfitability: Array<{ name: string; budget: number; actual: number; margin: number }>;
+  projectProfitability: Array<{ name: string; revenue: number; expenses: number; margin: number }>;
   kpis: {
     totalRevenue: number;
     totalExpenses: number;
@@ -245,8 +245,8 @@ export default function AnalyticsDashboard() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="text-right p-3 text-sm font-medium text-gray-600">المشروع</th>
-                  <th className="text-center p-3 text-sm font-medium text-gray-600">الميزانية</th>
-                  <th className="text-center p-3 text-sm font-medium text-gray-600">الفعلي</th>
+                  <th className="text-center p-3 text-sm font-medium text-gray-600">الإيراد المرحّل</th>
+                  <th className="text-center p-3 text-sm font-medium text-gray-600">المصروف المرحّل</th>
                   <th className="text-center p-3 text-sm font-medium text-gray-600">الهامش</th>
                   <th className="text-left p-3 text-sm font-medium text-gray-600">الأداء</th>
                 </tr>
@@ -255,8 +255,8 @@ export default function AnalyticsDashboard() {
                 {data.projectProfitability.map((p, i) => (
                   <tr key={i} className="border-b">
                     <td className="p-3 font-medium text-sm">{p.name}</td>
-                    <td className="p-3 text-center text-sm">{p.budget.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</td>
-                    <td className="p-3 text-center text-sm">{p.actual.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</td>
+                    <td className="p-3 text-center text-sm">{p.revenue.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</td>
+                    <td className="p-3 text-center text-sm">{p.expenses.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}</td>
                     <td className="p-3 text-center">
                       <span className={`text-sm font-bold ${p.margin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                         {p.margin.toFixed(1)}%

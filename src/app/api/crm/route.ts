@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -67,9 +67,9 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'crm', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<any>(request);
 
-    if (!body.name || !body.type) {
+    if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200 || !body.type) {
       return error('الاسم والنوع مطلوبان');
     }
 
@@ -77,20 +77,28 @@ export async function POST(request: NextRequest) {
     if (!validTypes.includes(body.type)) {
       return error(`النوع غير صالح. الخيارات: ${validTypes.join('، ')}`);
     }
+    if (body.pipeline_stage && !['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost'].includes(body.pipeline_stage)) return error('مرحلة المسار غير صالحة');
+    if (body.source && !['website', 'referral', 'cold_call', 'tender', 'social', 'other'].includes(body.source)) return error('مصدر العميل غير صالح');
+    if (body.estimated_value !== undefined && (!Number.isFinite(Number(body.estimated_value)) || Number(body.estimated_value) < 0)) return error('القيمة المقدرة غير صالحة');
+    if (body.assigned_to) {
+      const { data: assignee } = await s.from('users').select('id')
+        .eq('id', body.assigned_to).eq('company_id', auth.companyId).eq('is_active', true).maybeSingle();
+      if (!assignee) return error('المستخدم المسند إليه غير موجود', 404);
+    }
 
     const contactId = generateId();
     const { data, error: insertErr } = await s.from('crm_contacts')
       .insert({
         id: contactId,
         company_id: auth.companyId,
-        name: body.name,
+        name: body.name.trim(),
         type: body.type,
         email: body.email || null,
         phone: body.phone || null,
         company_name: body.company_name || null,
         source: body.source || 'other', // website, referral, cold_call, tender, social, other
         pipeline_stage: body.pipeline_stage || 'new',
-        estimated_value: body.estimated_value || null,
+        estimated_value: body.estimated_value === undefined ? null : Number(body.estimated_value),
         description: body.description || null,
         assigned_to: body.assigned_to || auth.userId,
         created_by: auth.userId,

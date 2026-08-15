@@ -15,6 +15,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .select('id, name, phone, email, tax_number, notes, type')
       .eq('id', id)
       .eq('company_id', auth.companyId)
+      .eq('type', 'subcontractor')
       .maybeSingle();
 
     if (qErr || !data) return error('المقاول غير موجود', 404);
@@ -40,6 +41,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     const { id } = await params;
     const body = await parseBody(request);
     const { name, contact_person, specialty, phone, email, tax_number, notes } = body as any;
+    if (typeof name !== 'string' || !name.trim()) return error('الاسم مطلوب');
 
     const notesText = [
       specialty ? `التخصص: ${specialty}` : '',
@@ -58,9 +60,11 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       })
       .eq('id', id)
       .eq('company_id', auth.companyId)
+      .eq('type', 'subcontractor')
       .select()
-      .single();
+      .maybeSingle();
     if (uErr) throw uErr;
+    if (!data) return error('المقاول غير موجود',404);
     return success({ subcontractor: data });
   } catch (err) {
     return handleApiError(err);
@@ -72,12 +76,16 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     const auth = await requireModulePermission(request, 'subcontractors', 'delete');
     const s = sb();
     const { id } = await params;
-    const { error: dErr } = await s
+    const { data: deleted, error: dErr } = await s
       .from('contacts')
       .delete()
       .eq('id', id)
-      .eq('company_id', auth.companyId);
+      .eq('company_id', auth.companyId)
+      .eq('type', 'subcontractor')
+      .select('id')
+      .maybeSingle();
     if (dErr) throw dErr;
+    if (!deleted) return error('المقاول غير موجود', 404);
     return success({ message: 'تم الحذف' });
   } catch (err) {
     return handleApiError(err);

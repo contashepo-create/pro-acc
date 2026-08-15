@@ -37,13 +37,13 @@ export async function GET(req: NextRequest) {
 
       if (userError) throw userError;
 
-      // Get user activity (company-scoped audit trail for the user's company).
-      // admin_audit_log records actions by admins, not by users, so we surface
-      // the most-recent events for the company this user belongs to.
+      // Admin audit records use target_type/target_id (not the tenant audit
+      // table's entity_type/entity_id shape). Scope activity to this user.
       const { data: activity } = await s
         .from('admin_audit_log')
-        .select('id, action, entity_type, entity_id, note, created_at, admin_id')
-        .eq('company_id', (user as any).company_id)
+        .select('id, action, details, target_type, target_id, created_at, admin_id')
+        .eq('target_type', 'user')
+        .eq('target_id', userId)
         .order('created_at', { ascending: false })
         .limit(20);
 

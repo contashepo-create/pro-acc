@@ -49,29 +49,42 @@ export async function PUT(
     const s = sb();
     const body = await request.json();
     const { action, notes } = body;
+    const { data: existing, error: existingErr } = await s.from('bonds')
+      .select('id, status, issue_date').eq('id',id).eq('company_id',auth.companyId).maybeSingle();
+    if (existingErr) throw existingErr;
+    if (!existing) return notFound();
 
     if (action === 'release' || action === 'cancel') {
+      if ((existing as any).status !== 'active') return error('لا يمكن تغيير حالة ضمان غير نشط',409);
       const { data, error: updateErr } = await s.from('bonds')
         .update({
           status: action === 'release' ? 'released' : 'cancelled',
-          released_at: new Date().toISOString(),
-          notes: notes || null,
+          released_at: action === 'release' ? new Date().toISOString() : null,
+          notes: typeof notes === 'string' ? notes.trim() || null : null,
           updated_at: new Date().toISOString(),
         })
         .eq('id', id)
         .eq('company_id', auth.companyId)
+        .eq('status', 'active')
         .select()
-        .single();
+        .maybeSingle();
 
       if (updateErr) throw updateErr;
+      if (!data) return error('تغيرت حالة الضمان بواسطة طلب آخر',409);
       return success(data);
     }
 
+    if ((existing as any).status !== 'active') return error('لا يمكن تعديل ضمان غير نشط',409);
     // Regular update
     const allowedFields = ['title', 'amount', 'expiry_date', 'notes', 'beneficiary_name'];
     const updateData: Record<string, any> = {};
     for (const field of allowedFields) {
       if (body[field] !== undefined) updateData[field] = body[field];
+    }
+    if (body.title !== undefined && (typeof body.title !== 'string' || !body.title.trim())) return error('العنوان مطلوب');
+    if (body.amount !== undefined && (!Number.isFinite(Number(body.amount)) || Number(body.amount) <= 0)) return error('المبلغ يجب أن يكون موجباً');
+    if (body.expiry_date !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.expiry_date)) || body.expiry_date < (existing as any).issue_date)) {
+      return error('تاريخ الانتهاء غير صالح أو يسبق تاريخ الإصدار');
     }
     updateData.updated_at = new Date().toISOString();
 
@@ -79,10 +92,12 @@ export async function PUT(
       .update(updateData)
       .eq('id', id)
       .eq('company_id', auth.companyId)
+      .eq('status', 'active')
       .select()
-      .single();
+      .maybeSingle();
 
     if (updateErr) throw updateErr;
+    if (!data) return error('تغيرت حالة الضمان بواسطة طلب آخر',409);
     return success(data);
   } catch (err) {
     return handleApiError(err);
@@ -98,8 +113,18 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    await s.from('bonds').delete().eq('id', id).eq('company_id', auth.companyId);
-    return success({ deleted: true });
+    const { data: cancelled, error: cancelErr } = await s.from('bonds')
+      .update({status:'cancelled',updated_at:new Date().toISOString()})
+      .eq('id',id).eq('company_id',auth.companyId).eq('status','active')
+      .select('id,status').maybeSingle();
+    if (cancelErr) throw cancelErr;
+    if (!cancelled) {
+      const { data: existing } = await s.from('bonds').select('status')
+        .eq('id',id).eq('company_id',auth.companyId).maybeSingle();
+      if (!existing) return notFound();
+      return error('لا يمكن إلغاء ضمان غير نشط',409);
+    }
+    return success({ cancelled: true, bond: cancelled });
   } catch (err) {
     return handleApiError(err);
   }

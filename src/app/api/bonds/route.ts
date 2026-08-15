@@ -67,8 +67,13 @@ export async function POST(request: NextRequest) {
     const s = sb();
     const body = await request.json();
 
-    if (!body.title || !body.type || !body.amount || !body.issue_date || !body.expiry_date) {
+    if (typeof body.title !== 'string' || !body.title.trim() || !body.type || !body.issue_date || !body.expiry_date) {
       return error('العنوان والنوع والمبلغ وتاريخا الإصدار والانتهاء مطلوبة');
+    }
+    const amount = Number(body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return error('المبلغ يجب أن يكون موجباً');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.issue_date)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(body.expiry_date)) || body.expiry_date < body.issue_date) {
+      return error('تاريخا الإصدار والانتهاء غير صالحين');
     }
 
     // عزل مستأجرين: المشروع/الطرف/الخزينة (إن وُجدت) يجب أن تنتمي لهذه الشركة
@@ -87,6 +92,11 @@ export async function POST(request: NextRequest) {
         .select('id').eq('id', body.bank_safe_id).eq('company_id', auth.companyId).maybeSingle();
       if (!bank) return error('الخزينة/البنك غير موجود', 404);
     }
+    if (body.tender_id) {
+      const { data: tender } = await s.from('tenders')
+        .select('id').eq('id', body.tender_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!tender) return error('المناقصة غير موجودة',404);
+    }
 
     const validTypes = ['bid_bond', 'performance_bond', 'advance_payment', 'retention', 'warranty', 'insurance', 'other'];
     if (!validTypes.includes(body.type)) {
@@ -100,7 +110,7 @@ export async function POST(request: NextRequest) {
         company_id: auth.companyId,
         title: body.title,
         type: body.type,
-        amount: body.amount,
+        amount,
         currency: body.currency || 'SAR',
         issue_date: body.issue_date,
         expiry_date: body.expiry_date,
@@ -111,7 +121,7 @@ export async function POST(request: NextRequest) {
         tender_id: body.tender_id || null,
         contact_id: body.contact_id || null,
         reference_number: body.reference_number || null,
-        status: body.status || 'active', // active, expired, released, cancelled
+        status: 'active',
         notes: body.notes || null,
         created_by: auth.userId,
         created_at: new Date().toISOString(),

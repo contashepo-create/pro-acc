@@ -1,52 +1,48 @@
 import { NextRequest } from 'next/server';
-import { success, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import {
-  detectDuplicateInvoices,
-  detectOutliers,
-  detectSpendingSpikes,
-  detectInvalidValues,
-  type AnomalyFinding,
+  detectDuplicateInvoices, detectOutliers, detectSpendingSpikes, detectInvalidValues, type AnomalyFinding,
 } from '@/lib/analytics/anomaly';
 
-const sb = () => getSupabase();
-
-/**
- * GET /api/reports/anomalies — run heuristic anomaly detectors over the
- * company's financial data and return findings grouped by category.
- */
+/** Deterministic anomaly scan. Large datasets disclose the scan limit. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'reports', 'read');
-    const s = sb();
-
-    // Invoices for duplicate + outlier detection.
-    const { data: invoices } = await s.from('invoices')
-      .select('id, contact_id, total, date')
-      .eq('company_id', auth.companyId);
-    const invoiceRows = (invoices || []).map((inv: any) => ({
-      id: inv.id, contact_id: inv.contact_id, amount: parseFloat(String(inv.total)) || 0, date: inv.date,
+    const s = getSupabase();
+    const year = new Date().getUTCFullYear();
+    const [invoiceResult, monthlyResult] = await Promise.all([
+      s.from('invoices').select('id, contact_id, total, date', { count: 'exact' })
+        .eq('company_id', auth.companyId).neq('status', 'cancelled').is('deleted_at', null)
+        .order('date', { ascending: false }).range(0, 4999),
+      s.rpc('get_monthly_profit_loss', { p_company_id: auth.companyId, p_year: year }),
+    ]);
+    if (invoiceResult.error) throw invoiceResult.error;
+    if (monthlyResult.error) throw monthlyResult.error;
+    const invoiceRows = (invoiceResult.data || []).map((invoice: any) => ({
+      id: invoice.id, contact_id: invoice.contact_id,
+      amount: Number(invoice.total), date: invoice.date,
     }));
-
-    // NOTE: spending_spike detector is available in lib/analytics/anomaly and
-    // can be wired to a monthly expense series here when such a series exists.
-
     const findings: AnomalyFinding[] = [
-      ...detectDuplicateInvoices(invoiceRows, 30),
-      ...detectOutliers(invoiceRows.map((i: any) => ({ id: i.id, amount: i.amount }))),
+      ...detectDuplicateInvoices(invoiceRows.filter((row) => Number.isFinite(row.amount)), 30),
+      ...detectOutliers(invoiceRows.filter((row) => Number.isFinite(row.amount)).map((row) => ({ id: row.id, amount: row.amount }))),
+      ...detectInvalidValues(invoiceRows.map((row) => ({ id: row.id, label: `فاتورة ${row.id}`, value: row.amount }))),
+      ...detectSpendingSpikes((monthlyResult.data || []).map((row: any) => ({
+        period: `${year}-${String(row.month_number).padStart(2, '0')}`, amount: Number(row.expenses) || 0,
+      }))),
     ];
-
     return success({
       categories: {
-        duplicate_invoices: findings.filter((f) => f.code === 'DUPLICATE_INVOICE'),
-        outliers: findings.filter((f) => f.code === 'OUTLIER_AMOUNT'),
-        spending_spikes: findings.filter((f) => f.code === 'SPENDING_SPIKE'),
-        invalid_values: findings.filter((f) => f.code === 'NEGATIVE_VALUE' || f.code === 'NON_FINITE'),
+        duplicate_invoices: findings.filter((finding) => finding.code === 'DUPLICATE_INVOICE'),
+        outliers: findings.filter((finding) => finding.code === 'OUTLIER_AMOUNT'),
+        spending_spikes: findings.filter((finding) => finding.code === 'SPENDING_SPIKE'),
+        invalid_values: findings.filter((finding) => ['NEGATIVE_VALUE', 'NON_FINITE'].includes(finding.code)),
       },
-      findings,
-      total: findings.length,
-      critical: findings.filter((f) => f.severity === 'critical').length,
-      high: findings.filter((f) => f.severity === 'high').length,
+      findings, total: findings.length,
+      critical: findings.filter((finding) => finding.severity === 'critical').length,
+      high: findings.filter((finding) => finding.severity === 'high').length,
+      scannedInvoices: invoiceRows.length,
+      scanTruncated: (invoiceResult.count || 0) > invoiceRows.length,
     });
   } catch (err) {
     return handleApiError(err);

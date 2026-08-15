@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -13,9 +13,11 @@ export async function GET(request: NextRequest) {
     const auth = await requireApiAuth(request);
     const s = sb();
 
-    const { data: subs } = await s.from('push_subscriptions')
-      .select('*')
-      .eq('user_id', auth.userId);
+    const { data: subs, error: subsErr } = await s.from('push_subscriptions')
+      .select('id, endpoint, is_active, user_agent, created_at')
+      .eq('user_id', auth.userId)
+      .eq('company_id',auth.companyId);
+    if (subsErr) throw subsErr;
 
     return success({ subscriptions: subs || [] });
   } catch (err) {
@@ -37,11 +39,20 @@ export async function POST(request: NextRequest) {
     }
 
     const { endpoint, keys } = body.subscription;
+    if (typeof endpoint !== 'string' || endpoint.length > 4096) return error('endpoint غير صالح');
+    try {
+      const endpointUrl = new URL(endpoint);
+      if (endpointUrl.protocol !== 'https:') return error('endpoint يجب أن يستخدم HTTPS');
+    } catch { return error('endpoint غير صالح'); }
+    if (typeof keys?.p256dh !== 'string' || !keys.p256dh || typeof keys?.auth !== 'string' || !keys.auth) {
+      return error('مفاتيح اشتراك الإشعارات مطلوبة');
+    }
 
     // Check if already subscribed
     const { data: existing } = await s.from('push_subscriptions')
       .select('id')
       .eq('user_id', auth.userId)
+      .eq('company_id',auth.companyId)
       .eq('endpoint', endpoint)
       .maybeSingle();
 
@@ -78,14 +89,25 @@ export async function POST(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireManagerOrAbove(request);
     const s = sb();
-    const body = await request.json();
+    const { title, message, url, target_user_id, target_role, tag, actions } = await parseBody<Record<string, any>>(request);
 
-    const { title, message, url, target_user_id, target_role, tag, actions } = body;
+    if (typeof title !== 'string' || !title.trim() || title.length > 200 || typeof message !== 'string' || !message.trim() || message.length > 2000) {
+      return error('العنوان والرسالة مطلوبان وبطول صالح');
+    }
+    if (url !== undefined && (typeof url !== 'string' || !url.startsWith('/') || url.startsWith('//') || url.length > 2000)) {
+      return error('رابط الإشعار يجب أن يكون مساراً داخلياً صالحاً');
+    }
+    if (actions !== undefined && (!Array.isArray(actions) || actions.length > 5)) return error('إجراءات الإشعار غير صالحة');
 
-    if (!title || !message) {
-      return error('العنوان والرسالة مطلوبان');
+    if (target_user_id) {
+      const { data: target } = await s.from('users').select('id')
+        .eq('id', target_user_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!target) return error('المستخدم المستهدف غير موجود', 404);
+    }
+    if (target_role && !['admin', 'manager', 'accountant', 'supervisor'].includes(target_role)) {
+      return error('دور المستهدف غير صالح');
     }
 
     // Get target subscriptions
@@ -115,6 +137,7 @@ export async function PUT(request: NextRequest) {
         const { data: user } = await s.from('users')
           .select('role')
           .eq('id', subObj.user_id)
+          .eq('company_id',auth.companyId)
           .maybeSingle();
         if (!user || (user as any).role !== target_role) continue;
       }
@@ -194,12 +217,16 @@ export async function DELETE(request: NextRequest) {
     const url = new URL(request.url);
     const endpoint = url.searchParams.get('endpoint');
 
-    if (endpoint) {
-      await s.from('push_subscriptions')
-        .delete()
-        .eq('user_id', auth.userId)
-        .eq('endpoint', endpoint);
-    }
+    if (!endpoint) return error('endpoint مطلوب');
+    const { data: deleted, error: deleteErr } = await s.from('push_subscriptions')
+      .delete()
+      .eq('user_id', auth.userId)
+      .eq('company_id',auth.companyId)
+      .eq('endpoint', endpoint)
+      .select('id')
+      .maybeSingle();
+    if (deleteErr) throw deleteErr;
+    if (!deleted) return error('الاشتراك غير موجود',404);
 
     return success({ unsubscribed: true });
   } catch (err) {

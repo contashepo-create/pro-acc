@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { postReversalEntry } from '@/lib/voucher-utils';
 
 const sb = () => getSupabase();
 
@@ -33,16 +34,22 @@ export async function PUT(
     const auth = await requireModulePermission(request, 'fixed_assets', 'update');
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, unknown>>(request);
 
     const { data: existing } = await s.from('fixed_assets')
-      .select('id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+      .select('id, status').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return notFound();
-
+    if ((existing as any).status === 'disposed') return error('لا يمكن تعديل أصل مستبعد',409);
+    const financialFields = ['code','category','purchase_date','purchase_cost','useful_life_years','depreciation_rate','depreciation_method','asset_account_id','depreciation_account_id'];
+    if (financialFields.some((field) => body[field]!==undefined)) return error('لا يمكن تعديل البيانات المالية لأصل مرحّل؛ استخدم استبعاداً وتصحيحاً محاسبياً',409);
     const updateData: any = {};
-    for (const k of ['name', 'code', 'category', 'purchase_date', 'purchase_cost', 'useful_life_years', 'depreciation_rate', 'depreciation_method', 'location', 'notes']) {
-      if (body[k] !== undefined) updateData[k] = body[k];
+    for (const key of ['name','location','notes']) {
+      if (body[key] !== undefined) {
+        if (typeof body[key] !== 'string' || body[key].length > (key==='notes'?2000:500) || (key==='name' && !body[key].trim())) return error('بيانات الأصل غير صالحة');
+        updateData[key] = body[key].trim() || null;
+      }
     }
+    if (!Object.keys(updateData).length) return error('لا توجد حقول قابلة للتعديل');
 
     const { data: updated, error: updErr } = await s.from('fixed_assets')
       .update(updateData).eq('id', id).eq('company_id', auth.companyId).select('*').single();
@@ -64,7 +71,7 @@ export async function DELETE(
     const s = sb();
 
     const { data: existing } = await s.from('fixed_assets')
-      .select('id, accumulated_depreciation')
+      .select('id, accumulated_depreciation, journal_entry_id, status')
       .eq('id', id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
@@ -75,26 +82,30 @@ export async function DELETE(
       return error('لا يمكن حذف أصل مُهلك — عطّله بدلاً من الحذف');
     }
     const { data: logs } = await s.from('depreciation_log')
-      .select('id').eq('asset_id', id).limit(1);
+      .select('id').eq('asset_id', id).eq('company_id', auth.companyId).limit(1);
     if (logs && logs.length > 0) {
       return error('لا يمكن حذف أصل له سجل إهلاك — عطّله بدلاً من الحذف');
     }
 
-    // احذف قيد الشراء المرتبط (إن وُجد) حتى لا يبقى قيد يتيم
-    const { data: je } = await s.from('journal_entries')
-      .select('id')
-      .eq('reference_type', 'fixed_asset')
-      .eq('reference_id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (je) {
-      await s.from('journal_lines').delete().eq('journal_entry_id', (je as any).id);
-      await s.from('journal_entries').delete().eq('id', (je as any).id).eq('company_id', auth.companyId);
+    // Financial records are immutable: reverse the acquisition entry and mark
+    // the asset disposed instead of deleting ledger history.
+    if ((existing as any).status === 'disposed') return error('الأصل مستبعد بالفعل',409);
+    if ((existing as any).journal_entry_id) {
+      const { error: reversalError } = await postReversalEntry(auth.companyId, {
+        journalEntryId: (existing as any).journal_entry_id,
+        referenceType: 'fixed_asset_disposal_reversal',
+        referenceId: id,
+        description: 'عكس قيد شراء أصل ثابت عند استبعاده',
+        userId: auth.userId,
+      });
+      if (reversalError) throw reversalError;
     }
 
-    const { error: delErr } = await s.from('fixed_assets').delete().eq('id', id).eq('company_id', auth.companyId);
-    if (delErr) throw delErr;
-    return success({ deleted: true });
+    const { error: disposeError } = await s.from('fixed_assets')
+      .update({ status: 'disposed' })
+      .eq('id', id).eq('company_id', auth.companyId);
+    if (disposeError) throw disposeError;
+    return success({ disposed: true });
   } catch (err) {
     return handleApiError(err);
   }

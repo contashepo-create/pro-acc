@@ -36,7 +36,7 @@ export async function GET(
 
     const { data: itemsRes } = await s.from('invoice_items')
       .select('id, description, quantity, unit_price, total, barcode')
-      .eq('invoice_id', id).order('id');
+      .eq('invoice_id', id).eq('company_id', auth.companyId).order('id');
 
     // Fetch company info with all relevant fields
     const { data: company } = await s.from('companies')
@@ -56,7 +56,7 @@ export async function GET(
     let createdBy: string | null = null;
     if (inv.created_by) {
       const { data: user } = await s.from('users')
-        .select('name').eq('id', inv.created_by).maybeSingle();
+        .select('name').eq('id', inv.created_by).eq('company_id', auth.companyId).maybeSingle();
       createdBy = (user as any)?.name || null;
     }
 
@@ -65,7 +65,8 @@ export async function GET(
     if (inv.journal_entry_id) {
       const { data: jl } = await s.from('journal_lines')
         .select('id, account_id, account_code, account_name, debit, credit, description')
-        .eq('journal_entry_id', inv.journal_entry_id);
+        .eq('journal_entry_id', inv.journal_entry_id)
+        .eq('company_id', auth.companyId);
       journalLines = jl || [];
     }
 
@@ -109,94 +110,37 @@ export async function PUT(
     const { id } = await paramsPromise;
     const s = sb();
     const body = await parseBody<any>(request);
-
     const { data: existing } = await s.from('invoices')
-      .select('id, status, journal_entry_id, number, paid_amount, contact_id, date, total')
+      .select('id, status, journal_entry_id, notes, due_date')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return notFound();
-    const inv = existing as Record<string, any>;
-    if (inv.status === 'cancelled') return error('لا يمكن تعديل فاتورة ملغاة');
+    if ((existing as any).status === 'cancelled') return error('لا يمكن تعديل فاتورة ملغاة', 409);
 
-    const paid = parseFloat(inv.paid_amount) || 0;
-    const wantsFinancial = Array.isArray(body.items) && body.items.length > 0;
-    if (wantsFinancial && paid > 0.005) {
-      return error('لا يمكن تعديل بنود فاتورة عليها تحصيل — اعكس سندات القبض أولاً');
+    // Posted invoices are immutable. Corrections require cancellation/reversal
+    // followed by a new invoice; in-place rewriting breaks the audit trail.
+    const immutableFields = [
+      'items', 'date', 'clientId', 'contact_id', 'projectId', 'project_id',
+      'vatRate', 'vat_rate', 'vatEnabled', 'subtotal', 'total',
+    ];
+    if (immutableFields.some((field) => body[field] !== undefined)) {
+      return error('لا يمكن تعديل البيانات المحاسبية لفاتورة مرحّلة؛ ألغِ الفاتورة وأنشئ أخرى', 409);
     }
-
-    const header: any = {};
-    if (body.notes !== undefined) header.notes = body.notes;
-    if (body.dueDate || body.due_date) header.due_date = body.dueDate || body.due_date;
-    if (body.date) header.date = body.date;
-    if (body.clientId || body.contact_id) header.contact_id = body.clientId || body.contact_id;
-    if (body.projectId !== undefined || body.project_id !== undefined) {
-      header.project_id = body.projectId ?? body.project_id ?? null;
+    const update: Record<string, unknown> = {};
+    if (body.notes !== undefined) {
+      if (typeof body.notes !== 'string' || body.notes.length > 2000) return error('الملاحظات طويلة جداً');
+      update.notes = body.notes.trim() || null;
     }
-
-    if (wantsFinancial) {
-      const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-      const items = body.items.map((it: any) => {
-        const qty = Number(it.quantity) || 0;
-        const price = Number(it.unitPrice ?? it.unit_price) || 0;
-        const disc = Number(it.discount) || 0;
-        const gross = round2(qty * price);
-        const discount = Math.min(round2(disc), gross);
-        return { description: it.description, quantity: qty, unit_price: price, total: round2(gross - discount) };
-      });
-      const subtotal = round2(items.reduce((sum: number, i: any) => sum + i.total, 0));
-      const vatRate = body.vatEnabled === false ? 0 : Number(body.vatRate ?? body.vat_rate ?? 0.15);
-      const vatAmount = round2(subtotal * vatRate);
-      header.subtotal = subtotal;
-      header.vat_rate = vatRate;
-      header.vat_amount = vatAmount;
-      header.tax_rate = vatRate;
-      header.tax_amount = vatAmount;
-      header.total = round2(subtotal + vatAmount);
-
-      await s.from('invoice_items').delete().eq('invoice_id', id).eq('company_id', auth.companyId);
-      for (const item of items) {
-        await s.from('invoice_items').insert({ company_id: auth.companyId, invoice_id: id, ...item });
-      }
-
-      if (inv.journal_entry_id) {
-        const { postReversalEntry } = await import('@/lib/voucher-utils');
-        const { error: revErr } = await postReversalEntry(auth.companyId, {
-          journalEntryId: inv.journal_entry_id,
-          referenceType: 'invoice_reversal',
-          referenceId: id,
-          description: `عكس قيد فاتورة رقم ${inv.number} قبل إعادة الترحيل`,
-          userId: auth.userId,
-        });
-        if (revErr) throw revErr;
-      }
-
-      const { postSalesInvoiceJournal } = await import('@/lib/invoice-accounting');
-      const newJe = await postSalesInvoiceJournal({
-        companyId: auth.companyId,
-        userId: auth.userId,
-        invoiceId: id,
-        invoiceNumber: inv.number,
-        date: header.date || inv.date,
-        contactId: header.contact_id || inv.contact_id,
-        projectId: header.project_id,
-        subtotal,
-        vatAmount,
-        total: header.total,
-      });
-      header.journal_entry_id = newJe;
+    const dueDate = body.dueDate ?? body.due_date;
+    if (dueDate !== undefined) {
+      if (typeof dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return error('تاريخ الاستحقاق غير صالح');
+      update.due_date = dueDate;
     }
-
-    const { data: updated, error: updErr } = await s.from('invoices')
-      .update(header).eq('id', id).eq('company_id', auth.companyId).select('*').single();
-    if (updErr) throw updErr;
-
-    // تغيير المشروع فقط: انقل وسم السطور دون إعادة ترحيل المبالغ
-    if (!wantsFinancial && header.project_id !== undefined && inv.journal_entry_id) {
-      await s.from('journal_lines')
-        .update({ project_id: header.project_id })
-        .eq('journal_entry_id', inv.journal_entry_id)
-        .eq('company_id', auth.companyId);
-    }
-
+    if (!Object.keys(update).length) return error('لا توجد حقول قابلة للتعديل');
+    const { data: updated, error: updateError } = await s.from('invoices')
+      .update({ ...update, updated_at: new Date().toISOString() })
+      .eq('id', id).eq('company_id', auth.companyId).select('*').maybeSingle();
+    if (updateError) throw updateError;
+    if (!updated) return notFound();
     return success(updated);
   } catch (err) {
     return handleApiError(err);
@@ -228,6 +172,9 @@ export async function PATCH(
       if (paidAmt > 0.005 || invoice.status === 'paid' || invoice.status === 'partial') {
         return error('لا يمكن إلغاء فاتورة عليها تحصيل — اعكس سندات القبض أولاً');
       }
+      const { data: credits } = await s.from('credit_notes').select('id')
+        .eq('company_id', auth.companyId).eq('invoice_id', id).eq('status', 'approved').limit(1);
+      if (credits?.length) return error('لا يمكن إلغاء فاتورة لها إشعارات دائنة معتمدة؛ ألغِ الإشعارات أولاً', 409);
 
       if (invoice.journal_entry_id) {
         const { postReversalEntry } = await import('@/lib/voucher-utils');

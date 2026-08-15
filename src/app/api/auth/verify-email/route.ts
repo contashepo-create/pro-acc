@@ -1,40 +1,27 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError } from '@/lib/api-helpers';
+import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-
-const sb = () => getSupabase();
+import { createHash } from 'crypto';
 
 export async function POST(request: NextRequest) {
   try {
-    const { token } = await request.json();
-
-    if (!token) {
-      return error('رمز التحقق مطلوب');
-    }
-
-    const s = sb();
-    const now = new Date().toISOString();
-
-    const { data: user, error: queryError } = await s.from('users')
-      .select('id, email')
-      .eq('email_verification_token', token)
-      .gt('email_verification_expires', now)
-      .maybeSingle();
-
-    if (queryError || !user) {
+    const { token } = await parseBody<{ token?: unknown }>(request);
+    if (typeof token !== 'string' || token.length !== 64 || !/^[a-f0-9]+$/i.test(token)) {
       return error('رمز التحقق غير صالح أو منتهي الصلاحية', 400);
     }
-
-    await s.from('users')
-      .update({
-        email_verified: true,
-        email_verification_token: null,
-        email_verification_expires: null,
-        updated_at: now,
-      })
-      .eq('id', user.id);
-
-    return success({ message: 'تم تأكيد البريد الإلكتروني بنجاح', email: user.email });
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    // Lock and consume in one transaction so a verification link is a true
+    // one-time capability even under concurrent requests.
+    const { data, error: verifyErr } = await getSupabase().rpc('consume_email_verification_token', {
+      p_token_hash: tokenHash,
+    });
+    if (verifyErr) {
+      if (verifyErr.code === 'P0001' || String(verifyErr.message || '').includes('رمز التحقق')) {
+        return error('رمز التحقق غير صالح أو منتهي الصلاحية', 400);
+      }
+      throw verifyErr;
+    }
+    return success({ message: 'تم تأكيد البريد الإلكتروني بنجاح', email: (data as Record<string, any>)?.email });
   } catch (err) {
     return serverError(err);
   }

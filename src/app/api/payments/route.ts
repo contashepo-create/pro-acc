@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { initPayment, getPaymentStatus, refundPayment, mapPaymentStatus } from '@/lib/payments/moyasar';
 import { generateId } from '@/lib/utils';
@@ -42,13 +42,13 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'invoices', 'create');
     const s = sb();
-    const body = await request.json();
-    const { invoice_id, customer_name, customer_email, return_url } = body as {
+    const body = await parseBody<{
       invoice_id?: string;
       customer_name?: string;
       customer_email?: string;
       return_url?: string;
-    };
+    }>(request);
+    const { invoice_id, customer_name, customer_email, return_url } = body;
 
     if (!invoice_id) return error('invoice_id مطلوب');
 
@@ -68,9 +68,16 @@ export async function POST(request: NextRequest) {
     const email = customer_email || inv.contacts?.email || '';
 
     try {
-      const host = request.headers.get('host') || 'localhost:3000';
-      const protocol = request.headers.get('x-forwarded-proto') || 'https';
-      const callbackUrl = return_url || `${protocol}://${host}/invoices?payment=callback`;
+      const configuredAppUrl = (process.env.NEXT_PUBLIC_APP_URL || '').trim();
+      const fallbackOrigin = request.nextUrl.origin;
+      const trustedOrigin = configuredAppUrl ? new URL(configuredAppUrl).origin : fallbackOrigin;
+      // Never hand a payment gateway a caller-controlled return URL. It can be
+      // abused as an open redirect/phishing hop after a legitimate payment.
+      if (return_url) {
+        const requested = new URL(return_url, trustedOrigin);
+        if (requested.origin !== trustedOrigin) return error('عنوان العودة غير مسموح', 400);
+      }
+      const callbackUrl = `${trustedOrigin}/invoices?payment=callback`;
 
       const { paymentId, paymentUrl } = await initPayment({
         amount: parseFloat(String(inv.total)),
@@ -143,12 +150,14 @@ export async function POST(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'invoices', 'update');
+    // Payment status is a financial authority. An invoice editor must never be
+    // able to mark a payment as paid by posting a client-controlled status.
+    const auth = await requireManagerOrAbove(request);
     const s = sb();
     const url = new URL(request.url);
     const recordId = url.searchParams.get('id');
-    const body = await request.json();
-    const { status, gateway_response } = body as { status?: string; gateway_response?: unknown };
+    const body = await parseBody<{ gateway_response?: unknown }>(request);
+    const { gateway_response } = body;
 
     if (!recordId) return error('id مطلوب');
 
@@ -160,17 +169,24 @@ export async function PUT(request: NextRequest) {
       .maybeSingle();
 
     if (!record) return error('سجل الدفع غير موجود');
-    const rec = record as { id: string; invoice_id: string; amount: number; status: string; payment_gateway_id: string };
+    const rec = record as { id: string; invoice_id: string; amount: number; status: string; payment_gateway_id: string; journal_entry_id?: string | null };
+    // Idempotency: a paid record has already created its accounting event.
+    if (rec.status === 'paid' || rec.journal_entry_id) {
+      return success({ id: recordId, status: rec.status, alreadyProcessed: true });
+    }
+    // Manual records cannot be promoted through this endpoint. They require a
+    // separately auditable voucher/receipt flow. Gateway status is fetched
+    // server-side; no request body may assert "paid".
+    if (!rec.payment_gateway_id || rec.payment_gateway_id.startsWith('manual_')) {
+      return error('سجل الدفع اليدوي لا يمكن تأكيده هنا. أنشئ سند قبض معتمد.', 409);
+    }
 
-    // If checking status from gateway, fetch latest
-    let finalStatus = status || rec.status;
-    if (!status && rec.payment_gateway_id && !rec.payment_gateway_id.startsWith('manual_')) {
-      try {
-        const gatewayStatus = await getPaymentStatus(rec.payment_gateway_id);
-        finalStatus = mapPaymentStatus(gatewayStatus.status);
-      } catch {
-        // keep current status
-      }
+    let finalStatus: string;
+    try {
+      const gatewayStatus = await getPaymentStatus(rec.payment_gateway_id);
+      finalStatus = mapPaymentStatus(gatewayStatus.status);
+    } catch {
+      return error('تعذر التحقق من حالة الدفع من البوابة', 503);
     }
 
     // Update the record
@@ -200,8 +216,9 @@ export async function PUT(request: NextRequest) {
             reference_id: recordId,
             created_by: auth.userId,
           });
-          if (!jeErr && journalId) {
-            await s.from('payment_records').update({ journal_entry_id: journalId }).eq('id', recordId).eq('company_id', auth.companyId);
+          if (jeErr || !journalId) throw jeErr || new Error('فشل إنشاء قيد الدفع');
+          await s.from('payment_records').update({ journal_entry_id: journalId }).eq('id', recordId).eq('company_id', auth.companyId);
+          {
             const { data: invRow } = await s.from('invoices')
               .select('total, paid_amount, status')
               .eq('id', rec.invoice_id).eq('company_id', auth.companyId).maybeSingle();
@@ -213,9 +230,16 @@ export async function PUT(request: NextRequest) {
                 .eq('id', rec.invoice_id).eq('company_id', auth.companyId);
             }
           }
+        } else {
+          throw new Error('حساب التحصيل أو الذمم غير موجود');
         }
       } catch (journalErr) {
-        console.warn('Failed to create auto journal entry for payment:', journalErr);
+        // Do not report a paid invoice without a matching balanced posting.
+        await s.from('payment_records').update({
+          status: 'failed',
+          updated_at: new Date().toISOString(),
+        }).eq('id', recordId).eq('company_id', auth.companyId);
+        throw journalErr;
       }
     }
 

@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireAdmin, handleApiError, parseBody } from '@/lib/api-helpers';
+import { safeHttpsUrl } from '@/lib/safe-input';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -27,19 +28,30 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    // تغيير شعار الشركة (هوية بصرية) — يقتصر على المدير فأعلى
-    const auth = await requireManagerOrAbove(request);
-    const body = await request.json();
+    // Company identity is reserved for the company administrator.
+    const auth = await requireAdmin(request);
+    const body = await parseBody<{ logo_url?: string }>(request);
     const s = sb();
 
-    if (!body.logo_url || typeof body.logo_url !== 'string') return error('logo_url is required');
+    const logoUrl = safeHttpsUrl(body.logo_url);
+    if (!logoUrl) return error('رابط الشعار يجب أن يكون HTTPS صالحاً');
 
-    await s.from('companies').update({
-      logo_url: body.logo_url,
+    const { error: updateError } = await s.from('companies').update({
+      logo_url: logoUrl,
       updated_at: new Date().toISOString(),
     }).eq('id', auth.companyId);
+    if (updateError) throw updateError;
+    const { error: auditError } = await s.from('audit_log').insert({
+      company_id: auth.companyId,
+      user_id: auth.userId,
+      action: 'update_company_logo',
+      entity_type: 'company',
+      entity_id: auth.companyId,
+      new_values: { logo_url: logoUrl },
+    });
+    if (auditError) console.error('Company logo audit write failed:', auditError);
 
-    return success({ logo_url: body.logo_url });
+    return success({ logo_url: logoUrl });
   } catch (err) {
     return handleApiError(err);
   }

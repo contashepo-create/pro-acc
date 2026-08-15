@@ -33,11 +33,11 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { companyId } = await requireApiAuth(request);
+    const { companyId } = await requireModulePermission(request, 'messages', 'create');
     const body = await parseBody<{ subject: string; body: string }>(request);
 
-    if (!body.subject?.trim()) return error('عنوان الرسالة مطلوب');
-    if (!body.body?.trim()) return error('نص الرسالة مطلوب');
+    if (!body.subject?.trim() || body.subject.length > 200) return error('عنوان الرسالة مطلوب وبحد أقصى 200 حرف');
+    if (!body.body?.trim() || body.body.length > 5000) return error('نص الرسالة مطلوب وبحد أقصى 5000 حرف');
 
     const s = sb();
     const { data: result, error: insertError } = await s.from('messages')

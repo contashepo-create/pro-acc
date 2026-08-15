@@ -26,6 +26,10 @@ export async function GET(req: NextRequest) {
     const type = url.searchParams.get('type') || 'trial_balance';
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
+    if (!['trial_balance', 'income_statement', 'balance_sheet'].includes(type)) return error('نوع التقرير غير صالح');
+    if ((from && (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !Number.isFinite(Date.parse(from))))
+      || (to && (!/^\d{4}-\d{2}-\d{2}$/.test(to) || !Number.isFinite(Date.parse(to))))
+      || (from && to && from > to)) return error('فترة التقرير غير صالحة');
 
     const accounts = await loadReportAccounts(s, auth.companyId);
     if (!accounts || accounts.length === 0) {
@@ -191,7 +195,7 @@ export async function GET(req: NextRequest) {
         {
           id: 'virtual-current-year-net-income',
           code: '3300-V',
-          name: 'أرباح (خسائر) الفترة الحالية (من قائمة الدخل)',
+          name: 'الأرباح (الخسائر) المتراكمة حتى تاريخ التقرير',
           balance: currentYearNetIncome
         }
       ];

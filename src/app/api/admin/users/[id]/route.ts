@@ -32,7 +32,7 @@ export async function PATCH(
 
     const s = sb();
     const { data: user, error: userErr } = await s.from('users')
-      .select('id, name, email, is_active')
+      .select('id, name, email, company_id, role, is_active, token_version')
       .eq('id', id)
       .single();
 
@@ -40,8 +40,19 @@ export async function PATCH(
       return notFound();
     }
 
+    if (!body.is_active && user.is_active && user.role === 'admin') {
+      const { count } = await s.from('users').select('*', { count: 'exact', head: true })
+        .eq('company_id', user.company_id).eq('role', 'admin').eq('is_active', true);
+      if ((count || 0) <= 1) return error('لا يمكن تعطيل آخر مدير نشط للشركة', 409);
+    }
+
     const { error: updateErr } = await s.from('users')
-      .update({ is_active: body.is_active, updated_at: new Date().toISOString() })
+      .update({
+        is_active: body.is_active,
+        // Invalidate all existing sessions immediately when disabling.
+        ...(body.is_active ? {} : { token_version: (Number((user as any).token_version) || 0) + 1 }),
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', id);
     if (updateErr) throw updateErr;
 

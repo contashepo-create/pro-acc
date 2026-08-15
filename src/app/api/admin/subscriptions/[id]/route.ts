@@ -2,6 +2,7 @@ import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
+import { auditLog } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
 
@@ -54,18 +55,45 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }>(req);
 
     const s = sb();
-    const { data: existing } = await s.from('subscriptions').select('id,company_id,extra_users,extra_branches,extra_storage_gb').eq('id', id).maybeSingle();
+    const { data: existing } = await s.from('subscriptions')
+      .select('id,company_id,plan_id,plan_code,status,end_date,extra_users,extra_branches,extra_storage_gb')
+      .eq('id', id).maybeSingle();
     if (!existing) return error('الاشتراك غير موجود', 404);
 
-    const patch: Record<string, any> = { updated_at: new Date().toISOString() };
-    if (body.plan_id) patch.plan_id = body.plan_id;
-    if (body.status && ['active','trial','cancelled','expired'].includes(body.status)) patch.status = body.status;
-    if (body.end_date) patch.end_date = body.end_date;
-    if (body.extra_users !== undefined) patch.extra_users = normInt(body.extra_users, 0) ?? 0;
-    if (body.extra_branches !== undefined) patch.extra_branches = normInt(body.extra_branches, 0) ?? 0;
-    if (body.extra_storage_gb !== undefined) patch.extra_storage_gb = normInt(body.extra_storage_gb, 0) ?? 0;
-
     const prev = existing as any;
+    // This generic editor is not a payment approval path. It may revoke or
+    // reduce access, but it must never manufacture a paid entitlement.
+    if (body.plan_id && body.plan_id !== prev.plan_id) {
+      return error('تغيير الباقة المدفوعة يتم فقط عبر طلب ترقية معتمد أو كود تفعيل', 409);
+    }
+    if (body.status === 'active' && prev.status !== 'active') {
+      return error('لا يمكن تفعيل اشتراك مدفوع يدوياً دون إثبات دفع معتمد', 409);
+    }
+    if (body.status === 'trial' && prev.status !== 'trial') {
+      return error('بدء تجربة جديدة يتم عبر مسار تمديد التجربة الموثق', 409);
+    }
+    if (body.end_date) {
+      const requestedEnd = new Date(body.end_date).getTime();
+      const currentEnd = new Date(prev.end_date).getTime();
+      if (!Number.isFinite(requestedEnd) || requestedEnd > currentEnd) {
+        return error('تمديد الاشتراك يتم فقط عبر دفع معتمد أو كود تفعيل', 409);
+      }
+    }
+
+    const nextUsers = body.extra_users !== undefined ? (normInt(body.extra_users, 0) ?? 0) : Number(prev.extra_users || 0);
+    const nextBranches = body.extra_branches !== undefined ? (normInt(body.extra_branches, 0) ?? 0) : Number(prev.extra_branches || 0);
+    const nextStorage = body.extra_storage_gb !== undefined ? (normInt(body.extra_storage_gb, 0) ?? 0) : Number(prev.extra_storage_gb || 0);
+    if (nextUsers > Number(prev.extra_users || 0) || nextBranches > Number(prev.extra_branches || 0) || nextStorage > Number(prev.extra_storage_gb || 0)) {
+      return error('زيادة الإضافات تتطلب طلب إضافة مدفوعاً أو كود تفعيل', 409);
+    }
+
+    const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (body.status && ['cancelled','expired'].includes(body.status)) patch.status = body.status;
+    if (body.end_date) patch.end_date = body.end_date;
+    if (body.extra_users !== undefined) patch.extra_users = nextUsers;
+    if (body.extra_branches !== undefined) patch.extra_branches = nextBranches;
+    if (body.extra_storage_gb !== undefined) patch.extra_storage_gb = nextStorage;
+    if (Object.keys(patch).length === 1) return error('لا توجد تغييرات مسموحة');
     const { data: updated, error: uErr } = await s.from('subscriptions').update(patch).eq('id', id).select().single();
     if (uErr) throw uErr;
 
@@ -99,6 +127,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       }); } catch {}
     }
 
+    await auditLog(
+      admin.adminId,
+      'restrict_subscription',
+      JSON.stringify({ before: prev, patch, notes: body.notes || null }),
+      'subscription',
+      id
+    );
     return success({ subscription: updated });
   } catch (e) { return adminJsonError(e); }
 }

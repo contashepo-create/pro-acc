@@ -2,13 +2,12 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { equipmentCostSchema } from '@/lib/validation';
-import { logAudit } from '@/lib/audit';
 
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'fixed-assets', 'read');
+    const auth = await requireModulePermission(request, 'fixed_assets', 'read');
     const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
@@ -31,46 +30,30 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'fixed-assets', 'create');
+    const auth = await requireModulePermission(request, 'fixed_assets', 'create');
     const body = await parseBody(request);
     const parsed = equipmentCostSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const s = sb();
 
-    // عزل مستأجرين: المعدة والمشروع (إن وُجدا) يجب أن ينتميا لهذه الشركة
-    if (parsed.data.equipment_id) {
-      const { data: eq } = await s.from('equipment')
-        .select('id').eq('id', parsed.data.equipment_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!eq) return error('المعدة غير موجودة', 404);
-    }
-    if (parsed.data.project_id) {
-      const { data: proj } = await s.from('projects')
-        .select('id').eq('id', parsed.data.project_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!proj) return error('المشروع غير موجود', 404);
-    }
-
-    const { data, error: insErr } = await s.from('equipment_costs')
-      .insert({
-        company_id: auth.companyId,
-        equipment_id: parsed.data.equipment_id || null,
-        project_id: parsed.data.project_id || null,
-        date: parsed.data.date || new Date().toISOString().split('T')[0],
-        cost_type: parsed.data.cost_type,
-        amount: parsed.data.amount,
-        usage_hours: parsed.data.usage_hours || 0,
-        notes: parsed.data.notes || null,
-        created_by: auth.userId,
-      })
-      .select('id, date, cost_type, amount, project_id').single();
-    if (insErr || !data) return error('فشل تسجيل تكلفة المعدة', 500);
-
-    await logAudit({
-      company_id: auth.companyId, user_id: auth.userId,
-      entity_type: 'equipment_cost', entity_id: data.id, action: 'create',
-      after: data, summary: `تسجيل تكلفة معدات (${data.cost_type}) ${data.amount}`,
+    // Equipment/project/account checks, posting, linkage and audit commit in
+    // one transaction. Depreciation defaults to 5260/1290; cash costs default
+    // to their type-specific expense and 1110 unless explicit accounts arrive.
+    const { data, error: postErr } = await s.rpc('post_equipment_cost', {
+      p_company_id: auth.companyId,
+      p_equipment_id: parsed.data.equipment_id || null,
+      p_project_id: parsed.data.project_id || null,
+      p_date: parsed.data.date || new Date().toISOString().slice(0, 10),
+      p_cost_type: parsed.data.cost_type,
+      p_amount: parsed.data.amount,
+      p_usage_hours: parsed.data.usage_hours || 0,
+      p_notes: parsed.data.notes || '',
+      p_expense_account_id: parsed.data.expense_account_id || null,
+      p_payment_account_id: parsed.data.payment_account_id || null,
+      p_user_id: auth.userId,
     });
-
+    if (postErr) throw postErr;
     return success({ row: data }, 201);
   } catch (err) {
     return handleApiError(err);

@@ -145,21 +145,26 @@ export async function canBypassTelegramConfirmation(
   const s = sb();
 
   // التحقق من إعدادات المستخدم
-  const { data: userPerm } = await s.from('user_permissions')
+  const { data: userPerm, error: userPermErr } = await s.from('user_permissions')
     .select('bypass_telegram_confirmation')
     .eq('user_id', userId)
     .eq('company_id', companyId)
+    .eq('bypass_telegram_confirmation', true)
+    .limit(1)
     .maybeSingle();
+  if (userPermErr) return false;
 
   if (userPerm && (userPerm as any).bypass_telegram_confirmation === true) {
     return true;
   }
 
   // التحقق من دور المستخدم - المدير والمدير التنفيذي يمكنهم التخطي
-  const { data: user } = await s.from('users')
+  const { data: user, error: userErr } = await s.from('users')
     .select('role')
     .eq('id', userId)
+    .eq('company_id', companyId)
     .maybeSingle();
+  if (userErr) return false;
 
   if (user && (user as any).role === 'admin') {
     return true;
@@ -180,23 +185,24 @@ export async function hasModulePermission(
   const s = sb();
 
   // أولاً: جلب دور المستخدم
-  const { data: user } = await s.from('users')
+  const { data: user, error: userErr } = await s.from('users')
     .select('role')
     .eq('id', userId)
     .eq('company_id', companyId)
     .maybeSingle();
 
-  if (!user) return false;
+  if (userErr || !user) return false;
 
   const role = (user as any).role;
 
   // ثانياً: التحقق من الصلاحيات المخصصة للمستخدم
-  const { data: customPerm } = await s.from('user_permissions')
+  const { data: customPerm, error: customPermErr } = await s.from('user_permissions')
     .select('permissions')
     .eq('user_id', userId)
     .eq('company_id', companyId)
     .eq('module', module)
     .maybeSingle();
+  if (customPermErr) return false;
 
   // إذا كانت هناك صلاحيات مخصصة، استخدمها
   if (customPerm) {
@@ -227,18 +233,22 @@ export async function getUserPermissions(userId: string, companyId: string) {
   const s = sb();
 
   // جلب الصلاحيات المخصصة
-  const { data: customPerms } = await s.from('user_permissions')
+  const { data: customPerms, error: customPermsErr } = await s.from('user_permissions')
     .select('module, permissions, bypass_telegram_confirmation')
     .eq('user_id', userId)
     .eq('company_id', companyId);
+  if (customPermsErr) throw customPermsErr;
 
-  // جلب دور المستخدم
-  const { data: user } = await s.from('users')
+  // جلب دور المستخدم من نفس الشركة فقط.
+  const { data: user, error: userErr } = await s.from('users')
     .select('role')
     .eq('id', userId)
+    .eq('company_id', companyId)
     .maybeSingle();
+  if (userErr) throw userErr;
+  if (!user) throw new Error('User does not belong to company');
 
-  const role = (user as any)?.role || 'supervisor';
+  const role = (user as any).role || 'supervisor';
   const defaultPerms = DEFAULT_ROLE_PERMISSIONS[role] || {};
 
   return {
@@ -259,35 +269,23 @@ export async function setUserPermission(
   bypassTelegram: boolean = false
 ) {
   const s = sb();
+  const { data: target, error: targetErr } = await s.from('users')
+    .select('id').eq('id', userId).eq('company_id', companyId).maybeSingle();
+  if (targetErr) throw targetErr;
+  if (!target) throw new Error('User does not belong to company');
 
-  // حذف الصلاحيات القديمة لنفس الوحدة
-  await s.from('user_permissions')
-    .delete()
-    .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .eq('module', module);
-
-  // إدراج الصلاحيات الجديدة
-  if (actions.length > 0) {
-    await s.from('user_permissions')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        module,
-        permissions: actions,
-        bypass_telegram_confirmation: bypassTelegram,
-      });
-  } else if (bypassTelegram) {
-    // حفظ إعداد تخطي التأكيد حتى بدون صلاحيات وحدة
-    await s.from('user_permissions')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        module: module || 'general',
-        permissions: [],
-        bypass_telegram_confirmation: bypassTelegram,
-      });
-  }
+  // A single upsert avoids the dangerous delete-then-insert window. An empty
+  // action list is an explicit deny; DELETE /api/permissions reverts to role
+  // defaults when that is the administrator's intent.
+  const { error } = await s.from('user_permissions').upsert({
+    user_id: userId,
+    company_id: companyId,
+    module,
+    permissions: actions,
+    bypass_telegram_confirmation: bypassTelegram,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'company_id,user_id,module' });
+  if (error) throw error;
 }
 
 /**
@@ -296,16 +294,17 @@ export async function setUserPermission(
 export async function getCompanyUsersWithPermissions(companyId: string) {
   const s = sb();
 
-  const { data: users } = await s.from('users')
+  const { data: users, error: usersErr } = await s.from('users')
     .select('id, name, email, role, is_active, last_login')
     .eq('company_id', companyId)
     .order('name');
-
+  if (usersErr) throw usersErr;
   if (!users) return [];
 
-  const { data: perms } = await s.from('user_permissions')
+  const { data: perms, error: permsErr } = await s.from('user_permissions')
     .select('user_id, module, permissions, bypass_telegram_confirmation')
     .eq('company_id', companyId);
+  if (permsErr) throw permsErr;
 
   const permsMap = new Map<string, any[]>();
   for (const p of perms || []) {

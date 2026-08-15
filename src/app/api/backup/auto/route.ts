@@ -104,7 +104,10 @@ export async function POST(request: NextRequest) {
     }
 
     return success({
-      backupUrl: `/api/backup/download?data=${encodeURIComponent(jsonString)}`,
+      // Never embed an entire financial export in a URL: URLs leak through
+      // browser history, proxies, analytics and server logs. The authenticated
+      // download endpoint generates the protected attachment on demand.
+      backupUrl: '/api/backup/download',
       sizeBytes,
       totalRecords: Object.values(exportData).reduce((sum: number, arr) => sum + (arr?.length || 0), 0),
       tablesExported: tables.length,

@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 
     // عزل مستأجرين: المشروع يجب أن ينتمي لهذه الشركة
     const { data: project } = await s.from('projects')
-      .select('id, name, status')
+      .select('id, name, status, contract_value')
       .eq('id', project_id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
@@ -58,14 +58,28 @@ export async function POST(req: NextRequest) {
       return error('لا يمكن إصدار فواتير مرحلية على مشروع مكتمل أو ملغى');
     }
 
-    const rate = retention_rate !== undefined ? Number(retention_rate) : (retention_percentage ? Number(retention_percentage) / 100 : 0);
-    const retentionAmount = grossAmount * rate;
-    const netAmount = grossAmount - retentionAmount;
+    const rate = retention_rate !== undefined ? Number(retention_rate) : (retention_percentage !== undefined ? Number(retention_percentage) / 100 : 0);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1) return error('نسبة الاستقطاع يجب أن تكون بين 0 و1');
+    const retentionAmount = Math.round(grossAmount * rate * 100) / 100;
+    const netAmount = Math.round((grossAmount - retentionAmount) * 100) / 100;
     const claimNumber = claim_number || `PB-${Date.now()}`;
 
+    // A claim cannot exceed the original contract plus approved change orders.
+    const { data: approvedChanges } = await s.from('change_orders')
+      .select('change_amount').eq('project_id', project_id).eq('company_id', auth.companyId).eq('status', 'approved');
+    const adjustedContract = Number((project as any).contract_value || 0)
+      + (approvedChanges || []).reduce((sum: number, row: any) => sum + (Number(row.change_amount) || 0), 0);
+    const { data: priorClaims } = await s.from('progress_billing')
+      .select('gross_amount').eq('project_id', project_id).eq('company_id', auth.companyId).neq('status', 'cancelled');
+    const alreadyClaimed = (priorClaims || []).reduce((sum: number, row: any) => sum + (Number(row.gross_amount) || 0), 0);
+    if (adjustedContract <= 0 || alreadyClaimed + grossAmount > adjustedContract + 0.005) {
+      return error('قيمة المستخلص تتجاوز الرصيد المتبقي من العقد المعدل', 409);
+    }
+
     // VAT calculation
-    const vRate = (tax_enabled !== false && tax_rate) ? Number(tax_rate) : 0;
-    const taxAmount = netAmount * vRate;
+    const vRate = tax_enabled !== false && tax_rate !== undefined ? Number(tax_rate) : 0;
+    if (!Number.isFinite(vRate) || vRate < 0 || vRate > 1) return error('نسبة الضريبة غير صالحة');
+    const taxAmount = Math.round(netAmount * vRate * 100) / 100;
 
     // حل جميع الحسابات قبل أي كتابة — القيد إلزامي متوازن
     const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_REVENUE).maybeSingle();

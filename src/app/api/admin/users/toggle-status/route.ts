@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
 
     const s = sb();
     const { data: user, error: userErr } = await s.from('users')
-      .select('id, name, email, is_active')
+      .select('id, name, email, company_id, role, is_active, token_version')
       .eq('id', body.userId)
       .single();
 
@@ -35,8 +35,18 @@ export async function POST(request: NextRequest) {
       return error('المستخدم غير موجود', 404);
     }
 
+    if (!body.is_active && user.is_active && user.role === 'admin') {
+      const { count } = await s.from('users').select('*', { count: 'exact', head: true })
+        .eq('company_id', user.company_id).eq('role', 'admin').eq('is_active', true);
+      if ((count || 0) <= 1) return error('لا يمكن تعطيل آخر مدير نشط للشركة', 409);
+    }
+
     const { error: updateErr } = await s.from('users')
-      .update({ is_active: body.is_active, updated_at: new Date().toISOString() })
+      .update({
+        is_active: body.is_active,
+        ...(body.is_active ? {} : { token_version: (Number(user.token_version) || 0) + 1 }),
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', body.userId);
     if (updateErr) throw updateErr;
 

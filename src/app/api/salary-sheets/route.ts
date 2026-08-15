@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -17,25 +17,38 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'salary_sheets', 'create');
     const s = sb();
     const { name, month, year, date, items } = await parseBody(req);
-    if (!name || !month || !year) return error('name, month, year are required');
-
-    const { data: sheet, error: sheetErr } = await s.from('salary_sheets')
-      .insert({ company_id: auth.companyId, name, month, year, date: date ?? new Date().toISOString().split('T')[0] })
-      .select('*').single();
-    if (sheetErr) throw sheetErr;
-
-    if (items && items.length > 0) {
-      for (const item of items) {
-        await s.from('salary_items').insert({
-          company_id: auth.companyId, sheet_id: sheet.id, employee_id: item.employeeId,
-          basic_salary: item.basicSalary ?? 0, allowances: item.allowances ?? 0,
-          deductions: item.deductions ?? 0, net_pay: item.netPay ?? 0,
-        });
-      }
+    if (typeof name !== 'string' || !name.trim() || name.length > 200
+      || !Number.isInteger(Number(month)) || Number(month) < 1 || Number(month) > 12
+      || !Number.isInteger(Number(year)) || Number(year) < 2000 || Number(year) > 9999) return error('بيانات كشف الرواتب غير صالحة');
+    const effectiveDate = date ?? new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) return error('تاريخ الكشف غير صالح');
+    if (items !== undefined && (!Array.isArray(items) || items.length > 1000)) return error('بنود كشف الرواتب غير صالحة');
+    const normalized = (items || []).map((item: any) => ({
+      employee_id: item?.employeeId, basic_salary: Number(item?.basicSalary ?? 0),
+      allowances: Number(item?.allowances ?? 0), deductions: Number(item?.deductions ?? 0),
+    }));
+    if (normalized.some((item: any) => !item.employee_id || ![item.basic_salary,item.allowances,item.deductions].every((value) => Number.isFinite(value) && value>=0)
+      || item.basic_salary+item.allowances-item.deductions<0)
+      || new Set(normalized.map((item: any) => item.employee_id)).size!==normalized.length) return error('أحد بنود كشف الرواتب غير صالح أو مكرر');
+    if (normalized.length) {
+      const employeeIds = normalized.map((item: any) => item.employee_id);
+      const { data: employees, error: employeeError } = await s.from('employees').select('id')
+        .eq('company_id', auth.companyId).in('id', employeeIds);
+      if (employeeError) throw employeeError;
+      if ((employees || []).length !== employeeIds.length) return error('أحد الموظفين لا ينتمي إلى الشركة', 404);
     }
-    return success(sheet);
+    const { data: sheet, error: rpcErr } = await s.rpc('create_salary_sheet', {
+      p_company_id: auth.companyId,
+      p_name: name.trim(),
+      p_month: Number(month),
+      p_year: Number(year),
+      p_date: effectiveDate,
+      p_items: normalized,
+    });
+    if (rpcErr) throw rpcErr;
+    return success(sheet, 201);
   } catch (err) { return handleApiError(err); }
 }

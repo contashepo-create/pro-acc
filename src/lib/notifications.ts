@@ -25,24 +25,24 @@ interface TelegramConfig {
 
 export async function getTelegramConfig(companyId: string): Promise<TelegramConfig | null> {
   const s = sb();
-  const { data: config } = await s.from('company_telegram_configs')
+  const { data: config, error } = await s.from('company_telegram_configs')
     .select('*')
     .eq('company_id', companyId)
     .maybeSingle();
+  if (error) throw error;
   return config as TelegramConfig | null;
 }
 
 export async function getAccountBalance(accountId: string, companyId?: string): Promise<number> {
-  const s = sb();
-  let query = s.from('journal_lines')
-    .select('debit, credit')
-    .eq('account_id', accountId);
-  if (companyId) query = query.eq('company_id', companyId);
-  const { data: lines } = await query;
-  if (!lines || lines.length === 0) return 0;
-  const totalDebit = lines.reduce((sum, l) => sum + (parseFloat(l.debit as any) || 0), 0);
-  const totalCredit = lines.reduce((sum, l) => sum + (parseFloat(l.credit as any) || 0), 0);
-  return totalDebit - totalCredit;
+  if (!companyId) throw new Error('companyId is required for a tenant-scoped balance');
+  const { data, error } = await sb().rpc('get_account_balance', {
+    p_company_id: companyId,
+    p_account_id: accountId,
+    p_journal_type: null,
+    p_as_of: null,
+  });
+  if (error) throw error;
+  return Number(data) || 0;
 }
 
 export async function checkBankBalance(
@@ -58,7 +58,7 @@ export async function checkBankBalance(
     .maybeSingle();
   if (!bankAcc) return { allowed: false, balance: 0, message: 'البنك/الخزينة غير موجود' };
   let currentBalance = 0;
-  if (bankAcc.account_id) currentBalance = await getAccountBalance(bankAcc.account_id);
+  if (bankAcc.account_id) currentBalance = await getAccountBalance(bankAcc.account_id, companyId);
   if (currentBalance < amount) {
     return {
       allowed: false,
@@ -134,8 +134,8 @@ export async function requireApproval(
     console.error('Failed to create approval request:', err);
     return {
       requiresApproval: true,
-      blocked: false, // في حالة الخطأ، نسمح بالعملية لتجنب توقف النظام
-      message: 'فشل إنشاء طلب الاعتماد، تم السماح بالعملية'
+      blocked: true,
+      message: 'تعذر إنشاء طلب الاعتماد؛ لم تُنفذ العملية'
     };
   }
 }
@@ -184,10 +184,12 @@ async function sendApprovalNotification(
 ): Promise<void> {
   const s = sb();
   
-  const { data: user } = await s.from('users')
+  const { data: user, error: userErr } = await s.from('users')
     .select('name, email')
     .eq('id', userId)
+    .eq('company_id', config.company_id)
     .maybeSingle();
+  if (userErr || !user) throw userErr || new Error('Approval requester not found');
   
   const userName = (user as any)?.name || 'مستخدم غير معروف';
   const userEmail = (user as any)?.email || '';
@@ -248,6 +250,20 @@ async function sendApprovalNotification(
   }
 }
 
+/** Send buttons for an approval request already created atomically with its entity. */
+export async function sendApprovalRequestNotification(
+  companyId: string,
+  amount: number,
+  transactionType: string,
+  transactionId: string,
+  requesterId: string,
+  approvalId: string,
+): Promise<void> {
+  const config = await getTelegramConfig(companyId);
+  if (!config || !config.is_enabled || !config.approvals_enabled) throw new Error('Telegram approvals are not enabled');
+  await sendApprovalNotification(config, amount, transactionType, transactionId, requesterId, approvalId);
+}
+
 /**
  * معالجة الرد على طلب الموافقة (من webhook)
  */
@@ -262,7 +278,7 @@ export async function handleApprovalResponse(
   
   // جلب طلب الاعتماد
   const { data: approvalReq, error: findErr } = await s.from('approval_requests')
-    .select('id, company_id, status')
+    .select('id, company_id, status, requester_id')
     .eq('transaction_id', transactionId)
     .eq('transaction_type', transactionType)
     .eq('status', 'pending')
@@ -277,13 +293,35 @@ export async function handleApprovalResponse(
   
   // SECURITY FIX: التحقق الصارم من أن معرّف المحادثة للموافق يتطابق تماماً مع المعرّف المسجل والمعتمد للشركة!
   // يمنع هذا أي مستخدم تيليجرام غريب يعرف البوت من محاولة تخمين أو النقر والموافقة على العمليات المالية للشركات
-  const { data: config } = await s.from('company_telegram_configs')
+  const { data: config, error: configErr } = await s.from('company_telegram_configs')
     .select('chat_id, approvals_enabled')
     .eq('company_id', companyId)
     .maybeSingle();
+  if (configErr) return { success: false, message: 'تعذر التحقق من صلاحية الاعتماد' };
 
   if (!config || !config.approvals_enabled || config.chat_id !== String(approverChatId)) {
     return { success: false, message: '❌ عذراً، هذا الحساب في تيليجرام غير مصرح له باعتماد هذه المعاملة مالياً' };
+  }
+
+  if (transactionType === 'voucher_disbursement') {
+    const { data, error } = await s.rpc('respond_voucher_disbursement_approval', {
+      p_company_id: companyId,
+      p_approval_id: approvalId,
+      p_action: action,
+      p_approver_user_id: null,
+      p_approver_chat_id: String(approverChatId),
+      p_comments: '',
+    });
+    if (error) {
+      console.error('Atomic Telegram disbursement approval failed:', error);
+      return { success: false, message: String(error.message || 'فشل تنفيذ الاعتماد المالي') };
+    }
+    return {
+      success: true,
+      message: (data as any)?.status === 'approved'
+        ? '✅ تم اعتماد سند الصرف وترحيله بنجاح!'
+        : '❌ تم رفض سند الصرف.',
+    };
   }
   
   const newStatus = action === 'approve' ? 'approved' : 'rejected';
@@ -314,6 +352,14 @@ export async function handleApprovalResponse(
       await createJournalEntryForApprovedTransaction(companyId, userId, transactionType, transactionId);
     } catch (createErr) {
       console.error('Failed to create journal entry on approval:', createErr);
+      // An approval without its required financial posting is not an approval.
+      // Restore both records to pending so it can be corrected and retried.
+      await s.from('approval_requests')
+        .update({ status: 'pending', approver_chat_id: null, approved_at: null })
+        .eq('id', approvalId)
+        .eq('company_id', companyId);
+      await updateTransactionStatus(companyId, transactionType, transactionId, 'pending', approvalId);
+      return { success: false, message: 'فشل ترحيل القيد المحاسبي؛ أعيد الطلب إلى الانتظار للمراجعة' };
     }
   }
   

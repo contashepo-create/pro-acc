@@ -60,9 +60,11 @@ export async function PATCH(
     if (!existing) return notFound();
 
     const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (typeof body.subject === 'string' && body.subject.trim()) update.subject = body.subject.trim();
-    if (typeof body.body === 'string' && body.body.trim()) update.body = body.body.trim();
-    if (['pending', 'read', 'replied', 'closed'].includes(body.status)) update.status = body.status;
+    if (typeof body.subject === 'string' && body.subject.trim() && body.subject.length <= 200) update.subject = body.subject.trim();
+    if (typeof body.body === 'string' && body.body.trim() && body.body.length <= 5000) update.body = body.body.trim();
+    // read/replied are administrative workflow states; a tenant may only
+    // close its own ticket, never impersonate an admin reply.
+    if (body.status === 'closed') update.status = 'closed';
 
     const { data: updated, error: updErr } = await s.from('complaints')
       .update(update)

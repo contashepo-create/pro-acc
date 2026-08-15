@@ -64,13 +64,42 @@ export async function insertJournalLines(
   companyId: string,
   lines: JournalLineInput[]
 ): Promise<{ error: any | null }> {
+  // This helper is used by invoices, vouchers, inventory and fiscal routes.
+  // Enforce the posting invariant here too, not only in the manual-journal UI.
+  if (lines.length < 2) return { error: new Error('لا يمكن ترحيل قيد بأقل من سطرين') };
+  let totalDebit = 0;
+  let totalCredit = 0;
+  const sides = new Map<string, { debit: number; credit: number }>();
+  for (const line of lines) {
+    const debit = Number(line.debit);
+    const credit = Number(line.credit);
+    if (!Number.isFinite(debit) || !Number.isFinite(credit) || debit < 0 || credit < 0 ||
+        (debit === 0 && credit === 0) || (debit > 0 && credit > 0) ||
+        Math.abs(debit * 100 - Math.round(debit * 100)) > 1e-8 ||
+        Math.abs(credit * 100 - Math.round(credit * 100)) > 1e-8) {
+      return { error: new Error('سطر القيد غير صالح: يجب أن يكون مديناً أو دائناً موجباً بمنزلتين عشريتين كحد أقصى') };
+    }
+    totalDebit += debit;
+    totalCredit += credit;
+    const side = sides.get(line.account_id) || { debit: 0, credit: 0 };
+    side.debit += debit;
+    side.credit += credit;
+    sides.set(line.account_id, side);
+  }
+  if (Math.abs(totalDebit - totalCredit) > 0.005) {
+    return { error: new Error(`القيد غير متزن: المدين ${totalDebit} والدائن ${totalCredit}`) };
+  }
+  if ([...sides.values()].some((side) => side.debit > 0 && side.credit > 0)) {
+    return { error: new Error('لا يجوز أن يكون الحساب نفسه مديناً ودائناً في القيد الواحد') };
+  }
+
   const s = sb();
 
   // جلب بيانات الحسابات لجميع السطور دفعة واحدة
   // Company scoping is mandatory: never resolve account metadata cross-tenant.
   const accountIds = [...new Set(lines.map(l => l.account_id))];
   const { data: accounts, error: accErr } = await s.from('accounts')
-    .select('id, code, name')
+    .select('id, code, name, is_header')
     .in('id', accountIds)
     .eq('company_id', companyId);
 
@@ -86,6 +115,9 @@ export async function insertJournalLines(
     return {
       error: new Error(`تعذر العثور على ${unresolved.length} حساب للقيد — تحقق من الحسابات المختارة`),
     };
+  }
+  if (lines.some((line) => Boolean((accMap.get(line.account_id) as any)?.is_header))) {
+    return { error: new Error('لا يجوز الترحيل على حساب رئيسي') };
   }
 
   // بناء السطور بالحقول المطلوبة
@@ -110,34 +142,6 @@ export async function insertJournalLines(
 }
 
 /**
- * حذف جميع سطور والقيد المحاسبي مع التعامل مع القيود المرتبطة
- * يحذف بشكل آمن: سطور القيد أولاً ثم القيد نفسه
- */
-export async function deleteJournalEntry(
-  companyId: string,
-  journalEntryId: string
-): Promise<{ error: any | null; message?: string }> {
-  const s = sb();
-
-  // حذف سطور القيد أولاً
-  const { error: linesErr } = await s.from('journal_lines')
-    .delete()
-    .eq('journal_entry_id', journalEntryId);
-  
-  if (linesErr) return { error: linesErr, message: 'فشل حذف سطور القيد' };
-
-  // حذف القيد نفسه
-  const { error: entryErr } = await s.from('journal_entries')
-    .delete()
-    .eq('id', journalEntryId)
-    .eq('company_id', companyId);
-  
-  if (entryErr) return { error: entryErr, message: 'فشل حذف القيد' };
-
-  return { error: null };
-}
-
-/**
  * حساب رصيد حساب معين من القيود المحاسبية
  * الرصيد = إجمالي المدين - إجمالي الدائن
  */
@@ -147,18 +151,12 @@ export async function getAccountBalanceFromJournal(
 ): Promise<number> {
   const s = sb();
 
-  let query = s.from('journal_lines')
-    .select('debit, credit')
-    .eq('account_id', accountId);
-  if (companyId) query = query.eq('company_id', companyId);
-  const { data: lines } = await query;
-
-  if (!lines || lines.length === 0) return 0;
-
-  const totalDebit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
-  const totalCredit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.credit) || 0), 0);
-
-  return totalDebit - totalCredit;
+  if (!companyId) throw new Error('companyId مطلوب لحساب رصيد الحساب بأمان');
+  const { data, error } = await s.rpc('get_account_balance', {
+    p_company_id: companyId, p_account_id: accountId, p_journal_type: null, p_as_of: null,
+  });
+  if (error) throw error;
+  return Number(data) || 0;
 }
 
 /**

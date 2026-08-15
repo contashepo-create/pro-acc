@@ -75,10 +75,7 @@ export async function checkRateLimit(
 
   if (error) {
     console.error('Rate limit check error:', error);
-    // Fail-Open by design: if DB is unreachable, allow login but log the issue.
-    // This is a deliberate availability-over-security tradeoff.
-    // NOTE: SECURITY_FINAL_REPORT.md should be updated to reflect this decision.
-    return { allowed: true, remainingMinutes: 0 };
+    throw error;
   }
 
   const count = (attempts || []).length;
@@ -122,7 +119,7 @@ export async function checkPasswordResetRateLimit(
 
   if (error) {
     console.error('Password-reset rate limit check error:', error);
-    return { allowed: true, remainingMinutes: 0 };
+    throw error;
   }
 
   const count = (data || []).length;
@@ -145,18 +142,12 @@ export async function recordPasswordResetRequest(
   email: string,
   ipAddress: string
 ): Promise<string | null> {
-  try {
-    const safeIp = sanitizeIpAddress(ipAddress);
-    const { data, error } = await sb().from('password_reset_requests')
-      .insert({ email: email.toLowerCase().trim(), ip_address: safeIp, status: 'requested' })
-      .select('id').single();
-    if (error) throw error;
-    return data?.id || null;
-  } catch (err) {
-    // Recording must never break the request it observes.
-    console.error('Failed to record password-reset request:', err);
-    return null;
-  }
+  const safeIp = sanitizeIpAddress(ipAddress);
+  const { data, error } = await sb().from('password_reset_requests')
+    .insert({ email: email.toLowerCase().trim(), ip_address: safeIp, status: 'requested' })
+    .select('id').single();
+  if (error) throw error;
+  return data?.id || null;
 }
 
 /** Update a recorded request's delivery outcome for diagnostics. */

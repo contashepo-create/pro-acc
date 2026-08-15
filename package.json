@@ -12,6 +12,7 @@
     "test:integration": "jest src/__tests__/comprehensive-integration.test.ts --runInBand",
     "test:regression": "jest --runInBand",
     "migrate": "npx tsx src/migrations/run.ts",
+    "test:migrations": "node scripts/test-migrations.mjs",
     "seed": "npx tsx scripts/seed.ts"
   },
   "dependencies": {
@@ -34,6 +35,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.5",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/jest": "^30.0.0",
     "@types/jsbarcode": "^3.11.4",

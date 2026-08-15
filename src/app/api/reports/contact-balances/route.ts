@@ -1,124 +1,42 @@
 import { NextRequest } from 'next/server';
-import { success, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-const sb = () => getSupabase();
+const number = (value: unknown) => Number(value) || 0;
 
-/**
- * Customer & Supplier Balances Summary (ميزان مراجعة مساعد - كشف أرصدة العملاء والموردين)
- * Shows each contact's Opening Balance, Period Debits, Period Credits, and Closing Balance.
- */
+/** Auxiliary customer/supplier ledger, aggregated without API row limits. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'reports', 'read');
-    const s = sb();
     const url = new URL(request.url);
-    const type = url.searchParams.get('type') || 'all'; // 'client', 'supplier', 'all'
+    const type = url.searchParams.get('type') || 'all';
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
+    if (!['all', 'client', 'supplier'].includes(type)) return error('نوع الطرف غير صالح');
+    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
 
-    let contactsQuery = s.from('contacts')
-      .select('id, name, type, phone, tax_number, commercial_registration')
-      .eq('company_id', auth.companyId)
-      .eq('is_active', true)
-      .order('name');
-
-    if (type === 'client') contactsQuery = contactsQuery.in('type', ['client', 'both']);
-    if (type === 'supplier') contactsQuery = contactsQuery.in('type', ['supplier', 'both']);
-
-    const { data: contacts } = await contactsQuery;
-    const contactIds = (contacts || []).map((c: any) => c.id);
-
-    if (contactIds.length === 0) {
-      return success({ contacts: [], totals: { opening: 0, debit: 0, credit: 0, closing: 0 } });
-    }
-
-    // 1. Opening balances (prior to 'from' date)
-    const openingMap = new Map<string, number>();
-    if (from) {
-      const { data: priorJEs } = await s.from('journal_entries')
-        .select('id')
-        .eq('company_id', auth.companyId)
-        .lt('date', from)
-        .is('deleted_at', null);
-
-      const priorJeIds = (priorJEs || []).map((j: any) => j.id);
-      if (priorJeIds.length > 0) {
-        const { data: priorLines } = await s.from('journal_lines')
-          .select('contact_id, debit, credit')
-          .eq('company_id', auth.companyId)
-          .in('contact_id', contactIds)
-          .in('journal_entry_id', priorJeIds);
-
-        for (const l of priorLines || []) {
-          if (!l.contact_id) continue;
-          const debit = parseFloat(l.debit) || 0;
-          const credit = parseFloat(l.credit) || 0;
-          openingMap.set(l.contact_id, (openingMap.get(l.contact_id) || 0) + debit - credit);
-        }
-      }
-    }
-
-    // 2. Period transactions (between 'from' and 'to')
-    let periodQuery = s.from('journal_entries')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .is('deleted_at', null);
-
-    if (from) periodQuery = periodQuery.gte('date', from);
-    if (to) periodQuery = periodQuery.lte('date', to);
-
-    const { data: periodJEs } = await periodQuery;
-    const periodJeIds = (periodJEs || []).map((j: any) => j.id);
-
-    const periodDebitMap = new Map<string, number>();
-    const periodCreditMap = new Map<string, number>();
-
-    if (periodJeIds.length > 0) {
-      const { data: periodLines } = await s.from('journal_lines')
-        .select('contact_id, debit, credit')
-        .eq('company_id', auth.companyId)
-        .in('contact_id', contactIds)
-        .in('journal_entry_id', periodJeIds);
-
-      for (const l of periodLines || []) {
-        if (!l.contact_id) continue;
-        const debit = parseFloat(l.debit) || 0;
-        const credit = parseFloat(l.credit) || 0;
-        periodDebitMap.set(l.contact_id, (periodDebitMap.get(l.contact_id) || 0) + debit);
-        periodCreditMap.set(l.contact_id, (periodCreditMap.get(l.contact_id) || 0) + credit);
-      }
-    }
-
-    const rows = (contacts || []).map((c: any) => {
-      const opening = openingMap.get(c.id) || 0;
-      const debit = periodDebitMap.get(c.id) || 0;
-      const credit = periodCreditMap.get(c.id) || 0;
-      const closing = opening + debit - credit;
-
+    const { data, error: queryError } = await getSupabase().rpc('get_contact_balances', {
+      p_company_id: auth.companyId, p_type: type, p_from: from, p_to: to,
+    });
+    if (queryError) throw queryError;
+    const contacts = (data || []).map((row: any) => {
+      const closing = number(row.closing);
       return {
-        id: c.id,
-        name: c.name,
-        type: c.type === 'client' ? 'عميل' : c.type === 'supplier' ? 'مورد' : 'عميل ومورد',
-        phone: c.phone || '—',
-        tax_number: c.tax_number || '—',
-        opening_balance: opening,
-        period_debit: debit,
-        period_credit: credit,
-        closing_balance: closing,
-        balance_type: closing >= 0 ? 'مدين (له)' : 'دائن (عليه)',
+        id: row.contact_id, name: row.name,
+        type: row.contact_type === 'client' ? 'عميل' : row.contact_type === 'supplier' ? 'مورد' : 'عميل ومورد',
+        phone: row.phone || '—', tax_number: row.tax_number || '—',
+        opening_balance: number(row.opening), period_debit: number(row.period_debit),
+        period_credit: number(row.period_credit), closing_balance: closing,
+        balance_type: closing >= 0 ? 'مدين' : 'دائن',
       };
-    }).filter((r) => r.opening_balance !== 0 || r.period_debit !== 0 || r.period_credit !== 0 || r.closing_balance !== 0);
-
-    const totals = rows.reduce((acc, r) => {
-      acc.opening += r.opening_balance;
-      acc.debit += r.period_debit;
-      acc.credit += r.period_credit;
-      acc.closing += r.closing_balance;
-      return acc;
-    }, { opening: 0, debit: 0, credit: 0, closing: 0 });
-
-    return success({ contacts: rows, totals, type, count: rows.length });
+    });
+    const totals = contacts.reduce((acc, row) => ({
+      opening: acc.opening + row.opening_balance,
+      debit: acc.debit + row.period_debit,
+      credit: acc.credit + row.period_credit,
+      closing: acc.closing + row.closing_balance,
+    }), { opening: 0, debit: 0, credit: 0, closing: 0 });
+    return success({ contacts, totals, type, count: contacts.length, period: { from, to } });
   } catch (err) {
     return handleApiError(err);
   }

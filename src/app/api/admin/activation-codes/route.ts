@@ -1,6 +1,7 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
+import { auditLog } from '@/lib/admin-auth';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 
@@ -43,7 +44,9 @@ export async function GET(req: NextRequest) {
 
     const result = (codes || []).map((c: any) => ({
       id: c.id,
-      code: c.code,
+      // Never return a redeemable secret from a list endpoint. The plaintext
+      // is shown exactly once in the POST response.
+      code: c.code ? `••••-${String(c.code).slice(-8)}` : '••••-••••',
       plan_code: c.plan_code,
       duration_months: c.duration_months || c.plan_duration_months,
       addon_type: c.addon_type,
@@ -67,7 +70,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    const admin = await requireAdmin(req);
     const body = await parseBody<{
       planCode?: string;
       durationMonths?: number;
@@ -83,12 +86,22 @@ export async function POST(req: NextRequest) {
     if (!isAddon && (!body.planCode || !body.durationMonths)) {
       return error('planCode و durationMonths مطلوبان (أو addonType لإضافة)');
     }
-    if (isAddon && (body.addonQuantity || 0) < 1) {
+    if (isAddon && (!Number.isInteger(Number(body.addonQuantity)) || Number(body.addonQuantity) < 1 || Number(body.addonQuantity) > 10000)) {
       return error('كمية الإضافة غير صالحة');
     }
+    if (!isAddon && (!Number.isInteger(Number(body.durationMonths)) || Number(body.durationMonths) < 1 || Number(body.durationMonths) > 120)) {
+      return error('مدة التفعيل يجب أن تكون بين شهر و120 شهراً');
+    }
+    if (body.expiresAt && (!/^\d{4}-\d{2}-\d{2}/.test(body.expiresAt) || new Date(body.expiresAt).getTime() <= Date.now())) {
+      return error('تاريخ انتهاء الكود غير صالح');
+    }
 
-    // Lock plan exists
+    // Lock plan/company targets before creating any secrets.
     const s = sb();
+    if (body.companyId) {
+      const { data: company } = await s.from('companies').select('id').eq('id', body.companyId).maybeSingle();
+      if (!company) return error('الشركة المستهدفة غير موجودة', 404);
+    }
     if (!isAddon) {
       const { data: plan } = await s.from('subscription_plans')
         .select('id, code, is_active').eq('code', body.planCode!).eq('is_active', true).maybeSingle();
@@ -99,30 +112,42 @@ export async function POST(req: NextRequest) {
     const codes: string[] = [];
 
     for (let i = 0; i < n; i++) {
-      // Generate, retrying on collision (unique index will catch duplicates).
-      let code: string = '';
+      // Generate, retrying on collision (the unique hash index is authoritative).
+      let generated = '';
+      let inserted = false;
       for (let attempt = 0; attempt < 8; attempt++) {
-        code = genCode();
+        generated = genCode();
+        const codeHash = createHash('sha256').update(generated.toUpperCase()).digest('hex');
         const { error: insErr } = await s.from('activation_codes').insert({
-          code,
+          // Plaintext activation secrets are never persisted. They are returned
+          // once below; only the SHA-256 lookup digest remains in the database.
+          code: null,
+          code_hash: codeHash,
           plan_code: isAddon ? null : body.planCode!,
-          duration_months: isAddon ? 1 : Number(body.durationMonths),
+          duration_months: isAddon ? null : Number(body.durationMonths),
           plan_duration_months: isAddon ? null : Number(body.durationMonths),
           target_company_id: body.companyId || null,
           expires_at: body.expiresAt || null,
           addon_type: isAddon ? body.addonType! : null,
           addon_quantity: isAddon ? Number(body.addonQuantity) : null,
-          notes: body.notes || null,
+          notes: typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null,
           is_used: false,
           one_time: true,
         });
-        if (!insErr) break;
-        if (insErr.code === '23505') continue; // unique collision → retry with new code
+        if (!insErr) { inserted = true; break; }
+        if (insErr.code === '23505') continue;
         throw insErr;
       }
-      if (code) codes.push(code);
+      if (!inserted) throw new Error('تعذر إنشاء كود فريد بعد عدة محاولات');
+      codes.push(generated);
     }
 
+    await auditLog(
+      admin.adminId,
+      'create_activation_codes',
+      JSON.stringify({ count: codes.length, planCode: body.planCode || null, addonType: body.addonType || null, targetCompanyId: body.companyId || null }),
+      'activation_code_batch'
+    );
     return success({ codes, count: codes.length }, 201);
   } catch (e) {
     return adminJsonError(e);

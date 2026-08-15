@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextQuotationNumber } from '@/lib/numbering';
 
 const sb = () => getSupabase();
 
@@ -27,7 +26,9 @@ export async function GET(req: NextRequest) {
     const quotations = (data || []).map((q: any) => ({ ...q, contact_name: q.contacts?.name || null }));
 
     for (const q of quotations) {
-      const { data: items } = await s.from('quotation_items').select('*').eq('quotation_id', q.id).order('id');
+      const { data: items, error: itemsErr } = await s.from('quotation_items').select('*')
+        .eq('quotation_id', q.id).eq('company_id',auth.companyId).order('id');
+      if (itemsErr) throw itemsErr;
       q.items = items || [];
     }
 
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
     const data = await parseBody(req);
     const { date, contact_id, items, notes, tax_rate, valid_until } = data;
 
-    if (!date || !contact_id || !items || items.length === 0)
+    if (!date || !contact_id || !Array.isArray(items) || items.length === 0)
       return error('date, contact_id, items are required');
 
     // عزل مستأجرين: العميل يجب أن ينتمي لهذه الشركة
@@ -57,38 +58,23 @@ export async function POST(req: NextRequest) {
       .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
     if (!contact) return error('العميل غير موجود', 404);
 
-    let subtotal = 0;
-    for (const item of items) subtotal += (item.quantity || 0) * (item.unit_price || 0);
-    const rate = tax_rate || 0;
-    const taxAmount = subtotal * rate;
-    const total = subtotal + taxAmount;
-
-    // FIXED: Use atomic RPC-based numbering instead of manual MAX+1
-    const nextNum = await getNextQuotationNumber(auth.companyId);
-
-    const { data: result, error: insertError } = await s.from('quotations')
-      .insert({ company_id: auth.companyId, number: nextNum, date, contact_id, subtotal, tax_amount: taxAmount, tax_rate: rate, total, notes, valid_until, status: 'draft', created_by: auth.userId })
-      .select('*').single();
-    if (insertError) throw insertError;
-
-    for (const item of items) {
-      await s.from('quotation_items').insert({
-        company_id: auth.companyId,
-        quotation_id: result.id,
-        description: item.description,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        total: item.quantity * item.unit_price,
-      });
-    }
-
-    const { data: full } = await s.from('quotations')
-      .select('*, contacts(name)').eq('id', result.id).single();
-    const fullResult = full as Record<string, any>;
-    fullResult.items = items;
-    fullResult.contact_name = fullResult.contacts?.name || null;
-
-    return success(fullResult, 201);
+    if (!Array.isArray(items) || items.length>1000 || items.some((item:any) =>
+      typeof item?.description!=='string' || !item.description.trim() || item.description.length>1000
+      || !Number.isFinite(Number(item.quantity)) || Number(item.quantity)<=0
+      || !Number.isFinite(Number(item.unit_price)) || Number(item.unit_price)<0
+      || Math.abs(Number(item.quantity)*100-Math.round(Number(item.quantity)*100))>1e-8
+      || Math.abs(Number(item.unit_price)*100-Math.round(Number(item.unit_price)*100))>1e-8)) return error('أحد بنود عرض السعر غير صالح');
+    const rate=Number(tax_rate || 0);
+    if (!Number.isFinite(rate) || rate<0 || rate>1 || Math.abs(rate*10000-Math.round(rate*10000))>1e-8) return error('نسبة الضريبة غير صالحة');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || (valid_until && (!/^\d{4}-\d{2}-\d{2}$/.test(String(valid_until)) || valid_until<date))) return error('التاريخ غير صالح');
+    if (notes!==undefined && (typeof notes!=='string' || notes.length>5000)) return error('الملاحظات غير صالحة');
+    const normalizedItems=items.map((item:any)=>({description:item.description.trim(),quantity:Number(item.quantity),unit_price:Number(item.unit_price)}));
+    const { data: result, error: rpcErr } = await s.rpc('create_quotation', {
+      p_company_id:auth.companyId,p_date:date,p_contact_id:contact_id,p_items:normalizedItems,
+      p_notes:typeof notes==='string'?notes.trim():'',p_tax_rate:rate,p_valid_until:valid_until||null,p_created_by:auth.userId,
+    });
+    if (rpcErr) throw rpcErr;
+    return success(result,201);
   } catch (err) {
     return handleApiError(err);
   }

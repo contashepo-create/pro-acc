@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { sendMessage, sendOverdueReminders, renderTemplate, TEMPLATES } from '@/lib/messaging';
 
@@ -69,17 +69,9 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireManagerOrAbove(request);
     const s = sb();
-    const body = await request.json();
-    const { action, invoice_id, channel, to, template, variables } = body as {
-      action?: string;
-      invoice_id?: string;
-      channel?: string;
-      to?: string;
-      template?: string;
-      variables?: Record<string, string>;
-    };
+    const { action, invoice_id } = await parseBody<{ action?: string; invoice_id?: string }>(request);
 
     if (action === 'send_all_overdue') {
       const result = await sendOverdueReminders(auth.companyId);
@@ -186,14 +178,11 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (action === 'custom' && channel && to && template) {
-      const result = await sendMessage({
-        channel: channel as 'whatsapp' | 'email' | 'telegram',
-        to,
-        template,
-        variables: variables || {},
-      });
-      return success(result);
+    // Arbitrary recipient/template sending turns this endpoint into an
+    // authenticated spam relay. Reminders must always be tied to a tenant
+    // invoice and its verified contact record.
+    if (action === 'custom') {
+      return error('الإرسال المخصص غير مسموح؛ استخدم تذكيراً مرتبطاً بفاتورة العميل', 403);
     }
 
     return error('عملية غير صالحة');

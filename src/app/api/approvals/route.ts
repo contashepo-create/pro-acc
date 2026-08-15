@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, getPaginationParams, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
       .eq('company_id', auth.companyId);
 
     if (status !== 'all') {
-      query = query.eq('status', status);
+      query = status === 'pending' ? query.in('status', ['pending', 'processing']) : query.eq('status', status);
     }
 
     if (entityType) {
@@ -67,17 +67,25 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'approvals', 'approve');
+    const auth = await requireModulePermission(request, 'approvals', 'create');
     const s = sb();
-    const body = await request.json();
-    const { entity_type, entity_id, amount, description } = body;
+    const { entity_type, entity_id, amount, description } = await parseBody<{
+      entity_type?: string; entity_id?: string; amount?: number; description?: string;
+    }>(request);
 
-    if (!entity_type || !entity_id) {
-      return error('entity_type و entity_id مطلوبان');
+    if (!entity_type || !entity_id || !/^[0-9a-fA-F-]{8,}$/.test(entity_id) ||
+        (description !== undefined && (typeof description !== 'string' || description.length > 2000))) {
+      return error('بيانات طلب الاعتماد غير صالحة');
     }
 
-    // Determine the approver based on amount and type
-    const approverId = await determineApprover(s, auth, entity_type, amount);
+    // Never create an approval capability for an arbitrary caller-supplied id.
+    // Resolve the entity inside this tenant and use its server-side amount.
+    const entity = await resolveApprovalEntity(s, auth.companyId, entity_type, entity_id);
+    if (!entity) return error('العنصر المطلوب اعتماده غير موجود أو لا ينتمي للشركة', 404);
+    const canonicalAmount = entity.amount;
+
+    // Determine the approver based on canonical amount and type.
+    const approverId = await determineApprover(s, auth, entity_type, canonicalAmount);
     if (!approverId) {
       return error('لم يتم تحديد معتمد لهذا النوع من الطلبات');
     }
@@ -102,8 +110,11 @@ export async function POST(request: NextRequest) {
         company_id: auth.companyId,
         entity_type,
         entity_id,
-        amount: amount || null,
-        description: description || null,
+        amount: canonicalAmount,
+        description: description?.trim() || null,
+        // Keep the legacy Telegram shape synchronized with the canonical one.
+        transaction_type: entity_type,
+        transaction_id: entity_id,
         requester_id: auth.userId,
         approver_id: approverId,
         status: 'pending',
@@ -112,6 +123,7 @@ export async function POST(request: NextRequest) {
       .select()
       .single();
 
+    if (insertErr?.code === '23505') return error('يوجد طلب اعتماد قائم لهذا العنصر بالفعل', 409);
     if (insertErr) throw insertErr;
 
     // Create notification for the approver
@@ -122,7 +134,7 @@ export async function POST(request: NextRequest) {
         user_id: approverId,
         type: 'approval_request',
         title: 'طلب اعتماد جديد',
-        message: `طلب اعتماد ${getEntityTypeName(entity_type)} بمبلغ ${amount || 'غير محدد'} ر.س`,
+        message: `طلب اعتماد ${getEntityTypeName(entity_type)} بمبلغ ${canonicalAmount ?? 'غير محدد'} ر.س`,
         entity_type: 'approval_request',
         entity_id: requestId,
         created_at: new Date().toISOString(),
@@ -137,9 +149,45 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/**
- * Determine the appropriate approver based on entity type and amount
- */
+const APPROVAL_ENTITY_SOURCES: Record<string, { table: string; amount?: string }> = {
+  journal_entry: { table: 'journal_entries' },
+  voucher_disbursement: { table: 'voucher_disbursements', amount: 'amount' },
+  voucher_receipt: { table: 'voucher_receipts', amount: 'amount' },
+  purchase_invoice: { table: 'purchase_invoices', amount: 'total' },
+  payroll: { table: 'salary_sheets' },
+  cash_transaction: { table: 'cash_transactions', amount: 'amount' },
+};
+
+async function resolveApprovalEntity(
+  s: any,
+  companyId: string,
+  entityType: string,
+  entityId: string,
+): Promise<{ amount: number | null } | null> {
+  const source = APPROVAL_ENTITY_SOURCES[entityType];
+  if (!source) return null;
+  const columns = source.amount ? `id, ${source.amount}` : 'id';
+  const { data } = await s.from(source.table)
+    .select(columns)
+    .eq('id', entityId)
+    .eq('company_id', companyId)
+    .maybeSingle();
+  if (!data) return null;
+
+  if (entityType === 'journal_entry') {
+    const { data: lines } = await s.from('journal_lines')
+      .select('debit').eq('journal_entry_id', entityId).eq('company_id', companyId);
+    return { amount: (lines || []).reduce((sum: number, row: any) => sum + (Number(row.debit) || 0), 0) };
+  }
+  if (entityType === 'payroll') {
+    const { data: items } = await s.from('salary_items')
+      .select('net_pay').eq('sheet_id', entityId).eq('company_id', companyId);
+    return { amount: (items || []).reduce((sum: number, row: any) => sum + (Number(row.net_pay) || 0), 0) };
+  }
+  return { amount: Number((data as any)[source.amount!]) || 0 };
+}
+
+/** Determine the appropriate approver based on entity type and amount. */
 async function determineApprover(
   s: any,
   auth: { companyId: string; userId: string; role: string },

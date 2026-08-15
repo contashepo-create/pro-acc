@@ -1,14 +1,25 @@
 const MISSING_COL = /deleted_at|is_header|42703|Could not find/i;
 const CHUNK = 200;
+const PAGE = 1000;
 
 export async function loadReportAccounts(supabase: any, companyId: string) {
-  const selectFull = 'id, code, name, type, is_header, is_active';
-  let res = await supabase.from('accounts').select(selectFull).eq('company_id', companyId).order('code');
-  if (res.error && MISSING_COL.test(res.error.message || '')) {
-    res = await supabase.from('accounts').select('id, code, name, type, is_active').eq('company_id', companyId).order('code');
-  }
-  const rows = (res.data || []).filter((a: any) => a.is_active !== false);
-  return rows as Array<{ id: string; code: string; name: string; type: string; is_header?: boolean }>;
+  const load = async (full: boolean) => {
+    const out: any[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const select = full ? 'id, code, name, type, is_header, is_active' : 'id, code, name, type, is_active';
+      const res = await supabase.from('accounts').select(select).eq('company_id', companyId)
+        .order('code').range(from, from + PAGE - 1);
+      if (res.error) return { data: out, error: res.error };
+      out.push(...(res.data || []));
+      if ((res.data || []).length < PAGE) return { data: out, error: null };
+    }
+  };
+  let res = await load(true);
+  if (res.error && MISSING_COL.test(res.error.message || '')) res = await load(false);
+  if (res.error) throw res.error;
+  return res.data.filter((account: any) => account.is_active !== false) as Array<{
+    id: string; code: string; name: string; type: string; is_header?: boolean;
+  }>;
 }
 
 export async function loadReportJournalEntries(
@@ -16,19 +27,24 @@ export async function loadReportJournalEntries(
   companyId: string,
   opts: { from?: string | null; to?: string | null } = {},
 ) {
-  const build = (withDeleted: boolean) => {
-    let q = supabase.from('journal_entries').select('id, date').eq('company_id', companyId);
-    if (withDeleted) q = q.is('deleted_at', null);
-    if (opts.to) q = q.lte('date', opts.to);
-    if (opts.from) q = q.gte('date', opts.from);
-    return q;
+  const load = async (withDeleted: boolean) => {
+    const out: any[] = [];
+    for (let offset = 0; ; offset += PAGE) {
+      let query = supabase.from('journal_entries').select('id, date, number, description, reference_type, reference_id').eq('company_id', companyId)
+        .order('date').order('id').range(offset, offset + PAGE - 1);
+      if (withDeleted) query = query.is('deleted_at', null);
+      if (opts.to) query = query.lte('date', opts.to);
+      if (opts.from) query = query.gte('date', opts.from);
+      const res = await query;
+      if (res.error) return { data: out, error: res.error };
+      out.push(...(res.data || []));
+      if ((res.data || []).length < PAGE) return { data: out, error: null };
+    }
   };
-
-  let res = await build(true);
-  if (res.error && MISSING_COL.test(res.error.message || '')) {
-    res = await build(false);
-  }
-  return (res.data || []) as Array<{ id: string; date: string }>;
+  let res = await load(true);
+  if (res.error && MISSING_COL.test(res.error.message || '')) res = await load(false);
+  if (res.error) throw res.error;
+  return res.data as Array<{ id: string; date: string; number?: number; description?: string; reference_type?: string; reference_id?: string }>;
 }
 
 export async function loadReportJournalLines(
@@ -39,23 +55,15 @@ export async function loadReportJournalLines(
   const out: any[] = [];
   for (let i = 0; i < journalEntryIds.length; i += CHUNK) {
     const chunk = journalEntryIds.slice(i, i + CHUNK);
-    let res = await supabase
-      .from('journal_lines')
-      .select('journal_entry_id, account_id, account_code, debit, credit')
-      .in('journal_entry_id', chunk)
-      .eq('company_id', companyId);
-    if (res.error || !(res.data || []).length) {
-      const retry = await supabase
-        .from('journal_lines')
-        .select('journal_entry_id, account_id, account_code, debit, credit')
-        .in('journal_entry_id', chunk);
-      // Keep company-scoped rows when the column exists; otherwise take all for these JEs.
-      res = {
-        data: (retry.data || []).filter((l: any) => !l.company_id || l.company_id === companyId),
-        error: retry.error,
-      };
+    for (let offset = 0; ; offset += PAGE) {
+      const res = await supabase.from('journal_lines')
+        .select('journal_entry_id, account_id, account_code, account_name, debit, credit, description')
+        .in('journal_entry_id', chunk).eq('company_id', companyId)
+        .order('id').range(offset, offset + PAGE - 1);
+      if (res.error) throw res.error;
+      out.push(...(res.data || []));
+      if ((res.data || []).length < PAGE) break;
     }
-    out.push(...(res.data || []));
   }
   return out;
 }

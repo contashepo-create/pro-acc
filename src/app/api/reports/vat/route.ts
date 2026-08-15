@@ -1,156 +1,77 @@
 import { NextRequest } from 'next/server';
-import { success, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+const number = (value: unknown) => Number(value) || 0;
 
-/**
- * VAT Report (تقرير ضريبة القيمة المضافة)
- * For ZATCA compliance in Saudi Arabia - 15% VAT
- * Shows VAT on sales (collected) and VAT on purchases (paid)
- */
+/** VAT report: control accounts are authoritative; documents are reconciliation evidence. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'reports', 'read');
     const s = sb();
     const url = new URL(request.url);
-    const from = url.searchParams.get('from');
-    const to = url.searchParams.get('to');
+    const from = url.searchParams.get('from') || '1900-01-01';
+    const to = url.searchParams.get('to') || new Date().toISOString().slice(0, 10);
+    const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
+    const pageSize = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('page_size') || '100', 10) || 100));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return error('فترة التقرير غير صالحة');
 
-    // VAT Sales account 2120, VAT Purchases 1180
-    const { data: vatSalesAcc } = await s.from('accounts')
-      .select('id').eq('company_id', auth.companyId).eq('code', '2120').maybeSingle();
-    const { data: vatPurchasesAcc } = await s.from('accounts')
-      .select('id').eq('company_id', auth.companyId).eq('code', '1180').maybeSingle();
+    const [summaryResult, linesResult, invoicesResult, purchasesResult] = await Promise.all([
+      s.rpc('get_vat_return_summary', { p_company_id: auth.companyId, p_from: from, p_to: to }),
+      s.rpc('get_vat_ledger_lines', {
+        p_company_id: auth.companyId, p_from: from, p_to: to,
+        p_limit: pageSize, p_offset: (page - 1) * pageSize,
+      }),
+      s.from('invoices').select('id, number, date, subtotal, tax_amount, total', { count: 'exact' })
+        .eq('company_id', auth.companyId).gte('date', from).lte('date', to)
+        .neq('status', 'cancelled').is('deleted_at', null).order('date').range(0, 99),
+      s.from('purchase_invoices').select('id, number, date, subtotal, tax_amount, total', { count: 'exact' })
+        .eq('company_id', auth.companyId).gte('date', from).lte('date', to)
+        .neq('status', 'cancelled').order('date').range(0, 99),
+    ]);
+    for (const result of [summaryResult, linesResult, invoicesResult, purchasesResult]) if (result.error) throw result.error;
 
-    let salesQuery = s.from('journal_entries').select('id, date, number, description').eq('company_id', auth.companyId).is('deleted_at', null);
-    let purchasesQuery = s.from('journal_entries').select('id, date, number, description').eq('company_id', auth.companyId).is('deleted_at', null);
-
-    if (from) {
-      salesQuery = salesQuery.gte('date', from);
-      purchasesQuery = purchasesQuery.gte('date', from);
-    }
-    if (to) {
-      salesQuery = salesQuery.lte('date', to);
-      purchasesQuery = purchasesQuery.lte('date', to);
-    }
-
-    const { data: salesEntries } = await salesQuery;
-    const { data: purchaseEntries } = await purchasesQuery;
-
-    const salesIds = (salesEntries || []).map((e: any) => e.id);
-    const purchaseIds = (purchaseEntries || []).map((e: any) => e.id);
-    const entryMap = new Map([...(salesEntries || []), ...(purchaseEntries || [])].map((e: any) => [e.id, e]));
-
-    let vatCollected = 0;
-    let vatPaid = 0;
-    let vatCollectedDetails: any[] = [];
-    let vatPaidDetails: any[] = [];
-
-    if (vatSalesAcc && salesIds.length > 0) {
-      const { data: salesLines } = await s.from('journal_lines')
-        .select('id, journal_entry_id, credit, debit, description')
-        .eq('company_id', auth.companyId)
-        .eq('account_id', (vatSalesAcc as any).id)
-        .in('journal_entry_id', salesIds);
-
-      for (const line of salesLines || []) {
-        const amount = (parseFloat((line as any).credit) || 0) - (parseFloat((line as any).debit) || 0);
-        if (amount <= 0) continue;
-        vatCollected += amount;
-        const entry = entryMap.get(line.journal_entry_id);
-        vatCollectedDetails.push({
-          date: entry?.date,
-          number: entry?.number,
-          description: line.description || entry?.description || 'ضريبة مخرجات (مبيعات)',
-          amount,
-          type: 'sales',
-        });
-      }
-    }
-
-    if (vatPurchasesAcc && purchaseIds.length > 0) {
-      const { data: purchaseLines } = await s.from('journal_lines')
-        .select('id, journal_entry_id, debit, credit, description')
-        .eq('company_id', auth.companyId)
-        .eq('account_id', (vatPurchasesAcc as any).id)
-        .in('journal_entry_id', purchaseIds);
-
-      for (const line of purchaseLines || []) {
-        const amount = (parseFloat((line as any).debit) || 0) - (parseFloat((line as any).credit) || 0);
-        if (amount <= 0) continue;
-        vatPaid += amount;
-        const entry = entryMap.get(line.journal_entry_id);
-        vatPaidDetails.push({
-          date: entry?.date,
-          number: entry?.number,
-          description: line.description || entry?.description || 'ضريبة مدخلات (مشتريات)',
-          amount,
-          type: 'purchases',
-        });
-      }
-    }
-
-    // Direct document queries for cross-validation
-    let invoiceQuery = s.from('invoices')
-      .select('id, number, date, subtotal, vat_amount, tax_amount, total')
-      .eq('company_id', auth.companyId)
-      .neq('status', 'cancelled')
-      .is('deleted_at', null);
-
-    if (from) invoiceQuery = invoiceQuery.gte('date', from);
-    if (to) invoiceQuery = invoiceQuery.lte('date', to);
-
-    const { data: invoices } = await invoiceQuery;
-
-    const invoiceVatTotal = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.vat_amount || inv.tax_amount) || 0), 0);
-    const invoiceSubtotal = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.subtotal) || 0), 0);
-    const invoiceTotal = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
-
-    let purchaseInvQuery = s.from('purchase_invoices')
-      .select('id, invoice_number, date, subtotal, tax_amount, total')
-      .eq('company_id', auth.companyId)
-      .neq('status', 'cancelled');
-
-    if (from) purchaseInvQuery = purchaseInvQuery.gte('date', from);
-    if (to) purchaseInvQuery = purchaseInvQuery.lte('date', to);
-
-    const { data: purchaseInvoices } = await purchaseInvQuery;
-
-    const purchaseVatTotal = (purchaseInvoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.tax_amount) || 0), 0);
-
-    const effectiveVatCollected = vatCollected > 0 ? vatCollected : invoiceVatTotal;
-    const effectiveVatPaid = vatPaid > 0 ? vatPaid : purchaseVatTotal;
-    const vatPayable = effectiveVatCollected - effectiveVatPaid;
+    const summary = (summaryResult.data || {}) as Record<string, unknown>;
+    const outputVat = number(summary.outputVat);
+    const inputVat = number(summary.inputVat);
+    const lines = linesResult.data || [];
+    const salesDetails = lines.filter((row: any) => row.vat_type === 'sales').map(formatVatLine);
+    const purchaseDetails = lines.filter((row: any) => row.vat_type === 'purchases').map(formatVatLine);
+    const invoiceVatTotal = (invoicesResult.data || []).reduce((sum: number, row: any) => sum + number(row.tax_amount), 0);
+    const purchaseVatTotal = (purchasesResult.data || []).reduce((sum: number, row: any) => sum + number(row.tax_amount), 0);
+    const totalCount = lines.length ? number((lines[0] as any).total_count) : 0;
 
     return success({
       period: { from, to },
       vat_collected: {
-        from_journal: vatCollected,
-        from_invoices: invoiceVatTotal,
-        total: effectiveVatCollected,
-        details: vatCollectedDetails,
-        invoices: invoices || [],
+        from_journal: outputVat, from_invoices_preview: invoiceVatTotal,
+        total: outputVat, details: salesDetails, invoices: invoicesResult.data || [],
       },
       vat_paid: {
-        from_journal: vatPaid,
-        from_invoices: purchaseVatTotal,
-        total: effectiveVatPaid,
-        details: vatPaidDetails,
-        purchase_invoices: purchaseInvoices || [],
+        from_journal: inputVat, from_invoices_preview: purchaseVatTotal,
+        total: inputVat, details: purchaseDetails, purchase_invoices: purchasesResult.data || [],
       },
       summary: {
-        total_sales_excluding_vat: invoiceSubtotal,
-        total_sales_including_vat: invoiceTotal,
-        total_vat_collected: effectiveVatCollected,
-        total_vat_paid: effectiveVatPaid,
-        vat_payable: vatPayable,
-        vat_payable_status: vatPayable >= 0 ? 'payable' : 'refundable',
+        total_sales_excluding_vat: number(summary.totalSales),
+        total_sales_including_vat: number(summary.totalSales) + outputVat,
+        total_purchases_excluding_vat: number(summary.totalPurchases),
+        total_vat_collected: outputVat, total_vat_paid: inputVat,
+        vat_payable: outputVat - inputVat,
+        vat_payable_status: outputVat - inputVat >= 0 ? 'payable' : 'refundable',
       },
-      zatca_compliant: true,
-      vat_rate: 0.15,
+      pagination: { page, pageSize, total: totalCount, totalPages: Math.ceil(totalCount / pageSize) },
+      reconciliationPreviewTruncated: (invoicesResult.count || 0) > 100 || (purchasesResult.count || 0) > 100,
+      zatca_compliant: true, vat_rate: 0.15,
     });
   } catch (err) {
     return handleApiError(err);
   }
+}
+
+function formatVatLine(row: any) {
+  return {
+    date: row.entry_date, number: row.entry_number, description: row.description,
+    amount: number(row.amount), type: row.vat_type,
+  };
 }

@@ -11,6 +11,7 @@
  */
 
 import { mockClient, resetMock, setResult, findOp, getCalls, callsForTable } from './helpers/supabase-mock';
+import { createHash } from 'crypto';
 
 jest.mock('@/lib/supabase-client', () => ({
   getSupabase: () => mockClient,
@@ -51,7 +52,7 @@ describe('verify-email', () => {
     setResult('users', 'maybeSingle', { id: 'u1', email: 'a@b.com' });
     setResult('users', 'update', null);
 
-    const res = await verifyPOST(req({ token: 'valid-token' }));
+    const res = await verifyPOST(req({ token: 'a'.repeat(64) }));
     expect(res.status).toBe(200);
     const j = await res.json();
     expect(j.data.message).toContain('تم تأكيد البريد');
@@ -61,6 +62,15 @@ describe('verify-email', () => {
     expect(data.email_verified).toBe(true);
     expect(data.email_verification_token).toBeNull();
     expect(data.email_verification_expires).toBeNull();
+  });
+
+  test('looks up only the SHA-256 digest of the URL token', async () => {
+    const raw = 'b'.repeat(64);
+    setResult('users', 'maybeSingle', null);
+    await verifyPOST(req({ token: raw }));
+    const lookup = callsForTable('users')[0].ops.find((op) => op.op === 'eq' && op.args[0] === 'email_verification_token');
+    expect(lookup?.args[1]).toBe(createHash('sha256').update(raw).digest('hex'));
+    expect(lookup?.args[1]).not.toBe(raw);
   });
 
   test('rejects an invalid or expired token', async () => {

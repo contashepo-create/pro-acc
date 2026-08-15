@@ -63,9 +63,14 @@ export async function POST(request: NextRequest) {
     const s = sb();
     const body = await request.json();
 
-    if (!body.title || !body.client_name) {
+    if (typeof body.title !== 'string' || !body.title.trim() || body.title.length > 200 || typeof body.client_name !== 'string' || !body.client_name.trim() || body.client_name.length > 200) {
       return error('عنوان العطاء واسم العميل مطلوبان');
     }
+    if (body.status && !['draft', 'preparing'].includes(body.status)) return error('حالة البداية غير صالحة');
+    for (const field of ['estimated_value', 'bid_bond_amount', 'project_duration_months', 'win_probability']) {
+      if (body[field] !== undefined && body[field] !== null && (!Number.isFinite(Number(body[field])) || Number(body[field]) < 0)) return error(`القيمة ${field} غير صالحة`);
+    }
+    if (body.win_probability !== undefined && Number(body.win_probability) > 100) return error('احتمال الفوز يجب ألا يتجاوز 100');
 
     if (body.contact_id) {
       const { data: contact } = await s.from('contacts')

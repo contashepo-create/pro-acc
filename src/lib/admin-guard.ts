@@ -43,13 +43,14 @@ export async function requireAdmin(request: Request | any): Promise<AdminAuthCon
 
   const { data, error } = await s
     .from('admin_users')
-    .select('id, email, name, is_active')
+    .select('id, email, name, is_active, token_version')
     .eq('id', payload.userId)
     .maybeSingle();
 
   if (error || !data) throw new AdminAuthError('Unauthorized');
   const a = data as Record<string, any>;
   if (!a.is_active) throw new AdminAuthError('Account inactive', 403);
+  if (payload.ver !== (Number(a.token_version) || 0)) throw new AdminAuthError('Unauthorized');
 
   return { adminId: a.id, email: String(a.email || '').toLowerCase(), name: String(a.name || '') };
 }

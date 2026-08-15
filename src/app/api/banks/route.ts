@@ -1,9 +1,7 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { createAutoAccount } from '@/lib/auto-account';
 import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
-import { nextChildAccountCode } from '@/lib/account-code';
 
 const sb = () => getSupabase();
 
@@ -49,19 +47,6 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/**
- * توليد كود حساب فرعي فريد للخزينة/البنك.
- * كان 4 أرقام من الطابع الزمني: بنكان خلال ~10 ثوانٍ بذات النوع يتشاركان
- * الحساب المحاسبي نفسه وتندمج أرصدتهما صامتةً — الآن تسلسل تصاعدي مضمون.
- */
-async function nextBankAccountCode(companyId: string, parentCode: string): Promise<string> {
-  const s = sb();
-  const { data: siblings } = await s.from('accounts')
-    .select('code')
-    .eq('company_id', companyId);
-  return nextChildAccountCode(parentCode, (siblings || []).map((r: any) => r.code));
-}
-
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'banks', 'create');
@@ -77,59 +62,22 @@ export async function POST(request: NextRequest) {
       return error('النوع يجب أن يكون bank أو safe');
     }
 
-    const parsedOpeningBalance = parseFloat(opening_balance) || 0;
+    const parsedOpeningBalance = opening_balance === undefined || opening_balance === null || opening_balance === '' ? 0 : Number(opening_balance);
+    if (!Number.isFinite(parsedOpeningBalance) || Math.abs(parsedOpeningBalance * 100 - Math.round(parsedOpeningBalance * 100)) > 1e-8) return error('الرصيد الافتتاحي غير صالح');
+    if (account_number !== undefined && account_number !== null && (typeof account_number !== 'string' || account_number.length > 100)) return error('رقم الحساب غير صالح');
 
-    // Create auto account in chart of accounts — بكود فريد مضمون
-    const parentCode = type === 'bank' ? '1120' : '1110';
-    const accountCode = await nextBankAccountCode(auth.companyId, parentCode);
-
-    console.log(`Creating auto account for bank/safe: ${name} with code ${accountCode}`);
-    
-    const newAccount = await createAutoAccount({
-      companyId: auth.companyId,
-      code: accountCode,
-      name: name,
-      type: 'asset',
-      parentCode: parentCode,
-      openingBalance: parsedOpeningBalance,
+    // Child-code allocation, account + bank creation, optional opening entry,
+    // linkage and audit are serialized and committed in one transaction.
+    const { data: result, error: createErr } = await s.rpc('create_bank_safe', {
+      p_company_id: auth.companyId,
+      p_name: name.trim(),
+      p_type: type,
+      p_account_number: account_number || '',
+      p_opening_balance: parsedOpeningBalance,
+      p_user_id: auth.userId,
     });
-
-    if (!newAccount) {
-      console.error('Failed to create auto account for bank/safe');
-      return error('فشل إنشاء الحساب المحاسبي للبنك/الصندوق. تأكد من وجود الحساب الأب في شجرة الحسابات');
-    }
-
-    console.log(`Auto account created successfully: ${newAccount.id}`);
-
-    // Create bank/safe and link to account (save opening_balance in table)
-    const { data: result, error: insertError } = await s.from('banks_safes')
-      .insert({
-        company_id: auth.companyId,
-        name,
-        type,
-        account_number: account_number || null,
-        account_id: newAccount.id,
-        opening_balance: parsedOpeningBalance,
-        is_active: true,
-      })
-      .select('*')
-      .single();
-
-    if (insertError) {
-      console.error('Failed to create bank/safe:', insertError);
-      throw insertError;
-    }
-
-    console.log(`Bank/safe created successfully: ${result.id}`);
-
-    return success({
-      ...result,
-      account_code: newAccount.code,
-      account_name: newAccount.name,
-      opening_balance: parsedOpeningBalance,
-      current_balance: parsedOpeningBalance,
-      balance: parsedOpeningBalance,
-    }, 201);
+    if (createErr) throw createErr;
+    return success(result, 201);
   } catch (err) {
     console.error('Error in POST /api/banks:', err);
     return handleApiError(err);

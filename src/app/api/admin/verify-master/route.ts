@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, setAuthCookie, clearAuthCookie } from '@/lib/api-helpers';
 import { verifyPassword, createAdminToken } from '@/lib/auth';
-import { getSession, deleteSession } from '@/lib/admin-session';
+import { getSession, deleteSession, parseAdminSessionPointer } from '@/lib/admin-session';
 import { getSupabase } from '@/lib/supabase-client';
 import { adminJsonError } from '@/lib/admin-guard';
 import { auditLog } from '@/lib/admin-auth';
@@ -17,7 +17,8 @@ export async function POST(request: NextRequest) {
     }
 
     const adminId = request.cookies.get('admin_session')?.value;
-    if (!adminId) {
+    const pointer = adminId ? parseAdminSessionPointer(adminId) : null;
+    if (!adminId || !pointer) {
       return error('انتهت صلاحية الجلسة. يرجى تسجيل الدخول مرة أخرى', 401);
     }
 
@@ -34,9 +35,15 @@ export async function POST(request: NextRequest) {
       return error('يرجى التحقق من رمز تيليجرام أولاً', 401);
     }
 
+    const { checkRateLimit } = await import('@/lib/rate-limit');
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const rateLimit = await checkRateLimit(session.email, ip);
+    if (!rateLimit.allowed) return error('تم تجاوز عدد المحاولات. حاول لاحقاً', 429);
+
     const s = sb();
     const { data: admin, error: queryErr } = await s.from('admin_users')
-      .select('id, name, email, master_password_hash, is_active')
+      .select('id, name, email, master_password_hash, is_active, token_version')
+      .eq('id', pointer.adminId)
       .eq('email', session.email)
       .single();
 
@@ -55,11 +62,18 @@ export async function POST(request: NextRequest) {
 
     const valid = await verifyPassword(masterPassword, a.master_password_hash);
     if (!valid) {
+      const { error: attemptErr } = await s.from('login_attempts').insert({
+        email: session.email,
+        ip_address: ip,
+        success: false,
+        attempted_at: new Date().toISOString(),
+      });
+      if (attemptErr) throw attemptErr;
       return error('كلمة المرور الرئيسية غير صحيحة', 401);
     }
 
     // SECURITY: Use admin-specific secret; shorter TTL (24h); role enforced.
-    const token = createAdminToken(a.id, 0);
+    const token = createAdminToken(a.id, Number(a.token_version) || 0);
     await deleteSession(adminId);
     try { await auditLog(a.id, 'admin_login_success', 'Admin login successful (step 3)'); } catch {}
 

@@ -21,7 +21,7 @@ export async function GET(
     if (!cn) return notFound();
 
     const { data: items } = await s.from('credit_note_items')
-      .select('*').eq('credit_note_id', id).order('id');
+      .select('*').eq('credit_note_id', id).eq('company_id', auth.companyId).order('id');
 
     const result = cn as Record<string, any>;
     result.items = items || [];
@@ -45,23 +45,35 @@ export async function DELETE(
     const s = sb();
 
     const { data: existing } = await s.from('credit_notes')
-      .select('id, journal_entry_id, number')
+      .select('id, journal_entry_id, number, status')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
 
     if (!existing) return notFound();
 
     const cn = existing as any;
 
-    // Delete journal entry if exists
-    if (cn.journal_entry_id) {
-      const { deleteJournalEntry } = await import('@/lib/journal-utils');
-      await deleteJournalEntry(auth.companyId, cn.journal_entry_id);
+    if (cn.status === 'cancelled') return error('الإشعار ملغى بالفعل', 409);
+    if (cn.status === 'draft' && !cn.journal_entry_id) {
+      await s.from('credit_note_items').delete().eq('credit_note_id', id).eq('company_id', auth.companyId);
+      const { error: deleteError } = await s.from('credit_notes').delete().eq('id', id).eq('company_id', auth.companyId);
+      if (deleteError) throw deleteError;
+      return success({ deleted: true });
     }
+    if (!cn.journal_entry_id) return error('الإشعار المعتمد لا يملك قيداً يمكن عكسه', 409);
 
-    await s.from('credit_note_items').delete().eq('credit_note_id', id);
-    await s.from('credit_notes').delete().eq('id', id).eq('company_id', auth.companyId);
+    const { postReversalEntry } = await import('@/lib/voucher-utils');
+    const reversal = await postReversalEntry(auth.companyId, {
+      journalEntryId: cn.journal_entry_id,
+      referenceType: 'credit_note_cancellation', referenceId: id,
+      description: `إلغاء الإشعار الدائن ${cn.number}`, userId: auth.userId,
+    });
+    if (reversal.error) throw reversal.error;
+    const { error: updateError } = await s.from('credit_notes')
+      .update({ status: 'cancelled', deleted_at: new Date().toISOString() })
+      .eq('id', id).eq('company_id', auth.companyId).eq('status', cn.status);
+    if (updateError) throw updateError;
 
-    return success({ deleted: true });
+    return success({ cancelled: true });
   } catch (err) {
     return handleApiError(err);
   }

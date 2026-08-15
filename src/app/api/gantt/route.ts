@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -16,6 +16,9 @@ export async function GET(request: NextRequest) {
     const projectId = url.searchParams.get('project_id');
 
     if (!projectId) return error('project_id مطلوب');
+    const { data: project } = await s.from('projects').select('id')
+      .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+    if (!project) return notFound();
 
     // Get project tasks
     const { data: tasks } = await s.from('project_tasks')
@@ -99,10 +102,29 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'gantt', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<any>(request);
 
-    if (!body.project_id || !body.name || !body.start_date || !body.end_date) {
+    if (!body.project_id || typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200 || !body.start_date || !body.end_date) {
       return error('المشروع والاسم وتاريخ البداية والنهاية مطلوبة');
+    }
+    if (!Number.isFinite(Date.parse(body.start_date)) || !Number.isFinite(Date.parse(body.end_date)) || Date.parse(body.start_date) > Date.parse(body.end_date)) return error('تواريخ المهمة غير صالحة');
+    const progress = body.progress === undefined ? 0 : Number(body.progress);
+    if (!Number.isFinite(progress) || progress < 0 || progress > 100) return error('نسبة التقدم غير صالحة');
+    if (body.status && !['not_started', 'in_progress', 'completed', 'blocked', 'on_hold'].includes(body.status)) return error('حالة المهمة غير صالحة');
+    if (body.priority && !['low', 'medium', 'high', 'critical'].includes(body.priority)) return error('أولوية المهمة غير صالحة');
+    for (const field of ['estimated_hours', 'actual_hours']) if (body[field] !== undefined && (!Number.isFinite(Number(body[field])) || Number(body[field]) < 0)) return error('عدد الساعات غير صالح');
+    const { data: project } = await s.from('projects').select('id')
+      .eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
+    if (!project) return error('المشروع غير موجود', 404);
+    if (body.parent_task_id) {
+      const { data: parent } = await s.from('project_tasks').select('id')
+        .eq('id', body.parent_task_id).eq('project_id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!parent) return error('المهمة الأم غير موجودة', 404);
+    }
+    if (body.assigned_to) {
+      const { data: assignee } = await s.from('users').select('id')
+        .eq('id', body.assigned_to).eq('company_id', auth.companyId).eq('is_active', true).maybeSingle();
+      if (!assignee) return error('المستخدم المسند إليه غير موجود', 404);
     }
 
     const taskId = generateId();
@@ -111,11 +133,11 @@ export async function POST(request: NextRequest) {
         id: taskId,
         company_id: auth.companyId,
         project_id: body.project_id,
-        name: body.name,
+        name: body.name.trim(),
         description: body.description || null,
         start_date: body.start_date,
         end_date: body.end_date,
-        progress: body.progress || 0,
+        progress,
         status: body.status || 'not_started', // not_started, in_progress, completed, blocked
         priority: body.priority || 'medium', // low, medium, high, critical
         parent_task_id: body.parent_task_id || null, // For sub-tasks
@@ -147,7 +169,29 @@ export async function PUT(request: NextRequest) {
 
     if (!taskId) return error('task_id مطلوب');
 
-    const body = await request.json();
+    const body = await parseBody<any>(request);
+    const { data: existing } = await s.from('project_tasks').select('id, project_id, start_date, end_date')
+      .eq('id', taskId).eq('company_id', auth.companyId).maybeSingle();
+    if (!existing) return notFound();
+    const startDate = body.start_date ?? (existing as any).start_date;
+    const endDate = body.end_date ?? (existing as any).end_date;
+    if (!Number.isFinite(Date.parse(startDate)) || !Number.isFinite(Date.parse(endDate)) || Date.parse(startDate) > Date.parse(endDate)) return error('تواريخ المهمة غير صالحة');
+    if (body.progress !== undefined && (!Number.isFinite(Number(body.progress)) || Number(body.progress) < 0 || Number(body.progress) > 100)) return error('نسبة التقدم غير صالحة');
+    if (body.status && !['not_started', 'in_progress', 'completed', 'blocked', 'on_hold'].includes(body.status)) return error('حالة المهمة غير صالحة');
+    if (body.priority && !['low', 'medium', 'high', 'critical'].includes(body.priority)) return error('أولوية المهمة غير صالحة');
+    if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200)) return error('اسم المهمة غير صالح');
+    for (const field of ['estimated_hours', 'actual_hours']) if (body[field] !== undefined && (!Number.isFinite(Number(body[field])) || Number(body[field]) < 0)) return error('عدد الساعات غير صالح');
+    if (body.parent_task_id) {
+      if (body.parent_task_id === taskId) return error('لا يمكن أن تكون المهمة أمّاً لنفسها');
+      const { data: parent } = await s.from('project_tasks').select('id')
+        .eq('id', body.parent_task_id).eq('project_id', (existing as any).project_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!parent) return error('المهمة الأم غير موجودة', 404);
+    }
+    if (body.assigned_to) {
+      const { data: assignee } = await s.from('users').select('id')
+        .eq('id', body.assigned_to).eq('company_id', auth.companyId).eq('is_active', true).maybeSingle();
+      if (!assignee) return error('المستخدم المسند إليه غير موجود', 404);
+    }
     const allowedFields = ['name', 'description', 'start_date', 'end_date', 'progress',
       'status', 'priority', 'parent_task_id', 'assigned_to', 'estimated_hours', 'actual_hours'];
 
@@ -190,9 +234,17 @@ export async function DELETE(request: NextRequest) {
 
     if (!taskId) return error('task_id مطلوب');
 
-    // Delete sub-tasks first
-    await s.from('project_tasks').delete().eq('parent_task_id', taskId);
-    await s.from('project_tasks').delete().eq('id', taskId).eq('company_id', auth.companyId);
+    const { data: task } = await s.from('project_tasks').select('id, progress')
+      .eq('id', taskId).eq('company_id', auth.companyId).maybeSingle();
+    if (!task) return notFound();
+    if (Number((task as any).progress) > 0) return error('لا يمكن حذف مهمة بدأ تنفيذها؛ حدّث حالتها بدلاً من ذلك', 409);
+
+    const { data: startedChildren } = await s.from('project_tasks').select('id')
+      .eq('parent_task_id', taskId).eq('company_id', auth.companyId).gt('progress', 0).limit(1);
+    if (startedChildren?.length) return error('لا يمكن حذف مهمة لها مهام فرعية بدأ تنفيذها', 409);
+    await s.from('project_tasks').delete().eq('parent_task_id', taskId).eq('company_id', auth.companyId);
+    const { error: deleteError } = await s.from('project_tasks').delete().eq('id', taskId).eq('company_id', auth.companyId);
+    if (deleteError) throw deleteError;
 
     return success({ deleted: true });
   } catch (err) {

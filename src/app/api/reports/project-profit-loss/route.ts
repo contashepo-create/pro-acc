@@ -1,182 +1,101 @@
 import { NextRequest } from 'next/server';
-import { success, requireApiAuth, handleApiError, error, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { sumProjectJournal, sumProjectsJournal } from '@/lib/project-costs';
 
-const sb = () => getSupabase();
+const number = (value: unknown) => Number(value) || 0;
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/**
- * Project Profit & Loss (أرباح وخسائر كل مشروع لوحده)
- * Shows revenue, costs, profit per project
- */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'financial_reports', 'read');
-    const s = sb();
+    const s = getSupabase();
     const url = new URL(request.url);
     const projectId = url.searchParams.get('project_id');
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
+    if (projectId && !uuid.test(projectId)) return error('معرّف المشروع غير صالح');
+    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
 
     if (projectId) {
-      // Single project P&L
-      const { data: project, error: projErr } = await s.from('projects')
+      const { data: project, error: projectError } = await s.from('projects')
         .select('id, name, contract_value, client_id, contacts!client_id(name), status, start_date, end_date')
-        .eq('id', projectId)
-        .eq('company_id', auth.companyId)
-        .single();
-
-      if (projErr || !project) return error('المشروع غير موجود', 404);
-
-      const p: any = project;
-
-      const { sumProjectJournal } = await import('@/lib/project-costs');
-      const journal = await sumProjectJournal(auth.companyId, projectId);
-
-      const costs = {
-        materials: 0,
-        labor: 0,
-        subcontractors: 0,
-        equipment: 0,
-        other: 0,
-        total: journal.expenses,
-      };
-      for (const acc of journal.accounts) {
-        if (acc.type !== 'expense') continue;
-        const net = acc.debit - acc.credit;
-        const code = acc.code || '';
-        if (code.startsWith('511')) costs.materials += net;
-        else if (code.startsWith('521') || code.startsWith('522')) costs.labor += net;
-        else if (code.startsWith('215') || code.startsWith('513')) costs.subcontractors += net;
-        else if (code.startsWith('512') || code.startsWith('52')) costs.equipment += net;
+        .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+      if (projectError) throw projectError;
+      if (!project) return error('المشروع غير موجود', 404);
+      const [journal, billingResult] = await Promise.all([
+        sumProjectJournal(auth.companyId, projectId, from, to),
+        s.rpc('get_project_billing_totals', {
+          p_company_id: auth.companyId, p_project_ids: [projectId], p_from: from, p_to: to,
+        }),
+      ]);
+      if (billingResult.error) throw billingResult.error;
+      const billing = billingResult.data?.[0] || {};
+      const costs = { materials: 0, labor: 0, subcontractors: 0, equipment: 0, other: 0, total: journal.expenses };
+      for (const account of journal.accounts) {
+        if (account.type !== 'expense') continue;
+        const net = account.debit - account.credit;
+        if (account.code.startsWith('511')) costs.materials += net;
+        else if (account.code.startsWith('521') || account.code.startsWith('522')) costs.labor += net;
+        else if (account.code.startsWith('513')) costs.subcontractors += net;
+        else if (account.code.startsWith('512')) costs.equipment += net;
         else costs.other += net;
       }
-
-      let revenue = journal.revenue;
-      let invoiceQuery = s.from('invoices')
-        .select('total, status')
-        .eq('company_id', auth.companyId)
-        .eq('project_id', projectId)
-        .neq('status', 'cancelled')
-        .is('deleted_at', null);
-
-      if (from) invoiceQuery = invoiceQuery.gte('date', from);
-      if (to) invoiceQuery = invoiceQuery.lte('date', to);
-
-      const { data: invoices } = await invoiceQuery;
-      const invoiceRevenue = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
-
-      // Subtract credit notes from revenue
-      let creditNoteTotal = 0;
-      try {
-        const { data: creditNotes } = await s.from('credit_notes')
-          .select('total')
-          .eq('company_id', auth.companyId)
-          .eq('project_id', projectId)
-          .neq('status', 'cancelled');
-        creditNoteTotal = (creditNotes || []).reduce((sum: number, cn: any) => sum + (parseFloat(cn.total) || 0), 0);
-      } catch {}
-
-      const netInvoiceRevenue = invoiceRevenue - creditNoteTotal;
-
-      // If no journal revenue, use net invoices
-      if (revenue === 0 && netInvoiceRevenue > 0) {
-        revenue = netInvoiceRevenue;
-      }
-
+      const revenue = journal.revenue;
       const profit = revenue - costs.total;
-      const profitMargin = revenue > 0 ? (profit / revenue) * 100 : 0;
-      const contractValue = parseFloat(p.contract_value) || 0;
-      const completionPercent = contractValue > 0 ? (revenue / contractValue) * 100 : 0;
-
+      const contractValue = number((project as any).contract_value);
       return success({
         project: {
-          id: p.id,
-          name: p.name,
-          client_name: p.contacts?.name || null,
-          contract_value: contractValue,
-          status: p.status,
-          start_date: p.start_date,
-          end_date: p.end_date,
+          id: project.id, name: project.name, client_name: (project as any).contacts?.name || null,
+          contract_value: contractValue, status: project.status,
+          start_date: (project as any).start_date, end_date: (project as any).end_date,
         },
         financials: {
-          revenue,
-          invoice_revenue: netInvoiceRevenue,
-          credit_notes: creditNoteTotal,
-          costs,
-          profit,
-          profit_margin: profitMargin,
+          revenue, invoice_revenue: number(billing.net_billed), credit_notes: number(billing.credits),
+          costs, profit, profit_margin: revenue ? (profit / revenue) * 100 : 0,
           contract_value: contractValue,
-          completion_percent: completionPercent,
+          completion_percent: contractValue ? (revenue / contractValue) * 100 : 0,
           remaining_value: contractValue - revenue,
         },
-        summary: {
-          total_revenue: revenue,
-          total_costs: costs.total,
-          net_profit: profit,
-          profit_margin: profitMargin,
-        }
-      });
-    } else {
-      // All projects P&L (like profitability but with more details)
-      const { data: projects } = await s.from('projects')
-        .select('id, name, contract_value, client_id, contacts!client_id(name), status')
-        .eq('company_id', auth.companyId)
-        .order('name');
-
-      const result = [];
-
-      for (const project of projects || []) {
-        const p: any = project;
-        const contractValue = parseFloat(p.contract_value) || 0;
-
-        // Get invoices revenue
-        const { data: invoices } = await s.from('invoices')
-          .select('total, subtotal, tax_amount, vat_amount')
-          .eq('company_id', auth.companyId)
-          .eq('project_id', p.id)
-          .neq('status', 'cancelled');
-
-        const revenue = (invoices || []).reduce((sum: number, inv: any) => {
-          const net = parseFloat(inv.subtotal) || ((parseFloat(inv.total) || 0) - (parseFloat(inv.tax_amount || inv.vat_amount) || 0));
-          return sum + net;
-        }, 0);
-
-        const { sumProjectJournal } = await import('@/lib/project-costs');
-        const journal = await sumProjectJournal(auth.companyId, p.id);
-        const costs = journal.expenses;
-
-        const profit = revenue - costs;
-        const profitMargin = revenue > 0 ? (profit / revenue) * 100 : 0;
-
-        result.push({
-          id: p.id,
-          name: p.name,
-          client_name: p.contacts?.name || null,
-          contract_value: contractValue,
-          revenue,
-          costs,
-          profit,
-          profit_margin: profitMargin,
-          status: p.status,
-        });
-      }
-
-      const totalContract = result.reduce((sum, p) => sum + p.contract_value, 0);
-      const totalRevenue = result.reduce((sum, p) => sum + p.revenue, 0);
-      const totalCosts = result.reduce((sum, p) => sum + p.costs, 0);
-      const totalProfit = result.reduce((sum, p) => sum + p.profit, 0);
-
-      return success({
-        projects: result,
-        totals: {
-          total_contract_value: totalContract,
-          total_revenue: totalRevenue,
-          total_costs: totalCosts,
-          total_profit: totalProfit,
-          overall_margin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
-        }
+        summary: { total_revenue: revenue, total_costs: costs.total, net_profit: profit, profit_margin: revenue ? (profit / revenue) * 100 : 0 },
+        period: { from, to }, revenue_source: 'general_ledger',
       });
     }
+
+    const { data: projects, error: projectsError } = await s.from('projects')
+      .select('id, name, contract_value, client_id, contacts!client_id(name), status')
+      .eq('company_id', auth.companyId).order('name');
+    if (projectsError) throw projectsError;
+    const projectIds = (projects || []).map((project: any) => project.id);
+    const [journalMap, billingResult] = await Promise.all([
+      sumProjectsJournal(auth.companyId, projectIds, from, to),
+      s.rpc('get_project_billing_totals', { p_company_id: auth.companyId, p_project_ids: projectIds, p_from: from, p_to: to }),
+    ]);
+    if (billingResult.error) throw billingResult.error;
+    const billingMap = new Map((billingResult.data || []).map((row: any) => [row.project_id, row]));
+    const result = (projects || []).map((project: any) => {
+      const contractValue = number(project.contract_value);
+      const revenue = journalMap[project.id]?.revenue || 0;
+      const costs = journalMap[project.id]?.expenses || 0;
+      const profit = revenue - costs;
+      return {
+        id: project.id, name: project.name, client_name: project.contacts?.name || null,
+        contract_value: contractValue, billed_amount: number((billingMap.get(project.id) as any)?.net_billed),
+        revenue, costs, profit, profit_margin: revenue ? (profit / revenue) * 100 : 0, status: project.status,
+      };
+    });
+    const totals = result.reduce((acc, project) => ({
+      total_contract_value: acc.total_contract_value + project.contract_value,
+      total_billed: acc.total_billed + project.billed_amount,
+      total_revenue: acc.total_revenue + project.revenue,
+      total_costs: acc.total_costs + project.costs,
+      total_profit: acc.total_profit + project.profit,
+    }), { total_contract_value: 0, total_billed: 0, total_revenue: 0, total_costs: 0, total_profit: 0 });
+    return success({
+      projects: result,
+      totals: { ...totals, overall_margin: totals.total_revenue ? (totals.total_profit / totals.total_revenue) * 100 : 0 },
+      period: { from, to }, revenue_source: 'general_ledger',
+    });
   } catch (err) {
     return handleApiError(err);
   }

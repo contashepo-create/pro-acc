@@ -1,176 +1,79 @@
 import { NextRequest } from 'next/server';
-import { success, requireApiAuth, requireModulePermission, handleApiError, error } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+const number = (value: unknown) => Number(value) || 0;
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/**
- * General Ledger (الأستاذ العام)
- * Shows all transactions for a specific account or all accounts
- * with running balance
- */
+/** Paginated general ledger with database-side totals and running balance. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'reports', 'read');
     const s = sb();
     const url = new URL(request.url);
-    
     const accountId = url.searchParams.get('account_id');
     const accountCode = url.searchParams.get('account_code');
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
     const costCenterId = url.searchParams.get('cost_center_id');
     const branchId = url.searchParams.get('branch_id');
+    const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
+    const pageSize = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('page_size') || '100', 10) || 100));
+    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    if ((accountId && !uuid.test(accountId)) || (costCenterId && !uuid.test(costCenterId)) || (branchId && !uuid.test(branchId))) return error('معرّف المرشح غير صالح');
 
     let account: any = null;
-
-    if (accountId) {
-      const { data } = await s.from('accounts')
-        .select('id, code, name, type')
-        .eq('id', accountId)
-        .eq('company_id', auth.companyId)
-        .single();
-      account = data;
-    } else if (accountCode) {
-      const { data } = await s.from('accounts')
-        .select('id, code, name, type')
-        .eq('code', accountCode)
-        .eq('company_id', auth.companyId)
-        .single();
-      account = data;
-    }
-
-    if (!account && (accountId || accountCode)) {
-      return error('الحساب غير موجود', 404);
-    }
-
-    // Get journal entries for date range
-    let entryQuery = s.from('journal_entries')
-      .select('id, number, date, description, reference_type, reference_id, type')
-      .eq('company_id', auth.companyId)
-      .is('deleted_at', null)
-      .order('date', { ascending: true })
-      .order('number', { ascending: true });
-
-    if (from) entryQuery = entryQuery.gte('date', from);
-    if (to) entryQuery = entryQuery.lte('date', to);
-
-    const { data: entries } = await entryQuery;
-
-    const entryIds = (entries || []).map((e: any) => e.id);
-    const entryMap = new Map((entries || []).map((e: any) => [e.id, e]));
-
-    if (entryIds.length === 0) {
-      return success({
-        account: account || null,
-        transactions: [],
-        opening_balance: 0,
-        total_debit: 0,
-        total_credit: 0,
-        closing_balance: 0,
-      });
-    }
-
-    // Get lines for these entries, filtered by account if specified
-    let linesQuery = s.from('journal_lines')
-      .select('id, journal_entry_id, account_id, account_code, debit, credit, description, cost_center_id, branch_id, accounts(name)')
-      .in('journal_entry_id', entryIds)
-      .order('id');
-
-    if (account) {
-      linesQuery = linesQuery.eq('account_id', account.id);
+    if (accountId || accountCode) {
+      let query = s.from('accounts').select('id, code, name, type').eq('company_id', auth.companyId);
+      query = accountId ? query.eq('id', accountId) : query.eq('code', accountCode!);
+      const result = await query.maybeSingle();
+      if (result.error) throw result.error;
+      if (!result.data) return error('الحساب غير موجود', 404);
+      account = result.data;
     }
     if (costCenterId) {
-      linesQuery = linesQuery.eq('cost_center_id', costCenterId);
+      const { data } = await s.from('cost_centers').select('id').eq('id', costCenterId).eq('company_id', auth.companyId).maybeSingle();
+      if (!data) return error('مركز التكلفة غير موجود', 404);
     }
     if (branchId) {
-      linesQuery = linesQuery.eq('branch_id', branchId);
+      const { data } = await s.from('branches').select('id').eq('id', branchId).eq('company_id', auth.companyId).maybeSingle();
+      if (!data) return error('الفرع غير موجود', 404);
     }
 
-    const { data: lines } = await linesQuery;
-
-    // Calculate running balance
-    let runningBalance = 0;
-    let totalDebit = 0;
-    let totalCredit = 0;
-
-    // Get opening balance (before from date)
-    if (from && account) {
-      let openingQuery = s.from('journal_entries')
-        .select('id')
-        .eq('company_id', auth.companyId)
-        .lt('date', from)
-        .is('deleted_at', null);
-
-      const { data: openingEntries } = await openingQuery;
-      const openingIds = (openingEntries || []).map((e: any) => e.id);
-
-      if (openingIds.length > 0) {
-        const { data: openingLines } = await s.from('journal_lines')
-          .select('debit, credit')
-          .eq('account_id', account.id)
-          .in('journal_entry_id', openingIds);
-
-        for (const l of openingLines || []) {
-          totalDebit += parseFloat((l as any).debit) || 0;
-          totalCredit += parseFloat((l as any).credit) || 0;
-        }
-
-        if (account.type === 'asset' || account.type === 'expense') {
-          runningBalance = totalDebit - totalCredit;
-        } else {
-          runningBalance = totalCredit - totalDebit;
-        }
-      }
-    }
-
-    const openingBalance = runningBalance;
-    totalDebit = 0;
-    totalCredit = 0;
-
-    const transactions = (lines || []).map((line: any) => {
-      const entry = entryMap.get(line.journal_entry_id);
-      const debit = parseFloat(line.debit) || 0;
-      const credit = parseFloat(line.credit) || 0;
-
-      totalDebit += debit;
-      totalCredit += credit;
-
-      if (account) {
-        if (account.type === 'asset' || account.type === 'expense') {
-          runningBalance += debit - credit;
-        } else {
-          runningBalance += credit - debit;
-        }
-      } else {
-        // If no specific account, balance is debit - credit for reporting
-        runningBalance += debit - credit;
-      }
-
-      return {
-        id: line.id,
-        date: entry?.date,
-        number: entry?.number,
-        description: entry?.description || line.description,
-        reference: entry?.reference,
-        account_code: line.account_code,
-        account_name: line.accounts?.name || line.account_name,
-        debit,
-        credit,
-        balance: runningBalance,
-        cost_center_id: line.cost_center_id,
-        branch_id: line.branch_id,
-      };
-    });
+    const calls: any[] = [s.rpc('get_general_ledger', {
+      p_company_id: auth.companyId, p_account_id: account?.id || null,
+      p_from: from, p_to: to, p_cost_center_id: costCenterId, p_branch_id: branchId,
+      p_limit: pageSize, p_offset: (page - 1) * pageSize,
+    })];
+    if (from && account) calls.push(s.rpc('get_account_opening_balance', {
+      p_company_id: auth.companyId, p_account_id: account.id, p_before: from,
+      p_cost_center_id: costCenterId, p_branch_id: branchId,
+    }));
+    const [ledgerResult, openingResult] = await Promise.all(calls);
+    if (ledgerResult.error) throw ledgerResult.error;
+    if (openingResult?.error) throw openingResult.error;
+    const rows = ledgerResult.data || [];
+    const openingBalance = openingResult ? number(openingResult.data) : (rows.length ? number(rows[0].opening_balance) : 0);
+    const totalDebit = rows.length ? number(rows[0].total_debit) : 0;
+    const totalCredit = rows.length ? number(rows[0].total_credit) : 0;
+    const total = rows.length ? number(rows[0].total_count) : 0;
+    const transactions = rows.map((row: any) => ({
+      id: row.line_id, date: row.entry_date, number: row.entry_number,
+      description: row.entry_description || row.line_description,
+      reference_type: row.reference_type, reference_id: row.reference_id,
+      account_id: row.account_id, account_code: row.account_code, account_name: row.account_name,
+      debit: number(row.debit), credit: number(row.credit), balance: number(row.running_balance),
+      cost_center_id: row.cost_center_id, branch_id: row.branch_id,
+    }));
+    const closingBalance = account
+      ? openingBalance + (['asset', 'expense'].includes(account.type) ? totalDebit - totalCredit : totalCredit - totalDebit)
+      : totalDebit - totalCredit;
 
     return success({
-      account: account || null,
-      opening_balance: openingBalance,
-      transactions,
-      total_debit: totalDebit,
-      total_credit: totalCredit,
-      closing_balance: runningBalance,
-      count: transactions.length,
+      account, opening_balance: openingBalance, transactions,
+      total_debit: totalDebit, total_credit: totalCredit, closing_balance: closingBalance,
+      count: total, page, pageSize, totalPages: Math.ceil(total / pageSize),
     });
   } catch (err) {
     return handleApiError(err);

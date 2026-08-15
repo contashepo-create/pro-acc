@@ -35,7 +35,7 @@ export interface PlanLimits {
 
 export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimits | null> {
   const s = sb();
-  const { data: sub } = await s
+  const { data: sub, error: subscriptionError } = await s
     .from('subscriptions')
     .select(
       'plan_id, plan_code, status, extra_users, extra_branches, extra_storage_gb, addons_json, ' +
@@ -47,7 +47,7 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-
+  if (subscriptionError) throw subscriptionError;
   if (!sub) return null;
   const subr = sub as Record<string, any>;
   const plan = subr.subscription_plans as Record<string, any> | null;
@@ -161,49 +161,58 @@ async function countResource(resource: LimitResource, companyId: string): Promis
 
   switch (resource) {
     case 'users': {
-      const { count } = await s.from('users').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('users').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'clients': {
-      const { count } = await s.from('contacts').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('contacts').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId).eq('type', 'client');
+      if (error) throw error;
       return count || 0;
     }
     case 'suppliers': {
-      const { count } = await s.from('contacts').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('contacts').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId).eq('type', 'supplier');
+      if (error) throw error;
       return count || 0;
     }
     case 'employees': {
-      const { count } = await s.from('employees').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('employees').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'projects': {
-      const { count } = await s.from('projects').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('projects').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'invoices': {
-      const { count } = await s.from('invoices').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('invoices').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId).gte('date', monthStart);
+      if (error) throw error;
       return count || 0;
     }
     case 'quotations': {
       // quotations table is 'quotations'; same monthly window.
-      const { count } = await s.from('quotations').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('quotations').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId).gte('date', monthStart);
+      if (error) throw error;
       return count || 0;
     }
     case 'branches': {
-      const { count } = await s.from('branches').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('branches').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'warehouses': {
-      const { count } = await s.from('warehouses').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('warehouses').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'storage':

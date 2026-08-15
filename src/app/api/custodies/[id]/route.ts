@@ -2,7 +2,6 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { loadCustodyFile, assertFileOpen } from '@/lib/custody';
-import { postReversalEntry } from '@/lib/voucher-utils';
 
 const sb = () => getSupabase();
 
@@ -71,25 +70,13 @@ export async function DELETE(
     if (file.is_closed) return error('لا يمكن حذف ملف مغلق');
     if (file.total_expenses > 0.005) return error('لا يمكن حذف ملف عليه إثباتات مصروف — اعكس المصروفات أولاً');
 
-    if (file.journal_entry_id) {
-      const { error: revErr } = await postReversalEntry(auth.companyId, {
-        journalEntryId: file.journal_entry_id,
-        referenceType: 'custody_reversal',
-        referenceId: id,
-        description: `عكس افتتاح عهدة ${file.file_number || id}`,
-        userId: auth.userId,
-      });
-      if (revErr) throw revErr;
-    }
-
-    await sb().from('custodies').update({
-      status: 'settled',
-      remaining_amount: 0,
-      notes: `${file.notes || ''} [ملغى]`.trim(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ cancelled: true });
+    const { data: cancelled, error: rpcErr } = await sb().rpc('cancel_custody_file', {
+      p_company_id: auth.companyId,
+      p_custody_id: id,
+      p_created_by: auth.userId,
+    });
+    if (rpcErr) throw rpcErr;
+    return success(cancelled);
   } catch (err) {
     return handleApiError(err);
   }

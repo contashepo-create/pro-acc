@@ -23,10 +23,13 @@ export async function GET(request: NextRequest) {
     const userId = url.searchParams.get('userId');
 
     if (userId) {
-      // TENANT: المستخدم المطلوب يجب أن ينتمي لنفس الشركة قبل كشف صلاحياته
+      if (userId !== auth.userId && !['admin', 'manager'].includes(auth.role)) {
+        return error('ليس لديك صلاحية لعرض صلاحيات مستخدم آخر', 403);
+      }
       const s = sb();
-      const { data: target } = await s.from('users')
+      const { data: target, error: targetErr } = await s.from('users')
         .select('id').eq('id', userId).eq('company_id', auth.companyId).maybeSingle();
+      if (targetErr) throw targetErr;
       if (!target) return error('المستخدم غير موجود', 404);
 
       const perms = await getUserPermissions(userId, auth.companyId);
@@ -64,13 +67,15 @@ export async function POST(request: NextRequest) {
 
     const { user_id, bypass_telegram } = data;
     if (!user_id) return error('user_id مطلوب');
+    if (bypass_telegram !== undefined && typeof bypass_telegram !== 'boolean') return error('قيمة تجاوز تيليجرام غير صالحة');
 
     // التحقق من أن المستخدم ينتمي لنفس الشركة
-    const { data: targetUser } = await s.from('users')
+    const { data: targetUser, error: targetUserErr } = await s.from('users')
       .select('id')
       .eq('id', user_id)
       .eq('company_id', auth.companyId)
       .maybeSingle();
+    if (targetUserErr) throw targetUserErr;
 
     if (!targetUser) return error('المستخدم غير موجود', 404);
 
@@ -90,33 +95,24 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 1. مسح جميع صلاحيات المستخدم القديمة دفعة واحدة
-      await s.from('user_permissions')
-        .delete()
-        .eq('user_id', user_id)
-        .eq('company_id', auth.companyId);
-
-      // 2. تصفية وبناء السطور المراد إدخالها
-      const rowsToInsert = data.permissions
-        .filter((p: any) => (p.actions && p.actions.length > 0) || !!bypass_telegram)
-        .map((p: any) => ({
-          company_id: auth.companyId,
-          user_id: user_id,
-          module: p.module,
-          permissions: p.actions || [],
-          bypass_telegram_confirmation: !!bypass_telegram,
-        }));
-
-      if (rowsToInsert.length > 0) {
-        const { error: insertErr } = await s.from('user_permissions').insert(rowsToInsert);
-        if (insertErr) throw insertErr;
+      if (data.permissions.length > 200 || new Set(data.permissions.map((permission: any) => permission.module)).size !== data.permissions.length) {
+        return error('قائمة الصلاحيات مكررة أو كبيرة جداً');
       }
-
-      return success({ message: 'تم ترحيل وحفظ جميع الصلاحيات دفعة واحدة وبسرعة فائقة!' });
+      const { error: replaceError } = await s.rpc('replace_user_permissions', {
+        p_company_id: auth.companyId, p_user_id: user_id,
+        p_permissions: data.permissions, p_bypass_telegram: !!bypass_telegram,
+      });
+      if (replaceError) throw replaceError;
+      return success({ message: 'تم حفظ جميع الصلاحيات بنجاح' });
     }
 
     // 🛑 الحالة 2: حفظ فردي لوحدة واحدة (متوافق)
     const { module, actions } = data;
+    const validModules = new Set<string>(Object.values(MODULES) as any);
+    const validActions = new Set<string>([...(Object.values(ACTIONS) as any), '*']);
+    if (!module || !validModules.has(module) || !Array.isArray(actions) || actions.some((action: string) => !validActions.has(action))) {
+      return error('الوحدة أو الإجراءات غير صالحة');
+    }
     await setUserPermission(
       user_id,
       auth.companyId,
@@ -153,7 +149,8 @@ export async function DELETE(request: NextRequest) {
       query = query.eq('module', module);
     }
 
-    await query;
+    const { error: deleteErr } = await query;
+    if (deleteErr) throw deleteErr;
 
     return success({ message: 'تم حذف الصلاحيات المخصصة' });
   } catch (err) {

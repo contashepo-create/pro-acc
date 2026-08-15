@@ -40,11 +40,18 @@ export async function POST(req: NextRequest) {
     const data = await parseBody(req);
     const { project_id, item_code, code, description, unit, quantity, unit_price } = data;
     const effectiveCode = item_code || code;
-    if (!project_id || !effectiveCode || !description || !unit || !quantity || unit_price == null)
+    const qty = Number(quantity);
+    const price = Number(unit_price);
+    if (!project_id || typeof effectiveCode !== 'string' || !effectiveCode.trim() || typeof description !== 'string' || !description.trim() || typeof unit !== 'string' || !unit.trim())
       return error('project_id, item_code, description, unit, quantity, unit_price are required');
+    if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price < 0) return error('الكمية أو سعر الوحدة غير صالح');
+    const { data: project } = await s.from('projects')
+      .select('id, status').eq('id', project_id).eq('company_id', auth.companyId).maybeSingle();
+    if (!project) return error('المشروع غير موجود', 404);
+    if (['completed', 'cancelled'].includes((project as any).status)) return error('لا يمكن تعديل كميات مشروع مغلق');
 
     const { data: result, error: insertError } = await s.from('boq_items')
-      .insert({ company_id: auth.companyId, project_id, item_code: effectiveCode, description, unit, quantity, unit_price, total: quantity * unit_price })
+      .insert({ company_id: auth.companyId, project_id, item_code: effectiveCode.trim(), description: description.trim(), unit: unit.trim(), quantity: qty, unit_price: price, total: Math.round(qty * price * 100) / 100 })
       .select('*').single();
     if (insertError) throw insertError;
     return success(result, 201);

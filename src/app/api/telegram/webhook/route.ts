@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { randomInt } from 'crypto';
+import { randomInt, randomBytes, timingSafeEqual, createHash } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -21,13 +21,14 @@ export async function POST(request: NextRequest) {
     const secretToken = request.headers.get('x-telegram-bot-api-secret-token');
     const expectedSecretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
 
-    if (!expectedSecretToken || secretToken !== expectedSecretToken) {
+    const supplied = secretToken || '';
+    if (!expectedSecretToken || supplied.length !== expectedSecretToken.length ||
+        !timingSafeEqual(Buffer.from(supplied), Buffer.from(expectedSecretToken))) {
       console.warn('[Telegram Webhook Bypass Attack Blocked]: Missing or invalid secret token header.');
       return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
     }
 
     const body = await request.json();
-    console.log('[Telegram Webhook Payload Received]:', JSON.stringify(body, null, 2));
 
     // 1. التعامل مع الرسائل العادية (مثل كتابة /start)
     if (body.message) {
@@ -76,21 +77,33 @@ export async function POST(request: NextRequest) {
     if (callbackData.startsWith('test:')) {
       const parts = callbackData.split(':');
       if (parts.length === 3) {
-        const action = parts[1]; // accept أو reject
-        const testRunId = parts[2]; // UUID
+        const action = parts[1];
+        const testRunId = parts[2];
+        if (!['accept','reject'].includes(action) || !/^[0-9a-f-]{36}$/i.test(testRunId)) {
+          await answerCallback(callbackQueryId,'طلب فحص غير صالح',true);
+          return NextResponse.json({success:true},{status:200});
+        }
+        const { data: testRun, error: testErr } = await s.from('telegram_test_runs')
+          .select('company_id,status').eq('id',testRunId).maybeSingle();
+        if (testErr || !testRun || testRun.status!=='pending') {
+          await answerCallback(callbackQueryId,'انتهى هذا الفحص أو تمت معالجته',true);
+          return NextResponse.json({success:true},{status:200});
+        }
+        const { data: config } = await s.from('company_telegram_configs').select('chat_id')
+          .eq('company_id',testRun.company_id).maybeSingle();
+        if (!config || config.chat_id!==String(chatId)) {
+          await answerCallback(callbackQueryId,'غير مصرح لهذا الحساب بمعالجة الفحص',true);
+          return NextResponse.json({success:true},{status:200});
+        }
         const statusValue = action === 'accept' ? 'accepted' : 'rejected';
+        const { data: changed, error: updateErr } = await s.from('telegram_test_runs')
+          .update({status:statusValue,updated_at:new Date().toISOString()})
+          .eq('id',testRunId).eq('company_id',testRun.company_id).eq('status','pending')
+          .select('id').maybeSingle();
 
-        // تحديث قاعدة البيانات
-        const { error: updateErr } = await s.from('telegram_test_runs')
-          .update({
-            status: statusValue,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', testRunId);
-
-        if (updateErr) {
-          console.error('Failed to update telegram test run status:', updateErr);
-          await answerCallback(callbackQueryId, 'حدث خطأ في الخادم أثناء تحديث حالة الفحص', true);
+        if (updateErr || !changed) {
+          console.error('Failed to update Telegram test run status:', updateErr);
+          await answerCallback(callbackQueryId, 'حدث خطأ أثناء تحديث حالة الفحص', true);
           return NextResponse.json({ success: true }, { status: 200 });
         }
 
@@ -153,7 +166,7 @@ export async function POST(request: NextRequest) {
         if (action === 'approve') {
           // التحقق من الهوية: هل المعرف يطابق شات الشركة المسجل للرقابة؟
           const { data: config } = await s.from('company_telegram_configs')
-            .select('chat_id')
+            .select('chat_id,reset_session_data')
             .eq('company_id', companyId)
             .maybeSingle();
 
@@ -161,26 +174,41 @@ export async function POST(request: NextRequest) {
             await answerCallback(callbackQueryId, '❌ غير مصرح لك باعتماد هذا الإجراء الحرج', true);
             return NextResponse.json({ success: true }, { status: 200 });
           }
+          const pendingSession=(config as any).reset_session_data;
+          if (!pendingSession || pendingSession.step!=='pending_telegram_approval'
+            || !pendingSession.requester_id || Date.now()-new Date(pendingSession.requested_at).getTime()>10*60*1000) {
+            await answerCallback(callbackQueryId,'طلب التصفير منتهٍ أو غير صالح',true);
+            return NextResponse.json({success:true},{status:200});
+          }
 
           // توليد كود سداسي عشوائي آمن (2FA Code) باستخدام CSPRNG
           let code: string;
           try {
             code = String(randomInt(0, 1000000)).padStart(6, '0');
           } catch {
-            // fallback — يجب ألا يحدث أبداً، ولكن للأمان فقط
-            code = String(Math.floor(100000 + Math.random() * 900000));
+            // Keep the fallback cryptographically secure too; Math.random is
+            // predictable and must never generate a destructive-operation OTP.
+            code = String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, '0');
           }
           const updatedSession = {
             step: 'approved_and_code_sent',
-            code,
+            code_hash: createHash('sha256').update(code).digest('hex'),
+            attempts: 0,
+            requester_id: pendingSession.requester_id,
             expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
             approved_by_chat_id: String(chatId)
           };
 
-          // حفظ الرمز في السوبابيز لجلسة الأمان
-          await s.from('company_telegram_configs')
+          // حفظ بصمة الرمز فقط، وبشرط أن الجلسة ما زالت هي الطلب المنتظر.
+          const { data: sessionUpdated, error: sessionErr } = await s.from('company_telegram_configs')
             .update({ reset_session_data: updatedSession })
-            .eq('company_id', companyId);
+            .eq('company_id', companyId)
+            .contains('reset_session_data',{step:'pending_telegram_approval',requester_id:pendingSession.requester_id})
+            .select('company_id').maybeSingle();
+          if (sessionErr || !sessionUpdated) {
+            await answerCallback(callbackQueryId,'تغيرت جلسة التصفير أو انتهت',true);
+            return NextResponse.json({success:true},{status:200});
+          }
 
           // إرسال كود الـ 2FA السري لمدير النظام على تليجرام
           const codeMessage = `🔐 <b>رمز المصادقة الثنائية (2FA) لتصفير البيانات:</b>
@@ -206,10 +234,16 @@ export async function POST(request: NextRequest) {
           await editTelegramMessage(botToken, chatId, messageId, finalMsg);
 
         } else if (action === 'reject') {
-          // رفض وإجهاض العملية بالكامل وحماية الجداول
-          await s.from('company_telegram_configs')
-            .update({ reset_session_data: null })
-            .eq('company_id', companyId);
+          const { data: rejectConfig } = await s.from('company_telegram_configs')
+            .select('chat_id,reset_session_data').eq('company_id',companyId).maybeSingle();
+          if (!rejectConfig || rejectConfig.chat_id!==String(chatId)
+            || (rejectConfig as any).reset_session_data?.step!=='pending_telegram_approval') {
+            await answerCallback(callbackQueryId,'غير مصرح أو لا يوجد طلب منتظر',true);
+            return NextResponse.json({success:true},{status:200});
+          }
+          const { error: rejectErr } = await s.from('company_telegram_configs')
+            .update({ reset_session_data: null }).eq('company_id', companyId);
+          if (rejectErr) throw rejectErr;
 
           await answerCallback(callbackQueryId, 'تم رفض وإلغاء الطلب بالكامل ❌');
 

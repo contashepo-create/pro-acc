@@ -99,15 +99,15 @@ export async function createJournalEntryForApprovedTransaction(
       const { data: bankSafe } = await s.from('banks_safes').select('account_id').eq('id', transactionData.bank_safe_id).maybeSingle();
       if (!bankSafe || !bankSafe.account_id) return;
 
-      // تحديد الحساب المدين (المصروف أو الالتزام)
-      let debitAccountId: string = ACCOUNT_CODES.DIRECT_COSTS;
-      if (transactionData.disbursement_type === 'supplier') {
-        debitAccountId = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
-      } else if (transactionData.disbursement_type === 'employee_advance') {
-        debitAccountId = ACCOUNT_CODES.EMPLOYEE_ADVANCES;
-      } else if (transactionData.disbursement_type === 'subcontractor') {
-        debitAccountId = ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES;
-      }
+      // Resolve the tenant's actual account UUID; account codes are never valid
+      // journal_lines.account_id values.
+      let debitCode: string = ACCOUNT_CODES.DIRECT_COSTS;
+      if (transactionData.disbursement_type === 'supplier') debitCode = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
+      else if (transactionData.disbursement_type === 'employee_advance') debitCode = ACCOUNT_CODES.EMPLOYEE_ADVANCES;
+      else if (transactionData.disbursement_type === 'subcontractor') debitCode = ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES;
+      const { data: debitAccount } = await s.from('accounts').select('id')
+        .eq('company_id', companyId).eq('code', debitCode).maybeSingle();
+      if (!debitAccount?.id) throw new Error(`حساب الطرف المدين ${debitCode} غير موجود`);
 
       // إنشاء القيد المحاسبي المتزن (المدين: المصروف/الالتزام، الدائن: البنك/الخزينة)
       const { journalId, error: jeErr } = await createJournalEntry(companyId, {
@@ -116,7 +116,7 @@ export async function createJournalEntryForApprovedTransaction(
         description: `اعتماد سند صرف رقم ${number}: ${reason}`,
         lines: [
           {
-            account_id: debitAccountId, // مدين: الحساب المختص بقيمة الصرف
+            account_id: debitAccount.id, // مدين: الحساب المختص بقيمة الصرف
             debit: amount,
             credit: 0,
             contact_id: transactionData.contact_id || null,
@@ -147,13 +147,12 @@ export async function createJournalEntryForApprovedTransaction(
       const { data: bankSafe } = await s.from('banks_safes').select('account_id').eq('id', transactionData.bank_safe_id).maybeSingle();
       if (!bankSafe || !bankSafe.account_id) return;
 
-      // تحديد الحساب الدائن
-      let creditAccountId: string = ACCOUNT_CODES.CASH;
-      if (transactionData.receipt_type === 'client') {
-        creditAccountId = ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
-      } else if (transactionData.receipt_type === 'supplier_refund') {
-        creditAccountId = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
-      }
+      let creditCode: string = ACCOUNT_CODES.OTHER_REVENUE;
+      if (transactionData.receipt_type === 'client') creditCode = ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;
+      else if (transactionData.receipt_type === 'supplier_refund') creditCode = ACCOUNT_CODES.ACCOUNTS_PAYABLE;
+      const { data: creditAccount } = await s.from('accounts').select('id')
+        .eq('company_id', companyId).eq('code', creditCode).maybeSingle();
+      if (!creditAccount?.id) throw new Error(`حساب الطرف الدائن ${creditCode} غير موجود`);
 
       // إنشاء القيد (المدين: البنك/الخزينة المستلمة، الدائن: العميل/المورد)
       const { journalId, error: jeErr } = await createJournalEntry(companyId, {
@@ -168,7 +167,7 @@ export async function createJournalEntryForApprovedTransaction(
             bank_safe_id: transactionData.bank_safe_id,
           },
           {
-            account_id: creditAccountId, // دائن: العميل/المورد المسدد
+            account_id: creditAccount.id, // دائن: العميل/المورد المسدد
             debit: 0,
             credit: amount,
             contact_id: transactionData.contact_id || null,
@@ -189,6 +188,7 @@ export async function createJournalEntryForApprovedTransaction(
     }
   } catch (e) {
     console.error('[Approval Journal Engine Failed]:', e);
+    throw e;
   }
 }
 

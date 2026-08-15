@@ -1,7 +1,8 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireAdmin, handleApiError, requireApiAuth } from '@/lib/api-helpers';
+import { success, error, requireAdmin, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword } from '@/lib/auth';
+import { passwordPolicy } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
@@ -10,7 +11,7 @@ const sb = () => getSupabase();
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireAdmin(request);
     const s = sb();
 
     const { data: users, error: queryError } = await s
@@ -76,7 +77,10 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAdmin(request);
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<{
+      email?: string; name?: string; password?: string; role?: string;
+      phone?: string; birth_date?: string; city?: string;
+    }>(request);
 
     const { email, name, password, role, phone, birth_date, city } = body as {
       email?: string;
@@ -94,9 +98,6 @@ export async function POST(request: NextRequest) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return error('صيغة البريد الإلكتروني غير صحيحة');
     }
-    if (password.length < 6) {
-      return error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
-    }
     const validRoles = ['admin', 'accountant', 'manager', 'supervisor'];
     if (!role || !validRoles.includes(role)) {
       return error(`الدور غير صالح. الأدوار المتاحة: ${validRoles.join('، ')}`);
@@ -112,6 +113,10 @@ export async function POST(request: NextRequest) {
       if (adminCount && adminCount > 0) {
         return error('لا يمكن إنشاء أكثر من حساب مدير واحد للشركة. يرجى اختيار دور مدير (manager) أو محاسب للمستخدم الجديد لمنع تخطي الصلاحيات حماية للنظام ماليًا.', 403);
       }
+    }
+
+    if (!passwordPolicy.safeParse(password).success) {
+      return error('كلمة المرور لا تفي بسياسة الأمان');
     }
 
     const { count: currentCount } = await s

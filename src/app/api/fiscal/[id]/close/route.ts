@@ -1,110 +1,136 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber } from '@/lib/numbering';
 import { ACCOUNT_CODES } from '@/lib/constants';
 import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
+const EPSILON = 0.005;
 
+/**
+ * Close one fiscal year using a single balanced entry:
+ * revenue (debit) + expenses (credit) + retained earnings (net offset).
+ * This zeros every temporary income-statement account and transfers exactly
+ * the resulting profit/loss without hard-deleting any historical evidence.
+ */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'fiscal', 'approve');
     const { id } = await params;
     const s = sb();
 
-    const { data: fy } = await s.from('fiscal_years').select('*').eq('id', id).maybeSingle();
-    if (!fy) return notFound();
-    if (fy.status === 'closed') return error('السنة المالية مقفلة بالفعل');
+    const { data: fiscalYear, error: fiscalError } = await s.from('fiscal_years')
+      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (fiscalError) throw fiscalError;
+    if (!fiscalYear) return notFound();
+    if (fiscalYear.status === 'closed') return error('السنة المالية مقفلة بالفعل', 409);
 
-    const companyId = fy.company_id;
-    const endDate = fy.end_date;
-    if (companyId !== auth.companyId) return error('غير مصرح به');
-
-    const { data: openCustodies } = await s.from('custodies')
+    const companyId = auth.companyId;
+    const { data: openCustodies, error: custodyError } = await s.from('custodies')
       .select('id').eq('company_id', companyId).eq('status', 'open').limit(1);
+    if (custodyError) throw custodyError;
     if (openCustodies && openCustodies.length > 0) return error('لا يمكن إقفال السنة والعُهد مفتوحة');
 
-    const warnings: string[] = [];
-
-    const { data: activeProjects } = await s.from('projects')
+    const { data: activeProjects, error: projectError } = await s.from('projects')
       .select('id').eq('company_id', companyId).eq('status', 'active').limit(1);
-    if (activeProjects && activeProjects.length > 0) warnings.push('هناك مشاريع نشطة');
+    if (projectError) throw projectError;
+    const warnings = activeProjects && activeProjects.length > 0 ? ['هناك مشاريع نشطة'] : [];
 
-    const { data: revenueAccounts } = await s.from('accounts')
-      .select('id').eq('company_id', companyId).eq('type', 'revenue');
-    const { data: expenseAccounts } = await s.from('accounts')
-      .select('id').eq('company_id', companyId).eq('type', 'expense');
+    const { data: accounts, error: accountsError } = await s.from('accounts')
+      .select('id, code, name, type')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .in('type', ['revenue', 'expense']);
+    if (accountsError) throw accountsError;
 
-    // Get all journal entries for this company up to endDate, excluding closing
-    const { data: jes } = await s.from('journal_entries')
-      .select('id').eq('company_id', companyId).lte('date', endDate).neq('type', 'closing');
-    const jeIds = (jes || []).map((je: any) => je.id);
+    const { data: retained, error: retainedError } = await s.from('accounts')
+      .select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.RETAINED_EARNINGS).maybeSingle();
+    if (retainedError) throw retainedError;
+    if (!retained) return error('حساب الأرباح المحتجزة غير موجود', 400);
 
+    const { data: sourceEntries, error: sourceError } = await s.from('journal_entries')
+      .select('id')
+      .eq('company_id', companyId)
+      .gte('date', fiscalYear.start_date)
+      .lte('date', fiscalYear.end_date)
+      .neq('type', 'closing');
+    if (sourceError) throw sourceError;
+    const entryIds = (sourceEntries || []).map((entry: { id: string }) => entry.id);
+
+    const balances = new Map<string, number>();
+    if (entryIds.length > 0) {
+      const { data: lines, error: linesError } = await s.from('journal_lines')
+        .select('account_id, debit, credit')
+        .eq('company_id', companyId)
+        .in('journal_entry_id', entryIds);
+      if (linesError) throw linesError;
+      for (const line of lines || []) {
+        const current = balances.get(line.account_id) || 0;
+        balances.set(line.account_id, current + (Number(line.debit) || 0) - (Number(line.credit) || 0));
+      }
+    }
+
+    const closingLines: Array<{ journal_entry_id: string; account_id: string; debit: number; credit: number; description: string }> = [];
     let totalRevenue = 0;
     let totalExpenses = 0;
-    const accountBalances: Record<string, number> = {};
-
-    if (jeIds.length > 0) {
-      const { data: lines } = await s.from('journal_lines')
-        .select('account_id, debit, credit').in('journal_entry_id', jeIds);
-      for (const l of (lines || [])) {
-        const debit = parseFloat(l.debit) || 0;
-        const credit = parseFloat(l.credit) || 0;
-        if (!accountBalances[l.account_id]) accountBalances[l.account_id] = 0;
-        accountBalances[l.account_id] += debit - credit;
-      }
-    }
-
-    for (const acc of (revenueAccounts || [])) {
-      const bal = accountBalances[acc.id] || 0;
-      totalRevenue += -bal; // revenue balance = credit - debit = -net
-    }
-    for (const acc of (expenseAccounts || [])) {
-      const bal = accountBalances[acc.id] || 0;
-      totalExpenses += bal; // expense balance = debit - credit = net
-    }
-
-    const netIncome = totalRevenue - totalExpenses;
-    const { data: retainedAccount } = await s.from('accounts')
-      .select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.RETAINED_EARNINGS).maybeSingle();
-
-    if (netIncome !== 0 && retainedAccount) {
-      const closingNumber = await getNextJournalNumber(companyId, endDate);
-
-      const { data: closingJe, error: jeErr } = await s.from('journal_entries')
-        .insert({ company_id: companyId, number: closingNumber, date: endDate, type: 'closing', description: 'قيد إقفال السنة المالية', created_by: auth.userId })
-        .select('id').single();
-      if (jeErr) throw jeErr;
-      const jeId = closingJe.id;
-
-      const closingLines: Array<{ journal_entry_id: string; account_id: string; debit: number; credit: number }> = [];
-      if (netIncome > 0) {
-        for (const acc of (revenueAccounts || [])) {
-          const bal = -(accountBalances[acc.id] || 0);
-          if (bal > 0) closingLines.push({ journal_entry_id: jeId, account_id: acc.id, debit: bal, credit: 0 });
-        }
-        closingLines.push({ journal_entry_id: jeId, account_id: retainedAccount.id, debit: 0, credit: netIncome });
+    let netIncome = 0;
+    for (const account of accounts || []) {
+      const balance = Math.round(((balances.get(account.id) || 0) + Number.EPSILON) * 100) / 100;
+      if (Math.abs(balance) <= EPSILON) continue;
+      // To zero an account, post the exact opposite of its debit-credit net.
+      // This also handles abnormal debit-revenue / credit-expense balances
+      // rather than silently leaving temporary accounts open.
+      closingLines.push({
+        journal_entry_id: '',
+        account_id: account.id,
+        debit: balance < 0 ? Math.abs(balance) : 0,
+        credit: balance > 0 ? balance : 0,
+        description: `إقفال ${account.type === 'revenue' ? 'إيراد' : 'مصروف'} ${account.name}`,
+      });
+      if (account.type === 'revenue') {
+        totalRevenue += -balance;
+        netIncome += -balance;
       } else {
-        const loss = Math.abs(netIncome);
-        for (const acc of (expenseAccounts || [])) {
-          const bal = accountBalances[acc.id] || 0;
-          if (bal > 0) closingLines.push({ journal_entry_id: jeId, account_id: acc.id, debit: 0, credit: bal });
-        }
-        closingLines.push({ journal_entry_id: jeId, account_id: retainedAccount.id, debit: loss, credit: 0 });
+        totalExpenses += balance;
+        netIncome -= balance;
       }
-      if (closingLines.length > 0) {
-        const { error: jlErr } = await insertJournalLines(companyId, closingLines);
-        if (jlErr) throw jlErr;
+    }
+    netIncome = Math.round((netIncome + Number.EPSILON) * 100) / 100;
+    if (closingLines.length > 0) {
+      const closingNumber = await getNextJournalNumber(companyId, fiscalYear.end_date);
+      const { data: closingEntry, error: entryError } = await s.from('journal_entries')
+        .insert({
+          company_id: companyId,
+          number: closingNumber,
+          date: fiscalYear.end_date,
+          type: 'closing',
+          description: `قيد إقفال السنة المالية ${fiscalYear.name || ''}`.trim(),
+          created_by: auth.userId,
+        })
+        .select('id')
+        .single();
+      if (entryError || !closingEntry) throw entryError || new Error('فشل إنشاء قيد الإقفال');
+
+      if (netIncome > EPSILON) {
+        closingLines.push({ journal_entry_id: closingEntry.id, account_id: retained.id, debit: 0, credit: netIncome, description: 'نقل صافي الربح إلى الأرباح المحتجزة' });
+      } else if (netIncome < -EPSILON) {
+        closingLines.push({ journal_entry_id: closingEntry.id, account_id: retained.id, debit: Math.abs(netIncome), credit: 0, description: 'نقل صافي الخسارة من الأرباح المحتجزة' });
+      }
+      for (const line of closingLines) line.journal_entry_id = closingEntry.id;
+      const { error: postingError } = await insertJournalLines(companyId, closingLines);
+      if (postingError) {
+        await s.from('journal_entries').delete().eq('id', closingEntry.id).eq('company_id', companyId);
+        throw postingError;
       }
     }
 
-    const { error: updErr } = await s.from('fiscal_years')
+    const { error: closeError } = await s.from('fiscal_years')
       .update({ status: 'closed', closed_at: new Date().toISOString(), closed_by: auth.userId })
-      .eq('id', id).eq('company_id', auth.companyId);
-    if (updErr) throw updErr;
+      .eq('id', id).eq('company_id', companyId);
+    if (closeError) throw closeError;
 
-    return success({ ...fy, status: 'closed', warnings });
+    return success({ ...fiscalYear, status: 'closed', totalRevenue, totalExpenses, netIncome, warnings });
   } catch (err) {
     return handleApiError(err);
   }

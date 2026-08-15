@@ -38,17 +38,15 @@ export async function GET(request: NextRequest) {
 
     if (projectIds.length > 0) {
       const { sumProjectsJournal } = await import('@/lib/project-costs');
-      const journalMap = await sumProjectsJournal(auth.companyId, projectIds);
-      const { data: billRes } = await s.from('invoices')
-        .select('project_id, total, subtotal, tax_amount, vat_amount, status')
-        .eq('company_id', auth.companyId)
-        .in('project_id', projectIds)
-        .neq('status', 'cancelled');
+      const [journalMap, billingResult] = await Promise.all([
+        sumProjectsJournal(auth.companyId, projectIds),
+        s.rpc('get_project_billing_totals', {
+          p_company_id: auth.companyId, p_project_ids: projectIds, p_from: null, p_to: null,
+        }),
+      ]);
+      if (billingResult.error) throw billingResult.error;
       for (const id of projectIds) costsByProject[id] = journalMap[id]?.expenses || 0;
-      for (const b of billRes || []) {
-        const net = parseFloat(String(b.subtotal)) || ((parseFloat(String(b.total)) || 0) - (parseFloat(String(b.tax_amount || b.vat_amount)) || 0));
-        billedByProject[b.project_id] = (billedByProject[b.project_id] || 0) + net;
-      }
+      for (const row of billingResult.data || []) billedByProject[row.project_id] = parseFloat(String(row.net_billed)) || 0;
     }
 
     const rows = (projects || []).map((p: any) => {

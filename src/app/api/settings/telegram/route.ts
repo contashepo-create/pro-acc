@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, handleApiError, parseBody, requireAdmin } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { checkModuleAccess } from '@/lib/usage-limits';
 
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     
     // جلب الإعدادات من الجدول
     const { data: config, error: queryErr } = await s.from('company_telegram_configs')
-      .select('*')
+      .select('company_id, chat_id, is_enabled, notify_invoices, notify_cash_transactions, notify_user_logins, approvals_enabled, approval_threshold, updated_at')
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
@@ -61,7 +61,9 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'telegram', 'create');
+    // Changing the approved Telegram chat controls financial approvals and
+    // destructive reset confirmations; it is company-admin-only.
+    const auth = await requireAdmin(request);
     
     // 1. التحقق من الصلاحية للباقة
     const isAllowed = await checkModuleAccess(auth.companyId, 'telegram_integration');
@@ -71,23 +73,28 @@ export async function POST(request: NextRequest) {
 
     const body = await parseBody<any>(request);
     const s = sb();
+    const chatId = typeof body.chat_id === 'string' ? body.chat_id.trim() : '';
+    const threshold = Number(body.approval_threshold ?? 0);
+    if (chatId && !/^-?\d{1,20}$/.test(chatId)) return error('معرف محادثة تيليجرام غير صالح');
+    if ((body.is_enabled || body.approvals_enabled) && !chatId) return error('معرف محادثة تيليجرام مطلوب عند التفعيل');
+    if (!Number.isFinite(threshold) || threshold < 0 || Math.abs(threshold * 100 - Math.round(threshold * 100)) > 1e-8) return error('حد الموافقات غير صالح');
 
     const configData = {
       company_id: auth.companyId,
-      chat_id: body.chat_id || '',
+      chat_id: chatId,
       is_enabled: !!body.is_enabled,
       notify_invoices: !!body.notify_invoices,
       notify_cash_transactions: !!body.notify_cash_transactions,
       notify_user_logins: !!body.notify_user_logins,
       approvals_enabled: !!body.approvals_enabled,
-      approval_threshold: Number(body.approval_threshold) || 0,
+      approval_threshold: threshold,
       updated_at: new Date().toISOString()
     };
 
     // حفظ أو تحديث في جدول الإعدادات
     const { data: updatedConfig, error: upsertErr } = await s.from('company_telegram_configs')
       .upsert(configData, { onConflict: 'company_id' })
-      .select('*')
+      .select('company_id, chat_id, is_enabled, notify_invoices, notify_cash_transactions, notify_user_logins, approvals_enabled, approval_threshold, updated_at')
       .single();
 
     if (upsertErr) throw upsertErr;

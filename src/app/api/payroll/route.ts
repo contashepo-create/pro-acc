@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, getDateRangeParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 
@@ -36,99 +35,21 @@ export async function POST(req: NextRequest) {
     const s = sb();
     const data = await parseBody(req);
     const { date, employee_ids } = data;
-    if (!date || !employee_ids || employee_ids.length === 0)
+    if (!date || !Array.isArray(employee_ids) || employee_ids.length === 0)
       return error('date, employee_ids are required');
+    if (new Set(employee_ids).size !== employee_ids.length) return error('لا يمكن تكرار الموظف في دفعة الرواتب');
 
-    // حل الحسابات قبل أي كتابة — القيد إلزامي متوازن
-    const { data: salAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.SALARIES_EXPENSE).maybeSingle();
-    const { data: accrAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_SALARIES).maybeSingle();
-    const { data: advAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_ADVANCES).maybeSingle();
-    if (!salAcc || !accrAcc) {
-      return error('حسابات الرواتب (5210) أو الرواتب المستحقة (2140) غير موجودة — راجع دليل الحسابات');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) return error('التاريخ غير صالح');
+    if (employee_ids.length>500 || employee_ids.some((id: unknown) => typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id))) {
+      return error('قائمة الموظفين غير صالحة');
     }
-
-    let totalSalary = 0;
-    let totalAdvance = 0;
-    const rows: Array<{ empId: string; salary: number; advanceDeduction: number; netPay: number }> = [];
-
-    // احسب كل شيء أولاً (بدون كتابة) — السلف تُقرأ من remaining_amount
-    for (const empId of employee_ids) {
-      const { data: emp } = await s.from('employees').select('*').eq('id', empId).eq('company_id', auth.companyId).maybeSingle();
-      if (!emp) continue;
-      const salary = parseFloat(emp.salary) || 0;
-
-      const { data: advRows } = await s.from('employee_advances')
-        .select('id, amount, remaining_amount')
-        .eq('employee_id', empId)
-        .eq('company_id', auth.companyId)
-        .gt('remaining_amount', 0);
-      const advanceBalance = (advRows || []).reduce((s: number, r: any) => s + (parseFloat(r.remaining_amount) || 0), 0);
-      const advanceDeduction = Math.min(advanceBalance, salary * 0.5);
-      const netPay = salary - advanceDeduction;
-
-      rows.push({ empId, salary, advanceDeduction, netPay });
-      totalSalary += salary;
-      totalAdvance += advanceDeduction;
-    }
-
-    if (rows.length === 0) return error('لا يوجد موظفون صالحون للترحيل');
-
-    // القيد: مدين مصروف الرواتب / دائن المستحق + سلف الموظفين
-    const { createJournalEntry } = await import('@/lib/journal-utils');
-    const lines: Array<{ account_id: string; debit: number; credit: number }> = [
-      { account_id: salAcc.id, debit: totalSalary, credit: 0 },
-      { account_id: accrAcc.id, debit: 0, credit: totalSalary - totalAdvance },
-    ];
-    if (totalAdvance > 0) {
-      if (!advAcc) return error('حساب سلف الموظفين (1160) غير موجود');
-      lines.push({ account_id: advAcc.id, debit: 0, credit: totalAdvance });
-    }
-
-    const je = await createJournalEntry(auth.companyId, {
-      date, type: 'general', description: `رواتب شهر ${date.substring(0, 7)}`, created_by: auth.userId, lines,
+    const { data: result, error: rpcErr } = await s.rpc('post_payroll_batch', {
+      p_company_id: auth.companyId,
+      p_date: date,
+      p_employee_ids: employee_ids,
+      p_created_by: auth.userId,
     });
-    if (je.error || !je.journalId) throw je.error || new Error('فشل قيد الرواتب');
-    const jeId = je.journalId;
-
-    // الآن اكتب سجلات الرواتب وخفض أرصدة السلف
-    const created: any[] = [];
-    try {
-      for (const r of rows) {
-        const { data: pr, error: prErr } = await s.from('payroll')
-          .insert({ company_id: auth.companyId, employee_id: r.empId, date, basic_salary: r.salary, allowances: 0, deductions: 0, advance_deduction: r.advanceDeduction, net_pay: r.netPay, journal_entry_id: jeId })
-          .select('*').single();
-        if (prErr) throw prErr;
-        created.push(pr);
-
-        // خفض رصيد السلف (FIFO) بدلاً من عمود type غير الموجود
-        if (r.advanceDeduction > 0) {
-          const { data: advRows } = await s.from('employee_advances')
-            .select('id, remaining_amount')
-            .eq('employee_id', r.empId)
-            .eq('company_id', auth.companyId)
-            .gt('remaining_amount', 0)
-            .order('date');
-          let left = r.advanceDeduction;
-          for (const adv of advRows || []) {
-            if (left <= 0) break;
-            const rem = parseFloat(adv.remaining_amount) || 0;
-            const deduct = Math.min(rem, left);
-            await s.from('employee_advances')
-              .update({ remaining_amount: rem - deduct })
-              .eq('id', adv.id)
-              .eq('company_id', auth.companyId);
-            left -= deduct;
-          }
-        }
-      }
-    } catch (writeErr) {
-      // تراجع كامل: احذف سجلات الرواتب والقيد عند أي فشل
-      await s.from('payroll').delete().eq('journal_entry_id', jeId).eq('company_id', auth.companyId);
-      await s.from('journal_lines').delete().eq('journal_entry_id', jeId);
-      await s.from('journal_entries').delete().eq('id', jeId).eq('company_id', auth.companyId);
-      throw writeErr;
-    }
-
-    return success(created, 201);
+    if (rpcErr) throw rpcErr;
+    return success((result as Record<string,any>)?.records || [],201);
   } catch (err) { return handleApiError(err); }
 }

@@ -1,27 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError, getPaginationParams, getDateRangeParams, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextVoucherNumber } from '@/lib/numbering';
-import { createJournalEntry } from '@/lib/journal-utils';
-import { resolveAccountId, applyInvoiceAllocations, allocateOldestUnpaidInvoices, revertInvoiceAllocations, hydratePartyNames } from '@/lib/voucher-utils';
+import { hydratePartyNames } from '@/lib/voucher-utils';
 import { receiptVoucherCreateSchema } from '@/lib/validation';
-import { ACCOUNT_CODES } from '@/lib/constants';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
+import { checkApprovalThreshold } from '@/lib/notifications';
 
 const sb = () => getSupabase();
-
-/**
- * كود الحساب الدائن المقابل لسند القبض (يُحلَّل إلى معرف فعلي في POST —
- * تمرير الكود كـ account_id كان يبني قيوداً تنهار مع إنفاذ القسم 3)
- */
-function receiptCounterpartCode(receiptType: string): string {
-  switch (receiptType) {
-    case 'client': return ACCOUNT_CODES.ACCOUNTS_RECEIVABLE;      // تخفيض ذمم العميل
-    case 'supplier_refund': return ACCOUNT_CODES.ACCOUNTS_PAYABLE; // عكس سداد مورد
-    case 'general':
-    default: return ACCOUNT_CODES.OTHER_REVENUE;                   // إيراد متنوع
-  }
-}
 
 /**
  * GET /api/vouchers/receipt
@@ -107,7 +92,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'receipts', 'create');
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, unknown>>(request);
 
     // توافقية مزدوجة: camelCase → snake_case قبل التحقق
     const normalized = {
@@ -125,136 +110,38 @@ export async function POST(request: NextRequest) {
 
     const { date, receipt_type, contact_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
 
-    // الخزينة/البنك: انتماء للشركة + حساب محاسبي مربوط (القيد يحتاجه)
-    const { data: bankSafe } = await s.from('banks_safes')
-      .select('account_id')
-      .eq('id', bank_safe_id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
-
-    // الطرف (عميل/مورد) يجب أن ينتمي للشركة
-    if (contact_id) {
-      const { data: contact } = await s.from('contacts')
-        .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!contact) return error('الطرف المحدد غير موجود', 404);
-    }
-
-    // بوابة الاعتماد عبر تيليجرام (كما كانت — لا إزالة لميزة موجودة)
     const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
     if (!canBypass) {
-      const { data: config } = await s.from('company_telegram_configs')
-        .select('approvals_enabled, approval_threshold')
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-
-      if (config && config.approvals_enabled && amount > (config.approval_threshold || 0)) {
-        return error('هذه العملية تتطلب اعتماد تيليجرام تقديراً لإدارة النظام', 400);
-      }
+      const threshold = await checkApprovalThreshold(auth.companyId, amount, 'voucher_receipt', auth.userId);
+      // Receipt approval posting is deliberately blocked until it is migrated
+      // to the same atomic pending lifecycle as disbursements.
+      if (threshold.requiresApproval) return error('هذه العملية تتطلب اعتماداً قبل الترحيل', 409);
     }
 
-    // حل الحسابات: خزينة + مقابل — الفشل هنا صريح قبل أي كتابة
-    const counterpartAccountId = await resolveAccountId(auth.companyId, receiptCounterpartCode(receipt_type));
-    if (!bankSafe.account_id || !counterpartAccountId) {
-      return error('الحسابات المحاسبية للسند غير مكتملة (حساب الخزينة أو الحساب المقابل مفقود) — راجع شجرة الحسابات', 400);
+    let autoFifo = false;
+    if ((!invoice_items || invoice_items.length === 0) && receipt_type === 'client' && contact_id) {
+      const { data: setting, error: settingErr } = await s.from('settings')
+        .select('value').eq('company_id', auth.companyId).eq('key', 'auto_allocate_receipts_fifo').maybeSingle();
+      if (settingErr) throw settingErr;
+      autoFifo = !!setting && ['true', '1', 'yes'].includes(String(setting.value).toLowerCase());
     }
 
-    const nextNumber = await getNextVoucherNumber(auth.companyId, 'voucher_receipts');
-    const receiptDate = new Date(date).toISOString().split('T')[0];
-
-    let receiptId: string | null = null;
-    let journalEntryId: string | null = null;
-
-    try {
-      const { data: receipt, error: receiptError } = await s.from('voucher_receipts')
-        .insert({
-          company_id: auth.companyId,
-          number: nextNumber,
-          date: receiptDate,
-          receipt_type,
-          contact_id: contact_id || null,
-          amount,
-          bank_safe_id,
-          reason,
-          created_by: auth.userId,
-          status: 'approved',
-        })
-        .select()
-        .single();
-      if (receiptError) throw receiptError;
-      receiptId = receipt.id;
-
-      // القيد: مدين الخزينة (المبلغ داخل) / دائن المقابل
-      const { journalId, error: journalError } = await createJournalEntry(
-        auth.companyId,
-        {
-          date: receiptDate,
-          type: 'general',
-          description: `سند قبض رقم ${nextNumber}: ${reason}`,
-          lines: [
-            { account_id: bankSafe.account_id, debit: amount, credit: 0 },
-            { account_id: counterpartAccountId, debit: 0, credit: amount, contact_id: contact_id || null },
-          ],
-          reference_type: 'voucher_receipt',
-          reference_id: receipt.id,
-          created_by: auth.userId,
-        }
-      );
-      if (journalError) throw journalError;
-      journalEntryId = journalId;
-
-      await s.from('voucher_receipts')
-        .update({ journal_entry_id: journalEntryId })
-        .eq('id', receiptId).eq('company_id', auth.companyId);
-
-      // Open Items: الفاتورة لا تتغير إلا بتخصيص صريح.
-      // سند بلا invoice_items = دفعة مقدمة / رصيد غير مخصص — الفواتير تبقى كما هي.
-      let applied = 0;
-      if (invoice_items && invoice_items.length > 0) {
-        const alloc = await applyInvoiceAllocations(
-          auth.companyId, 'receipt', receiptId, journalEntryId, amount, invoice_items, contact_id || null
-        );
-        if (alloc.error) throw new Error(alloc.error);
-        applied = alloc.applied;
-      } else if (receipt_type === 'client' && contact_id) {
-        const { data: fifoSetting } = await s.from('settings')
-          .select('value')
-          .eq('company_id', auth.companyId)
-          .eq('key', 'auto_allocate_receipts_fifo')
-          .maybeSingle();
-        const fifoOn = fifoSetting && ['true', '1', 'yes'].includes(String(fifoSetting.value).toLowerCase());
-        if (fifoOn) {
-          const alloc = await allocateOldestUnpaidInvoices(
-            auth.companyId, receiptId, journalEntryId, amount, contact_id
-          );
-          if (alloc.error) throw new Error(alloc.error);
-          applied = alloc.applied;
-        }
-      }
-
-      return success({
-        ...receipt,
-        journal_entry_id: journalEntryId,
-        allocated_amount: applied,
-        unapplied_amount: Math.round((amount - applied + Number.EPSILON) * 100) / 100,
-      }, 201);
-    } catch (txErr) {
-      console.error('Receipt creation failed, rolling back:', txErr);
-      try {
-        if (journalEntryId) {
-          await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
-          await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);
-        }
-        if (receiptId) {
-          // استرجاع أي تخصيصات طُبقت على الفواتير قبل حذف السند
-          await revertInvoiceAllocations(auth.companyId, 'receipt', receiptId);
-          await s.from('voucher_receipts').delete().eq('id', receiptId).eq('company_id', auth.companyId);
-        }
-      } catch (rollbackErr) {
-        console.error('Receipt rollback failed:', rollbackErr);
-      }
-      throw txErr;
-    }
+    // Numbering, voucher, journal, explicit/FIFO allocation, invoice states
+    // and audit commit in one database transaction.
+    const { data, error: createErr } = await s.rpc('create_voucher_receipt_atomic', {
+      p_company_id: auth.companyId,
+      p_date: date,
+      p_receipt_type: receipt_type,
+      p_contact_id: contact_id || null,
+      p_amount: amount,
+      p_bank_safe_id: bank_safe_id,
+      p_reason: reason,
+      p_allocations: invoice_items || [],
+      p_auto_fifo: autoFifo,
+      p_user_id: auth.userId,
+    });
+    if (createErr) throw createErr;
+    return success(data, 201);
   } catch (err) {
     console.error('Receipt creation error:', err);
     return handleApiError(err);

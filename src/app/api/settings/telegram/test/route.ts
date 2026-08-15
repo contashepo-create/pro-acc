@@ -56,14 +56,15 @@ export async function POST(request: NextRequest) {
     }
 
     // 2. جلب إعدادات التليجرام الحالية للشركة للتأكد من ربط المعرف
-    const { data: config } = await s.from('company_telegram_configs')
+    const { data: config, error: configErr } = await s.from('company_telegram_configs')
       .select('chat_id, is_enabled')
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
+    if (configErr) throw configErr;
     const chatId = config?.chat_id;
-    if (!chatId || chatId.trim() === '') {
-      return error('يرجى تعيين وحفظ "معرف الدردشة" (Chat ID) أولاً قبل إطلاق الفحص التفاعلي');
+    if (!config?.is_enabled || !chatId || chatId.trim() === '') {
+      return error('يرجى تفعيل تيليجرام وتعيين معرف الدردشة أولاً');
     }
 
     // 3. إنشاء سجل فحص جديد بحالة انتظار (pending)
@@ -83,6 +84,11 @@ export async function POST(request: NextRequest) {
     const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
       ? process.env.TELEGRAM_BOT_TOKEN
       : '';
+
+    if (!botToken) {
+      await s.from('telegram_test_runs').delete().eq('id',testRunId).eq('company_id',auth.companyId);
+      return error('رمز بوت تيليجرام غير مهيأ في الخادم',503);
+    }
 
     const message = `🧪 <b>طلب فحص الربط التفاعلي</b> 🚀\n\nلقد أرسل موقعك الإلكتروني المحاسبي طلباً تفاعلياً للتأكد من جاهزية البوت لاستقبال الموافقات والتنبيهات المباشرة.\n\nالرجاء الضغط على أحد الأزرار أدناه لتأكيد حالة الربط:`;
 
@@ -110,6 +116,8 @@ export async function POST(request: NextRequest) {
     if (!response.ok) {
       const errBody = await response.text();
       console.error('Failed to send Telegram Test message:', response.status, errBody);
+      await s.from('telegram_test_runs').update({status:'expired',updated_at:new Date().toISOString()})
+        .eq('id',testRunId).eq('company_id',auth.companyId);
       return error('تعذر إرسال طلب الفحص إلى تليجرام. يرجى التأكد من تشغيل البوت وإدخال المعرف بشكل صحيح.');
     }
 

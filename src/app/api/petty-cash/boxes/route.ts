@@ -1,115 +1,83 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
 
 const sb = () => getSupabase();
 
-/**
- * POST /api/petty-cash/boxes — Create a new petty cash box
- */
+/** POST /api/petty-cash/boxes — create a ledger-linked petty-cash box. */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'petty_cash', 'create');
-    const s = sb();
-    const body = await request.json();
+    const body = await parseBody<Record<string, any>>(request);
+    if (typeof body.name !== 'string' || !body.name.trim()) return error('اسم الصندوق مطلوب');
+    const initialBalance = Number(body.initial_balance ?? 0);
+    const dailyLimit = Number(body.daily_limit ?? 5000);
+    if (![initialBalance, dailyLimit].every((value) => Number.isFinite(value) && value >= 0 && Math.abs(value * 100 - Math.round(value * 100)) < 1e-8)) {
+      return error('الرصيد الافتتاحي أو الحد اليومي غير صالح', 422);
+    }
+    if ((body.notes !== undefined && body.notes !== null && typeof body.notes !== 'string') ||
+        (body.currency !== undefined && typeof body.currency !== 'string')) return error('بيانات الصندوق غير صالحة', 422);
 
-    if (!body.name) return error('اسم الصندوق مطلوب');
-
-    const boxId = generateId();
-    const { data, error: insertErr } = await s.from('petty_cash_boxes')
-      .insert({
-        id: boxId,
-        company_id: auth.companyId,
-        name: body.name,
-        initial_balance: body.initial_balance || 0,
-        daily_limit: body.daily_limit || 5000,
-        currency: body.currency || 'SAR',
-        custodian_id: body.custodian_id || null,
-        notes: body.notes || null,
-        is_active: true,
-        created_by: auth.userId,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
+    // Account validation, optional opening journal, box creation and audit are
+    // one transaction. account_id defaults to 1110 and opening funding to 3000.
+    const { data, error: createErr } = await sb().rpc('create_petty_cash_box', {
+      p_company_id: auth.companyId,
+      p_name: body.name,
+      p_initial_balance: initialBalance,
+      p_daily_limit: dailyLimit,
+      p_currency: body.currency || 'SAR',
+      p_custodian_id: body.custodian_id || null,
+      p_notes: body.notes || '',
+      p_account_id: body.account_id || null,
+      p_funding_account_id: body.funding_account_id || null,
+      p_user_id: auth.userId,
+    });
+    if (createErr) throw createErr;
     return success(data, 201);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * POST /api/petty-cash/boxes — with action=reconcile for reconciliation
- */
+/** PUT /api/petty-cash/boxes — reconcile or close a box atomically. */
 export async function PUT(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'petty_cash', 'update');
+    const body = await parseBody<Record<string, any>>(request);
+    if (!body.box_id) return error('box_id مطلوب');
     const s = sb();
-    const body = await request.json();
-    const { box_id, action, physical_count } = body;
 
-    if (!box_id) return error('box_id مطلوب');
-
-    if (action === 'reconcile') {
-      // Calculate system balance
-      const { data: box } = await s.from('petty_cash_boxes')
-        .select('initial_balance')
-        .eq('id', box_id)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-
-      if (!box) return error('الصندوق غير موجود');
-
-      const { data: txs } = await s.from('petty_cash_transactions')
-        .select('type, amount')
-        .eq('box_id', box_id);
-
-      const inflow = (txs || [])
-        .filter((t: any) => t.type === 'deposit')
-        .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
-      const outflow = (txs || [])
-        .filter((t: any) => t.type === 'withdrawal')
-        .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
-
-      const systemBalance = parseFloat((box as any).initial_balance || 0) + inflow - outflow;
-      const physical = parseFloat(physical_count || 0);
-      const difference = physical - systemBalance;
-
-      // Log reconciliation
-      const reconId = generateId();
-      await s.from('petty_cash_reconciliation').insert({
-        id: reconId,
-        company_id: auth.companyId,
-        box_id,
-        reconciliation_date: new Date().toISOString().split('T')[0],
-        system_balance: systemBalance,
-        physical_count: physical,
-        difference,
-        status: Math.abs(difference) < 0.01 ? 'balanced' : 'discrepancy',
-        notes: body.notes || null,
-        reconciled_by: auth.userId,
-        created_at: new Date().toISOString(),
+    if (body.action === 'reconcile') {
+      const physical = Number(body.physical_count);
+      if (!Number.isFinite(physical) || physical < 0 || Math.abs(physical * 100 - Math.round(physical * 100)) > 1e-8) {
+        return error('الجرد الفعلي غير صالح', 422);
+      }
+      const { data, error: reconcileErr } = await s.rpc('reconcile_petty_cash_box', {
+        p_company_id: auth.companyId,
+        p_box_id: body.box_id,
+        p_physical_count: physical,
+        p_notes: typeof body.notes === 'string' ? body.notes : '',
+        p_user_id: auth.userId,
       });
-
+      if (reconcileErr) throw reconcileErr;
+      const row = data as Record<string, any>;
       return success({
-        system_balance: systemBalance,
-        physical_count: physical,
-        difference,
-        status: Math.abs(difference) < 0.01 ? 'balanced' : 'discrepancy',
+        system_balance: Number(row.system_balance),
+        physical_count: Number(row.physical_count),
+        difference: Number(row.difference),
+        status: row.status,
       });
     }
 
-    if (action === 'close') {
-      await s.from('petty_cash_boxes')
-        .update({ is_active: false, updated_at: new Date().toISOString() })
-        .eq('id', box_id)
-        .eq('company_id', auth.companyId);
+    if (body.action === 'close') {
+      const { error: closeErr } = await s.rpc('close_petty_cash_box', {
+        p_company_id: auth.companyId,
+        p_box_id: body.box_id,
+        p_user_id: auth.userId,
+      });
+      if (closeErr) throw closeErr;
       return success({ closed: true });
     }
-
     return error('عملية غير صالحة');
   } catch (err) {
     return handleApiError(err);

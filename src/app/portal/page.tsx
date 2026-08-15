@@ -21,6 +21,7 @@ export default function CustomerPortalPage() {
   const [authenticated, setAuthenticated] = useState(false);
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
+  const [portalMessage, setPortalMessage] = useState('');
 
   // Get portal token from URL or ask for email
   useEffect(() => {
@@ -45,11 +46,13 @@ export default function CustomerPortalPage() {
       });
       const data = await res.json();
       if (data.success) {
-        setToken(data.data.token);
-        setAuthenticated(true);
-        fetchInvoices(data.data.token);
+        setError('');
+        setEmail('');
+        // البريد وحده ليس وسيلة مصادقة: الرابط قصير الصلاحية يُرسل إلى
+        // صندوق البريد المسجل، ولا يظهر كقدرة وصول في استجابة المتصفح.
+        setPortalMessage(data.data.message || 'تحقق من بريدك الإلكتروني لإكمال الدخول.');
       } else {
-        setError(data.message || 'فشل تسجيل الدخول');
+        setError(data.message || 'فشل إرسال رابط الدخول');
       }
     } catch {
       setError('خطأ في الاتصال');
@@ -101,6 +104,7 @@ export default function CustomerPortalPage() {
             <p className="text-gray-500 mt-2">أدخل بريدك الإلكتروني للوصول لفواتيرك</p>
           </div>
           {error && <div className="bg-red-50 text-red-700 p-3 rounded-lg mb-4 text-sm">{error}</div>}
+          {portalMessage && <div className="bg-green-50 text-green-700 p-3 rounded-lg mb-4 text-sm">{portalMessage}</div>}
           <div className="space-y-4">
             <input
               type="email"
