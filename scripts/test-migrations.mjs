@@ -191,6 +191,24 @@ async function smokeAtomicWriters(ids) {
   const replayPayment=await db.query(`SELECT finalize_gateway_payment($1,$2,'paid','{}',$3) result`,[c,paymentRecord,u]);
   assert.equal(replayPayment.rows[0].result.already_processed,true);
 
+  const supplier='73000000-0000-4000-8000-000000000001', warehouse='74000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Atomic supplier','supplier')`,[supplier,c]);
+  await db.query(`INSERT INTO warehouses(id,company_id,name) VALUES($1,$2,'Main warehouse')`,[warehouse,c]);
+  const poCreated=await db.query(`SELECT create_purchase_order_atomic($1,$2,'2026-02-10',$3::jsonb,'',$4) result`,[c,supplier,JSON.stringify([{description:'SKU-ATOMIC',quantity:2,unit_price:10}]),u]);
+  const purchaseOrder=poCreated.rows[0].result.id;
+  assert.equal(Number(poCreated.rows[0].result.total),20);
+  const [receiptOne,receiptReplay]=await Promise.all([
+    db.query(`SELECT receive_purchase_order_atomic($1,$2,NULL,'2026-02-11',$3) result`,[c,purchaseOrder,u]),
+    db.query(`SELECT receive_purchase_order_atomic($1,$2,NULL,'2026-02-11',$3) result`,[c,purchaseOrder,u]),
+  ]);
+  assert.equal(receiptOne.rows[0].result.status,'received');
+  assert.equal(receiptReplay.rows[0].result.status,'received');
+  assert.equal(Number((await db.query(`SELECT quantity FROM inventory_items WHERE company_id=$1 AND code='SKU-ATOMIC'`,[c])).rows[0].quantity),2);
+  assert.equal((await db.query(`SELECT count(*)::int count FROM inventory_transactions WHERE company_id=$1 AND reference_id=$2`,[c,purchaseOrder])).rows[0].count,1);
+  const cancellable=(await db.query(`SELECT create_purchase_order_atomic($1,$2,'2026-02-10',$3::jsonb,'',$4) result`,[c,supplier,JSON.stringify([{description:'SKU-CANCEL',quantity:1,unit_price:5}]),u])).rows[0].result.id;
+  assert.equal((await db.query(`SELECT cancel_purchase_order_atomic($1,$2,$3) result`,[c,cancellable,u])).rows[0].result.status,'cancelled');
+  assert.equal((await db.query(`SELECT cancel_purchase_order_atomic($1,$2,$3) result`,[c,cancellable,u])).rows[0].result.already_processed,true);
+
   await db.query(`SELECT create_employee_advance($1,$2,'2026-02-01',100,'advance',$3,$4)`, [c, e, b, u]);
   await db.query(`SELECT post_payroll_batch($1,'2026-02-01',$2::uuid[],$3)`, [c, [e], u]);
   const payroll = await db.query('SELECT advance_deduction,net_pay FROM payroll WHERE company_id=$1', [c]);

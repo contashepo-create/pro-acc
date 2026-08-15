@@ -2798,3 +2798,159 @@ GRANT EXECUTE ON FUNCTION public.redeem_activation_code(UUID, UUID, TEXT) TO ser
 GRANT EXECUTE ON FUNCTION public.review_addon_request(UUID, UUID, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION public.review_upgrade_request(UUID, UUID, TEXT, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION public.record_ad_event(UUID, UUID, UUID, TEXT, TEXT, TEXT) TO service_role;
+
+-- Atomic purchase-order creation, editing, receipt and cancellation. These
+-- operations previously spanned many HTTP statements and could leave orphan
+-- lines, over-receive stock, or race with cancellation.
+ALTER TABLE purchase_order_items
+  ADD COLUMN IF NOT EXISTS inventory_item_id UUID REFERENCES inventory_items(id);
+CREATE INDEX IF NOT EXISTS idx_purchase_order_items_inventory_item
+  ON purchase_order_items(company_id, inventory_item_id);
+
+CREATE OR REPLACE FUNCTION public.create_purchase_order_atomic(
+  p_company_id UUID, p_supplier_id UUID, p_date DATE, p_items JSONB,
+  p_notes TEXT, p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_order purchase_orders%ROWTYPE; v_item JSONB; v_number INT; v_total NUMERIC(15,2) := 0; v_qty NUMERIC; v_price NUMERIC; v_line NUMERIC;
+BEGIN
+  IF p_date IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN RAISE EXCEPTION 'Invalid purchase order'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM contacts WHERE id=p_supplier_id AND company_id=p_company_id) THEN RAISE EXCEPTION 'Supplier not found'; END IF;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_qty := (v_item->>'quantity')::NUMERIC; v_price := (v_item->>'unit_price')::NUMERIC;
+    IF btrim(COALESCE(v_item->>'description',''))='' OR v_qty<=0 OR v_price<0 THEN RAISE EXCEPTION 'Invalid purchase order item'; END IF;
+    v_total := v_total + round(v_qty*v_price,2);
+  END LOOP;
+  PERFORM pg_advisory_xact_lock(hashtext(p_company_id::text || 'purchase_orders'));
+  SELECT COALESCE(MAX(number),0)+1 INTO v_number FROM purchase_orders WHERE company_id=p_company_id;
+  INSERT INTO purchase_orders(company_id,number,po_number,date,supplier_id,total,status,notes,created_by)
+  VALUES(p_company_id,v_number,v_number::TEXT,p_date,p_supplier_id,round(v_total,2),'pending',NULLIF(p_notes,''),p_user_id) RETURNING * INTO v_order;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_qty := (v_item->>'quantity')::NUMERIC; v_price := (v_item->>'unit_price')::NUMERIC; v_line := round(v_qty*v_price,2);
+    INSERT INTO purchase_order_items(company_id,purchase_order_id,description,quantity,unit_price,total)
+    VALUES(p_company_id,v_order.id,btrim(v_item->>'description'),v_qty,v_price,v_line);
+  END LOOP;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','purchase_order',v_order.id,to_jsonb(v_order));
+  RETURN to_jsonb(v_order);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_purchase_order_atomic(
+  p_company_id UUID, p_order_id UUID, p_supplier_id UUID, p_date DATE,
+  p_items JSONB, p_notes TEXT, p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old purchase_orders%ROWTYPE; v_order purchase_orders%ROWTYPE; v_item JSONB; v_total NUMERIC(15,2):=0; v_qty NUMERIC; v_price NUMERIC;
+BEGIN
+  SELECT * INTO v_old FROM purchase_orders WHERE id=p_order_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Purchase order not found'; END IF;
+  IF v_old.status <> 'pending' THEN RAISE EXCEPTION 'Only pending purchase orders can be edited'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM contacts WHERE id=COALESCE(p_supplier_id,v_old.supplier_id) AND company_id=p_company_id) THEN RAISE EXCEPTION 'Supplier not found'; END IF;
+  IF p_items IS NOT NULL THEN
+    IF jsonb_typeof(p_items)<>'array' OR jsonb_array_length(p_items)=0 THEN RAISE EXCEPTION 'Invalid purchase order items'; END IF;
+    FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+      v_qty := (v_item->>'quantity')::NUMERIC; v_price := (v_item->>'unit_price')::NUMERIC;
+      IF btrim(COALESCE(v_item->>'description',''))='' OR v_qty<=0 OR v_price<0 THEN RAISE EXCEPTION 'Invalid purchase order item'; END IF;
+      v_total := v_total + round(v_qty*v_price,2);
+    END LOOP;
+    DELETE FROM purchase_order_items WHERE purchase_order_id=p_order_id AND company_id=p_company_id;
+    FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+      v_qty := (v_item->>'quantity')::NUMERIC; v_price := (v_item->>'unit_price')::NUMERIC;
+      INSERT INTO purchase_order_items(company_id,purchase_order_id,description,quantity,unit_price,total)
+      VALUES(p_company_id,p_order_id,btrim(v_item->>'description'),v_qty,v_price,round(v_qty*v_price,2));
+    END LOOP;
+  ELSE v_total := v_old.total; END IF;
+  UPDATE purchase_orders SET supplier_id=COALESCE(p_supplier_id,v_old.supplier_id), date=COALESCE(p_date,v_old.date),
+    total=round(v_total,2), notes=COALESCE(p_notes,v_old.notes), updated_at=now()
+  WHERE id=p_order_id RETURNING * INTO v_order;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'update','purchase_order',p_order_id,to_jsonb(v_old),to_jsonb(v_order));
+  RETURN to_jsonb(v_order);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.receive_purchase_order_atomic(
+  p_company_id UUID, p_order_id UUID, p_quantities JSONB,
+  p_received_date DATE, p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_order purchase_orders%ROWTYPE; v_line purchase_order_items%ROWTYPE; v_stock inventory_items%ROWTYPE; v_warehouse UUID;
+  v_remaining NUMERIC; v_receive NUMERIC; v_new_qty NUMERIC; v_status TEXT; v_key TEXT; v_received_count INT:=0;
+BEGIN
+  SELECT * INTO v_order FROM purchase_orders WHERE id=p_order_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Purchase order not found'; END IF;
+  IF v_order.status='cancelled' THEN RAISE EXCEPTION 'Purchase order is cancelled'; END IF;
+  IF v_order.status='received' THEN RETURN jsonb_build_object('id',p_order_id,'status','received','already_processed',TRUE); END IF;
+  IF p_quantities IS NOT NULL AND jsonb_typeof(p_quantities)<>'object' THEN RAISE EXCEPTION 'Invalid receipt quantities'; END IF;
+  IF p_quantities IS NOT NULL THEN
+    FOR v_key IN SELECT key FROM jsonb_each(p_quantities) LOOP
+      IF NOT EXISTS (SELECT 1 FROM purchase_order_items WHERE purchase_order_id=p_order_id AND company_id=p_company_id AND id::TEXT=v_key) THEN RAISE EXCEPTION 'Unknown purchase order item'; END IF;
+      BEGIN v_receive := (p_quantities->>v_key)::NUMERIC; EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'Invalid receipt quantity'; END;
+      IF v_receive<=0 THEN RAISE EXCEPTION 'Receipt quantity must be positive'; END IF;
+    END LOOP;
+  END IF;
+  FOR v_line IN SELECT * FROM purchase_order_items WHERE purchase_order_id=p_order_id AND company_id=p_company_id ORDER BY id FOR UPDATE LOOP
+    v_remaining := v_line.quantity-v_line.received_quantity;
+    IF v_remaining<=0 THEN CONTINUE; END IF;
+    IF p_quantities IS NULL THEN v_receive:=v_remaining;
+    ELSIF p_quantities ? v_line.id::TEXT THEN v_receive:=(p_quantities->>v_line.id::TEXT)::NUMERIC;
+    ELSE CONTINUE; END IF;
+    IF v_receive>v_remaining THEN RAISE EXCEPTION 'Receipt quantity exceeds remaining quantity'; END IF;
+
+    v_stock.id:=NULL;
+    IF v_line.inventory_item_id IS NOT NULL THEN
+      SELECT * INTO v_stock FROM inventory_items WHERE id=v_line.inventory_item_id AND company_id=p_company_id FOR UPDATE;
+    END IF;
+    IF v_stock.id IS NULL THEN
+      PERFORM pg_advisory_xact_lock(hashtext(p_company_id::TEXT || ':inventory:' || v_line.description));
+      SELECT * INTO v_stock FROM inventory_items WHERE company_id=p_company_id AND code=v_line.description FOR UPDATE;
+    END IF;
+    IF v_stock.id IS NULL THEN
+      SELECT id INTO v_warehouse FROM warehouses WHERE company_id=p_company_id AND COALESCE(is_active,TRUE) ORDER BY id LIMIT 1 FOR UPDATE;
+      IF v_warehouse IS NULL THEN RAISE EXCEPTION 'A warehouse is required before receiving purchases'; END IF;
+      INSERT INTO inventory_items(company_id,code,name,unit,warehouse_id,quantity,unit_price,is_active)
+      VALUES(p_company_id,v_line.description,v_line.description,'وحدة',v_warehouse,v_receive,v_line.unit_price,TRUE) RETURNING * INTO v_stock;
+    ELSE
+      IF NOT COALESCE(v_stock.is_active,TRUE) THEN RAISE EXCEPTION 'Inventory item is inactive'; END IF;
+      v_new_qty:=v_stock.quantity+v_receive;
+      UPDATE inventory_items SET quantity=v_new_qty,
+        unit_price=CASE WHEN v_new_qty=0 THEN v_line.unit_price ELSE round(((v_stock.quantity*v_stock.unit_price)+(v_receive*v_line.unit_price))/v_new_qty,2) END
+      WHERE id=v_stock.id RETURNING * INTO v_stock;
+    END IF;
+    UPDATE purchase_order_items SET received_quantity=received_quantity+v_receive,inventory_item_id=v_stock.id WHERE id=v_line.id;
+    INSERT INTO inventory_transactions(company_id,item_id,warehouse_id,type,quantity,unit_price,total_value,date,reference_type,reference_id,created_by)
+    VALUES(p_company_id,v_stock.id,v_stock.warehouse_id,'add',v_receive,v_line.unit_price,round(v_receive*v_line.unit_price,2),COALESCE(p_received_date,v_order.date),'purchase_order',p_order_id,p_user_id);
+    v_received_count:=v_received_count+1;
+  END LOOP;
+  IF v_received_count=0 AND p_quantities IS NOT NULL THEN RAISE EXCEPTION 'No quantities were received'; END IF;
+  SELECT CASE WHEN bool_and(received_quantity>=quantity) THEN 'received' ELSE 'partial' END INTO v_status
+  FROM purchase_order_items WHERE purchase_order_id=p_order_id AND company_id=p_company_id;
+  UPDATE purchase_orders SET status=v_status,updated_at=now() WHERE id=p_order_id RETURNING * INTO v_order;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'receive','purchase_order',p_order_id,jsonb_build_object('status',v_status,'line_count',v_received_count));
+  RETURN to_jsonb(v_order)||jsonb_build_object('received_line_count',v_received_count);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.cancel_purchase_order_atomic(p_company_id UUID,p_order_id UUID,p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old purchase_orders%ROWTYPE; v_order purchase_orders%ROWTYPE;
+BEGIN
+  SELECT * INTO v_old FROM purchase_orders WHERE id=p_order_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Purchase order not found'; END IF;
+  PERFORM 1 FROM purchase_order_items WHERE purchase_order_id=p_order_id AND company_id=p_company_id FOR UPDATE;
+  IF v_old.status='cancelled' THEN RETURN jsonb_build_object('id',p_order_id,'status','cancelled','already_processed',TRUE); END IF;
+  IF v_old.status='received' OR EXISTS(SELECT 1 FROM purchase_order_items WHERE purchase_order_id=p_order_id AND received_quantity>0) THEN RAISE EXCEPTION 'Received purchase orders cannot be cancelled'; END IF;
+  UPDATE purchase_orders SET status='cancelled',updated_at=now() WHERE id=p_order_id RETURNING * INTO v_order;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'cancel','purchase_order',p_order_id,to_jsonb(v_old),to_jsonb(v_order));
+  RETURN to_jsonb(v_order);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_purchase_order_atomic(UUID,UUID,DATE,JSONB,TEXT,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.update_purchase_order_atomic(UUID,UUID,UUID,DATE,JSONB,TEXT,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.receive_purchase_order_atomic(UUID,UUID,JSONB,DATE,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.cancel_purchase_order_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_purchase_order_atomic(UUID,UUID,DATE,JSONB,TEXT,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.update_purchase_order_atomic(UUID,UUID,UUID,DATE,JSONB,TEXT,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.receive_purchase_order_atomic(UUID,UUID,JSONB,DATE,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cancel_purchase_order_atomic(UUID,UUID,UUID) TO service_role;

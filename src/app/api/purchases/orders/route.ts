@@ -1,12 +1,10 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextPurchaseOrderNumber } from '@/lib/numbering';
 import { purchaseOrderSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
 
-const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export async function GET(req: NextRequest) {
   try {
@@ -67,45 +65,17 @@ export async function POST(req: NextRequest) {
 
     const { date, supplier_id, items, notes } = parsed.data;
 
-    // TENANT CHECK: المورد يجب أن ينتمي لهذه الشركة (قبل أي كتابة)
-    const { data: supplier } = await s.from('contacts')
-      .select('id').eq('id', supplier_id).eq('company_id', auth.companyId).maybeSingle();
-    if (!supplier) return error('المورد غير موجود', 404);
-
-    // الإجمالي يُحسب خادمياً — إجمالي العميل (إن أُرسل) يُتجاهل
-    const computedItems = items.map((it) => ({
-      ...it,
-      total: round2(it.quantity * it.unit_price),
-    }));
-    const total = round2(computedItems.reduce((sum, it) => sum + it.total, 0));
-
-    // ترقيم ذري عبر RPC مع قفل استشاري
-    const nextNum = await getNextPurchaseOrderNumber(auth.companyId);
-
-    const { data: po, error: poErr } = await s.from('purchase_orders')
-      .insert({ company_id: auth.companyId, po_number: nextNum, date, supplier_id, total, status: 'pending', notes: notes || null, created_by: auth.userId })
-      .select('*').single();
+    // Supplier validation, numbering, totals, parent and child inserts are one
+    // database transaction. A line failure can no longer leave an orphan PO.
+    const { data: po, error: poErr } = await s.rpc('create_purchase_order_atomic', {
+      p_company_id: auth.companyId,
+      p_supplier_id: supplier_id,
+      p_date: date,
+      p_items: items,
+      p_notes: notes || '',
+      p_user_id: auth.userId,
+    });
     if (poErr) throw poErr;
-
-    try {
-      for (const item of computedItems) {
-        const { error: itemErr } = await s.from('purchase_order_items').insert({
-          company_id: auth.companyId,
-          purchase_order_id: po.id,
-          description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total: item.total,
-        });
-        if (itemErr) throw itemErr;
-      }
-    } catch (itemInsertErr) {
-      // لا أمر شراء يتيم بدون بنود
-      await s.from('purchase_order_items').delete().eq('purchase_order_id', po.id);
-      await s.from('purchase_orders').delete().eq('id', po.id).eq('company_id', auth.companyId);
-      throw itemInsertErr;
-    }
-
     return success(po, 201);
   } catch (err) { return handleApiError(err); }
 }
