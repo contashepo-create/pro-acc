@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 
@@ -47,104 +46,34 @@ export async function POST(req: NextRequest) {
     const grossAmount = Number(gross_amount);
     if (!(grossAmount > 0)) return error('المبلغ الإجمالي يجب أن يكون موجباً');
 
-    // عزل مستأجرين: المشروع يجب أن ينتمي لهذه الشركة
-    const { data: project } = await s.from('projects')
-      .select('id, name, status, contract_value')
-      .eq('id', project_id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (!project) return error('المشروع غير موجود', 404);
-    if ((project as any).status === 'completed' || (project as any).status === 'cancelled') {
-      return error('لا يمكن إصدار فواتير مرحلية على مشروع مكتمل أو ملغى');
+    const rate = retention_rate !== undefined
+      ? Number(retention_rate)
+      : (retention_percentage !== undefined ? Number(retention_percentage) / 100 : 0);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
+      return error('نسبة الاستقطاع يجب أن تكون بين 0 و1');
     }
-
-    const rate = retention_rate !== undefined ? Number(retention_rate) : (retention_percentage !== undefined ? Number(retention_percentage) / 100 : 0);
-    if (!Number.isFinite(rate) || rate < 0 || rate > 1) return error('نسبة الاستقطاع يجب أن تكون بين 0 و1');
-    const retentionAmount = Math.round(grossAmount * rate * 100) / 100;
-    const netAmount = Math.round((grossAmount - retentionAmount) * 100) / 100;
-    const claimNumber = claim_number || `PB-${Date.now()}`;
-
-    // A claim cannot exceed the original contract plus approved change orders.
-    const { data: approvedChanges } = await s.from('change_orders')
-      .select('change_amount').eq('project_id', project_id).eq('company_id', auth.companyId).eq('status', 'approved');
-    const adjustedContract = Number((project as any).contract_value || 0)
-      + (approvedChanges || []).reduce((sum: number, row: any) => sum + (Number(row.change_amount) || 0), 0);
-    const { data: priorClaims } = await s.from('progress_billing')
-      .select('gross_amount').eq('project_id', project_id).eq('company_id', auth.companyId).neq('status', 'cancelled');
-    const alreadyClaimed = (priorClaims || []).reduce((sum: number, row: any) => sum + (Number(row.gross_amount) || 0), 0);
-    if (adjustedContract <= 0 || alreadyClaimed + grossAmount > adjustedContract + 0.005) {
-      return error('قيمة المستخلص تتجاوز الرصيد المتبقي من العقد المعدل', 409);
-    }
-
-    // VAT calculation
     const vRate = tax_enabled !== false && tax_rate !== undefined ? Number(tax_rate) : 0;
     if (!Number.isFinite(vRate) || vRate < 0 || vRate > 1) return error('نسبة الضريبة غير صالحة');
-    const taxAmount = Math.round(netAmount * vRate * 100) / 100;
+    if (typeof claim_number === 'string' && claim_number.length > 80) return error('رقم المستخلص طويل جداً');
+    const details = String(description || notes || '');
+    if (details.length > 2000) return error('وصف المستخلص طويل جداً');
 
-    // حل جميع الحسابات قبل أي كتابة — القيد إلزامي متوازن
-    const { data: arAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCRUED_REVENUE).maybeSingle();
-    const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).maybeSingle();
-    if (!arAcc || !revAcc) {
-      return error('حسابات الإيرادات المستحقة (1135) أو إيرادات العقود (4100) غير موجودة — راجع دليل الحسابات');
-    }
-    if (retentionAmount > 0) {
-      const { data: retAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.RETENTIONS).maybeSingle();
-      if (!retAcc) return error('حساب محجوزات الضمان (2160) غير موجود');
-    }
-    if (taxAmount > 0) {
-      const { data: vatAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.VAT_SALES).maybeSingle();
-      if (!vatAcc) return error('حساب ضريبة المبيعات (2120) غير موجود');
-    }
-
-    const { data: claim, error: claimErr } = await s.from('progress_billing')
-      .insert({ company_id: auth.companyId, project_id, date, claim_number: claimNumber, description: description || notes || null, gross_amount: grossAmount, retention_rate: rate, retention_amount: retentionAmount, net_amount: netAmount, status: 'approved', is_final: is_final || false, tax_rate: vRate, tax_amount: taxAmount })
-      .select('*').single();
-    if (claimErr) throw claimErr;
-
-    // القيد: مدين المستحقات (1135) بالمبلغ الشامل / دائن الإيراد + المحجوز + الضريبة
-    const lines: Array<{ account_id: string; debit: number; credit: number; description?: string | null; project_id?: string | null }> = [
-      { account_id: arAcc.id, debit: grossAmount + taxAmount, credit: 0, project_id: project_id },
-      { account_id: revAcc.id, debit: 0, credit: netAmount, project_id: project_id },
-    ];
-    if (retentionAmount > 0) {
-      const { data: retAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.RETENTIONS).maybeSingle();
-      lines.push({ account_id: retAcc.id, debit: 0, credit: retentionAmount, project_id: project_id });
-    }
-    if (taxAmount > 0) {
-      const { data: vatAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.VAT_SALES).maybeSingle();
-      lines.push({ account_id: vatAcc.id, debit: 0, credit: taxAmount, project_id: project_id });
-    }
-
-    const { createJournalEntry } = await import('@/lib/journal-utils');
-    const je = await createJournalEntry(auth.companyId, {
-      date,
-      type: 'general',
-      description: `فاتورة مرحلية: ${claimNumber}`,
-      lines,
-      reference_type: 'progress_billing',
-      reference_id: claim.id,
-      created_by: auth.userId,
+    // The project row serializes contract/change-order/previous-claim checks;
+    // claim and required journal then commit together.
+    const { data: claim, error: createError } = await s.rpc('create_progress_billing_atomic', {
+      p_company_id: auth.companyId,
+      p_project_id: project_id,
+      p_date: date,
+      p_claim_number: typeof claim_number === 'string' ? claim_number.trim() : '',
+      p_description: details.trim(),
+      p_gross_amount: grossAmount,
+      p_retention_rate: rate,
+      p_tax_rate: vRate,
+      p_is_final: Boolean(is_final),
+      p_user_id: auth.userId,
     });
-
-    if (je.error || !je.journalId) {
-      await s.from('progress_billing').delete().eq('id', claim.id).eq('company_id', auth.companyId);
-      throw je.error || new Error('فشل قيد الفاتورة المرحلية');
-    }
-
-    const { data: linked, error: linkErr } = await s.from('progress_billing')
-      .update({ journal_entry_id: je.journalId })
-      .eq('id', claim.id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-    if (linkErr) {
-      await s.from('journal_lines').delete().eq('journal_entry_id', je.journalId);
-      await s.from('journal_entries').delete().eq('id', je.journalId).eq('company_id', auth.companyId);
-      await s.from('progress_billing').delete().eq('id', claim.id).eq('company_id', auth.companyId);
-      throw linkErr;
-    }
-
-    return success(linked, 201);
+    if (createError) throw createError;
+    return success(claim, 201);
   } catch (err) {
     return handleApiError(err);
   }

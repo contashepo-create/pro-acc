@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -46,63 +46,30 @@ export async function PUT(
     const s = sb();
     const body = await request.json();
 
-    const { data: existing } = await s.from('projects')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const updateData: any = { updated_at: new Date().toISOString() };
-    if (typeof body.name === 'string' && body.name.trim()) updateData.name = body.name.trim();
-    if (body.start_date !== undefined) updateData.start_date = body.start_date;
-    if (body.end_date !== undefined) updateData.end_date = body.end_date;
-    if (body.budget !== undefined) updateData.budget = body.budget;
-    if (body.status !== undefined) updateData.status = body.status;
-    // كانت تُهمل رغم إرسال النموذج لها:
-    if (body.contract_value !== undefined) updateData.contract_value = Number(body.contract_value) || 0;
-    if (body.description !== undefined) updateData.description = body.description || null;
-    if (body.location !== undefined) updateData.location = body.location || null;
-
-    // العميل الجديد (إن تغيّر) يجب أن ينتمي للشركة — منع الربط المتقاطع
-    if (body.client_id !== undefined && body.client_id) {
-      const { data: client } = await s.from('contacts')
-        .select('id').eq('id', body.client_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!client) return error('العميل المحدد غير موجود', 404);
-      updateData.client_id = body.client_id;
-    } else if (body.client_id === null || body.client_id === '') {
-      updateData.client_id = null;
+    const payload: Record<string, unknown> = {};
+    for (const key of ['name','client_id','contract_value','start_date','end_date','budget','status','description','location']) {
+      if (body[key] !== undefined) payload[key] = body[key];
     }
-
-    const { data: updated, error: updateErr } = await s.from('projects')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    // تحديث بنود BOQ (استبدال كامل) عند إرسالها من نموذج التعديل
-    if (Array.isArray(body.items)) {
-      const cleanItems = body.items.filter((it: any) => it && String(it.description || '').trim() !== '');
-      await s.from('boq_items').delete().eq('project_id', id).eq('company_id', auth.companyId);
-      for (const item of cleanItems) {
-        const itemTotal = Number(item.total) || (Number(item.quantity) * Number(item.unit_price)) || 0;
-        const { error: boqErr } = await s.from('boq_items').insert({
-          company_id: auth.companyId,
-          project_id: id,
-          description: String(item.description).trim(),
-          unit: item.unit || 'واحدة',
-          quantity: Number(item.quantity) || 1,
-          unit_price: Number(item.unit_price) || 0,
-          total: itemTotal,
-        });
-        if (boqErr) throw boqErr;
-      }
+    const items = Array.isArray(body.items) ? body.items
+      .filter((item: any) => item && String(item.description || '').trim())
+      .map((item: any) => ({
+        description: String(item.description).trim(),
+        unit: typeof item.unit === 'string' ? item.unit.trim() : 'واحدة',
+        quantity: Number(item.quantity),
+        unit_price: Number(item.unit_price),
+      })) : null;
+    if (items?.some((item: any) => !Number.isFinite(item.quantity) || item.quantity <= 0
+      || !Number.isFinite(item.unit_price) || item.unit_price < 0)) {
+      return error('أحد بنود جدول الكميات غير صالح');
     }
-
+    const { data: updated, error: updateError } = await s.rpc('update_project_atomic', {
+      p_company_id: auth.companyId,
+      p_project_id: id,
+      p_payload: payload,
+      p_items: items,
+      p_user_id: auth.userId,
+    });
+    if (updateError) throw updateError;
     return success(updated);
   } catch (err) {
     return handleApiError(err);
@@ -118,38 +85,15 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    const { data: existing } = await s.from('projects')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    // Check if project has invoices
-    const { data: invoices } = await s.from('invoices')
-      .select('id')
-      .eq('project_id', id)
-      .eq('company_id', auth.companyId)
-      .limit(1);
-
-    if (invoices && invoices.length > 0) {
-      return error('لا يمكن حذف المشروع لأنه مرتبط بفواتير');
-    }
-
-    // قيود مرتبطة بالمشروع مباشرة — لا حذف ما دامت له آثار مالية
-    const { data: linkedJe } = await s.from('journal_entries')
-      .select('id').eq('project_id', id).eq('company_id', auth.companyId).limit(1);
-    if (linkedJe && linkedJe.length > 0) {
-      return error('لا يمكن حذف المشروع لأنه مرتبط بقيود محاسبية — ألغِه بدلاً من ذلك');
-    }
-
-    // بنود BOQ والمصروفات التابعة
-    await s.from('boq_items').delete().eq('project_id', id).eq('company_id', auth.companyId);
-
-    await s.from('projects').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
+    // Keep the project as an auditable cancelled record. The RPC refuses
+    // cancellation while any tenant-owned financial effect remains.
+    const { data: cancelled, error: cancelError } = await s.rpc('cancel_empty_project_atomic', {
+      p_company_id: auth.companyId,
+      p_project_id: id,
+      p_user_id: auth.userId,
+    });
+    if (cancelError) throw cancelError;
+    return success(cancelled);
   } catch (err) {
     return handleApiError(err);
   }

@@ -117,9 +117,9 @@ async function seedLedger() {
     ['1000', 'Bank', 'asset', false], ['1110', 'Safes parent', 'asset', false], ['1120', 'Banks parent', 'asset', false],
     ['3000', 'Equity', 'equity', false], ['3100', 'Capital', 'equity', false],
     ['3200', 'Retained earnings', 'equity', false], ['1230',  'Assets', 'asset', true], ['1290', 'Accumulated depreciation', 'asset', true],
-    ['1130', 'Receivables', 'asset', false], ['4100', 'Revenue', 'revenue', false], ['4200', 'Other revenue', 'revenue', false], ['5100', 'Expense', 'expense', false],
+    ['1130', 'Receivables', 'asset', false], ['1135', 'Accrued revenue', 'asset', false], ['4100', 'Revenue', 'revenue', false], ['4200', 'Other revenue', 'revenue', false], ['5100', 'Expense', 'expense', false],
     ['5210', 'Salaries', 'expense', false], ['5400', 'General expense', 'expense', false],
-    ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2180', 'Customer advances', 'liability', false],
+    ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2160', 'Retentions', 'liability', false], ['2180', 'Customer advances', 'liability', false],
     ['1160', 'Advances', 'asset', false], ['1150', 'Custodies', 'asset', false],
     ['1180', 'VAT input', 'asset', false], ['2120', 'VAT output', 'liability', false],
   ];
@@ -153,6 +153,30 @@ async function smokeAtomicWriters(ids) {
   ]);
   await db.query(`SELECT delete_draft_quotation($1,$2)`,[c,quoteId]);
   assert.equal(Number((await db.query('SELECT count(*) count FROM quotation_items WHERE company_id=$1',[c])).rows[0].count),0);
+  const atomicProject=(await db.query(`SELECT create_project_atomic($1,'Atomic project',$2,75,'2026-02-01',NULL,'active','','',$3::jsonb,TRUE,$4) result`,[
+    c,contact,JSON.stringify([{description:'Project work',unit:'unit',quantity:1,unit_price:75}]),u,
+  ])).rows[0].result;
+  assert.ok(atomicProject.invoice.id);
+  assert.equal(Number(atomicProject.boq_items_count),1);
+  const progressClaim=(await db.query(`SELECT create_progress_billing_atomic($1,$2,'2026-02-03','','Claim',30,0.1,0.15,FALSE,$3) result`,[c,atomicProject.id,u])).rows[0].result;
+  assert.ok(progressClaim.journal_entry_id);
+  assert.equal(Number(progressClaim.retention_amount),3);
+  assert.equal((await db.query(`SELECT cancel_progress_billing_atomic($1,$2,$3) result`,[c,progressClaim.id,u])).rows[0].result.status,'cancelled');
+  const editableProject=(await db.query(`SELECT create_project_atomic($1,'Editable',$2,20,'2026-02-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,[c,contact,u])).rows[0].result;
+  await db.query(`SELECT update_project_atomic($1,$2,$3::jsonb,$4::jsonb,$5)`,[
+    c,editableProject.id,JSON.stringify({name:'Edited',contract_value:30}),JSON.stringify([{description:'Line',unit:'u',quantity:3,unit_price:10}]),u,
+  ]);
+  assert.equal((await db.query(`SELECT cancel_empty_project_atomic($1,$2,$3) result`,[c,editableProject.id,u])).rows[0].result.status,'cancelled');
+  const convertQuote=(await db.query(`SELECT create_quotation($1,'2026-02-01',$2,$3::jsonb,'',0.15,'2026-02-10',$4) result`,[
+    c,contact,JSON.stringify([{description:'Convert work',quantity:2,unit_price:100}]),u,
+  ])).rows[0].result;
+  await db.query(`UPDATE quotations SET status='accepted' WHERE id=$1 AND company_id=$2`,[convertQuote.id,c]);
+  const converted=await Promise.all([
+    db.query(`SELECT convert_quotation_atomic($1,$2,'Converted project','2026-02-02',NULL,$3) result`,[c,convertQuote.id,u]),
+    db.query(`SELECT convert_quotation_atomic($1,$2,'Converted project','2026-02-02',NULL,$3) result`,[c,convertQuote.id,u]),
+  ]);
+  assert.equal(converted[0].rows[0].result.id,converted[1].rows[0].result.id);
+  assert.equal((await db.query(`SELECT count(*)::int count FROM projects WHERE id=$1 AND company_id=$2`,[converted[0].rows[0].result.id,c])).rows[0].count,1);
 
   await db.query(`SELECT create_fixed_asset($1,'Machine','A1','equipment','2026-02-01',500,5,'straight_line','','',$2,$3)`, [c, b, u]);
   const newBank=await db.query(`SELECT create_bank_safe($1,'New Bank','bank','123',500,$2) result`,[c,u]);
@@ -209,6 +233,15 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number((await db.query(`SELECT remaining_amount FROM custodies WHERE id=$1`,[custodyFile])).rows[0].remaining_amount),150);
   assert.equal((await db.query(`SELECT cancel_purchase_invoice_atomic($1,$2,'',$3) result`,[c,custodyPurchase.id,u])).rows[0].result.status,'cancelled');
   assert.equal(Number((await db.query(`SELECT remaining_amount FROM custodies WHERE id=$1`,[custodyFile])).rows[0].remaining_amount),200);
+
+  const terminal='68000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO pos_terminals(id,company_id,code,name,bank_safe_id) VALUES($1,$2,'T1','Terminal',$3)`,[terminal,c,b]);
+  const posSales=await Promise.all([
+    db.query(`SELECT create_pos_sale_atomic($1,$2,10,'cash',$3) result`,[c,terminal,u]),
+    db.query(`SELECT create_pos_sale_atomic($1,$2,15,'card',$3) result`,[c,terminal,u]),
+  ]);
+  assert.notEqual(posSales[0].rows[0].result.number,posSales[1].rows[0].result.number);
+  assert.ok(posSales[0].rows[0].result.journal_entry_id);
 
   const purchaseInvoice='70000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO purchase_invoices(id,company_id,number,date,supplier_id,total,paid_amount,status) VALUES($1,$2,101,'2026-02-01',$3,100,0,'unpaid')`,[purchaseInvoice,c,contact]);
