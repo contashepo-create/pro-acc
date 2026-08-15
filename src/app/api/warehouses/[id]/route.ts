@@ -89,6 +89,7 @@ export async function DELETE(
     const { data: items } = await s.from('inventory_items')
       .select('id')
       .eq('warehouse_id', id)
+      .eq('company_id', auth.companyId)
       .limit(1);
 
     if (items && items.length > 0) {

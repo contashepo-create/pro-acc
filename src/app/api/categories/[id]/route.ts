@@ -85,6 +85,7 @@ export async function DELETE(
     const { data: transactions } = await s.from('cash_transactions')
       .select('id')
       .eq('category_id', id)
+      .eq('company_id', auth.companyId)
       .limit(1);
 
     if (transactions && transactions.length > 0) {

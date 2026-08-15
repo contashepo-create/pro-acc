@@ -25,10 +25,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     if (poError || !po) return notFound();
 
     // السجلات الفرعية تابعة لأبٍ تحققنا من ملكيته
-    const { data: items } = await s.from('purchase_order_items')
+    const { data: items, error: itemsError } = await s.from('purchase_order_items')
       .select('*')
       .eq('purchase_order_id', id)
+      .eq('company_id', auth.companyId)
       .order('id');
+    if (itemsError) throw itemsError;
 
     return success({
       ...po,

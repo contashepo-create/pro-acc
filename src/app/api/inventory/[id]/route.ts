@@ -121,7 +121,7 @@ export async function DELETE(
     }
 
     const { data: txns } = await s.from('inventory_transactions')
-      .select('id').eq('item_id', id).limit(1);
+      .select('id').eq('item_id', id).eq('company_id', auth.companyId).limit(1);
     if (txns && txns.length > 0) {
       return error('لا يمكن حذف صنف له حركات سابقة — عطّله بدلاً من حذفه');
     }

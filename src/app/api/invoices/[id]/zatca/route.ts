@@ -33,9 +33,11 @@ export async function GET(
     };
 
     // Fetch invoice items
-    const { data: items } = await s.from('invoice_items')
+    const { data: items, error: itemsError } = await s.from('invoice_items')
       .select('id, description, quantity, unit_price, total')
-      .eq('invoice_id', id);
+      .eq('invoice_id', id)
+      .eq('company_id', auth.companyId);
+    if (itemsError) throw itemsError;
 
     // Fetch company info (seller)
     const { data: company } = await s.from('companies')

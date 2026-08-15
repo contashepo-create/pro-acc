@@ -1187,3 +1187,200 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.create_pos_sale_atomic(UUID,UUID,NUMERIC,TEXT,UUID) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.create_pos_sale_atomic(UUID,UUID,NUMERIC,TEXT,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.update_voucher_receipt_atomic(
+  p_company_id UUID,p_voucher_id UUID,p_date DATE,p_contact_id UUID,p_contact_set BOOLEAN,
+  p_amount NUMERIC,p_bank_safe_id UUID,p_reason TEXT,p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old voucher_receipts%ROWTYPE; v_voucher voucher_receipts%ROWTYPE; v_bank banks_safes%ROWTYPE;
+  v_contact UUID; v_amount NUMERIC; v_counterpart UUID; v_reversal UUID; v_journal JSONB; v_journal_id UUID;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_old FROM voucher_receipts WHERE id=p_voucher_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'السند غير موجود'; END IF;
+  IF v_old.status<>'approved' OR v_old.journal_entry_id IS NULL THEN RAISE EXCEPTION 'لا يمكن تعديل سند غير مرحل'; END IF;
+  IF EXISTS(SELECT 1 FROM cash_transactions WHERE company_id=p_company_id AND voucher_receipt_id=p_voucher_id)
+  THEN RAISE EXCEPTION 'السند مرتبط بحركة نقدية'; END IF;
+  IF EXISTS(SELECT 1 FROM receipt_invoice_items WHERE company_id=p_company_id AND voucher_receipt_id=p_voucher_id)
+  THEN RAISE EXCEPTION 'لا يمكن تعديل سند مخصص على فواتير'; END IF;
+  v_contact:=CASE WHEN p_contact_set THEN p_contact_id ELSE v_old.contact_id END;
+  v_amount:=COALESCE(p_amount,v_old.amount);
+  IF v_amount<=0 OR v_amount<>round(v_amount,2) OR length(COALESCE(p_reason,v_old.reason,''))>500
+  THEN RAISE EXCEPTION 'بيانات السند غير صالحة'; END IF;
+  IF v_contact IS NOT NULL AND NOT EXISTS(SELECT 1 FROM contacts WHERE id=v_contact AND company_id=p_company_id)
+  THEN RAISE EXCEPTION 'الطرف غير موجود'; END IF;
+  SELECT * INTO v_bank FROM banks_safes
+  WHERE id=COALESCE(p_bank_safe_id,v_old.bank_safe_id) AND company_id=p_company_id AND is_active=TRUE FOR UPDATE;
+  IF NOT FOUND OR v_bank.account_id IS NULL THEN RAISE EXCEPTION 'البنك أو الخزينة غير صالح'; END IF;
+  SELECT id INTO v_counterpart FROM accounts WHERE company_id=p_company_id
+    AND code=CASE v_old.receipt_type WHEN 'client' THEN '1130' WHEN 'supplier_refund' THEN '2110' ELSE '4200' END
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_counterpart IS NULL OR v_counterpart=v_bank.account_id THEN RAISE EXCEPTION 'الحساب المقابل غير صالح'; END IF;
+  v_reversal:=post_journal_reversal(p_company_id,v_old.journal_entry_id,'voucher_receipt_reversal',p_voucher_id,
+    'عكس سند قبض رقم '||v_old.number||' (تعديل)',p_user_id);
+  v_journal:=create_journal_entry(
+    p_company_id,COALESCE(p_date,v_old.date),'general','سند قبض رقم '||v_old.number||': '||COALESCE(NULLIF(btrim(p_reason),''),v_old.reason),p_user_id,
+    jsonb_build_array(
+      jsonb_build_object('accountId',v_bank.account_id,'debit',v_amount,'credit',0),
+      jsonb_build_object('accountId',v_counterpart,'debit',0,'credit',v_amount,'contactId',v_contact)
+    )
+  );
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='voucher_receipt',reference_id=p_voucher_id WHERE id=v_journal_id AND company_id=p_company_id;
+  UPDATE voucher_receipts SET date=COALESCE(p_date,v_old.date),contact_id=v_contact,amount=v_amount,
+    bank_safe_id=v_bank.id,reason=COALESCE(NULLIF(btrim(p_reason),''),v_old.reason),journal_entry_id=v_journal_id,updated_at=now()
+  WHERE id=p_voucher_id RETURNING * INTO v_voucher;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'update','voucher_receipt',p_voucher_id,to_jsonb(v_old),
+    to_jsonb(v_voucher)||jsonb_build_object('reversal_journal_id',v_reversal));
+  RETURN to_jsonb(v_voucher);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.cancel_voucher_receipt_atomic(
+  p_company_id UUID,p_voucher_id UUID,p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old voucher_receipts%ROWTYPE; v_voucher voucher_receipts%ROWTYPE; v_link receipt_invoice_items%ROWTYPE;
+  v_invoice invoices%ROWTYPE; v_new_paid NUMERIC; v_reversal UUID;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_old FROM voucher_receipts WHERE id=p_voucher_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'السند غير موجود'; END IF;
+  IF v_old.status='cancelled' THEN RETURN jsonb_build_object('id',p_voucher_id,'status','cancelled','already_processed',TRUE); END IF;
+  IF EXISTS(SELECT 1 FROM cash_transactions WHERE company_id=p_company_id AND voucher_receipt_id=p_voucher_id)
+  THEN RAISE EXCEPTION 'السند مرتبط بحركة نقدية'; END IF;
+  IF v_old.status='pending' THEN
+    UPDATE approval_requests SET status='cancelled',updated_at=now()
+    WHERE company_id=p_company_id AND transaction_type='voucher_receipt' AND transaction_id=p_voucher_id::TEXT AND status='pending';
+  ELSE
+    IF v_old.journal_entry_id IS NULL THEN RAISE EXCEPTION 'السند المرحل بلا قيد'; END IF;
+    FOR v_link IN SELECT * FROM receipt_invoice_items
+      WHERE company_id=p_company_id AND voucher_receipt_id=p_voucher_id ORDER BY id FOR UPDATE LOOP
+      SELECT * INTO v_invoice FROM invoices WHERE id=v_link.invoice_id AND company_id=p_company_id FOR UPDATE;
+      IF NOT FOUND OR v_invoice.paid_amount+0.005<v_link.amount THEN RAISE EXCEPTION 'تعذر عكس تخصيص الفاتورة'; END IF;
+      v_new_paid:=round(GREATEST(0,v_invoice.paid_amount-v_link.amount),2);
+      UPDATE invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid<=0.005 THEN 'unpaid'
+        WHEN v_new_paid>=total-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+    END LOOP;
+    v_reversal:=post_journal_reversal(p_company_id,v_old.journal_entry_id,'voucher_receipt_reversal',p_voucher_id,
+      'عكس سند قبض رقم '||v_old.number||' (إلغاء)',p_user_id);
+  END IF;
+  UPDATE voucher_receipts SET status='cancelled',updated_at=now() WHERE id=p_voucher_id RETURNING * INTO v_voucher;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'cancel','voucher_receipt',p_voucher_id,to_jsonb(v_old),
+    to_jsonb(v_voucher)||jsonb_build_object('reversal_journal_id',v_reversal));
+  RETURN to_jsonb(v_voucher)||jsonb_build_object('reversal_journal_id',v_reversal);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_voucher_disbursement_atomic(
+  p_company_id UUID,p_voucher_id UUID,p_date DATE,p_contact_id UUID,p_contact_set BOOLEAN,
+  p_employee_id UUID,p_employee_set BOOLEAN,p_amount NUMERIC,p_bank_safe_id UUID,p_reason TEXT,p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old voucher_disbursements%ROWTYPE; v_voucher voucher_disbursements%ROWTYPE; v_bank banks_safes%ROWTYPE;
+  v_contact UUID; v_employee UUID; v_amount NUMERIC; v_counterpart UUID; v_reversal UUID;
+  v_journal JSONB; v_journal_id UUID; v_balance NUMERIC;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_old FROM voucher_disbursements WHERE id=p_voucher_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'السند غير موجود'; END IF;
+  IF v_old.status<>'approved' OR v_old.journal_entry_id IS NULL THEN RAISE EXCEPTION 'لا يمكن تعديل سند غير مرحل'; END IF;
+  IF EXISTS(SELECT 1 FROM cash_transactions WHERE company_id=p_company_id AND voucher_disbursement_id=p_voucher_id)
+  THEN RAISE EXCEPTION 'السند مرتبط بحركة نقدية'; END IF;
+  IF EXISTS(SELECT 1 FROM disbursement_invoice_items WHERE company_id=p_company_id AND voucher_disbursement_id=p_voucher_id)
+  THEN RAISE EXCEPTION 'لا يمكن تعديل سند مخصص على فواتير'; END IF;
+  v_contact:=CASE WHEN p_contact_set THEN p_contact_id ELSE v_old.contact_id END;
+  v_employee:=CASE WHEN p_employee_set THEN p_employee_id ELSE v_old.employee_id END;
+  v_amount:=COALESCE(p_amount,v_old.amount);
+  IF v_amount<=0 OR v_amount<>round(v_amount,2) OR length(COALESCE(p_reason,v_old.reason,''))>500
+  THEN RAISE EXCEPTION 'بيانات السند غير صالحة'; END IF;
+  IF v_contact IS NOT NULL AND NOT EXISTS(SELECT 1 FROM contacts WHERE id=v_contact AND company_id=p_company_id)
+  THEN RAISE EXCEPTION 'الطرف غير موجود'; END IF;
+  IF v_employee IS NOT NULL AND NOT EXISTS(SELECT 1 FROM employees WHERE id=v_employee AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'الموظف غير موجود'; END IF;
+  SELECT * INTO v_bank FROM banks_safes
+  WHERE id=COALESCE(p_bank_safe_id,v_old.bank_safe_id) AND company_id=p_company_id AND is_active=TRUE FOR UPDATE;
+  IF NOT FOUND OR v_bank.account_id IS NULL THEN RAISE EXCEPTION 'البنك أو الخزينة غير صالح'; END IF;
+  SELECT id INTO v_counterpart FROM accounts WHERE company_id=p_company_id
+    AND code=CASE v_old.disbursement_type WHEN 'supplier' THEN '2110' WHEN 'employee_advance' THEN '1160'
+      WHEN 'subcontractor' THEN '2150' WHEN 'client_refund' THEN '1130' ELSE '5400' END
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_counterpart IS NULL OR v_counterpart=v_bank.account_id THEN RAISE EXCEPTION 'الحساب المقابل غير صالح'; END IF;
+  v_reversal:=post_journal_reversal(p_company_id,v_old.journal_entry_id,'voucher_disbursement_reversal',p_voucher_id,
+    'عكس سند صرف رقم '||v_old.number||' (تعديل)',p_user_id);
+  v_balance:=get_account_balance(p_company_id,v_bank.account_id,NULL,NULL);
+  IF v_balance+0.005<v_amount THEN RAISE EXCEPTION 'الرصيد غير كاف للصرف'; END IF;
+  v_journal:=create_journal_entry(
+    p_company_id,COALESCE(p_date,v_old.date),'general','سند صرف رقم '||v_old.number||': '||COALESCE(NULLIF(btrim(p_reason),''),v_old.reason),p_user_id,
+    jsonb_build_array(
+      jsonb_build_object('accountId',v_counterpart,'debit',v_amount,'credit',0,'contactId',v_contact),
+      jsonb_build_object('accountId',v_bank.account_id,'debit',0,'credit',v_amount)
+    )
+  );
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='voucher_disbursement',reference_id=p_voucher_id WHERE id=v_journal_id AND company_id=p_company_id;
+  UPDATE voucher_disbursements SET date=COALESCE(p_date,v_old.date),contact_id=v_contact,employee_id=v_employee,
+    amount=v_amount,bank_safe_id=v_bank.id,reason=COALESCE(NULLIF(btrim(p_reason),''),v_old.reason),journal_entry_id=v_journal_id,updated_at=now()
+  WHERE id=p_voucher_id RETURNING * INTO v_voucher;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'update','voucher_disbursement',p_voucher_id,to_jsonb(v_old),
+    to_jsonb(v_voucher)||jsonb_build_object('reversal_journal_id',v_reversal));
+  RETURN to_jsonb(v_voucher);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.cancel_voucher_disbursement_atomic(
+  p_company_id UUID,p_voucher_id UUID,p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old voucher_disbursements%ROWTYPE; v_voucher voucher_disbursements%ROWTYPE;
+  v_link disbursement_invoice_items%ROWTYPE; v_invoice purchase_invoices%ROWTYPE;
+  v_new_paid NUMERIC; v_reversal UUID;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_old FROM voucher_disbursements WHERE id=p_voucher_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'السند غير موجود'; END IF;
+  IF v_old.status='cancelled' THEN RETURN jsonb_build_object('id',p_voucher_id,'status','cancelled','already_processed',TRUE); END IF;
+  IF EXISTS(SELECT 1 FROM cash_transactions WHERE company_id=p_company_id AND voucher_disbursement_id=p_voucher_id)
+  THEN RAISE EXCEPTION 'السند مرتبط بحركة نقدية'; END IF;
+  IF v_old.status='pending' THEN
+    UPDATE approval_requests SET status='cancelled',updated_at=now()
+    WHERE company_id=p_company_id AND transaction_type='voucher_disbursement' AND transaction_id=p_voucher_id::TEXT AND status='pending';
+  ELSE
+    IF v_old.journal_entry_id IS NULL THEN RAISE EXCEPTION 'السند المرحل بلا قيد'; END IF;
+    FOR v_link IN SELECT * FROM disbursement_invoice_items
+      WHERE company_id=p_company_id AND voucher_disbursement_id=p_voucher_id ORDER BY id FOR UPDATE LOOP
+      SELECT * INTO v_invoice FROM purchase_invoices WHERE id=v_link.purchase_invoice_id AND company_id=p_company_id FOR UPDATE;
+      IF NOT FOUND OR v_invoice.paid_amount+0.005<v_link.amount THEN RAISE EXCEPTION 'تعذر عكس تخصيص فاتورة الشراء'; END IF;
+      v_new_paid:=round(GREATEST(0,v_invoice.paid_amount-v_link.amount),2);
+      UPDATE purchase_invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid<=0.005 THEN 'unpaid'
+        WHEN v_new_paid>=total-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+    END LOOP;
+    v_reversal:=post_journal_reversal(p_company_id,v_old.journal_entry_id,'voucher_disbursement_reversal',p_voucher_id,
+      'عكس سند صرف رقم '||v_old.number||' (إلغاء)',p_user_id);
+    UPDATE employee_advances SET status='cancelled'
+    WHERE company_id=p_company_id AND journal_entry_id=v_old.journal_entry_id;
+  END IF;
+  UPDATE voucher_disbursements SET status='cancelled',updated_at=now() WHERE id=p_voucher_id RETURNING * INTO v_voucher;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'cancel','voucher_disbursement',p_voucher_id,to_jsonb(v_old),
+    to_jsonb(v_voucher)||jsonb_build_object('reversal_journal_id',v_reversal));
+  RETURN to_jsonb(v_voucher)||jsonb_build_object('reversal_journal_id',v_reversal);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.update_voucher_receipt_atomic(UUID,UUID,DATE,UUID,BOOLEAN,NUMERIC,UUID,TEXT,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.cancel_voucher_receipt_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.update_voucher_disbursement_atomic(UUID,UUID,DATE,UUID,BOOLEAN,UUID,BOOLEAN,NUMERIC,UUID,TEXT,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.cancel_voucher_disbursement_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.update_voucher_receipt_atomic(UUID,UUID,DATE,UUID,BOOLEAN,NUMERIC,UUID,TEXT,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cancel_voucher_receipt_atomic(UUID,UUID,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.update_voucher_disbursement_atomic(UUID,UUID,DATE,UUID,BOOLEAN,UUID,BOOLEAN,NUMERIC,UUID,TEXT,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cancel_voucher_disbursement_atomic(UUID,UUID,UUID) TO service_role;

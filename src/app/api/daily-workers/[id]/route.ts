@@ -88,12 +88,12 @@ export async function DELETE(
 
     // عامل له سجلات حضور/تسويات لا يُحذف — يُعطَّل بدلاً من ذلك
     const { data: recs } = await s.from('daily_worker_records')
-      .select('id').eq('worker_id', id).limit(1);
+      .select('id').eq('worker_id', id).eq('company_id', auth.companyId).limit(1);
     if (recs && recs.length > 0) {
       return error('لا يمكن حذف عامل له سجلات حضور — عطّله بدلاً من الحذف');
     }
     const { data: sett } = await s.from('daily_worker_settlements')
-      .select('id').eq('worker_id', id).limit(1);
+      .select('id').eq('worker_id', id).eq('company_id', auth.companyId).limit(1);
     if (sett && sett.length > 0) {
       return error('لا يمكن حذف عامل له تسويات — عطّله بدلاً من الحذف');
     }

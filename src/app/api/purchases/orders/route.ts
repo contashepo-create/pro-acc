@@ -36,7 +36,8 @@ export async function GET(req: NextRequest) {
     if (ids.length > 0) {
       const { data: allItems } = await s.from('purchase_order_items')
         .select('*')
-        .in('purchase_order_id', ids);
+        .in('purchase_order_id', ids)
+        .eq('company_id', auth.companyId);
       const itemsByOrder = new Map<string, any[]>();
       for (const it of allItems || []) {
         const list = itemsByOrder.get(it.purchase_order_id) || [];
