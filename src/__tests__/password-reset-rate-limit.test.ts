@@ -62,11 +62,10 @@ describe('checkPasswordResetRateLimit', () => {
     expect(capturedFilter).not.toContain('hack');
   });
 
-  test('fail-open on DB error', async () => {
+  test('fails closed on DB error so an outage cannot disable throttling', async () => {
     mockError = new Error('db down');
     mockData = null;
-    const r = await checkPasswordResetRateLimit('user@test.com', '10.0.0.1');
-    expect(r.allowed).toBe(true);
+    await expect(checkPasswordResetRateLimit('user@test.com', '10.0.0.1')).rejects.toThrow('db down');
   });
 });
 

@@ -18,7 +18,7 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 process.env.CAPTCHA_ENABLED = 'false';
 delete process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
-import { mockClient, resetMock, setResult, setResults, findOp } from './helpers/supabase-mock';
+import { mockClient, resetMock, setResult, setResults, setRpcResult, getRpcCalls, findOp } from './helpers/supabase-mock';
 
 jest.mock('@/lib/supabase-client', () => ({
   getSupabase: () => mockClient,
@@ -30,6 +30,9 @@ jest.mock('@/lib/email', () => ({
 }));
 
 jest.mock('@/lib/default-accounts', () => ({
+  DEFAULT_CHART_OF_ACCOUNTS: [
+    { code: '1000', name: 'الأصول', nameEn: 'Assets', type: 'asset', isHeader: true },
+  ],
   createDefaultChartOfAccounts: jest.fn(async () => {}),
 }));
 
@@ -111,73 +114,56 @@ describe('register — duplicate detection', () => {
   });
 });
 
-describe('register — user creation security', () => {
-  beforeEach(resetMock);
-
-  function successSetup(planRow: any | null = { id: 'p1', code: 'start', trial_days: 7 }) {
-    setResult('users', 'select', []); // no duplicate email
-    setResult('companies', 'select', []); // no duplicate name/phone
-    // The company insert chain ends with `.select(...).single()` → terminal op 'single'.
-    setResult('companies', 'single', { id: 'company-1' });
-    setResult('users', 'single', { id: 'u1', name: validBody.name, email: validBody.email, role: 'admin' });
-    // register now uses maybeSingle (not single) when looking up the Start plan.
-    setResult('subscription_plans', 'maybeSingle', planRow);
-    setResult('subscriptions', 'upsert', null);
-  }
-
-  test('stores a scrypt-hashed password and an email verification token', async () => {
-    successSetup();
-    const res = await registerPOST(req(validBody));
-    expect(res.status).toBe(201);
-
-    const userInsert = findOp('users', 'insert')!;
-    const data = userInsert.args[0] as any;
-    // scrypt hash format salt:key
-    expect(data.password_hash).toContain(':');
-    expect(data.password_hash.split(':')[0]).toHaveLength(64); // 32-byte salt
-    // verification token present + 24h expiry
-    expect(data.email_verification_token).toMatch(/^[0-9a-f]{64}$/);
-    const exp = new Date(data.email_verification_expires).getTime();
-    expect(exp).toBeGreaterThan(Date.now());
-    expect(exp).toBeLessThan(Date.now() + 2 * 24 * 3600 * 1000);
-    // must not store plaintext password
-    expect(data.password_hash).not.toContain(validBody.password);
-    expect(data.role).toBe('admin');
-    expect(data.email).toBe(validBody.email.toLowerCase());
+describe('register — atomic company bootstrap', () => {
+  beforeEach(() => {
+    resetMock();
+    setResult('users', 'select', []);
+    setResult('companies', 'select', []);
   });
 
-  test('creates a trial subscription with the plan trial_days (7 days, Start plan)', async () => {
-    successSetup({ id: 'p1', code: 'start', trial_days: 7 });
+  const registration = {
+    company: { id: 'company-1', name: 'شركة الاختبار' },
+    user: { id: 'u1', name: validBody.name, email: validBody.email, role: 'admin' },
+  };
+
+  test('delegates the company, owner and chart bootstrap to one transaction RPC', async () => {
+    setRpcResult('register_company', registration);
     const res = await registerPOST(req(validBody));
     expect(res.status).toBe(201);
+    expect(getRpcCalls()).toHaveLength(1);
+    const call = getRpcCalls()[0];
+    expect(call.name).toBe('register_company');
+    expect(call.params.p_company_name).toBe(validBody.companyName);
+    expect(call.params.p_email).toBe(validBody.email.toLowerCase());
+    expect(call.params.p_user_name).toBe(validBody.name);
+    expect(call.params.p_password_hash).toContain(':');
+    expect(call.params.p_password_hash).not.toContain(validBody.password);
+    expect(call.params.p_verification_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(Array.isArray(call.params.p_accounts)).toBe(true);
+    expect(call.params.p_accounts.length).toBeGreaterThan(0);
 
-    const upsert = findOp('subscriptions', 'upsert')!;
-    expect(upsert).not.toBeNull();
-    const sub = upsert.args[0] as any;
-    expect(sub.plan_id).toBe('p1');
-    expect(sub.plan_code).toBe('start');
-    expect(sub.status).toBe('trial');
-    expect(sub.auto_renew).toBe(false);
-    // end_date should be today + 7 days
-    const end = new Date(sub.end_date);
-    const start = new Date(sub.start_date);
-    const diffDays = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-    expect(diffDays).toBe(7);
+    expect(findOp('companies', 'insert')).toBeNull();
+    expect(findOp('users', 'insert')).toBeNull();
+    expect(findOp('accounts', 'insert')).toBeNull();
   });
 
-  test('RESILIENCE: registration still succeeds when the Start plan row is missing (no auto-seeding)', async () => {
-    // The Start plan is missing in the DB (migration 032 hasn't been run yet).
-    successSetup(null);
-
+  test('returns the registered owner without leaking sensitive hashes', async () => {
+    setRpcResult('register_company', registration);
     const res = await registerPOST(req(validBody));
+    const body = await res.json();
     expect(res.status).toBe(201);
+    expect(body.data.user).toMatchObject({ id: 'u1', email: validBody.email, role: 'admin' });
+    expect(JSON.stringify(body)).not.toContain('password_hash');
+    expect(JSON.stringify(body)).not.toContain('verification_hash');
+  });
 
-    // Register must NOT try to recreate a 'trial' plan behind the scenes.
-    const planInsert = findOp('subscription_plans', 'insert');
-    expect(planInsert).toBeNull();
-
-    // It skips creating the subscription (warns) rather than failing.
-    const upsert = findOp('subscriptions', 'upsert');
-    expect(upsert).toBeNull();
+  test('maps a database uniqueness conflict to 409', async () => {
+    setRpcResult('register_company', {
+      data: null,
+      error: { code: 'P0001', message: 'البريد الإلكتروني مسجل مسبقاً' },
+    });
+    const res = await registerPOST(req(validBody));
+    expect(res.status).toBe(409);
+    expect((await res.json()).message).toContain('مسجل مسبقاً');
   });
 });

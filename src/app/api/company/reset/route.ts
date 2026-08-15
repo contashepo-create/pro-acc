@@ -86,7 +86,9 @@ export async function POST(request: NextRequest) {
       if (!response.ok) {
         const errText = await response.text();
         console.error('Failed to send Telegram reset approval:', response.status, errText);
-        await s.from('company_telegram_configs').update({reset_session_data:null}).eq('company_id',auth.companyId);
+        await s.from('company_telegram_configs')
+          .update({ reset_session_data: null })
+          .eq('company_id', auth.companyId);
         return error('تعذر الاتصال بـ تيليجرام لإرسال طلب الموافقة. يرجى التأكد من أن البوت يعمل.');
       }
 

@@ -83,9 +83,12 @@ function makeDb(db: Record<string, Row[]>) {
     return api;
   };
 
-  const db_: any = { from, calls };
+  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
   db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `missing ${name}` } });
-  db_.rpc = (name: string, params: any) => db_.rpcImpl(name, params);
+  db_.rpc = (name: string, params: any) => {
+    db_.rpcCalls.push({ name, params });
+    return db_.rpcImpl(name, params);
+  };
   return db_;
 }
 
@@ -386,6 +389,7 @@ describe('inventory items — create/edit/delete guards', () => {
 describe('single stock writer — purchase invoice no longer bumps stock', () => {
   test('invoice with PO: JE posts, inventory untouched (receipt is the stock writer)', async () => {
     mockDb = makeDb(baseDb());
+    mockDb.rpcImpl = async () => ({ data: { id: 'purchase-invoice-1' }, error: null });
     const res = await purchaseInvoicePOST(authedRequest({
       date: '2026-08-01',
       supplier_id: SUPPLIER,
@@ -397,7 +401,11 @@ describe('single stock writer — purchase invoice no longer bumps stock', () =>
     // no inventory_items updates from the invoice anymore (was the double-entry bug)
     expect(updatesOf('inventory_items')).toHaveLength(0);
     expect(insertsOf('inventory_transactions')).toHaveLength(0);
-    // but the financial JE still posted
-    expect(insertsOf('journal_entries')).toHaveLength(1);
+    // The RPC owns invoice, journal and lifecycle writes in one transaction.
+    expect(insertsOf('journal_entries')).toHaveLength(0);
+    expect(mockDb.rpcCalls[0]).toMatchObject({
+      name: 'create_purchase_invoice_atomic',
+      params: { p_company_id: C1, p_purchase_order_id: PO, p_supplier_id: SUPPLIER },
+    });
   });
 });

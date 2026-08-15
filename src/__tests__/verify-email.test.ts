@@ -10,7 +10,7 @@
  *    users; refuses already-verified addresses; rate-limited.
  */
 
-import { mockClient, resetMock, setResult, findOp, getCalls, callsForTable } from './helpers/supabase-mock';
+import { mockClient, resetMock, setResult, setRpcResult, getRpcCalls, findOp, callsForTable } from './helpers/supabase-mock';
 import { createHash } from 'crypto';
 
 jest.mock('@/lib/supabase-client', () => ({
@@ -24,6 +24,9 @@ jest.mock('@/lib/email', () => ({
 
 jest.mock('@/lib/rate-limit', () => ({
   checkRateLimit: jest.fn(async () => ({ allowed: true, remainingMinutes: 0 })),
+  checkPasswordResetRateLimit: jest.fn(async () => ({ allowed: true, remainingMinutes: 0 })),
+  recordPasswordResetRequest: jest.fn(async () => 'request-1'),
+  markPasswordResetRequest: jest.fn(async () => undefined),
   sanitizeEmailForFilter: (e: string) => e,
   sanitizeIpAddress: (i: string) => i,
 }));
@@ -35,56 +38,38 @@ function req(body: any) {
   return {
     json: async () => body,
     headers: { get: () => null },
+    nextUrl: { origin: 'http://localhost' },
   } as any;
 }
 
-describe('verify-email', () => {
+describe('verify-email — one-time RPC boundary', () => {
   beforeEach(resetMock);
 
-  test('requires a token', async () => {
+  test('requires a 64-character token', async () => {
     const res = await verifyPOST(req({}));
     expect(res.status).toBe(400);
-    const j = await res.json();
-    expect(j.message).toContain('رمز التحقق مطلوب');
+    expect((await res.json()).message).toContain('غير صالح أو منتهي');
+    expect(getRpcCalls()).toHaveLength(0);
   });
 
-  test('marks the user verified and clears the token fields', async () => {
-    setResult('users', 'maybeSingle', { id: 'u1', email: 'a@b.com' });
-    setResult('users', 'update', null);
-
-    const res = await verifyPOST(req({ token: 'a'.repeat(64) }));
+  test('hashes the URL token and consumes it atomically', async () => {
+    const raw = 'a'.repeat(64);
+    setRpcResult('consume_email_verification_token', { email: 'a@b.com' });
+    const res = await verifyPOST(req({ token: raw }));
     expect(res.status).toBe(200);
-    const j = await res.json();
-    expect(j.data.message).toContain('تم تأكيد البريد');
-
-    const update = findOp('users', 'update')!;
-    const data = update.args[0] as any;
-    expect(data.email_verified).toBe(true);
-    expect(data.email_verification_token).toBeNull();
-    expect(data.email_verification_expires).toBeNull();
-  });
-
-  test('looks up only the SHA-256 digest of the URL token', async () => {
-    const raw = 'b'.repeat(64);
-    setResult('users', 'maybeSingle', null);
-    await verifyPOST(req({ token: raw }));
-    const lookup = callsForTable('users')[0].ops.find((op) => op.op === 'eq' && op.args[0] === 'email_verification_token');
-    expect(lookup?.args[1]).toBe(createHash('sha256').update(raw).digest('hex'));
-    expect(lookup?.args[1]).not.toBe(raw);
-  });
-
-  test('rejects an invalid or expired token', async () => {
-    setResult('users', 'maybeSingle', null); // no user matches the token/expiry
-    const res = await verifyPOST(req({ token: 'bad-or-expired' }));
-    expect(res.status).toBe(400);
-    const j = await res.json();
-    expect(j.message).toContain('غير صالح أو منتهي');
-  });
-
-  test('does not update the user when the token is invalid', async () => {
-    setResult('users', 'maybeSingle', null);
-    await verifyPOST(req({ token: 'bad' }));
+    expect((await res.json()).data.email).toBe('a@b.com');
+    expect(getRpcCalls()).toEqual([{
+      name: 'consume_email_verification_token',
+      params: { p_token_hash: createHash('sha256').update(raw).digest('hex') },
+    }]);
     expect(findOp('users', 'update')).toBeNull();
+  });
+
+  test('maps invalid, expired and replayed token errors to one response', async () => {
+    setRpcResult('consume_email_verification_token', { data: null, error: { code: 'P0001', message: 'رمز التحقق غير صالح' } });
+    const res = await verifyPOST(req({ token: 'b'.repeat(64) }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toContain('غير صالح أو منتهي');
   });
 });
 
@@ -98,7 +83,7 @@ describe('resend-verification', () => {
     const res = await resendPOST(req({ email: 'user@example.com' }));
     expect(res.status).toBe(200);
     const j = await res.json();
-    expect(j.data.message).toContain('إرسال رابط التأكيد');
+    expect(j.data.message).toContain('إذا كان البريد الإلكتروني مسجلاً');
 
     const update = findOp('users', 'update')!;
     const data = update.args[0] as any;
@@ -113,7 +98,7 @@ describe('resend-verification', () => {
     setResult('users', 'maybeSingle', { id: 'u1', email_verified: true, is_active: true });
     const res = await resendPOST(req({ email: 'verified@example.com' }));
     const j = await res.json();
-    expect(j.data.message).toContain('تم تأكيد هذا البريد الإلكتروني مسبقاً');
+    expect(j.data.message).toContain('إذا كان البريد الإلكتروني مسجلاً');
     expect(findOp('users', 'update')).toBeNull();
   });
 

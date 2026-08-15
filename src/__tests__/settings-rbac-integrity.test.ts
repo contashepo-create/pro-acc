@@ -79,9 +79,12 @@ function makeDb(db: Record<string, Row[]>) {
     return api;
   };
 
-  const db_: any = { from, calls };
+  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
   db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `missing ${name}` } });
-  db_.rpc = (name: string, params: any) => db_.rpcImpl(name, params);
+  db_.rpc = (name: string, params: any) => {
+    db_.rpcCalls.push({ name, params });
+    return db_.rpcImpl(name, params);
+  };
   return db_;
 }
 
@@ -141,7 +144,7 @@ describe('settings PUT — privilege escalation fix', () => {
   test('supervisor is blocked (needs manager+)', async () => {
     mockDb = makeDb(baseDb());
     const res = await settingsPUT(authedAs('u-sup', 'supervisor', { company: { name: 'هجوم' } }));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
     expect(updatesOf('companies')).toHaveLength(0);
   });
 
@@ -203,10 +206,10 @@ describe('permissions — tenant + enum hardening', () => {
     expect(res.status).toBe(200);
   });
 
-  test('POST by non-admin → 401', async () => {
+  test('POST by non-admin → 403', async () => {
     mockDb = makeDb(baseDb());
     const res = await permissionsPOST(authedAs('u-sup', 'supervisor', { user_id: 'u-target', batch: true, permissions: [] }, 'POST'));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
   });
 
   test('POST batch rejects an unknown module', async () => {
@@ -228,14 +231,19 @@ describe('permissions — tenant + enum hardening', () => {
     expect(res.status).toBe(400);
   });
 
-  test('POST batch with valid enums → 200', async () => {
+  test('POST batch delegates an atomic tenant-scoped replacement to PostgreSQL', async () => {
     mockDb = makeDb(baseDb());
+    mockDb.rpcImpl = async () => ({ data: { replaced: 1 }, error: null });
+    const permissions = [{ module: 'invoices', actions: ['read', 'create'] }];
     const res = await permissionsPOST(authedAs('u-admin', 'admin', {
-      user_id: 'u-target', batch: true,
-      permissions: [{ module: 'invoices', actions: ['read', 'create'] }],
+      user_id: 'u-target', batch: true, permissions,
     }, 'POST'));
     expect(res.status).toBe(200);
-    expect(insertsOf('user_permissions').length).toBeGreaterThan(0);
+    expect(mockDb.rpcCalls).toEqual([{
+      name: 'replace_user_permissions',
+      params: { p_company_id: C1, p_user_id: 'u-target', p_permissions: permissions, p_bypass_telegram: false },
+    }]);
+    expect(insertsOf('user_permissions')).toHaveLength(0);
   });
 
   test('POST target user from another company → 404', async () => {
