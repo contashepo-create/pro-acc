@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
       : [];
     
     const cashBalance = cashResult.status === 'fulfilled' && cashResult.value.data
-      ? await calculateCashBalance(s, cashResult.value.data)
+      ? await calculateCashBalance(s, auth.companyId, cashResult.value.data)
       : 0;
 
     const revenueMonth = revenueThisMonth.status === 'fulfilled' && revenueThisMonth.value.data
@@ -129,7 +129,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-async function calculateCashBalance(s: any, banks: any[]): Promise<number> {
+async function calculateCashBalance(s: any, companyId: string, banks: any[]): Promise<number> {
   let totalBalance = 0;
   
   for (const bank of banks) {
@@ -137,6 +137,7 @@ async function calculateCashBalance(s: any, banks: any[]): Promise<number> {
       try {
         const { data: lines } = await s.from('journal_lines')
           .select('debit, credit')
+          .eq('company_id', companyId)
           .eq('account_id', bank.account_id);
         
         if (lines) {
