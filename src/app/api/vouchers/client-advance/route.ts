@@ -15,6 +15,9 @@ export async function GET(request: NextRequest) {
     }
 
     const s = sb();
+    const { data: contact } = await s.from('contacts').select('id')
+      .eq('id', contactId).eq('company_id', auth.companyId).maybeSingle();
+    if (!contact) return error('العميل غير موجود', 404);
 
     const { data: advAccount } = await s.from('accounts')
       .select('id')
@@ -45,6 +48,7 @@ export async function GET(request: NextRequest) {
 
     const { data: lines } = await s.from('journal_lines')
       .select('debit, credit')
+      .eq('company_id', auth.companyId)
       .eq('account_id', advAccount.id)
       .eq('contact_id', contactId)
       .in('journal_entry_id', jeIdList);
