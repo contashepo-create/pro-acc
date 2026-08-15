@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, notFound, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -44,36 +44,13 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    const { data: existing } = await s.from('credit_notes')
-      .select('id, journal_entry_id, number, status')
-      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-
-    if (!existing) return notFound();
-
-    const cn = existing as any;
-
-    if (cn.status === 'cancelled') return error('الإشعار ملغى بالفعل', 409);
-    if (cn.status === 'draft' && !cn.journal_entry_id) {
-      await s.from('credit_note_items').delete().eq('credit_note_id', id).eq('company_id', auth.companyId);
-      const { error: deleteError } = await s.from('credit_notes').delete().eq('id', id).eq('company_id', auth.companyId);
-      if (deleteError) throw deleteError;
-      return success({ deleted: true });
-    }
-    if (!cn.journal_entry_id) return error('الإشعار المعتمد لا يملك قيداً يمكن عكسه', 409);
-
-    const { postReversalEntry } = await import('@/lib/voucher-utils');
-    const reversal = await postReversalEntry(auth.companyId, {
-      journalEntryId: cn.journal_entry_id,
-      referenceType: 'credit_note_cancellation', referenceId: id,
-      description: `إلغاء الإشعار الدائن ${cn.number}`, userId: auth.userId,
+    const { data: cancelled, error: cancelError } = await s.rpc('cancel_credit_note_atomic', {
+      p_company_id: auth.companyId,
+      p_credit_note_id: id,
+      p_user_id: auth.userId,
     });
-    if (reversal.error) throw reversal.error;
-    const { error: updateError } = await s.from('credit_notes')
-      .update({ status: 'cancelled', deleted_at: new Date().toISOString() })
-      .eq('id', id).eq('company_id', auth.companyId).eq('status', cn.status);
-    if (updateError) throw updateError;
-
-    return success({ cancelled: true });
+    if (cancelError) throw cancelError;
+    return success(cancelled);
   } catch (err) {
     return handleApiError(err);
   }

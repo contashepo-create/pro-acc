@@ -164,8 +164,54 @@ async function smokeAtomicWriters(ids) {
   await db.query(`SELECT update_bank_reconciliation($1,$2,NULL,TRUE,$3)`,[c,bankRec.rows[0].result.id,u]);
   await assert.rejects(()=>db.query(`SELECT delete_pending_bank_reconciliation($1,$2,$3)`,[c,bankRec.rows[0].result.id,u]));
 
+  const atomicSale=(await db.query(`SELECT create_sales_invoice_atomic($1,$2,$3,'2026-02-01','2026-03-01',$4::jsonb,0.15,TRUE,'sale',50,$5,$6) result`,[
+    c,contact,project,JSON.stringify([{description:'Atomic sale',quantity:2,unitPrice:50,discount:0}]),b,u,
+  ])).rows[0].result;
+  assert.equal(Number(atomicSale.total),115);
+  assert.equal(Number(atomicSale.paid_amount),50);
+  assert.equal(atomicSale.status,'partial');
+  assert.ok(atomicSale.journal_entry_id);
+  assert.ok(atomicSale.voucher_receipt_id);
+  assert.equal((await db.query(`SELECT count(*)::int count FROM invoice_items WHERE invoice_id=$1`,[atomicSale.id])).rows[0].count,1);
+  const cancellableSale=(await db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,'2026-02-01','2026-03-01',$3::jsonb,0,FALSE,'',0,NULL,$4) result`,[
+    c,contact,JSON.stringify([{description:'Cancel sale',quantity:1,unitPrice:25,discount:0}]),u,
+  ])).rows[0].result;
+  const cancelledSale=(await db.query(`SELECT cancel_sales_invoice_atomic($1,$2,'mistake',$3) result`,[c,cancellableSale.id,u])).rows[0].result;
+  assert.ok(cancelledSale.reversal_journal_id);
+  assert.equal(cancelledSale.status,'cancelled');
+  assert.equal((await db.query(`SELECT cancel_sales_invoice_atomic($1,$2,'',$3) result`,[c,cancellableSale.id,u])).rows[0].result.already_processed,true);
+  const creditInvoice=(await db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,'2026-02-01','2026-03-01',$3::jsonb,0,FALSE,'',0,NULL,$4) result`,[
+    c,contact,JSON.stringify([{description:'Credit target',quantity:1,unitPrice:100,discount:0}]),u,
+  ])).rows[0].result;
+  const concurrentCredits=await Promise.allSettled([1,2].map((n)=>db.query(
+    `SELECT create_credit_note_atomic($1,$2,NULL,NULL,'2026-02-02',$3,$4::jsonb,0,$5) result`,
+    [c,creditInvoice.id,`credit ${n}`,JSON.stringify([{description:'Return',quantity:1,unit_price:60}]),u],
+  )));
+  assert.equal(concurrentCredits.filter((r)=>r.status==='fulfilled').length,1);
+  assert.equal(concurrentCredits.filter((r)=>r.status==='rejected').length,1);
+  const creditResult=concurrentCredits.find((r)=>r.status==='fulfilled').value.rows[0].result;
+  assert.ok(creditResult.journal_entry_id);
+  assert.equal(Number(creditResult.total),60);
+  assert.equal((await db.query(`SELECT cancel_credit_note_atomic($1,$2,$3) result`,[c,creditResult.id,u])).rows[0].result.status,'cancelled');
+  assert.equal((await db.query(`SELECT cancel_credit_note_atomic($1,$2,$3) result`,[c,creditResult.id,u])).rows[0].result.already_processed,true);
+
+  const atomicPurchase=(await db.query(`SELECT create_purchase_invoice_atomic($1,$2,NULL,$3,NULL,TRUE,'2026-02-02',$4::jsonb,0.05,'purchase',$5) result`,[
+    c,contact,project,JSON.stringify([{description:'Materials',quantity:2,unit_price:50}]),u,
+  ])).rows[0].result;
+  assert.equal(Number(atomicPurchase.total),105);
+  assert.ok(atomicPurchase.journal_entry_id);
+  assert.equal((await db.query(`SELECT cancel_purchase_invoice_atomic($1,$2,'error',$3) result`,[c,atomicPurchase.id,u])).rows[0].result.status,'cancelled');
+  const custodyFile='69000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO custodies(id,company_id,employee_id,amount,total_received,total_expenses,remaining_amount,date,status,project_id) VALUES($1,$2,$3,200,200,0,200,'2026-01-01','open',$4)`,[custodyFile,c,e,project]);
+  const custodyPurchase=(await db.query(`SELECT create_purchase_invoice_atomic($1,$2,NULL,NULL,$3,TRUE,'2026-02-02',$4::jsonb,0,'custody purchase',$5) result`,[
+    c,contact,custodyFile,JSON.stringify([{description:'Site item',quantity:1,unit_price:50}]),u,
+  ])).rows[0].result;
+  assert.equal(Number((await db.query(`SELECT remaining_amount FROM custodies WHERE id=$1`,[custodyFile])).rows[0].remaining_amount),150);
+  assert.equal((await db.query(`SELECT cancel_purchase_invoice_atomic($1,$2,'',$3) result`,[c,custodyPurchase.id,u])).rows[0].result.status,'cancelled');
+  assert.equal(Number((await db.query(`SELECT remaining_amount FROM custodies WHERE id=$1`,[custodyFile])).rows[0].remaining_amount),200);
+
   const purchaseInvoice='70000000-0000-4000-8000-000000000001';
-  await db.query(`INSERT INTO purchase_invoices(id,company_id,number,date,supplier_id,total,paid_amount,status) VALUES($1,$2,1,'2026-02-01',$3,100,0,'unpaid')`,[purchaseInvoice,c,contact]);
+  await db.query(`INSERT INTO purchase_invoices(id,company_id,number,date,supplier_id,total,paid_amount,status) VALUES($1,$2,101,'2026-02-01',$3,100,0,'unpaid')`,[purchaseInvoice,c,contact]);
   const pendingVoucher=await db.query(`SELECT create_voucher_disbursement_atomic($1,'2026-02-02','supplier',$2,NULL,100,$3,'pay',$4::jsonb,TRUE,$5) result`,
     [c,contact,b,JSON.stringify([{invoice_id:purchaseInvoice,amount:100}]),u]);
   assert.ok(pendingVoucher.rows[0].result.approval_id);
@@ -177,21 +223,21 @@ async function smokeAtomicWriters(ids) {
   const directVoucher=await db.query(`SELECT create_voucher_disbursement_atomic($1,'2026-02-02','other',NULL,NULL,50,$2,'expense','[]'::jsonb,FALSE,$3) result`,[c,b,u]);
   assert.ok(directVoucher.rows[0].result.journal_entry_id);
   const salesInvoice='71000000-0000-4000-8000-000000000001';
-  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,1,'2026-02-01','2026-03-01',$3,80,0,0,80,0,'unpaid')`,[salesInvoice,c,contact]);
+  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,101,'2026-02-01','2026-03-01',$3,80,0,0,80,0,'unpaid')`,[salesInvoice,c,contact]);
   const receipt=await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','client',$2,80,$3,'receipt',$4::jsonb,FALSE,FALSE,$5) result`,
     [c,contact,b,JSON.stringify([{invoice_id:salesInvoice,amount:80}]),u]);
   assert.ok(receipt.rows[0].result.journal_entry_id);
   assert.equal((await db.query(`SELECT status FROM invoices WHERE id=$1`,[salesInvoice])).rows[0].status,'paid');
   const gatewayInvoice='71000000-0000-4000-8000-000000000002';
   const paymentRecord='72000000-0000-4000-8000-000000000001';
-  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,2,'2026-02-01','2026-03-01',$3,100,0,0,100,0,'unpaid')`,[gatewayInvoice,c,contact]);
+  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,102,'2026-02-01','2026-03-01',$3,100,0,0,100,0,'unpaid')`,[gatewayInvoice,c,contact]);
   await db.query(`INSERT INTO payment_records(id,company_id,invoice_id,payment_gateway_id,amount,status,created_by,settlement_account_id) VALUES($1,$2,$3,'gateway-1',120,'pending',$4,$5)`,[paymentRecord,c,gatewayInvoice,u,a['1110']]);
   const finalizedPayment=await db.query(`SELECT finalize_gateway_payment($1,$2,'paid','{}',$3) result`,[c,paymentRecord,u]);
   assert.equal(Number(finalizedPayment.rows[0].result.customer_advance),20);
   const replayPayment=await db.query(`SELECT finalize_gateway_payment($1,$2,'paid','{}',$3) result`,[c,paymentRecord,u]);
   assert.equal(replayPayment.rows[0].result.already_processed,true);
   const approvalInvoice='71000000-0000-4000-8000-000000000003';
-  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,3,'2026-02-01','2026-03-01',$3,100,0,0,100,0,'unpaid')`,[approvalInvoice,c,contact]);
+  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,103,'2026-02-01','2026-03-01',$3,100,0,0,100,0,'unpaid')`,[approvalInvoice,c,contact]);
   const pendingReceipt=(await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-03','client',$2,60,$3,'pending receipt',$4::jsonb,FALSE,TRUE,$5) result`,[c,contact,b,JSON.stringify([{invoice_id:approvalInvoice,amount:60}]),u])).rows[0].result;
   assert.ok(pendingReceipt.approval_id);
   assert.equal((await db.query(`SELECT journal_entry_id FROM voucher_receipts WHERE id=$1`,[pendingReceipt.id])).rows[0].journal_entry_id,null);
@@ -276,8 +322,9 @@ async function smokeAtomicWriters(ids) {
     WHERE company_id=$1 AND status='active' ORDER BY created_at LIMIT 1`, [c]);
   await db.query(`SELECT update_cash_transaction_note($1,$2,'updated',$3)`, [c, transaction.rows[0].id, u]);
   await db.query(`SELECT cancel_cash_transaction($1,$2,$3)`, [c, transaction.rows[0].id, u]);
-  const reversal = await db.query('SELECT count(*) count FROM journal_entries WHERE reversal_of IS NOT NULL');
-  assert.equal(Number(reversal.rows[0].count), 2);
+  const reversal = await db.query(`SELECT count(*) count FROM journal_entries
+    WHERE reversal_of IS NOT NULL AND reference_type='cash_transaction_reversal' AND reference_id=$1`,[transaction.rows[0].id]);
+  assert.equal(Number(reversal.rows[0].count), 1);
 
   await db.query(`SELECT create_journal_entry($1,'2026-02-07','general','Project revenue',$2,$3::jsonb)`,[
     c,u,JSON.stringify([

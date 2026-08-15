@@ -66,67 +66,27 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const parsed = purchaseInvoiceUpdateSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { data: existing } = await s.from('purchase_invoices')
-      .select('id, number, status, total, journal_entry_id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (!existing) return notFound();
-
-    const inv = existing as Record<string, any>;
-
-    if (inv.status === 'cancelled') {
-      return error('الفاتورة ملغاة ولا يمكن تعديلها');
+    if (parsed.data.status && parsed.data.status !== 'cancelled') {
+      return error('لا يمكن تغيير حالة الدفع يدوياً؛ الحالة تُشتق من سندات الصرف', 409);
     }
-
-    // منع التلاعب اليدوي بحالة فاتورة عليها مدفوعات (الحالة تُشتق من السندات)
-    if (
-      parsed.data.status &&
-      ['paid', 'partial'].includes(inv.status) &&
-      parsed.data.status !== 'cancelled'
-    ) {
-      return error('لا يمكن تغيير حالة فاتورة عليها مدفوعات يدوياً');
-    }
-
     if (parsed.data.status === 'cancelled') {
-      // لا إلغاء لفاتورة عليها سندات صرف — عكس المدفوعات مسؤولية قسم السندات
-      const { data: pays } = await s.from('disbursement_invoice_items')
-        .select('amount')
-        .eq('purchase_invoice_id', id)
-        .eq('company_id', auth.companyId);
-      const paidAmount = (pays || []).reduce(
-        (sum: number, p: any) => sum + (parseFloat(p.amount) || 0), 0
-      );
-      if (paidAmount > 0) {
-        return error('لا يمكن إلغاء فاتورة عليها مدفوعات — اعكس سندات الصرف المرتبطة أولاً');
-      }
-
-      // قيد عكسي كامل الحقول مع الإبقاء على القيد الأصلي
-      if (inv.journal_entry_id) {
-        const { postReversalEntry } = await import('@/lib/voucher-utils');
-        const { error: revErr } = await postReversalEntry(auth.companyId, {
-          journalEntryId: inv.journal_entry_id,
-          referenceType: 'purchase_invoice_reversal',
-          referenceId: id,
-          description: `عكس فاتورة مشتريات رقم ${inv.number}`,
-          userId: auth.userId,
-        });
-        if (revErr) throw revErr;
-      }
+      const { data: cancelled, error: cancelError } = await s.rpc('cancel_purchase_invoice_atomic', {
+        p_company_id: auth.companyId,
+        p_invoice_id: id,
+        p_notes: parsed.data.notes || '',
+        p_user_id: auth.userId,
+      });
+      if (cancelError) throw cancelError;
+      return success(cancelled);
     }
-
-    const updateData: any = { updated_at: new Date().toISOString() };
-    if (parsed.data.status !== undefined) updateData.status = parsed.data.status;
-    if (parsed.data.notes !== undefined) updateData.notes = parsed.data.notes;
-
-    const { data: result, error: updateError } = await s.from('purchase_invoices')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .maybeSingle();
-
-    if (updateError || !result) return notFound();
+    if (parsed.data.notes === undefined) return error('لا توجد حقول قابلة للتعديل');
+    const { data: result, error: updateError } = await s.rpc('update_purchase_invoice_metadata', {
+      p_company_id: auth.companyId,
+      p_invoice_id: id,
+      p_notes: parsed.data.notes,
+      p_user_id: auth.userId,
+    });
+    if (updateError) throw updateError;
     return success(result);
   } catch (err) {
     return handleApiError(err);
@@ -145,37 +105,16 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const { id } = await params;
     const s = sb();
 
-    const { data: inv } = await s.from('purchase_invoices')
-      .select('id, journal_entry_id, purchase_order_id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!inv) return notFound();
-
-    const { data: pays } = await s.from('disbursement_invoice_items')
-      .select('id')
-      .eq('purchase_invoice_id', id)
-      .eq('company_id', auth.companyId)
-      .limit(1);
-    if (pays && pays.length > 0) {
-      return error('لا يمكن حذف فاتورة عليها سندات صرف — اعكس السندات أو ألغِ الفاتورة');
-    }
-
-    if ((inv as Record<string, any>).journal_entry_id) {
-      return error('لا يمكن حذف فاتورة مُرحَّلة — استخدم الإلغاء لعكس القيد المحاسبي');
-    }
-    if ((inv as Record<string, any>).purchase_order_id) {
-      return error('لا يمكن حذف فاتورة مرتبطة بأمر شراء أو تحديث مخزون', 409);
-    }
-
-    await s.from('purchase_invoice_items').delete().eq('purchase_invoice_id', id).eq('company_id', auth.companyId);
-    await s.from('purchase_invoices')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
+    // Financial purchase invoices are never hard-deleted. DELETE is kept as
+    // a compatibility alias for the same audited reversal lifecycle.
+    const { data: cancelled, error: cancelError } = await s.rpc('cancel_purchase_invoice_atomic', {
+      p_company_id: auth.companyId,
+      p_invoice_id: id,
+      p_notes: '',
+      p_user_id: auth.userId,
+    });
+    if (cancelError) throw cancelError;
+    return success(cancelled);
   } catch (err) {
     return handleApiError(err);
   }

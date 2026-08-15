@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -110,14 +110,8 @@ export async function PUT(
     const { id } = await paramsPromise;
     const s = sb();
     const body = await parseBody<any>(request);
-    const { data: existing } = await s.from('invoices')
-      .select('id, status, journal_entry_id, notes, due_date')
-      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!existing) return notFound();
-    if ((existing as any).status === 'cancelled') return error('لا يمكن تعديل فاتورة ملغاة', 409);
-
-    // Posted invoices are immutable. Corrections require cancellation/reversal
-    // followed by a new invoice; in-place rewriting breaks the audit trail.
+    // Posted financial fields are immutable; only presentation metadata can
+    // change, under a row lock that cannot race with cancellation.
     const immutableFields = [
       'items', 'date', 'clientId', 'contact_id', 'projectId', 'project_id',
       'vatRate', 'vat_rate', 'vatEnabled', 'subtotal', 'total',
@@ -125,22 +119,23 @@ export async function PUT(
     if (immutableFields.some((field) => body[field] !== undefined)) {
       return error('لا يمكن تعديل البيانات المحاسبية لفاتورة مرحّلة؛ ألغِ الفاتورة وأنشئ أخرى', 409);
     }
-    const update: Record<string, unknown> = {};
-    if (body.notes !== undefined) {
-      if (typeof body.notes !== 'string' || body.notes.length > 2000) return error('الملاحظات طويلة جداً');
-      update.notes = body.notes.trim() || null;
+    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) {
+      return error('الملاحظات طويلة جداً');
     }
     const dueDate = body.dueDate ?? body.due_date;
-    if (dueDate !== undefined) {
-      if (typeof dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return error('تاريخ الاستحقاق غير صالح');
-      update.due_date = dueDate;
+    if (dueDate !== undefined && (typeof dueDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate))) {
+      return error('تاريخ الاستحقاق غير صالح');
     }
-    if (!Object.keys(update).length) return error('لا توجد حقول قابلة للتعديل');
-    const { data: updated, error: updateError } = await s.from('invoices')
-      .update({ ...update, updated_at: new Date().toISOString() })
-      .eq('id', id).eq('company_id', auth.companyId).select('*').maybeSingle();
+    if (body.notes === undefined && dueDate === undefined) return error('لا توجد حقول قابلة للتعديل');
+    const { data: updated, error: updateError } = await s.rpc('update_sales_invoice_metadata', {
+      p_company_id: auth.companyId,
+      p_invoice_id: id,
+      p_due_date: dueDate || null,
+      p_notes: typeof body.notes === 'string' ? body.notes : '',
+      p_notes_set: body.notes !== undefined,
+      p_user_id: auth.userId,
+    });
     if (updateError) throw updateError;
-    if (!updated) return notFound();
     return success(updated);
   } catch (err) {
     return handleApiError(err);
@@ -157,44 +152,23 @@ export async function PATCH(
     const s = sb();
     const body = await parseBody<{ status: string; notes?: string }>(request);
 
-    const { data: invRes } = await s.from('invoices')
-      .select('id, number, total, status, journal_entry_id, paid_amount').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!invRes) return notFound();
-    const invoice = invRes as Record<string, any>;
-
     if (body.status === 'paid') {
       return error('لا يمكن تعليم الفاتورة مدفوعة يدوياً. سجّل سند قبض وخصّصه على الفاتورة');
     }
-
-    if (body.status === 'cancelled') {
-      if (invoice.status === 'cancelled') return error('الفاتورة ملغية مسبقاً');
-      const paidAmt = parseFloat(invoice.paid_amount || '0') || 0;
-      if (paidAmt > 0.005 || invoice.status === 'paid' || invoice.status === 'partial') {
-        return error('لا يمكن إلغاء فاتورة عليها تحصيل — اعكس سندات القبض أولاً');
-      }
-      const { data: credits } = await s.from('credit_notes').select('id')
-        .eq('company_id', auth.companyId).eq('invoice_id', id).eq('status', 'approved').limit(1);
-      if (credits?.length) return error('لا يمكن إلغاء فاتورة لها إشعارات دائنة معتمدة؛ ألغِ الإشعارات أولاً', 409);
-
-      if (invoice.journal_entry_id) {
-        const { postReversalEntry } = await import('@/lib/voucher-utils');
-        const { error: revErr } = await postReversalEntry(auth.companyId, {
-          journalEntryId: invoice.journal_entry_id,
-          referenceType: 'invoice_reversal',
-          referenceId: id,
-          description: `قيد عكسي لفاتورة رقم ${invoice.number}`,
-          userId: auth.userId,
-        });
-        if (revErr) throw revErr;
-      }
-
-      await s.from('invoices')
-        .update({ status: 'cancelled', notes: body.notes || null, updated_at: new Date().toISOString() })
-        .eq('id', id).eq('company_id', auth.companyId);
-      return success({ message: 'تم إلغاء الفاتورة بنجاح' });
+    if (body.status !== 'cancelled') {
+      return error('حالة غير صالحة. الحالة المسموحة هنا: cancelled');
     }
-
-    return error('حالة غير صالحة. الحالات المسموحة: paid, cancelled');
+    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) {
+      return error('الملاحظات طويلة جداً');
+    }
+    const { data: cancelled, error: cancelError } = await s.rpc('cancel_sales_invoice_atomic', {
+      p_company_id: auth.companyId,
+      p_invoice_id: id,
+      p_notes: body.notes || '',
+      p_user_id: auth.userId,
+    });
+    if (cancelError) throw cancelError;
+    return success(cancelled);
   } catch (err) {
     return handleApiError(err);
   }
