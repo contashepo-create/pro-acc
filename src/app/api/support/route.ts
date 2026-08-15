@@ -53,32 +53,17 @@ export async function POST(req: NextRequest) {
       return error('يجب رفع المرفق عبر التخزين الآمن للشركة أولاً');
     }
 
-    const s = sb();
-    const { data, error: insErr } = await s.from('support_tickets')
-      .insert({
-        company_id: auth.companyId,
-        user_id: auth.userId,
-        subject,
-        message,
-        category,
-        attachment_url: attachment,
-        status: 'open',
-      })
-      .select('id, subject, category, status, created_at')
-      .single();
-    if (insErr) throw insErr;
-
-    // Also write a company_message so existing admin UI surfaces it.
-    try {
-      await s.from('company_messages').insert({
-        company_id: auth.companyId,
-        user_id: auth.userId,
-        subject: `[دعم/${category}] ${subject}`,
-        body: message,
-        type: 'support',
-        status: 'open',
-      });
-    } catch {}
+    // Ticket, admin-facing message and tenant audit either all commit or all
+    // roll back. The RPC revalidates the authenticated user/company relation.
+    const { data, error: createError } = await sb().rpc('create_support_ticket_atomic', {
+      p_company_id: auth.companyId,
+      p_user_id: auth.userId,
+      p_subject: subject,
+      p_message: message,
+      p_category: category,
+      p_attachment_url: attachment,
+    });
+    if (createError) throw createError;
 
     return success({ ticket: data, message: 'تم إرسال الرسالة. سنتواصل معك قريباً.' }, 201);
   } catch (e) {

@@ -5,6 +5,7 @@ import { success, error, parseBody } from '@/lib/api-helpers';
 import { verifyMasterPassword } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest) {
     if (!body.companyId || typeof body.is_active !== 'boolean') {
       return error('companyId و is_active مطلوبان');
     }
-    if (!/^[0-9a-fA-F-]{8,}$/.test(body.companyId)) {
+    if (!UUID.test(body.companyId)) {
       return error('معرّف الشركة غير صالح', 400);
     }
 

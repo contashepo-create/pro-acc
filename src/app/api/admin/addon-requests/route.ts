@@ -5,6 +5,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { signPrivateReceiptReference } from '@/lib/storage-references';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(req: NextRequest) {
   try {
@@ -44,7 +45,7 @@ export async function PUT(req: NextRequest) {
       status?: 'approved' | 'rejected';
       admin_notes?: string;
     }>(req);
-    if (!body.id || !/^[0-9a-fA-F-]{8,}$/.test(body.id)) return error('id غير صالح');
+    if (!body.id || !UUID.test(body.id)) return error('id غير صالح');
     if (body.status !== 'approved' && body.status !== 'rejected') return error('حالة غير صالحة');
     if (body.admin_notes && body.admin_notes.length > 2000) return error('ملاحظات الإدارة طويلة جداً');
 
@@ -67,22 +68,9 @@ export async function PUT(req: NextRequest) {
       throw reviewError;
     }
 
-    const result = (data || {}) as Record<string, any>;
-    // Customer notification is intentionally after the atomic grant. A failed
-    // notification cannot duplicate or roll back a paid entitlement.
-    if (body.status === 'approved' && result.company_id) {
-      try {
-        await sb().from('company_messages').insert({
-          company_id: result.company_id,
-          subject: 'تم تفعيل الإضافة',
-          body: `تمت الموافقة على الإضافة ${result.addon_type || ''} بكمية ${result.quantity || 0}.`,
-          type: 'addon_granted',
-          status: 'open',
-        });
-      } catch { /* entitlement remains authoritative */ }
-    }
-
-    return success({ result });
+    // A database trigger writes the user-scoped notification in this same
+    // transaction, so approval cannot commit without its audit/message pair.
+    return success({ result: data || {} });
   } catch (err) {
     return adminJsonError(err);
   }

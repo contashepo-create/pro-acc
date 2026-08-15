@@ -5,13 +5,14 @@ import { success, error, parseBody } from '@/lib/api-helpers';
 import { verifyMasterPassword } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const __admin = await requireAdmin(request);
     const { id: companyId } = await params;
     // Validate UUID shape to prevent path-based filter injection
-    if (!/^[0-9a-fA-F-]{8,}$/.test(companyId)) return error('معرّف الشركة غير صالح', 400);
+    if (!UUID.test(companyId)) return error('معرّف الشركة غير صالح', 400);
 
     const body = await parseBody(request);
     const { days = 7, reason, masterPassword } = body;

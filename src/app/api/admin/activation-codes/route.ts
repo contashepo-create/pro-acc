@@ -25,8 +25,11 @@ export async function GET(req: NextRequest) {
     await requireAdmin(req);
     const s = sb();
     const used = req.nextUrl.searchParams.get('used');
+    if (used && used !== 'true' && used !== 'false') return error('حالة كود التفعيل غير صالحة');
 
-    let queryBuilder = s.from('activation_codes').select('*');
+    let queryBuilder = s.from('activation_codes').select(
+      'id, code, plan_code, duration_months, company_id, target_company_id, is_used, used_by, used_at, expires_at, created_by, created_at, addon_type, addon_quantity, plan_duration_months, notes, one_time'
+    );
     if (used === 'true') queryBuilder = queryBuilder.eq('is_used', true);
     else if (used === 'false') queryBuilder = queryBuilder.eq('is_used', false);
     queryBuilder = queryBuilder.order('created_at', { ascending: false });
@@ -37,7 +40,8 @@ export async function GET(req: NextRequest) {
     const companyIds = (codes || []).map((c: any) => c.target_company_id || c.used_by).filter(Boolean);
     const companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
-      const { data: companies } = await s.from('companies').select('id, name').in('id', [...new Set(companyIds)]);
+      const { data: companies, error: companiesError } = await s.from('companies').select('id, name').in('id', [...new Set(companyIds)]);
+      if (companiesError) throw companiesError;
       (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
     }
 

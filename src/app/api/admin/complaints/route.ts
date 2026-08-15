@@ -6,6 +6,7 @@ import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 const sb = () => getSupabase();
 
 const ALLOWED_STATUSES = new Set(['pending', 'read', 'replied', 'closed']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,6 +14,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status') || '';
 
+    if (status && !ALLOWED_STATUSES.has(status)) return error('حالة غير صالحة');
     const s = sb();
     let queryBuilder = s.from('complaints')
       .select('id, type, subject, body, status, admin_reply, created_at, company_id, replied_at')
@@ -29,9 +31,10 @@ export async function GET(request: NextRequest) {
     const companyIds = (complaints || []).map((c: any) => c.company_id).filter(Boolean);
     const companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
-      const { data: companies } = await s.from('companies')
+      const { data: companies, error: companiesError } = await s.from('companies')
         .select('id, name')
         .in('id', [...new Set(companyIds)]);
+      if (companiesError) throw companiesError;
       (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
     }
 
@@ -49,40 +52,22 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const admin = await requireAdmin(request);
-    const body = await parseBody<{ id: string; status?: string; adminReply?: string }>(request);
+    const body = await parseBody<{ id?: string; status?: string; adminReply?: string }>(request);
+    if (!body.id || !UUID.test(body.id)) return error('معرّف الشكوى غير صالح');
+    if (body.status !== undefined && !ALLOWED_STATUSES.has(body.status)) return error('حالة غير صالحة');
+    if (body.adminReply !== undefined && (typeof body.adminReply !== 'string' || body.adminReply.length > 5000)) return error('رد الإدارة طويل جداً');
+    if (body.status === undefined && body.adminReply === undefined) return error('لا توجد حقول قابلة للتحديث');
 
-    if (!body.id || typeof body.id !== 'string') {
-      return error('معرّف الشكوى مطلوب', 400);
-    }
-    if (body.status && !ALLOWED_STATUSES.has(body.status)) {
-      return error('حالة غير صالحة', 400);
-    }
-
-    const update: any = {};
-    if (body.status) update.status = body.status;
-    if (body.adminReply !== undefined) {
-      update.admin_reply = String(body.adminReply).slice(0, 5000);
-      update.replied_by = admin.adminId;
-      update.replied_at = new Date().toISOString();
-      if (!update.status) update.status = 'replied';
-    }
-
-    if (Object.keys(update).length === 0) return success({ message: 'لا توجد تحديثات' });
-    update.updated_at = new Date().toISOString();
-
-    const s = sb();
-    let { error: updateErr } = await s.from('complaints').update(update).eq('id', body.id);
-
-    // Resilience: live DBs created from older snapshots may lack updated_at
-    // (schema-cache error) — retry without it so "إغلاق شكوى" still works.
-    if (updateErr && /column|schema cache|Could not find|42703/i.test(`${updateErr.message} ${updateErr.code}`)) {
-      console.warn('[admin/complaints] updated_at missing — apply migration 044. Retrying without it.');
-      delete update.updated_at;
-      ({ error: updateErr } = await s.from('complaints').update(update).eq('id', body.id));
-    }
-    if (updateErr) throw updateErr;
-
-    return success({ ok: true });
+    const { data, error: updateError } = await sb().rpc('admin_update_complaint', {
+      p_admin_id: admin.adminId,
+      p_complaint_id: body.id,
+      p_status: body.status ?? null,
+      p_reply: body.adminReply ?? null,
+      p_reply_set: body.adminReply !== undefined,
+    });
+    if (updateError) throw updateError;
+    if ((data as { not_found?: boolean } | null)?.not_found) return error('الشكوى غير موجودة', 404);
+    return success(data);
   } catch (err) {
     return adminJsonError(err);
   }

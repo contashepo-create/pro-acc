@@ -175,6 +175,116 @@ async function seedLedger() {
   return ids;
 }
 
+async function smokeAdminEntitlements(ids) {
+  const adminId='90000000-0000-4000-8000-000000000001';
+  const inactiveAdmin='90000000-0000-4000-8000-000000000099';
+  const plan=(await db.query(`SELECT admin_manage_subscription_plan($1,'create',NULL,$2::jsonb) result`,[
+    adminId,JSON.stringify({
+      code:'runtime_secure',name:'Runtime secure',currency:'USD',price_monthly:25.50,
+      price_yearly:250,yearly_discount_percent:20,trial_days:7,max_users:5,
+      max_clients:null,max_suppliers:null,max_employees:null,max_projects:20,
+      max_invoices_per_month:100,max_quotations_per_month:50,max_storage_mb:1000,
+      features:['accounts','invoices'],features_modules:{accounts:true,invoices:true},is_active:true,sort_order:91,
+    }),
+  ])).rows[0].result;
+  assert.equal(plan.code,'runtime_secure');
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM admin_audit_log WHERE action='create_subscription_plan' AND target_id=$1`,[plan.id])).rows[0].count),1);
+
+  await assert.rejects(()=>db.query(`SELECT admin_manage_subscription_plan($1,'create',NULL,$2::jsonb)`,[
+    adminId,JSON.stringify({code:'invalid_integer',name:'Invalid integer',max_users:1.5}),
+  ]));
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM subscription_plans WHERE code='invalid_integer'`)).rows[0].count),0);
+  await assert.rejects(()=>db.query(`SELECT admin_manage_subscription_plan($1,'update',$2,$3::jsonb)`,[
+    inactiveAdmin,plan.id,JSON.stringify({name:'Blocked'}),
+  ]));
+  assert.equal((await db.query(`SELECT name FROM subscription_plans WHERE id=$1`,[plan.id])).rows[0].name,'Runtime secure');
+
+  const subscription=(await db.query(`INSERT INTO subscriptions(company_id,plan_id,plan_code,status,start_date,end_date)
+    VALUES($1,$2,'runtime_secure','active',CURRENT_DATE,CURRENT_DATE+30) RETURNING id`,[ids.company,plan.id])).rows[0].id;
+  await assert.rejects(()=>db.query(`SELECT admin_manage_subscription_plan($1,'update',$2,$3::jsonb)`,[
+    adminId,plan.id,JSON.stringify({code:'changed_after_use'}),
+  ]));
+  assert.equal((await db.query(`SELECT code FROM subscription_plans WHERE id=$1`,[plan.id])).rows[0].code,'runtime_secure');
+
+  const companyUpdated=(await db.query(`SELECT admin_update_company_profile($1,$2,$3::jsonb) result`,[
+    adminId,ids.company,JSON.stringify({name:'Updated tenant',email:'owner@example.test',vat_rate:0.14}),
+  ])).rows[0].result;
+  assert.equal(companyUpdated.name,'Updated tenant');
+  await assert.rejects(()=>db.query(`SELECT admin_update_company_profile($1,$2,$3::jsonb)`,[
+    inactiveAdmin,ids.company,JSON.stringify({name:'Blocked tenant'}),
+  ]));
+  assert.equal((await db.query(`SELECT name FROM companies WHERE id=$1`,[ids.company])).rows[0].name,'Updated tenant');
+
+  const complaintId='92000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO complaints(id,company_id,user_id,type,subject,body)
+    VALUES($1,$2,$3,'complaint','Runtime complaint','Runtime body')`,[complaintId,ids.company,ids.user]);
+  const complaint=(await db.query(`SELECT admin_update_complaint($1,$2,'replied','Reviewed',TRUE) result`,[
+    adminId,complaintId,
+  ])).rows[0].result;
+  assert.equal(complaint.status,'replied');
+  assert.equal((await db.query(`SELECT admin_reply FROM complaints WHERE id=$1`,[complaintId])).rows[0].admin_reply,'Reviewed');
+
+  const sent=(await db.query(`SELECT admin_send_company_message($1,$2,'Runtime subject','Runtime body') result`,[
+    adminId,ids.company,
+  ])).rows[0].result;
+  assert.ok(sent.id);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM admin_audit_log WHERE action='send_company_message' AND target_id=$1`,[ids.company])).rows[0].count),1);
+  await assert.rejects(()=>db.query(`SELECT admin_send_company_message($1,'93000000-0000-4000-8000-000000000099','No tenant','Blocked')`,[adminId]));
+
+  const paymentMethod=(await db.query(`SELECT code FROM payment_methods WHERE is_active=TRUE ORDER BY sort_order LIMIT 1`)).rows[0].code;
+  const supportTicket=(await db.query(`SELECT create_support_ticket_atomic($1,$2,'Atomic support','Atomic support message','technical',NULL) result`,[
+    ids.company,ids.user,
+  ])).rows[0].result;
+  assert.equal(supportTicket.status,'open');
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_type='support_ticket' AND entity_id=$1`,[supportTicket.id])).rows[0].count),1);
+
+  const addonCreated=(await db.query(`SELECT create_addon_request_atomic($1,$2,'storage_gb',2,'monthly',$3,CURRENT_DATE,'12:30',$4,'paid') result`,[
+    ids.company,ids.user,paymentMethod,`${ids.company}/receipts/addon.png`,
+  ])).rows[0].result;
+  assert.equal(Number(addonCreated.total_amount_usd),6);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND type='addon_request'`,[ids.company])).rows[0].count),1);
+  await assert.rejects(()=>db.query(`SELECT create_addon_request_atomic($1,$2,'storage_gb',2,'monthly',$3,CURRENT_DATE,'12:30',$4,'duplicate')`,[
+    ids.company,ids.user,paymentMethod,`${ids.company}/receipts/addon-2.png`,
+  ]));
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND type='addon_request'`,[ids.company])).rows[0].count),1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_type='addon_request' AND company_id=$1`,[ids.company])).rows[0].count),1);
+
+  const upgradeCreated=(await db.query(`SELECT create_upgrade_request_atomic($1,$2,$3,'monthly',$4,25.50,CURRENT_DATE,'13:00',$5,'paid') result`,[
+    ids.company,ids.user,plan.id,paymentMethod,`${ids.company}/receipts/upgrade.png`,
+  ])).rows[0].result;
+  assert.equal(upgradeCreated.plan_code,'runtime_secure');
+  await db.query(`UPDATE upgrade_requests SET status='rejected' WHERE id=$1`,[upgradeCreated.id]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND user_id=$2 AND type='upgrade'`,[ids.company,ids.user])).rows[0].count),2);
+
+  const addonId='93000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO addon_requests(id,company_id,user_id,addon_type,quantity,duration_type,unit_price_usd,total_amount_usd,status)
+    VALUES($1,$2,$3,'extra_user',1,'monthly',10,10,'pending')`,[addonId,ids.company,ids.user]);
+  await db.query(`UPDATE addon_requests SET status='rejected' WHERE id=$1`,[addonId]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND user_id=$2 AND type='addon_update'`,[ids.company,ids.user])).rows[0].count),1);
+
+  const otherCompany='93000000-0000-4000-8000-000000000010';
+  const otherUser='93000000-0000-4000-8000-000000000011';
+  const mismatchedAddon='93000000-0000-4000-8000-000000000012';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Other notification tenant')`,[otherCompany]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active)
+    VALUES($1,$2,'other-notify@example.test','x','Other user','admin',TRUE)`,[otherUser,otherCompany]);
+  await assert.rejects(()=>db.query(`SELECT create_support_ticket_atomic($1,$2,'Cross tenant','Cross tenant message','technical',NULL)`,[
+    ids.company,otherUser,
+  ]));
+  await assert.rejects(()=>db.query(`SELECT create_upgrade_request_atomic($1,$2,$3,'monthly',$4,25.50,CURRENT_DATE,NULL,$5,NULL)`,[
+    ids.company,otherUser,plan.id,paymentMethod,`${ids.company}/receipts/cross.png`,
+  ]));
+  await db.query(`INSERT INTO addon_requests(id,company_id,user_id,addon_type,quantity,duration_type,unit_price_usd,total_amount_usd,status)
+    VALUES($1,$2,$3,'extra_user',1,'monthly',10,10,'pending')`,[mismatchedAddon,ids.company,otherUser]);
+  await assert.rejects(()=>db.query(`UPDATE addon_requests SET status='approved' WHERE id=$1`,[mismatchedAddon]));
+  assert.equal((await db.query(`SELECT status FROM addon_requests WHERE id=$1`,[mismatchedAddon])).rows[0].status,'pending');
+
+  await db.query(`SELECT restrict_subscription_atomic($1,$2,'cancelled',NULL,NULL,NULL,NULL,'runtime cancellation')`,[
+    subscription,adminId,
+  ]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM notifications WHERE company_id=$1 AND type='warning' AND title='تم إلغاء اشتراكك'`,[ids.company])).rows[0].count),1);
+}
+
 async function smokeAdminSupport(ids) {
   const adminId='90000000-0000-4000-8000-000000000001';
   const ticketId='91000000-0000-4000-8000-000000000001';
@@ -183,7 +293,7 @@ async function smokeAdminSupport(ids) {
   const updated=(await db.query(`SELECT admin_update_support_ticket($1,$2,'resolved','Completed',TRUE) result`,[adminId,ticketId])).rows[0].result;
   assert.equal(updated.status,'resolved');
   assert.equal((await db.query(`SELECT status FROM support_tickets WHERE id=$1`,[ticketId])).rows[0].status,'resolved');
-  assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND type='support'`,[ids.company])).rows[0].count),1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND type='support'`,[ids.company])).rows[0].count),2);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM admin_audit_log WHERE admin_id=$1 AND target_id=$2`,[adminId,ticketId])).rows[0].count),1);
 }
 
@@ -636,6 +746,7 @@ try {
   await smokeAdminOtp();
   await smokeAdminGlobalConfiguration();
   const ids = await seedLedger();
+  await smokeAdminEntitlements(ids);
   await smokeAdminSupport(ids);
   await smokeAtomicWriters(ids);
   console.log('Clean migrations and atomic RPC smoke tests passed.');

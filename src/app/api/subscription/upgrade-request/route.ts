@@ -4,6 +4,7 @@ import { requireApiAuth, handleApiError, success, error, parseBody, requireModul
 import { trustedReceiptReference } from '@/lib/safe-input';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,9 +15,11 @@ export async function GET(request: NextRequest) {
     const s = sb();
 
     const { data, error: err } = await s.from('upgrade_requests')
-      .select('*, subscription_plans!requested_plan_id(name, price_monthly, price_yearly)')
+      .select('id, current_plan_id, requested_plan_id, duration_type, status, payment_method_code, payment_amount, payment_date, payment_time, receipt_image_url, receipt_text, notes, admin_notes, reviewed_at, created_at, updated_at, subscription_plans!requested_plan_id(name, price_monthly, price_yearly)')
       .eq('company_id', auth.companyId)
-      .order('created_at', { ascending: false });
+      .eq('user_id', auth.userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
 
     if (err) throw err;
 
@@ -29,110 +32,51 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'subscription', 'create');
-    const s = sb();
-    const body = await parseBody(request);
+    const body = await parseBody<Record<string, unknown>>(request);
 
-    const {
-      requested_plan_id,
-      duration_type,
-      payment_method_code,
-      payment_amount,
-      payment_date,
-      payment_time,
-      receipt_image_url,
-      notes
-    } = body;
+    const requestedPlanId = typeof body.requested_plan_id === 'string' ? body.requested_plan_id : '';
+    const durationType = body.duration_type;
+    const paymentMethod = typeof body.payment_method_code === 'string' ? body.payment_method_code : '';
+    const paymentAmount = Number(body.payment_amount);
+    const paymentDate = typeof body.payment_date === 'string' ? body.payment_date : '';
+    const paymentTime = typeof body.payment_time === 'string' && body.payment_time ? body.payment_time : null;
+    const notes = typeof body.notes === 'string' ? body.notes.trim() : null;
 
-    if (!requested_plan_id || !['monthly', 'yearly'].includes(duration_type) || !payment_method_code) {
+    if (!UUID.test(requestedPlanId) || (durationType !== 'monthly' && durationType !== 'yearly') ||
+        !/^[a-z0-9_-]{1,50}$/i.test(paymentMethod)) {
       return error('الحقول المطلوبة مفقودة أو غير صالحة: الباقة، المدة، طريقة الدفع');
     }
-    const receiptReference = trustedReceiptReference(receipt_image_url, auth.companyId);
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0 ||
+        Math.abs(paymentAmount * 100 - Math.round(paymentAmount * 100)) > 1e-8) {
+      return error('مبلغ الدفع غير صالح');
+    }
+    if (!paymentDate || !/^\d{4}-\d{2}-\d{2}$/.test(paymentDate) || Number.isNaN(Date.parse(paymentDate))) {
+      return error('تاريخ الدفع مطلوب وغير صالح');
+    }
+    if (paymentTime && !/^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(paymentTime)) return error('وقت الدفع غير صالح');
+    if (body.notes !== undefined && typeof body.notes !== 'string') return error('الملاحظات غير صالحة');
+    if (notes && notes.length > 2000) return error('الملاحظات طويلة جداً');
+    const receiptReference = trustedReceiptReference(body.receipt_image_url, auth.companyId);
     if (!receiptReference) return error('يجب رفع إيصال الدفع عبر التخزين الآمن أولاً');
-    if (notes !== undefined && (typeof notes !== 'string' || notes.length > 2000)) return error('الملاحظات طويلة جداً');
 
-    // Check current subscription
-    const { data: currentSub } = await s.from('subscriptions')
-      .select('plan_id')
-      .eq('company_id', auth.companyId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    // Check if there's already pending request
-    const { data: pending } = await s.from('upgrade_requests')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('status', 'pending')
-      .limit(1)
-      .maybeSingle();
-
-    if (pending) {
-      return error('لديك طلب ترقية معلق بالفعل. يرجى الانتظار حتى تتم مراجعته', 400);
-    }
-
-    // Validate plan exists
-    const { data: plan } = await s.from('subscription_plans')
-      .select('id, code, price_monthly, price_yearly')
-      .eq('id', requested_plan_id)
-      .eq('is_active', true)
-      .single();
-
-    if (!plan) return error('الباقة المطلوبة غير موجودة', 404);
-    const expectedAmount = Number(duration_type === 'yearly'
-      ? (plan as any).price_yearly
-      : (plan as any).price_monthly);
-    if (!Number.isFinite(expectedAmount) || expectedAmount <= 0) return error('سعر الباقة غير صالح، تواصل مع الإدارة');
-    if (!Number.isFinite(Number(payment_amount)) || Math.abs(Number(payment_amount) - expectedAmount) > 0.01) {
-      return error(`مبلغ الدفع يجب أن يطابق سعر الباقة (${expectedAmount.toFixed(2)})`);
-    }
-    if (!payment_date || !/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) return error('تاريخ الدفع مطلوب وغير صالح');
-
-    // Validate payment method
-    const { data: paymentMethod } = await s.from('payment_methods')
-      .select('code')
-      .eq('code', payment_method_code)
-      .eq('is_active', true)
-      .single();
-
-    if (!paymentMethod) return error('طريقة الدفع غير صالحة', 400);
-
-    const { data: newRequest, error: insertErr } = await s.from('upgrade_requests')
-      .insert({
-        company_id: auth.companyId,
-        user_id: auth.userId,
-        current_plan_id: (currentSub as any)?.plan_id || null,
-        requested_plan_id,
-        duration_type,
-        payment_method_code,
-        payment_amount: expectedAmount,
-        payment_date,
-        payment_time: typeof payment_time === 'string' ? payment_time.slice(0, 16) : null,
-        receipt_image_url: receiptReference,
-        notes: typeof notes === 'string' ? notes.trim() : null,
-        status: 'pending',
-      })
-      .select()
-      .single();
-
-    if (insertErr?.code === '23505') return error('لديك طلب ترقية معلق بالفعل', 409);
-    if (insertErr) throw insertErr;
-
-    // Send to Telegram bot if configured
-    try {
-      console.log(`New upgrade request: ${newRequest.id} from company ${auth.companyId}`);
-    } catch {}
-
-    // Create notification for admin
-    await s.from('company_messages').insert({
-      company_id: auth.companyId,
-      user_id: auth.userId,
-      subject: `طلب ترقية إلى ${(plan as Record<string, any>).code}`,
-      body: `طلب ترقية جديد:\nالباقة: ${(plan as Record<string, any>).code}\nالمدة: ${duration_type}\nطريقة الدفع: ${payment_method_code}\nالمبلغ: ${payment_amount}\nالتاريخ: ${payment_date} ${payment_time}\nملاحظات: ${notes || ''}`,
-      type: 'upgrade',
-      status: 'open',
+    // Tenant ownership, catalogue price, active payment method, duplicate
+    // protection, request, admin message and audit share one transaction.
+    const { data, error: createError } = await sb().rpc('create_upgrade_request_atomic', {
+      p_company_id: auth.companyId,
+      p_user_id: auth.userId,
+      p_requested_plan_id: requestedPlanId,
+      p_duration_type: durationType,
+      p_payment_method_code: paymentMethod,
+      p_payment_amount: paymentAmount,
+      p_payment_date: paymentDate,
+      p_payment_time: paymentTime,
+      p_receipt_image_url: receiptReference,
+      p_notes: notes,
     });
+    if (createError?.code === '23505') return error('لديك طلب ترقية معلق بالفعل', 409);
+    if (createError) throw createError;
 
-    return success({ request: newRequest, message: 'تم إرسال طلب الترقية. سيتم مراجعته من الإدارة قريباً' }, 201);
+    return success({ request: data, message: 'تم إرسال طلب الترقية. سيتم مراجعته من الإدارة قريباً' }, 201);
   } catch (err) {
     return handleApiError(err);
   }

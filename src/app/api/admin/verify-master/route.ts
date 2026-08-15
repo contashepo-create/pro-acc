@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody, setAuthCookie, clearAuthCookie } from '@/lib/api-helpers';
+import { success, error, parseBody, setAuthCookie, clearAuthCookie } from '@/lib/api-helpers';
 import { verifyPassword, createAdminToken } from '@/lib/auth';
 import { getSession, deleteSession, parseAdminSessionPointer } from '@/lib/admin-session';
 import { getSupabase } from '@/lib/supabase-client';

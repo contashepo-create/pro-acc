@@ -1,18 +1,21 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError } from '@/lib/api-helpers';
+import { success, error } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 
 
 // Get all users with full profile data
 export async function GET(req: NextRequest) {
   try {
-    const __admin = await requireAdmin(req);
+    await requireAdmin(req);
     const userId = req.nextUrl.searchParams.get('user_id');
     const companyId = req.nextUrl.searchParams.get('company_id');
+    if (userId && !UUID.test(userId)) return error('معرّف المستخدم غير صالح');
+    if (companyId && !UUID.test(companyId)) return error('معرّف الشركة غير صالح');
 
     const s = sb();
 
@@ -33,22 +36,24 @@ export async function GET(req: NextRequest) {
           )
         `)
         .eq('id', userId)
-        .single();
+        .maybeSingle();
 
       if (userError) throw userError;
+      if (!user) return error('المستخدم غير موجود', 404);
 
       // Admin audit records use target_type/target_id (not the tenant audit
       // table's entity_type/entity_id shape). Scope activity to this user.
-      const { data: activity } = await s
+      const { data: activity, error: activityError } = await s
         .from('admin_audit_log')
         .select('id, action, details, target_type, target_id, created_at, admin_id')
         .eq('target_type', 'user')
         .eq('target_id', userId)
         .order('created_at', { ascending: false })
         .limit(20);
+      if (activityError) throw activityError;
 
       // Get subscription info (explicit column list — no password/token fields)
-      const { data: subscription } = await s
+      const { data: subscription, error: subscriptionError } = await s
         .from('subscriptions')
         .select(`
           id, subscriber_number, plan_id, plan_code, status,
@@ -64,6 +69,7 @@ export async function GET(req: NextRequest) {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
+      if (subscriptionError) throw subscriptionError;
 
       return success({
         user,

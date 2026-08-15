@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { getSupabase } from '@/lib/supabase-client';
 
@@ -14,7 +14,6 @@ function applySearch(query: any, search: string) {
 
 export async function GET(request: NextRequest) {
   try {
-      const __admin = await requireAdmin(request);
     await requireAdmin(request);
 
     const { page, pageSize } = (() => {
@@ -28,6 +27,11 @@ export async function GET(request: NextRequest) {
     const action = url.searchParams.get('action') || '';
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
+    if ((from && (!dateOnly.test(from) || Number.isNaN(Date.parse(from)))) ||
+        (to && (!dateOnly.test(to) || Number.isNaN(Date.parse(to))))) return error('نطاق التاريخ غير صالح');
+    if (from && to && from > to) return error('بداية النطاق بعد نهايته');
+    if (action.length > 100) return error('نوع العملية طويل جداً');
 
     const s = sb();
 
@@ -88,6 +92,3 @@ export async function DELETE(request: NextRequest) {
     return adminJsonError(err);
   }
 }
-
-// Use serverError for unexpected non-auth errors
-export { serverError };

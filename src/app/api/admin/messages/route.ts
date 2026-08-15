@@ -4,6 +4,7 @@ import { success, error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
       .limit(100);
 
     if (companyId) {
-      if (!/^[0-9a-fA-F-]{8,}$/.test(companyId)) return error('معرّف الشركة غير صالح', 400);
+      if (!UUID.test(companyId)) return error('معرّف الشركة غير صالح', 400);
       queryBuilder = queryBuilder.eq('company_id', companyId);
     }
 
@@ -28,9 +29,10 @@ export async function GET(request: NextRequest) {
     const companyIds = (messages || []).map((m: any) => m.company_id).filter(Boolean);
     const companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
-      const { data: companies } = await s.from('companies')
+      const { data: companies, error: companiesError } = await s.from('companies')
         .select('id, name')
         .in('id', [...new Set(companyIds)]);
+      if (companiesError) throw companiesError;
       (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
     }
 
@@ -51,23 +53,23 @@ export async function POST(request: NextRequest) {
     const body = await parseBody<{ companyId: string; subject: string; body: string }>(request);
 
     if (!body.companyId || typeof body.companyId !== 'string') return error('معرف الشركة مطلوب', 400);
-    if (!/^[0-9a-fA-F-]{8,}$/.test(body.companyId)) return error('معرف الشركة غير صالح', 400);
+    if (!UUID.test(body.companyId)) return error('معرف الشركة غير صالح', 400);
     if (!body.subject?.trim()) return error('عنوان الرسالة مطلوب', 400);
     if (!body.body?.trim()) return error('نص الرسالة مطلوب', 400);
     if (body.subject.length > 200) return error('العنوان طويل جداً', 400);
     if (body.body.length > 5000) return error('نص الرسالة طويل جداً', 400);
 
-    const s = sb();
-    const { data, error: insertErr } = await s.from('messages').insert({
-      company_id: body.companyId,
-      admin_id: admin.adminId,
-      subject: body.subject.trim(),
-      body: body.body.trim(),
-      direction: 'admin_to_company',
-    }).select('id').single();
-
-    if (insertErr) throw insertErr;
-    return success({ id: data.id }, 201);
+    const { data, error: insertErr } = await sb().rpc('admin_send_company_message', {
+      p_admin_id: admin.adminId,
+      p_company_id: body.companyId,
+      p_subject: body.subject.trim(),
+      p_body: body.body.trim(),
+    });
+    if (insertErr) {
+      if (/invalid company message/i.test(String(insertErr.message || ''))) return error('الشركة غير موجودة أو بيانات الرسالة غير صالحة', 404);
+      throw insertErr;
+    }
+    return success(data, 201);
   } catch (err) {
     return adminJsonError(err);
   }

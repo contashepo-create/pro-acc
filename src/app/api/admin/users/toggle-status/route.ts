@@ -1,7 +1,7 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, parseBody } from '@/lib/api-helpers';
 import { verifyMasterPassword } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();

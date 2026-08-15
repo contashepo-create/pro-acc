@@ -5,6 +5,7 @@ import { success, error, parseBody } from '@/lib/api-helpers';
 import { signPrivateReceiptReference } from '@/lib/storage-references';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(req: NextRequest) {
   try {
@@ -25,23 +26,23 @@ export async function GET(req: NextRequest) {
       .limit(300);
     if (status !== 'all') query = query.eq('status', status);
     const { data: requests, error: requestError } = await query;
-    if (requestError) {
-      if (requestError.code === '42P01') return success({ requests: [] });
-      throw requestError;
-    }
+    if (requestError) throw requestError;
 
     const companyIds = [...new Set((requests || []).map((r: any) => r.company_id).filter(Boolean))];
     const planIds = [...new Set((requests || []).map((r: any) => r.requested_plan_id).filter(Boolean))];
     const userIds = [...new Set((requests || []).map((r: any) => r.user_id).filter(Boolean))];
     const s = sb();
-    const [{ data: companies }, { data: plans }, { data: users }] = await Promise.all([
-      companyIds.length ? s.from('companies').select('id,name,email,phone').in('id', companyIds) : Promise.resolve({ data: [] }),
-      planIds.length ? s.from('subscription_plans').select('id,name,code,price_monthly,price_yearly,currency').in('id', planIds) : Promise.resolve({ data: [] }),
-      userIds.length ? s.from('users').select('id,name,email').in('id', userIds) : Promise.resolve({ data: [] }),
+    const [companiesResult, plansResult, usersResult] = await Promise.all([
+      companyIds.length ? s.from('companies').select('id,name,email,phone').in('id', companyIds) : Promise.resolve({ data: [], error: null }),
+      planIds.length ? s.from('subscription_plans').select('id,name,code,price_monthly,price_yearly,currency').in('id', planIds) : Promise.resolve({ data: [], error: null }),
+      userIds.length ? s.from('users').select('id,name,email').in('id', userIds) : Promise.resolve({ data: [], error: null }),
     ]);
-    const companyMap = new Map((companies || []).map((row: any) => [row.id, row]));
-    const planMap = new Map((plans || []).map((row: any) => [row.id, row]));
-    const userMap = new Map((users || []).map((row: any) => [row.id, row]));
+    if (companiesResult.error) throw companiesResult.error;
+    if (plansResult.error) throw plansResult.error;
+    if (usersResult.error) throw usersResult.error;
+    const companyMap = new Map((companiesResult.data || []).map((row: any) => [row.id, row]));
+    const planMap = new Map((plansResult.data || []).map((row: any) => [row.id, row]));
+    const userMap = new Map((usersResult.data || []).map((row: any) => [row.id, row]));
 
     return success({
       requests: await Promise.all((requests || []).map(async (row: any) => ({
@@ -61,7 +62,7 @@ export async function PUT(req: NextRequest) {
   try {
     const admin = await requireAdmin(req);
     const body = await parseBody<{ id?: string; status?: 'approved' | 'rejected'; admin_notes?: string }>(req);
-    if (!body.id || !/^[0-9a-fA-F-]{8,}$/.test(body.id)) return error('id غير صالح');
+    if (!body.id || !UUID.test(body.id)) return error('id غير صالح');
     if (body.status !== 'approved' && body.status !== 'rejected') return error('حالة غير صالحة');
     if (body.admin_notes && body.admin_notes.length > 2000) return error('ملاحظات الإدارة طويلة جداً');
 
@@ -85,19 +86,9 @@ export async function PUT(req: NextRequest) {
       throw reviewError;
     }
 
-    const result = (data || {}) as Record<string, any>;
-    if (body.status === 'approved' && result.company_id) {
-      try {
-        await sb().from('company_messages').insert({
-          company_id: result.company_id,
-          subject: 'تمت الموافقة على طلب الترقية',
-          body: `تم تفعيل باقة ${result.plan_name || result.plan_code} حتى ${result.end_date}.`,
-          type: 'upgrade',
-          status: 'open',
-        });
-      } catch { /* payment grant remains committed */ }
-    }
-    return success({ result });
+    // The reviewed-request trigger writes the user-scoped notification in the
+    // same transaction as entitlement activation and the admin audit record.
+    return success({ result: data || {} });
   } catch (err) {
     return adminJsonError(err);
   }

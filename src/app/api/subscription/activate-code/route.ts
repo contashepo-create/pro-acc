@@ -65,11 +65,12 @@ export async function GET(request: NextRequest) {
 
     const s = sb();
     const digest = createHash('sha256').update(code).digest('hex');
-    let { data: ac } = await s.from('activation_codes')
+    let { data: ac, error: codeError } = await s.from('activation_codes')
       .select('id, plan_code, duration_months, plan_duration_months, addon_type, addon_quantity, expires_at, target_company_id, company_id, is_used')
       .eq('code_hash', digest)
       .eq('is_used', false)
       .maybeSingle();
+    if (codeError) throw codeError;
 
     // Backward compatibility for codes created before migration 049.
     if (!ac) {
@@ -79,6 +80,7 @@ export async function GET(request: NextRequest) {
         .eq('is_used', false)
         .limit(1)
         .maybeSingle();
+      if (legacy.error) throw legacy.error;
       ac = legacy.data;
     }
 
@@ -95,11 +97,12 @@ export async function GET(request: NextRequest) {
       return success({ valid: true, type: 'addon', addon_type: row.addon_type, quantity: row.addon_quantity });
     }
 
-    const { data: plan } = await s.from('subscription_plans')
+    const { data: plan, error: planError } = await s.from('subscription_plans')
       .select('name, code, description_ar')
       .eq('code', row.plan_code)
       .eq('is_active', true)
       .maybeSingle();
+    if (planError) throw planError;
     if (!plan) return success({ valid: false, reason: 'plan_unavailable' });
     return success({
       valid: true,
