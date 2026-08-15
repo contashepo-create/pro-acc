@@ -144,6 +144,36 @@ async function seedLedger() {
 
 async function smokeAtomicWriters(ids) {
   const { company: c, user: u, employee: e, bank: b, contact, project, accounts: a } = ids;
+
+  const fiscalYear='60000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO fiscal_years(id,company_id,name,start_date,end_date,status)
+    VALUES($1,$2,'January 2026','2026-01-01','2026-01-31','open')`,[fiscalYear,c]);
+  await db.query(`SELECT create_journal_entry($1,'2026-01-15','general','January revenue',$2,$3::jsonb)`,[
+    c,u,JSON.stringify([{accountId:a['1000'],debit:100,credit:0},{accountId:a['4100'],debit:0,credit:100}]),
+  ]);
+  const closeRace=await Promise.all([
+    db.query(`SELECT close_fiscal_year_atomic($1,$2,$3) result`,[c,fiscalYear,u]),
+    db.query(`SELECT close_fiscal_year_atomic($1,$2,$3) result`,[c,fiscalYear,u]),
+  ]);
+  assert.equal(closeRace.filter((r)=>r.rows[0].result.already_processed===false).length,1);
+  assert.equal(Number(closeRace.find((r)=>r.rows[0].result.already_processed===false).rows[0].result.netIncome),100);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='fiscal_year_closing' AND reference_id=$2`,[c,fiscalYear])).rows[0].count),1);
+  const reopened=(await db.query(`SELECT reopen_fiscal_year_atomic($1,$2,$3) result`,[c,fiscalYear,u])).rows[0].result;
+  assert.equal(reopened.status,'open');
+  assert.equal(Number(reopened.reversedClosingEntries),1);
+  await db.query(`SELECT close_fiscal_year_atomic($1,$2,$3)`,[c,fiscalYear,u]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='fiscal_year_closing' AND reference_id=$2`,[c,fiscalYear])).rows[0].count),2);
+
+  const reversible=(await db.query(`SELECT create_journal_entry($1,'2026-02-01','general','Reversible',$2,$3::jsonb) result`,[
+    c,u,JSON.stringify([{accountId:a['5100'],debit:20,credit:0},{accountId:a['1000'],debit:0,credit:20}]),
+  ])).rows[0].result;
+  const reverseRace=await Promise.all([
+    db.query(`SELECT reverse_journal_entry_atomic($1,$2,'2026-02-02','Reverse runtime','journal_entry_reversal',$2,$3) result`,[c,reversible.id,u]),
+    db.query(`SELECT reverse_journal_entry_atomic($1,$2,'2026-02-02','Reverse runtime','journal_entry_reversal',$2,$3) result`,[c,reversible.id,u]),
+  ]);
+  assert.equal(reverseRace.filter((r)=>r.rows[0].result.already_processed===false).length,1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reversal_of=$2`,[c,reversible.id])).rows[0].count),1);
+
   const quote=await db.query(`SELECT create_quotation($1,'2026-02-01',$2,$3::jsonb,'',0.15,'2026-02-10',$4) result`,[
     c,contact,JSON.stringify([{description:'Work',quantity:2,unit_price:100}]),u,
   ]);

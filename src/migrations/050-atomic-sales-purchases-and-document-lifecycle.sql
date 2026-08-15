@@ -2084,3 +2084,147 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.create_subcontractor_payment_atomic(UUID,UUID,UUID,NUMERIC,DATE,UUID,TEXT,UUID) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.create_subcontractor_payment_atomic(UUID,UUID,UUID,NUMERIC,DATE,UUID,TEXT,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.reverse_journal_entry_atomic(
+  p_company_id UUID,p_journal_entry_id UUID,p_reverse_date DATE,p_description TEXT,
+  p_reference_type TEXT,p_reference_id UUID,p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_source journal_entries%ROWTYPE; v_existing UUID; v_lines JSONB; v_journal JSONB; v_reversal UUID;
+BEGIN
+  IF p_reverse_date IS NULL OR NULLIF(BTRIM(p_description),'') IS NULL OR LENGTH(p_description)>2000
+  THEN RAISE EXCEPTION 'بيانات القيد العكسي غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('fiscal-ledger:'||p_company_id::TEXT,0));
+  SELECT * INTO v_source FROM journal_entries WHERE id=p_journal_entry_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'القيد الأصلي غير موجود'; END IF;
+  IF v_source.reversed_by IS NOT NULL THEN
+    RETURN jsonb_build_object('id',v_source.reversed_by,'source_id',v_source.id,'already_processed',TRUE);
+  END IF;
+  SELECT id INTO v_existing FROM journal_entries WHERE company_id=p_company_id AND reversal_of=p_journal_entry_id LIMIT 1;
+  IF v_existing IS NOT NULL THEN
+    UPDATE journal_entries SET reversed_by=v_existing WHERE id=p_journal_entry_id;
+    RETURN jsonb_build_object('id',v_existing,'source_id',v_source.id,'already_processed',TRUE);
+  END IF;
+  SELECT jsonb_agg(jsonb_build_object('accountId',account_id,'debit',credit,'credit',debit,
+    'description','عكس: '||COALESCE(description,''),'projectId',project_id,'contactId',contact_id) ORDER BY id)
+    INTO v_lines FROM journal_lines WHERE journal_entry_id=p_journal_entry_id AND company_id=p_company_id;
+  IF v_lines IS NULL OR jsonb_array_length(v_lines)<2 THEN RAISE EXCEPTION 'القيد الأصلي لا يحتوي على سطور مكتملة'; END IF;
+  v_journal:=create_journal_entry(p_company_id,p_reverse_date,'reversing',BTRIM(p_description),p_user_id,v_lines);
+  v_reversal:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type=NULLIF(BTRIM(p_reference_type),''),reference_id=p_reference_id,
+    reversal_of=p_journal_entry_id WHERE id=v_reversal AND company_id=p_company_id;
+  UPDATE journal_entries SET reversed_by=v_reversal WHERE id=p_journal_entry_id AND company_id=p_company_id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'reverse','journal_entry',p_journal_entry_id,
+    to_jsonb(v_source),jsonb_build_object('reversal_id',v_reversal,'reverse_date',p_reverse_date));
+  RETURN jsonb_build_object('id',v_reversal,'number',v_journal->'number','source_id',v_source.id,'already_processed',FALSE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.reverse_journal_entry_atomic(UUID,UUID,DATE,TEXT,TEXT,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.reverse_journal_entry_atomic(UUID,UUID,DATE,TEXT,TEXT,UUID,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.close_fiscal_year_atomic(
+  p_company_id UUID,p_fiscal_year_id UUID,p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_year fiscal_years%ROWTYPE; v_account RECORD; v_retained UUID; v_lines JSONB:='[]'::JSONB;
+  v_total_revenue NUMERIC:=0; v_total_expenses NUMERIC:=0; v_net NUMERIC:=0;
+  v_journal JSONB; v_journal_id UUID; v_warnings JSONB:='[]'::JSONB;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('fiscal-ledger:'||p_company_id::TEXT,0));
+  SELECT * INTO v_year FROM fiscal_years WHERE id=p_fiscal_year_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'السنة المالية غير موجودة'; END IF;
+  IF v_year.status='closed' THEN RETURN to_jsonb(v_year)||jsonb_build_object('already_processed',TRUE); END IF;
+  IF EXISTS(SELECT 1 FROM fiscal_years WHERE company_id=p_company_id AND status='open' AND start_date<v_year.start_date)
+  THEN RAISE EXCEPTION 'يجب إقفال السنوات المالية الأقدم أولاً'; END IF;
+  IF EXISTS(SELECT 1 FROM custodies WHERE company_id=p_company_id AND status='open')
+  THEN RAISE EXCEPTION 'لا يمكن إقفال السنة والعهد مفتوحة'; END IF;
+  IF EXISTS(SELECT 1 FROM projects WHERE company_id=p_company_id AND status='active')
+  THEN v_warnings:=jsonb_build_array('هناك مشاريع نشطة'); END IF;
+  SELECT id INTO v_retained FROM accounts WHERE company_id=p_company_id AND code='3200'
+    AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE FOR UPDATE;
+  IF v_retained IS NULL THEN RAISE EXCEPTION 'حساب الأرباح المحتجزة غير موجود'; END IF;
+
+  FOR v_account IN
+    SELECT a.id,a.name,a.type,ROUND(COALESCE(b.balance,0),2) AS balance
+    FROM accounts a LEFT JOIN (
+      SELECT jl.account_id,SUM(jl.debit-jl.credit) AS balance
+      FROM journal_lines jl JOIN journal_entries je
+        ON je.id=jl.journal_entry_id AND je.company_id=jl.company_id
+      WHERE je.company_id=p_company_id AND je.date BETWEEN v_year.start_date AND v_year.end_date
+        AND je.type<>'closing'
+        AND NOT(COALESCE(je.reference_type,'')='fiscal_year_reopen' AND je.reference_id=p_fiscal_year_id)
+      GROUP BY jl.account_id
+    ) b ON b.account_id=a.id
+    WHERE a.company_id=p_company_id AND a.type IN('revenue','expense') AND COALESCE(a.is_active,TRUE)=TRUE
+    ORDER BY a.code
+  LOOP
+    IF ABS(v_account.balance)<=0.005 THEN CONTINUE; END IF;
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object('accountId',v_account.id,
+      'debit',CASE WHEN v_account.balance<0 THEN ABS(v_account.balance) ELSE 0 END,
+      'credit',CASE WHEN v_account.balance>0 THEN v_account.balance ELSE 0 END,
+      'description','إقفال '||CASE WHEN v_account.type='revenue' THEN 'إيراد ' ELSE 'مصروف ' END||v_account.name));
+    IF v_account.type='revenue' THEN v_total_revenue:=v_total_revenue-v_account.balance;
+    ELSE v_total_expenses:=v_total_expenses+v_account.balance; END IF;
+  END LOOP;
+  v_total_revenue:=ROUND(v_total_revenue,2); v_total_expenses:=ROUND(v_total_expenses,2);
+  v_net:=ROUND(v_total_revenue-v_total_expenses,2);
+  IF jsonb_array_length(v_lines)>0 THEN
+    IF v_net>0.005 THEN v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_retained,'debit',0,'credit',v_net,'description','نقل صافي الربح إلى الأرباح المحتجزة'));
+    ELSIF v_net< -0.005 THEN v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_retained,'debit',ABS(v_net),'credit',0,'description','نقل صافي الخسارة إلى الأرباح المحتجزة'));
+    END IF;
+    v_journal:=create_journal_entry(p_company_id,v_year.end_date,'closing',
+      'قيد إقفال السنة المالية '||COALESCE(v_year.name,''),p_user_id,v_lines);
+    v_journal_id:=(v_journal->>'id')::UUID;
+    UPDATE journal_entries SET reference_type='fiscal_year_closing',reference_id=p_fiscal_year_id
+      WHERE id=v_journal_id AND company_id=p_company_id;
+  END IF;
+  UPDATE fiscal_years SET status='closed',closed_at=NOW(),closed_by=p_user_id,closing_date=CURRENT_DATE,
+    closing_entries=CASE WHEN v_journal_id IS NULL THEN '[]'::JSONB ELSE jsonb_build_array(v_journal_id) END
+    WHERE id=p_fiscal_year_id RETURNING * INTO v_year;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'close','fiscal_year',p_fiscal_year_id,jsonb_build_object(
+    'closing_journal_id',v_journal_id,'total_revenue',v_total_revenue,'total_expenses',v_total_expenses,'net_income',v_net));
+  RETURN to_jsonb(v_year)||jsonb_build_object('closing_journal_id',v_journal_id,'totalRevenue',v_total_revenue,
+    'totalExpenses',v_total_expenses,'netIncome',v_net,'warnings',v_warnings,'already_processed',FALSE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.close_fiscal_year_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.close_fiscal_year_atomic(UUID,UUID,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.reopen_fiscal_year_atomic(
+  p_company_id UUID,p_fiscal_year_id UUID,p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_year fiscal_years%ROWTYPE; v_closing RECORD; v_reverse JSONB; v_count INTEGER:=0;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('fiscal-ledger:'||p_company_id::TEXT,0));
+  SELECT * INTO v_year FROM fiscal_years WHERE id=p_fiscal_year_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'السنة المالية غير موجودة'; END IF;
+  IF v_year.status<>'closed' THEN RAISE EXCEPTION 'السنة المالية غير مقفلة'; END IF;
+  IF EXISTS(SELECT 1 FROM fiscal_years WHERE company_id=p_company_id AND status='closed' AND start_date>v_year.start_date)
+  THEN RAISE EXCEPTION 'لا يمكن إعادة فتح السنة قبل السنوات الأحدث'; END IF;
+  UPDATE fiscal_years SET status='open',closed_at=NULL,closed_by=NULL,closing_date=NULL
+    WHERE id=p_fiscal_year_id;
+  FOR v_closing IN SELECT id,number FROM journal_entries WHERE company_id=p_company_id AND type='closing'
+    AND date BETWEEN v_year.start_date AND v_year.end_date ORDER BY date,id FOR UPDATE
+  LOOP
+    v_reverse:=reverse_journal_entry_atomic(p_company_id,v_closing.id,CURRENT_DATE,
+      'عكس قيد الإقفال رقم '||v_closing.number||' عند إعادة فتح السنة '||COALESCE(v_year.name,''),
+      'fiscal_year_reopen',p_fiscal_year_id,p_user_id);
+    v_count:=v_count+1;
+  END LOOP;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'reopen','fiscal_year',p_fiscal_year_id,to_jsonb(v_year),
+    jsonb_build_object('reversed_closing_entries',v_count));
+  SELECT * INTO v_year FROM fiscal_years WHERE id=p_fiscal_year_id;
+  RETURN to_jsonb(v_year)||jsonb_build_object('reversedClosingEntries',v_count);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.reopen_fiscal_year_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.reopen_fiscal_year_atomic(UUID,UUID,UUID) TO service_role;

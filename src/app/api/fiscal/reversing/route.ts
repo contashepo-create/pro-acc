@@ -1,124 +1,41 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
-/**
- * POST /api/fiscal/reversing
- * إنشاء قيد عكسي (Reversing Entry) لقيد موجود
- * 
- * القيد العكسي يعكس جميع سطور القيد الأصلي:
- * - المدين يصبح دائن
- * - الدائن يصبح مدين
- * 
- * يُستخدم عادةً في بداية السنة الجديدة لإلغاء قيود الإقفال أو القيود التقديرية
- */
+/** Create one immutable reversing entry and link it to its source atomically. */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'fiscal', 'approve');
-    const s = sb();
     const { originalEntryId, reverseDate, description } = await parseBody<{
       originalEntryId?: string;
       reverseDate?: string;
       description?: string;
     }>(request);
-
-    if (!originalEntryId) {
-      return error('originalEntryId مطلوب');
+    if (!originalEntryId || typeof originalEntryId !== 'string') return error('originalEntryId مطلوب');
+    const date = reverseDate || new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return error('تاريخ القيد العكسي غير صالح');
+    if (description !== undefined && (typeof description !== 'string' || !description.trim() || description.length > 2000)) {
+      return error('وصف القيد العكسي غير صالح');
     }
 
-    // الحصول على القيد الأصلي
-    const { data: originalEntry } = await s.from('journal_entries')
-      .select('*')
-      .eq('id', originalEntryId)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!originalEntry) {
-      return error('القيد الأصلي غير موجود');
+    const { data: result, error: rpcError } = await sb().rpc('reverse_journal_entry_atomic', {
+      p_company_id: auth.companyId,
+      p_journal_entry_id: originalEntryId,
+      p_reverse_date: date,
+      p_description: description?.trim() || `قيد عكسي للقيد ${originalEntryId}`,
+      p_reference_type: 'journal_entry_reversal',
+      p_reference_id: originalEntryId,
+      p_user_id: auth.userId,
+    });
+    if (rpcError) {
+      const message = String(rpcError.message || '');
+      if (message.includes('القيد الأصلي غير موجود')) return error(message, 404);
+      if (message.includes('closed fiscal year')) return error('لا يمكن الترحيل في سنة مالية مقفلة', 409);
+      throw rpcError;
     }
-
-    const oe = originalEntry as any;
-    if (oe.reversed_by) return error('تم إنشاء قيد عكسي لهذا القيد مسبقاً', 409);
-
-    // الحصول على سطور القيد الأصلي ضمن الشركة نفسها.
-    const { data: originalLines } = await s.from('journal_lines')
-      .select('*')
-      .eq('journal_entry_id', originalEntryId)
-      .eq('company_id', auth.companyId);
-
-    if (!originalLines || originalLines.length === 0) {
-      return error('القيد الأصلي لا يحتوي على سطور');
-    }
-
-    // التحقق من أن القيد متوازن
-    let totalDebit = 0;
-    let totalCredit = 0;
-    for (const line of originalLines) {
-      const l = line as any;
-      totalDebit += parseFloat(l.debit) || 0;
-      totalCredit += parseFloat(l.credit) || 0;
-    }
-
-    if (Math.abs(totalDebit - totalCredit) > 0.01) {
-      return error('القيد الأصلي غير متوازن');
-    }
-
-    // تحديد تاريخ القيد العكسي
-    const revDate = reverseDate || new Date().toISOString().split('T')[0];
-
-    // إنشاء القيد العكسي
-    const jeNum = await getNextJournalNumber(auth.companyId, revDate);
-    const { data: reverseEntry } = await s.from('journal_entries')
-      .insert({
-        company_id: auth.companyId,
-        number: jeNum,
-        date: revDate,
-        type: 'reversing',
-        description: description || `قيد عكسي للقيد رقم ${oe.number}`,
-        reference_type: 'journal_entry',
-        reference_id: originalEntryId,
-        created_by: auth.userId,
-      })
-      .select('id, number, date')
-      .single();
-
-    const re = reverseEntry as any;
-
-    // إنشاء السطور العكسية (عكس المدين والدائن)
-    const reverseLines = originalLines.map((line: any) => ({
-      journal_entry_id: re.id,
-      account_id: line.account_id,
-      debit: parseFloat(line.credit) || 0,  // العكس: credit -> debit
-      credit: parseFloat(line.debit) || 0,   // العكس: debit -> credit
-      description: `عكس: ${line.description || ''}`,
-    }));
-
-    const { error: linesErr } = await insertJournalLines(auth.companyId, reverseLines);
-
-    if (linesErr) {
-      // التراجع عن إنشاء القيد العكسي
-      await s.from('journal_entries').delete().eq('id', re.id).eq('company_id', auth.companyId);
-      throw linesErr;
-    }
-
-    // تحديث القيد الأصلي للإشارة إلى القيد العكسي
-    await s.from('journal_entries')
-      .update({ reversed_by: re.id })
-      .eq('id', originalEntryId).eq('company_id', auth.companyId);
-
-    return success({
-      originalEntryId,
-      originalEntryNumber: oe.number,
-      reverseEntryId: re.id,
-      reverseEntryNumber: re.number,
-      reverseDate: revDate,
-      linesCount: reverseLines.length,
-      message: `تم إنشاء قيد عكسي رقم ${re.number} بنجاح`,
-    }, 201);
+    return success(result, 201);
   } catch (err) {
     return handleApiError(err);
   }

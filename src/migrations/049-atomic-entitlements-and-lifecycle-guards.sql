@@ -74,6 +74,10 @@ GRANT EXECUTE ON FUNCTION next_credit_note_number(UUID, INTEGER) TO service_role
 CREATE OR REPLACE FUNCTION public.enforce_open_fiscal_year()
 RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
+  -- Serialize every ledger write with fiscal close/reopen for this tenant. A
+  -- plain status read is insufficient: an insert could otherwise pass while a
+  -- concurrent close is still calculating balances.
+  PERFORM pg_advisory_xact_lock(hashtextextended('fiscal-ledger:'||NEW.company_id::TEXT,0));
   IF EXISTS (SELECT 1 FROM fiscal_years WHERE company_id=NEW.company_id AND status='closed'
     AND NEW.date BETWEEN start_date AND end_date) THEN
     RAISE EXCEPTION 'cannot post to a closed fiscal year';
