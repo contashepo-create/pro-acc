@@ -20,7 +20,13 @@ export async function POST(req: NextRequest) {
     const s = sb();
     const body = await parseBody(req);
     const { terminal_id, total, payment_method } = body;
-    if (!total) return error('total required');
+    const saleTotal = Number(total);
+    if (!Number.isFinite(saleTotal) || saleTotal <= 0 || Math.abs(saleTotal * 100 - Math.round(saleTotal * 100)) > 1e-8) {
+      return error('إجمالي البيع غير صالح');
+    }
+    if (payment_method !== undefined && !['cash', 'card', 'transfer', 'credit'].includes(String(payment_method))) {
+      return error('طريقة الدفع غير صالحة');
+    }
 
     // عزل مستأجرين: الطرفية (إن حُددت) يجب أن تنتمي لهذه الشركة
     if (terminal_id) {
@@ -43,7 +49,7 @@ export async function POST(req: NextRequest) {
       company_id: auth.companyId,
       terminal_id: terminal_id || null,
       number,
-      total,
+      total: saleTotal,
       payment_method: payment_method || 'cash',
       status: 'completed',
     }).select().single();
@@ -65,8 +71,8 @@ export async function POST(req: NextRequest) {
       reference_id: data.id,
       created_by: auth.userId,
       lines: [
-        { account_id: cashAcc.id, debit: total, credit: 0, description: `مبيعات POS ${number}` },
-        { account_id: revAcc.id, debit: 0, credit: total, description: `إيراد POS ${number}` },
+        { account_id: cashAcc.id, debit: saleTotal, credit: 0, description: `مبيعات POS ${number}` },
+        { account_id: revAcc.id, debit: 0, credit: saleTotal, description: `إيراد POS ${number}` },
       ],
     });
     if (jeErr || !journalId) {
