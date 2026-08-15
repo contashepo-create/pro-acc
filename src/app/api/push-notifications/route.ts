@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { generateId } from '@/lib/utils';
 
@@ -78,14 +78,21 @@ export async function POST(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireManagerOrAbove(request);
     const s = sb();
-    const body = await request.json();
-
-    const { title, message, url, target_user_id, target_role, tag, actions } = body;
+    const { title, message, url, target_user_id, target_role, tag, actions } = await parseBody<Record<string, any>>(request);
 
     if (!title || !message) {
       return error('العنوان والرسالة مطلوبان');
+    }
+
+    if (target_user_id) {
+      const { data: target } = await s.from('users').select('id')
+        .eq('id', target_user_id).eq('company_id', auth.companyId).maybeSingle();
+      if (!target) return error('المستخدم المستهدف غير موجود', 404);
+    }
+    if (target_role && !['admin', 'manager', 'accountant', 'supervisor'].includes(target_role)) {
+      return error('دور المستهدف غير صالح');
     }
 
     // Get target subscriptions
