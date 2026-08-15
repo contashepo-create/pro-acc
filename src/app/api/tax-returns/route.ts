@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
 
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
@@ -104,20 +103,16 @@ export async function POST(request: NextRequest) {
     if (body.status && !['draft', 'filed'].includes(body.status)) return error('حالة الإقرار غير صالحة');
     if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) return error('الملاحظات طويلة جداً');
 
-    const summary = await loadSummary(auth.companyId, body.period_from, body.period_to);
-    const outputVat = number(summary.outputVat);
-    const inputVat = number(summary.inputVat);
-    const status = body.status || 'draft';
-    const { data, error: insertErr } = await sb().from('vat_return_filings').insert({
-      id: generateId(), company_id: auth.companyId,
-      period_from: body.period_from, period_to: body.period_to,
-      output_vat: outputVat, input_vat: inputVat, net_vat: outputVat - inputVat,
-      total_sales: number(summary.totalSales), total_purchases: number(summary.totalPurchases),
-      status, filed_at: status === 'filed' ? new Date().toISOString() : null,
-      filed_by: status === 'filed' ? auth.userId : null,
-      notes: body.notes?.trim() || null, created_by: auth.userId,
-    }).select().single();
-    if (insertErr) throw insertErr;
+    const { data, error: filingError } = await sb().rpc('create_vat_return_filing_atomic', {
+      p_company_id: auth.companyId,
+      p_period_from: body.period_from,
+      p_period_to: body.period_to,
+      p_status: body.status || 'draft',
+      p_notes: body.notes?.trim() || '',
+      p_user_id: auth.userId,
+    });
+    if (filingError?.code === '23505') return error('يوجد إقرار محفوظ لهذه الفترة بالفعل', 409);
+    if (filingError) throw filingError;
     return success(data, 201);
   } catch (err) {
     return handleApiError(err);

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { trustedReceiptReference } from '@/lib/safe-input';
 
 const sb = () => getSupabase();
 
@@ -42,16 +43,14 @@ export async function POST(req: NextRequest) {
     if (message.length > 5000) return error('نص الرسالة طويل جداً (حد أقصى 5000 حرف)');
     if (!VALID_CATEGORIES.includes(category as any)) return error('فئة الرسالة غير صالحة');
 
-    // Optional attachment URL — validate it's an http(s) URL if provided
-    let attachment = null;
-    if (body.attachment_url) {
-      try {
-        const u = new URL(body.attachment_url);
-        if (!['http:', 'https:'].includes(u.protocol)) return error('رابط المرفق غير صالح');
-        attachment = body.attachment_url.slice(0, 1000);
-      } catch {
-        return error('رابط المرفق غير صالح');
-      }
+    // Attachments must have been uploaded into this tenant's private receipt
+    // namespace. Arbitrary external URLs would expose administrators to
+    // tracking/phishing links and bypass the company's storage accounting.
+    const attachment = body.attachment_url
+      ? trustedReceiptReference(body.attachment_url, auth.companyId)
+      : null;
+    if (body.attachment_url && !attachment) {
+      return error('يجب رفع المرفق عبر التخزين الآمن للشركة أولاً');
     }
 
     const s = sb();

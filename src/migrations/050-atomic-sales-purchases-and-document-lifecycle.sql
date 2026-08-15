@@ -1566,3 +1566,36 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.extend_company_trial_atomic(UUID,UUID,INT,TEXT) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.extend_company_trial_atomic(UUID,UUID,INT,TEXT) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.create_vat_return_filing_atomic(
+  p_company_id UUID,p_period_from DATE,p_period_to DATE,p_status TEXT,p_notes TEXT,p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_filing vat_return_filings%ROWTYPE;
+BEGIN
+  IF p_period_from IS NULL OR p_period_to IS NULL OR p_period_from>p_period_to OR p_status NOT IN('draft','filed')
+    OR length(COALESCE(p_notes,''))>2000 THEN RAISE EXCEPTION 'بيانات الإقرار الضريبي غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+  -- Summary evaluation and insertion are one SQL statement and therefore use
+  -- one MVCC snapshot of the posted ledger.
+  WITH summary AS (
+    SELECT get_vat_return_summary(p_company_id,p_period_from,p_period_to) value
+  ), inserted AS (
+    INSERT INTO vat_return_filings(company_id,period_from,period_to,output_vat,input_vat,net_vat,
+      total_sales,total_purchases,status,filed_at,filed_by,notes,created_by)
+    SELECT p_company_id,p_period_from,p_period_to,
+      COALESCE((value->>'outputVat')::NUMERIC,0),COALESCE((value->>'inputVat')::NUMERIC,0),
+      COALESCE((value->>'outputVat')::NUMERIC,0)-COALESCE((value->>'inputVat')::NUMERIC,0),
+      COALESCE((value->>'totalSales')::NUMERIC,0),COALESCE((value->>'totalPurchases')::NUMERIC,0),
+      p_status,CASE WHEN p_status='filed' THEN now() END,CASE WHEN p_status='filed' THEN p_user_id END,
+      NULLIF(trim(COALESCE(p_notes,'')),''),p_user_id FROM summary RETURNING *
+  ) SELECT * INTO v_filing FROM inserted;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','vat_return_filing',v_filing.id,to_jsonb(v_filing));
+  RETURN to_jsonb(v_filing);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.create_vat_return_filing_atomic(UUID,DATE,DATE,TEXT,TEXT,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_vat_return_filing_atomic(UUID,DATE,DATE,TEXT,TEXT,UUID) TO service_role;

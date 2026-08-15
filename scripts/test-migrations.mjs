@@ -442,6 +442,13 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number(restored.rows[0].result.restored_records),1);
   assert.equal((await db.query(`SELECT name FROM accounts WHERE id=$1`,[a['1000']])).rows[0].name,'Restored account');
 
+  const vatSummary=(await db.query(`SELECT get_vat_return_summary($1,'2026-01-01','2026-02-28') result`,[c])).rows[0].result;
+  const vatFiling=(await db.query(`SELECT create_vat_return_filing_atomic($1,'2026-01-01','2026-02-28','filed','runtime',$2) result`,[c,u])).rows[0].result;
+  assert.equal(Number(vatFiling.output_vat),Number(vatSummary.outputVat));
+  assert.equal(Number(vatFiling.input_vat),Number(vatSummary.inputVat));
+  await assert.rejects(()=>db.query(`SELECT create_vat_return_filing_atomic($1,'2026-01-01','2026-02-28','filed','duplicate',$2)`,[c,u]));
+  await assert.rejects(()=>db.query(`SELECT create_vat_return_filing_atomic($1,'2026-03-01','2026-03-31','filed','cross',$2)`,[c2,u]));
+
   const expiredCompany='66000000-0000-4000-8000-000000000001';
   const expiredUser='66000000-0000-4000-8000-000000000002';
   await db.query(`INSERT INTO companies(id,name,is_active) VALUES($1,'Expired tenant',TRUE)`,[expiredCompany]);

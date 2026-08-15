@@ -115,8 +115,11 @@ export async function DELETE(
     if (!existing) return notFound();
     if ((existing as any).pipeline_stage === 'won') return error('لا يمكن حذف عميل رابح؛ احتفظ بسجل العلاقة', 409);
 
-    await s.from('crm_followups').delete().eq('crm_contact_id', id).eq('company_id', auth.companyId);
-    await s.from('crm_contacts').delete().eq('id', id).eq('company_id', auth.companyId);
+    // The foreign key cascades follow-ups in the same database statement, so
+    // no mid-delete failure can leave a partially removed CRM history.
+    const { error: deleteError } = await s.from('crm_contacts')
+      .delete().eq('id', id).eq('company_id', auth.companyId);
+    if (deleteError) throw deleteError;
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);
