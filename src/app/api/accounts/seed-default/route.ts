@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError, success, requireModulePermission } from '@/lib/api-helpers';
+import { handleApiError, success, requireAdmin } from '@/lib/api-helpers';
 import { createDefaultChartOfAccounts } from '@/lib/default-accounts';
 
 // @ts-ignore
@@ -8,7 +8,7 @@ const sb = () => getSupabase() ;
 
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'accounts', 'create');
+    const auth = await requireAdmin(request);
     const s = sb();
 
     // Always try to create missing default accounts, even if some exist
