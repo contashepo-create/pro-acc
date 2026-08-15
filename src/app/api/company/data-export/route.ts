@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
           .eq('company_id', auth.companyId)
           .eq('status', 'processing')
           .lt('requested_at', twoMinAgo);
-        await processPendingExports();
+        await processPendingExports(auth.companyId);
       }
     } catch (e) {
       console.warn('[data-export] stuck-export recovery failed:', e);
@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
     // For larger datasets you'd push to a queue. We do it in-process
     // but guarded by try/catch so a failure never crashes the request.
     try {
-      await processPendingExports();
+      await processPendingExports(auth.companyId);
     } catch (e) {
       console.warn('[data-export] background generation failed:', e);
     }
@@ -137,12 +137,15 @@ export async function POST(req: NextRequest) {
  * This is invoked inline after each POST and can also be called from
  * a cron job if desired.
  */
-export async function processPendingExports() {
+export async function processPendingExports(companyId?: string) {
   const s = sb();
-  const { data: pending } = await s.from('company_data_exports')
+  let pendingQuery = s.from('company_data_exports')
     .select('id, company_id')
-    .eq('status', 'pending')
-    .limit(5);
+    .eq('status', 'pending');
+  // A user-triggered export must never process another tenant's queue. A
+  // trusted cron worker may omit companyId to process a bounded global batch.
+  if (companyId) pendingQuery = pendingQuery.eq('company_id', companyId);
+  const { data: pending } = await pendingQuery.limit(5);
   if (!pending || pending.length === 0) return;
 
   for (const exp of pending as { id: string; company_id: string }[]) {
