@@ -56,11 +56,15 @@ export async function POST(req: NextRequest) {
 
     if (err) throw err;
 
-    const { data: cashAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '1110').maybeSingle();
+    // POS collections must post to a real cash/bank leaf account, never the
+    // 1110 group header. Require an active mapped safe until terminals gain
+    // their own settlement-account column.
+    const { data: settlementSafe } = await s.from('banks_safes').select('account_id')
+      .eq('company_id', auth.companyId).eq('is_active', true).limit(1).maybeSingle();
     const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
-    if (!cashAcc || !revAcc) {
+    if (!settlementSafe?.account_id || !revAcc) {
       await s.from('pos_sales').delete().eq('id', data.id).eq('company_id', auth.companyId);
-      return error('حسابات الصندوق أو الإيراد مفقودة — راجع دليل الحسابات', 400);
+      return error('يلزم ربط خزينة أو بنك نشط وحساب إيراد قبل إتمام مبيعات POS', 400);
     }
     const saleDate = new Date().toISOString().split('T')[0];
     const { journalId, error: jeErr } = await createJournalEntry(auth.companyId, {
@@ -71,7 +75,7 @@ export async function POST(req: NextRequest) {
       reference_id: data.id,
       created_by: auth.userId,
       lines: [
-        { account_id: cashAcc.id, debit: saleTotal, credit: 0, description: `مبيعات POS ${number}` },
+        { account_id: settlementSafe.account_id, debit: saleTotal, credit: 0, description: `مبيعات POS ${number}` },
         { account_id: revAcc.id, debit: 0, credit: saleTotal, description: `إيراد POS ${number}` },
       ],
     });
