@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireAdmin, handleApiError, requireApiAuth, parseBody } from '@/lib/api-helpers';
+import { success, error, requireAdmin, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword } from '@/lib/auth';
 import { passwordPolicy } from '@/lib/validation';
@@ -11,7 +11,7 @@ const sb = () => getSupabase();
  */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireAdmin(request);
     const s = sb();
 
     const { data: users, error: queryError } = await s
