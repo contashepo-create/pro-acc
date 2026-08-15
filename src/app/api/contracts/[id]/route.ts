@@ -136,14 +136,19 @@ export async function DELETE(
       .select('id, file_data').eq('contract_id', id).eq('company_id', auth.companyId);
     const paths = (documents || []).map((doc: any) => String(doc.file_data || ''))
       .filter((ref: string) => ref.startsWith('storage:contract-documents/'))
-      .map((ref: string) => ref.slice('storage:contract-documents/'.length));
-    if (paths.length) await s.storage.from('contract-documents').remove(paths);
-    await s.from('contract_documents').delete().eq('contract_id', id).eq('company_id', auth.companyId);
+      .map((ref: string) => ref.slice('storage:contract-documents/'.length))
+      .filter((path: string) => path.startsWith(`${auth.companyId}/${id}/`) && !path.includes('..'));
 
+    // Deleting the parent is one database statement; ON DELETE CASCADE removes
+    // all document rows atomically. Remove storage objects only afterwards so
+    // a database failure can never leave live metadata pointing at lost files.
     const { error: deleteErr } = await s.from('contracts')
       .delete().eq('id', id).eq('company_id', auth.companyId);
-
     if (deleteErr) throw deleteErr;
+    if (paths.length) {
+      const { error: storageError } = await s.storage.from('contract-documents').remove(paths);
+      if (storageError) console.error('Orphan contract document cleanup failed:', storageError);
+    }
 
     return success({ deleted: true });
   } catch (err) {
@@ -196,6 +201,17 @@ export async function POST(
     }
     if (buffer.length === 0 || buffer.length > 10 * 1024 * 1024) return error('حجم الملف يجب ألا يتجاوز 10 ميجابايت');
     if (!hasAllowedMagicBytes(buffer, mime)) return error('محتوى الملف لا يطابق نوعه');
+    try {
+      const { getCompanyPlanLimits, countUsedStorageBytes } = await import('@/lib/plan-limits');
+      const limits = await getCompanyPlanLimits(auth.companyId);
+      const capBytes = Number(limits?.max_storage_mb || 0) * 1024 * 1024;
+      if (capBytes <= 0) return error('باقتك الحالية لا تتضمن مساحة تخزين للملفات', 403);
+      const usedBytes = await countUsedStorageBytes(auth.companyId);
+      if (usedBytes + buffer.length > capBytes) return error('لا تتوفر مساحة تخزين كافية لهذا المستند', 403);
+    } catch (storageCheckError) {
+      console.error('Contract storage quota check failed:', storageCheckError);
+      return error('تعذر التحقق من مساحة التخزين. حاول لاحقاً.', 503);
+    }
 
     const docId = generateId();
     const extension = mime === 'application/pdf' ? 'pdf' : mime === 'image/png' ? 'png' : 'jpg';

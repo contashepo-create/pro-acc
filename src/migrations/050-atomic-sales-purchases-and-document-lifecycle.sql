@@ -1416,3 +1416,117 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.deactivate_inactive_expired_companies(TIMESTAMPTZ) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.deactivate_inactive_expired_companies(TIMESTAMPTZ) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.restore_company_backup_atomic(
+  p_company_id UUID, p_user_id UUID, p_hmac_signature TEXT, p_data JSONB
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_table TEXT; v_row JSONB; v_existing_company UUID; v_updates TEXT;
+  v_restored INT:=0; v_table_count INT:=0;
+  v_restore_tables CONSTANT TEXT[]:=ARRAY['accounts','contacts','projects','banks_safes','inventory_items','employees'];
+  v_known_tables CONSTANT TEXT[]:=ARRAY['accounts','journal_entries','journal_lines','invoices','invoice_items','contacts','clients','projects','banks_safes','cash_transactions','inventory_items','employees','payroll'];
+BEGIN
+  IF NOT jsonb_typeof(p_data)='object' THEN RAISE EXCEPTION 'بيانات النسخة غير صالحة'; END IF;
+  PERFORM 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE AND role='admin';
+  IF NOT FOUND THEN RAISE EXCEPTION 'المستخدم غير مخول بالاستعادة'; END IF;
+  PERFORM 1 FROM backup_logs WHERE company_id=p_company_id AND hmac_signature=p_hmac_signature;
+  IF NOT FOUND THEN RAISE EXCEPTION 'توقيع النسخة غير صالح'; END IF;
+  IF EXISTS(SELECT 1 FROM jsonb_object_keys(p_data) k WHERE NOT (k=ANY(v_known_tables))) THEN
+    RAISE EXCEPTION 'النسخة تحتوي على جدول غير مسموح';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('backup:'||p_company_id::TEXT,0));
+
+  FOREACH v_table IN ARRAY v_restore_tables LOOP
+    IF p_data ? v_table THEN
+      IF jsonb_typeof(p_data->v_table)<>'array' THEN RAISE EXCEPTION 'بيانات الجدول % غير صالحة',v_table; END IF;
+      v_table_count:=v_table_count+1;
+      SELECT string_agg(format('%1$I=EXCLUDED.%1$I',a.attname),',') INTO v_updates
+      FROM pg_attribute a WHERE a.attrelid=format('public.%I',v_table)::regclass
+        AND a.attnum>0 AND NOT a.attisdropped AND a.attname NOT IN('id','company_id','created_at');
+      FOR v_row IN SELECT value FROM jsonb_array_elements(p_data->v_table) LOOP
+        IF jsonb_typeof(v_row)<>'object' OR NOT(v_row?'id') THEN RAISE EXCEPTION 'سجل غير صالح في %',v_table; END IF;
+        IF v_row?'company_id' AND v_row->>'company_id'<>p_company_id::TEXT THEN
+          RAISE EXCEPTION 'سجل من شركة أخرى في %',v_table;
+        END IF;
+        EXECUTE format('SELECT company_id FROM public.%I WHERE id=$1 FOR UPDATE',v_table)
+          INTO v_existing_company USING (v_row->>'id')::UUID;
+        IF v_existing_company IS NOT NULL AND v_existing_company<>p_company_id THEN
+          RAISE EXCEPTION 'المعرف مستخدم بواسطة شركة أخرى في %',v_table;
+        END IF;
+        v_row:=v_row||jsonb_build_object('company_id',p_company_id);
+        EXECUTE format(
+          'INSERT INTO public.%1$I SELECT (jsonb_populate_record(NULL::public.%1$I,$1)).* '
+          'ON CONFLICT(id) DO UPDATE SET %2$s WHERE %1$I.company_id=$2',v_table,v_updates
+        ) USING v_row,p_company_id;
+        v_restored:=v_restored+1;
+      END LOOP;
+    END IF;
+  END LOOP;
+  INSERT INTO security_audit_log(company_id,user_id,action,details)
+  VALUES(p_company_id,p_user_id,'backup_restore_atomic',jsonb_build_object('restored_records',v_restored,'restored_tables',v_table_count));
+  RETURN jsonb_build_object('restored_records',v_restored,'restored_tables',v_table_count);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.restore_company_backup_atomic(UUID,UUID,TEXT,JSONB) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.restore_company_backup_atomic(UUID,UUID,TEXT,JSONB) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.respond_approval_request_atomic(
+  p_company_id UUID,p_approval_id UUID,p_action TEXT,p_approver_user_id UUID,p_comments TEXT DEFAULT ''
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_req approval_requests%ROWTYPE; v_role TEXT; v_type TEXT; v_final_status TEXT; v_entity_id UUID; v_now TIMESTAMPTZ:=now();
+BEGIN
+  IF p_action NOT IN('approve','reject') THEN RAISE EXCEPTION 'قرار الاعتماد غير صالح'; END IF;
+  v_final_status:=CASE WHEN p_action='approve' THEN 'approved' ELSE 'rejected' END;
+  IF length(COALESCE(p_comments,''))>2000 THEN RAISE EXCEPTION 'تعليق الاعتماد طويل جداً'; END IF;
+  SELECT role INTO v_role FROM users WHERE id=p_approver_user_id AND company_id=p_company_id AND is_active=TRUE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المعتمد لا ينتمي للشركة'; END IF;
+  SELECT * INTO v_req FROM approval_requests WHERE id=p_approval_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'طلب الاعتماد غير موجود'; END IF;
+  IF v_req.requester_id=p_approver_user_id THEN RAISE EXCEPTION 'لا يمكن اعتماد طلبك بنفسك'; END IF;
+  IF v_req.approver_id IS DISTINCT FROM p_approver_user_id AND v_role<>'admin' THEN RAISE EXCEPTION 'لست المخول بالاعتماد على هذا الطلب'; END IF;
+  IF v_req.status IN('approved','rejected') THEN
+    IF v_req.status=v_final_status THEN
+      RETURN jsonb_build_object('id',v_req.id,'status',v_req.status,'replayed',TRUE);
+    END IF;
+    RAISE EXCEPTION 'تمت معالجة طلب الاعتماد مسبقاً';
+  END IF;
+  IF v_req.status NOT IN('pending','processing') THEN RAISE EXCEPTION 'طلب الاعتماد غير قابل للمعالجة'; END IF;
+  IF v_req.status='processing' AND v_req.approved_by IS DISTINCT FROM p_approver_user_id AND v_role<>'admin' THEN
+    RAISE EXCEPTION 'طلب الاعتماد قيد المعالجة بواسطة مستخدم آخر';
+  END IF;
+  v_type:=COALESCE(v_req.entity_type,v_req.transaction_type);
+  BEGIN v_entity_id:=COALESCE(v_req.entity_id,v_req.transaction_id::UUID); EXCEPTION WHEN invalid_text_representation THEN RAISE EXCEPTION 'معرف العنصر غير صالح'; END;
+  IF v_type IN('voucher_receipt','voucher_disbursement') THEN RAISE EXCEPTION 'استخدم معاملة اعتماد السند المخصصة'; END IF;
+
+  IF p_action='approve' THEN
+    IF v_type='journal_entry' THEN
+      UPDATE journal_entries SET status='posted',approved_by=p_approver_user_id,approved_at=v_now WHERE id=v_entity_id AND company_id=p_company_id;
+    ELSIF v_type='purchase_invoice' THEN
+      UPDATE purchase_invoices SET approved_by=p_approver_user_id,approved_at=v_now WHERE id=v_entity_id AND company_id=p_company_id;
+    ELSIF v_type='payroll' THEN
+      UPDATE salary_sheets SET status='approved',approved_by=p_approver_user_id,approved_at=v_now WHERE id=v_entity_id AND company_id=p_company_id;
+    ELSIF v_type='cash_transaction' THEN
+      UPDATE cash_transactions SET approved_by=p_approver_user_id,approved_at=v_now WHERE id=v_entity_id AND company_id=p_company_id AND status<>'cancelled';
+    ELSE RAISE EXCEPTION 'نوع العنصر غير مدعوم للاعتماد';
+    END IF;
+    IF NOT FOUND THEN RAISE EXCEPTION 'العنصر المطلوب اعتماده غير موجود أو غير قابل للاعتماد'; END IF;
+  END IF;
+
+  UPDATE approval_requests SET status=v_final_status,
+    approved_by=p_approver_user_id,approved_at=v_now,approval_comments=NULLIF(trim(COALESCE(p_comments,'')),''),updated_at=v_now
+    WHERE id=p_approval_id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_approver_user_id,p_action||'_approval','approval_request',p_approval_id,
+    jsonb_build_object('status',v_req.status),jsonb_build_object('status',v_final_status,'entity_type',v_type,'entity_id',v_entity_id,'comments',p_comments));
+  IF v_req.requester_id IS NOT NULL THEN
+    INSERT INTO notifications(company_id,user_id,type,title,message,entity_type,entity_id)
+    VALUES(p_company_id,v_req.requester_id,'approval_response',CASE WHEN p_action='approve' THEN 'تم اعتماد طلبك' ELSE 'تم رفض طلبك' END,
+      left(COALESCE(NULLIF(trim(p_comments),''),CASE WHEN p_action='approve' THEN 'تم الاعتماد بنجاح' ELSE 'تم الرفض' END),1000),'approval_request',p_approval_id);
+  END IF;
+  RETURN jsonb_build_object('id',p_approval_id,'status',v_final_status,'approved_by',p_approver_user_id,'approved_at',v_now,'replayed',FALSE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.respond_approval_request_atomic(UUID,UUID,TEXT,UUID,TEXT) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.respond_approval_request_atomic(UUID,UUID,TEXT,UUID,TEXT) TO service_role;

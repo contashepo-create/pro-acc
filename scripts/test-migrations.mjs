@@ -402,6 +402,37 @@ async function smokeAtomicWriters(ids) {
   await assert.rejects(()=>db.query(`SELECT cancel_sales_invoice_atomic($1,$2,'',$3)`,[c2,atomicSale.id,u2]));
   assert.equal((await db.query(`SELECT status FROM invoices WHERE id=$1 AND company_id=$2`,[atomicSale.id,c])).rows[0].status,'partial');
 
+  const approver='65000000-0000-4000-8000-000000000001';
+  const approvalId='65000000-0000-4000-8000-000000000002';
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES($1,$2,'approver@example.test','x','Approver','manager',TRUE)`,[approver,c]);
+  await db.query(`INSERT INTO approval_requests(id,company_id,entity_type,entity_id,requester_id,approver_id,status) VALUES($1,$2,'purchase_invoice',$3,$4,$5,'pending')`,[approvalId,c,purchaseInvoice,u,approver]);
+  await assert.rejects(()=>db.query(`SELECT respond_approval_request_atomic($1,$2,'approve',$3,'')`,[c,approvalId,u]));
+  await assert.rejects(()=>db.query(`SELECT respond_approval_request_atomic($1,$2,'approve',$3,'')`,[c2,approvalId,u2]));
+  const approvalRace=await Promise.all([
+    db.query(`SELECT respond_approval_request_atomic($1,$2,'approve',$3,'ok') result`,[c,approvalId,approver]),
+    db.query(`SELECT respond_approval_request_atomic($1,$2,'approve',$3,'ok') result`,[c,approvalId,approver]),
+  ]);
+  assert.equal(approvalRace.filter(x=>x.rows[0].result.replayed===true).length,1);
+  assert.equal((await db.query(`SELECT status FROM purchase_invoices WHERE id=$1`,[purchaseInvoice])).rows[0].status,'unpaid');
+  assert.equal((await db.query(`SELECT approved_by FROM purchase_invoices WHERE id=$1`,[purchaseInvoice])).rows[0].approved_by,approver);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_id=$1 AND action='approve_approval'`,[approvalId])).rows[0].count),1);
+
+  const backupHmac='a'.repeat(64);
+  await db.query(`INSERT INTO backup_logs(company_id,user_id,backup_type,file_hash,hmac_signature) VALUES($1,$2,'json','hash',$3)`,[c,u,backupHmac]);
+  const accountBackup=(await db.query(`SELECT to_jsonb(a) row FROM accounts a WHERE id=$1`,[a['1000']])).rows[0].row;
+  const originalAccountName=accountBackup.name;
+  const tamperedRestore={
+    accounts:[{...accountBackup,name:'Must roll back'}],
+    contacts:[{id:contact2,company_id:c,name:'Cross tenant overwrite',type:'client'}],
+  };
+  await assert.rejects(()=>db.query(`SELECT restore_company_backup_atomic($1,$2,$3,$4::jsonb)`,[c,u,backupHmac,JSON.stringify(tamperedRestore)]));
+  assert.equal((await db.query(`SELECT name FROM accounts WHERE id=$1`,[a['1000']])).rows[0].name,originalAccountName);
+  const restored=await db.query(`SELECT restore_company_backup_atomic($1,$2,$3,$4::jsonb) result`,[
+    c,u,backupHmac,JSON.stringify({accounts:[{...accountBackup,name:'Restored account'}]}),
+  ]);
+  assert.equal(Number(restored.rows[0].result.restored_records),1);
+  assert.equal((await db.query(`SELECT name FROM accounts WHERE id=$1`,[a['1000']])).rows[0].name,'Restored account');
+
   const expiredCompany='66000000-0000-4000-8000-000000000001';
   const expiredUser='66000000-0000-4000-8000-000000000002';
   await db.query(`INSERT INTO companies(id,name,is_active) VALUES($1,'Expired tenant',TRUE)`,[expiredCompany]);
@@ -416,12 +447,13 @@ async function smokeAtomicWriters(ids) {
   const session={step:'approved_and_code_sent',code_hash:codeHash,attempts:0,requester_id:u,expires_at:new Date(Date.now()+300000).toISOString()};
   await db.query(`INSERT INTO company_telegram_configs(company_id,chat_id,is_enabled,reset_session_data)
     VALUES($1,'1',true,$2::jsonb)`,[c,JSON.stringify(session)]);
+  const retainedUsers=Number((await db.query('SELECT count(*) count FROM users WHERE company_id=$1',[c])).rows[0].count);
   const invalid=await db.query(`SELECT reset_company_business_data($1,$2,$3) result`,[c,u,'0'.repeat(64)]);
   assert.equal(invalid.rows[0].result.status,'invalid_code');
   const reset=await db.query(`SELECT reset_company_business_data($1,$2,$3) result`,[c,u,codeHash]);
   assert.equal(reset.rows[0].result.status,'reset_success');
   assert.equal(Number((await db.query('SELECT count(*) count FROM journal_entries')).rows[0].count),0);
-  assert.equal(Number((await db.query('SELECT count(*) count FROM users WHERE company_id=$1',[c])).rows[0].count),1);
+  assert.equal(Number((await db.query('SELECT count(*) count FROM users WHERE company_id=$1',[c])).rows[0].count),retainedUsers);
 }
 
 try {

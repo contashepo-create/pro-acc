@@ -221,37 +221,47 @@ async function countResource(resource: LimitResource, companyId: string): Promis
   }
 }
 
-/**
- * Count used storage bytes under the receipts bucket for a company.
- * Centralized here so upload + limits share the same implementation.
- * Returns 0 on "not found" (no files yet) but throws on other storage errors
- * so callers can fail-closed.
- */
+/** Count tenant-owned uploads across every billable private bucket. */
 export async function countUsedStorageBytes(companyId: string): Promise<number> {
   const { getSupabase: gs } = await import('@/lib/supabase-client');
   const s = gs();
-  let total = 0;
-  let offset = 0;
-  const pageSize = 1000;
-  while (true) {
-    // @ts-ignore supabase-js storage types
-    const { data: files, error } = await s.storage.from('receipts').list(companyId, {
-      limit: pageSize,
-      offset,
-      sortBy: { column: 'name', order: 'asc' },
-    });
-    if (error) {
-      const msg = String(error.message || '').toLowerCase();
-      if (msg.includes('not found') || msg.includes('does not exist') || msg.includes('404')) return 0;
-      throw error;
+
+  const scan = async (bucket: string, directory: string, depth: number): Promise<number> => {
+    let total = 0;
+    let offset = 0;
+    const pageSize = 1000;
+    while (true) {
+      // @ts-ignore supabase-js storage types
+      const { data: files, error } = await s.storage.from(bucket).list(directory, {
+        limit: pageSize,
+        offset,
+        sortBy: { column: 'name', order: 'asc' },
+      });
+      if (error) {
+        const msg = String(error.message || '').toLowerCase();
+        if (msg.includes('not found') || msg.includes('does not exist') || msg.includes('404')) break;
+        throw error;
+      }
+      if (!files?.length) break;
+      for (const file of files as any[]) {
+        const size = Number(file.metadata?.size);
+        if (Number.isFinite(size) && size > 0) total += size;
+        // Contract documents are grouped as company/contract/file. Supabase
+        // returns the contract folders without file metadata, so recurse one
+        // bounded level rather than silently omitting those billable bytes.
+        else if (depth > 0 && typeof file.name === 'string' && !file.name.includes('..')) {
+          total += await scan(bucket, `${directory}/${file.name}`, depth - 1);
+        }
+      }
+      if (files.length < pageSize) break;
+      offset += pageSize;
+      if (offset > 50000) throw new Error('Storage listing exceeded the safe scan limit');
     }
-    if (!files || files.length === 0) break;
-    for (const f of files as any[]) total += Number(f.metadata?.size) || 0;
-    if (files.length < pageSize) break;
-    offset += pageSize;
-    if (offset > 50000) break;
-  }
-  return total;
+    return total;
+  };
+
+  return (await scan('receipts', companyId, 0))
+    + (await scan('contract-documents', companyId, 1));
 }
 
 /**
