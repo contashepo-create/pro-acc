@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, requireAdmin, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { randomInt } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -117,8 +117,11 @@ export async function POST(request: NextRequest) {
         return error('انتهت صلاحية كود المصادقة ثنائي الأبعاد (صلاحيته 5 دقائق فقط). يرجى تقديم طلب جديد.', 400);
       }
 
-      // التحقق من مطابقة الكود
-      if (resetSession.code !== body.code.trim()) {
+      // المقارنة ثابتة الزمن لمنع كشف الرمز عبر فروق التوقيت.
+      const expectedCode = String(resetSession.code || '');
+      const suppliedCode = body.code.trim();
+      if (expectedCode.length !== suppliedCode.length ||
+          !timingSafeEqual(Buffer.from(expectedCode), Buffer.from(suppliedCode))) {
         return error('كود المصادقة ثنائي الأبعاد (2FA) غير صحيح! يرجى إدخال الكود المستلم على تليجرام بدقة.', 400);
       }
 
