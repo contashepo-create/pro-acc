@@ -82,7 +82,13 @@ export async function POST(request: NextRequest) {
     // 🛑 الحالة 1: حفظ مجمع ودفعي (Batch Save) - طلب شبكي واحد وصاروخي للسرعة الفائقة 🛑
     if (data.batch && Array.isArray(data.permissions)) {
       // التحقق من صحة الوحدات والإجراءات لمنع تخزين قيم عشوائية
-      const validModules = new Set<string>(Object.values(MODULES) as any);
+      const { data: customModules, error: customModulesError } = await s.from('custom_modules')
+        .select('code, name').eq('company_id', auth.companyId).eq('is_active', true);
+      if (customModulesError) throw customModulesError;
+      const validModules = new Set<string>([
+        ...(Object.values(MODULES) as string[]),
+        ...(customModules || []).flatMap((row: any) => [row.code, row.name]).filter(Boolean),
+      ]);
       const validActions = new Set<string>([...(Object.values(ACTIONS) as any), '*']);
       for (const p of data.permissions) {
         if (!p.module || !validModules.has(p.module)) {
@@ -108,7 +114,13 @@ export async function POST(request: NextRequest) {
 
     // 🛑 الحالة 2: حفظ فردي لوحدة واحدة (متوافق)
     const { module, actions } = data;
-    const validModules = new Set<string>(Object.values(MODULES) as any);
+    const { data: customModules, error: customModulesError } = await s.from('custom_modules')
+      .select('code, name').eq('company_id', auth.companyId).eq('is_active', true);
+    if (customModulesError) throw customModulesError;
+    const validModules = new Set<string>([
+      ...(Object.values(MODULES) as string[]),
+      ...(customModules || []).flatMap((row: any) => [row.code, row.name]).filter(Boolean),
+    ]);
     const validActions = new Set<string>([...(Object.values(ACTIONS) as any), '*']);
     if (!module || !validModules.has(module) || !Array.isArray(actions) || actions.some((action: string) => !validActions.has(action))) {
       return error('الوحدة أو الإجراءات غير صالحة');

@@ -95,36 +95,13 @@ export async function PUT(
       if (t.status !== 'won') return error('يمكن تحويل العطاءات الرابحة فقط إلى مشروع');
       if (t.project_id) return error('تم تحويل هذه المناقصة إلى مشروع مسبقاً', 409);
 
-      // Create project from tender
-      const projectId = generateId();
-      const { data: project, error: projErr } = await s.from('projects')
-        .insert({
-          id: projectId,
-          company_id: auth.companyId,
-          name: t.title,
-          description: t.description || null,
-          location: t.project_location || null,
-          budget: t.estimated_value || 0,
-          start_date: new Date().toISOString().split('T')[0],
-          end_date: t.project_duration_months
-            ? new Date(Date.now() + parseInt(t.project_duration_months) * 30 * 86400000).toISOString().split('T')[0]
-            : null,
-          status: 'active',
-          tender_id: id,
-          created_by: auth.userId,
-          created_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-
-      if (projErr) throw projErr;
-
-      // Update tender with project reference
-      await s.from('tenders')
-        .update({ project_id: projectId, updated_at: new Date().toISOString() })
-        .eq('id', id).eq('company_id', auth.companyId);
-
-      return success({ project, tender_id: id }, 201);
+      const { data: converted, error: conversionError } = await s.rpc('convert_won_tender_to_project_atomic', {
+        p_company_id: auth.companyId,
+        p_tender_id: id,
+        p_user_id: auth.userId,
+      });
+      if (conversionError) throw conversionError;
+      return success(converted, 201);
     }
 
     // Regular update
@@ -178,20 +155,18 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    const { data: tender } = await s.from('tenders')
-      .select('id, status, project_id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!tender) return notFound();
-    if ((tender as any).status !== 'draft' || (tender as any).project_id) {
-      return error('لا يمكن حذف مناقصة دخلت دورة العمل؛ ألغِها للحفاظ على السجل', 409);
+    const { data: result, error: deleteError } = await s.rpc('delete_draft_tender_atomic', {
+      p_company_id: auth.companyId,
+      p_tender_id: id,
+      p_user_id: auth.userId,
+    });
+    if (deleteError) {
+      const message = String(deleteError.message || 'تعذر حذف المناقصة');
+      if (/غير موجود/.test(message)) return notFound();
+      if (/دورة العمل|ضمان/.test(message)) return error(message, 409);
+      throw deleteError;
     }
-    const { data: bonds } = await s.from('bonds').select('id')
-      .eq('tender_id', id).eq('company_id', auth.companyId).limit(1);
-    if (bonds?.length) return error('لا يمكن حذف مناقصة مرتبطة بضمان', 409);
-
-    await s.from('tender_cost_items').delete().eq('tender_id', id).eq('company_id', auth.companyId);
-    const { error: deleteError } = await s.from('tenders').delete().eq('id', id).eq('company_id', auth.companyId);
-    if (deleteError) throw deleteError;
-    return success({ deleted: true });
+    return success(result);
   } catch (err) {
     return handleApiError(err);
   }

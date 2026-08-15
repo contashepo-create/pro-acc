@@ -425,6 +425,39 @@ async function smokeAtomicWriters(ids) {
   assert.equal((await db.query(`SELECT status FROM purchase_invoices WHERE id=$1`,[purchaseInvoice])).rows[0].status,'unpaid');
   assert.equal((await db.query(`SELECT approved_by FROM purchase_invoices WHERE id=$1`,[purchaseInvoice])).rows[0].approved_by,approver);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_id=$1 AND action='approve_approval'`,[approvalId])).rows[0].count),1);
+  const deactivatedUser=(await db.query(`SELECT deactivate_company_user_atomic($1,$2,$3) result`,[c,approver,u])).rows[0].result;
+  assert.equal(deactivatedUser.is_active,false);
+  assert.equal((await db.query(`SELECT is_active FROM users WHERE id=$1`,[approver])).rows[0].is_active,false);
+
+  const moduleId='64000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO custom_modules(id,company_id,name,code,is_system,created_by) VALUES($1,$2,'Runtime module','runtime_module',FALSE,$3)`,[moduleId,c,u]);
+  await db.query(`INSERT INTO user_permissions(company_id,user_id,module,permissions) VALUES($1,$2,'Runtime module','["read"]'::jsonb)`,[c,u]);
+  await db.query(`SELECT delete_custom_module_atomic($1,$2,$3)`,[c,moduleId,u]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM user_permissions WHERE company_id=$1 AND module='Runtime module'`,[c])).rows[0].count),0);
+
+  const parentTask='63000000-0000-4000-8000-000000000001';
+  const childTask='63000000-0000-4000-8000-000000000002';
+  const grandTask='63000000-0000-4000-8000-000000000003';
+  await db.query(`INSERT INTO project_tasks(id,company_id,project_id,name,start_date,end_date,progress,created_by) VALUES
+    ($1,$4,$5,'Parent','2026-01-01','2026-01-02',0,$6),($2,$4,$5,'Child','2026-01-01','2026-01-02',0,$6),($3,$4,$5,'Grand','2026-01-01','2026-01-02',0,$6)`,[parentTask,childTask,grandTask,c,project,u]);
+  await db.query(`UPDATE project_tasks SET parent_task_id=$1 WHERE id=$2`,[parentTask,childTask]);
+  await db.query(`UPDATE project_tasks SET parent_task_id=$1 WHERE id=$2`,[childTask,grandTask]);
+  const deletedTasks=(await db.query(`SELECT delete_unstarted_project_task_atomic($1,$2,$3) result`,[c,parentTask,u])).rows[0].result;
+  assert.equal(Number(deletedTasks.deleted_tasks),3);
+
+  const wonTender='62000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO tenders(id,company_id,title,client_name,contact_id,estimated_value,status,project_duration_months,created_by) VALUES($1,$2,'Won runtime tender','Client',$3,500,'won',2,$4)`,[wonTender,c,contact,u]);
+  const tenderRace=await Promise.all([
+    db.query(`SELECT convert_won_tender_to_project_atomic($1,$2,$3) result`,[c,wonTender,u]),
+    db.query(`SELECT convert_won_tender_to_project_atomic($1,$2,$3) result`,[c,wonTender,u]),
+  ]);
+  assert.equal(tenderRace.filter(x=>x.rows[0].result.already_processed===false).length,1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM projects WHERE company_id=$1 AND tender_id=$2`,[c,wonTender])).rows[0].count),1);
+  const draftTender='62000000-0000-4000-8000-000000000002';
+  await db.query(`INSERT INTO tenders(id,company_id,title,client_name,status,created_by) VALUES($1,$2,'Draft runtime tender','Client','draft',$3)`,[draftTender,c,u]);
+  await db.query(`INSERT INTO tender_cost_items(tender_id,company_id,category,amount,created_by) VALUES($1,$2,'materials',10,$3)`,[draftTender,c,u]);
+  await db.query(`SELECT delete_draft_tender_atomic($1,$2,$3)`,[c,draftTender,u]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM tender_cost_items WHERE tender_id=$1`,[draftTender])).rows[0].count),0);
 
   const backupHmac='a'.repeat(64);
   await db.query(`INSERT INTO backup_logs(company_id,user_id,backup_type,file_hash,hmac_signature) VALUES($1,$2,'json','hash',$3)`,[c,u,backupHmac]);

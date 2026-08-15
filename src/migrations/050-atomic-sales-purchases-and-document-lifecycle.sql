@@ -1599,3 +1599,128 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.create_vat_return_filing_atomic(UUID,DATE,DATE,TEXT,TEXT,UUID) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.create_vat_return_filing_atomic(UUID,DATE,DATE,TEXT,TEXT,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.deactivate_company_user_atomic(p_company_id UUID,p_target_user_id UUID,p_actor_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_target users%ROWTYPE; v_admins INT;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_actor_user_id AND company_id=p_company_id AND is_active=TRUE AND role='admin')
+  THEN RAISE EXCEPTION 'المدير غير صالح'; END IF;
+  IF p_target_user_id=p_actor_user_id THEN RAISE EXCEPTION 'لا يمكنك تعطيل حسابك الخاص'; END IF;
+  PERFORM 1 FROM users WHERE company_id=p_company_id ORDER BY id FOR UPDATE;
+  SELECT * INTO v_target FROM users WHERE id=p_target_user_id AND company_id=p_company_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المستخدم غير موجود'; END IF;
+  IF NOT COALESCE(v_target.is_active,FALSE) THEN RETURN jsonb_build_object('id',v_target.id,'is_active',FALSE,'already_inactive',TRUE); END IF;
+  IF v_target.role='admin' THEN
+    SELECT count(*) INTO v_admins FROM users WHERE company_id=p_company_id AND role='admin' AND is_active=TRUE;
+    IF v_admins<=1 THEN RAISE EXCEPTION 'لا يمكن تعطيل آخر مدير في الشركة'; END IF;
+  END IF;
+  UPDATE users SET is_active=FALSE,token_version=COALESCE(token_version,0)+1,updated_at=now() WHERE id=v_target.id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_actor_user_id,'deactivate_user','user',v_target.id,to_jsonb(v_target),jsonb_build_object('is_active',FALSE));
+  RETURN jsonb_build_object('id',v_target.id,'is_active',FALSE,'already_inactive',FALSE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.deactivate_company_user_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.deactivate_company_user_atomic(UUID,UUID,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.delete_custom_module_atomic(p_company_id UUID,p_module_id UUID,p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_module custom_modules%ROWTYPE;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE AND role='admin')
+  THEN RAISE EXCEPTION 'المدير غير صالح'; END IF;
+  SELECT * INTO v_module FROM custom_modules WHERE id=p_module_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'القسم غير موجود'; END IF;
+  IF v_module.is_system THEN RAISE EXCEPTION 'لا يمكن حذف قسم نظامي'; END IF;
+  DELETE FROM user_permissions WHERE company_id=p_company_id AND module IN(v_module.code,v_module.name);
+  DELETE FROM custom_modules WHERE id=p_module_id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values)
+  VALUES(p_company_id,p_user_id,'delete','custom_module',p_module_id,to_jsonb(v_module));
+  RETURN jsonb_build_object('id',p_module_id,'deleted',TRUE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.delete_custom_module_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_custom_module_atomic(UUID,UUID,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.delete_unstarted_project_task_atomic(p_company_id UUID,p_task_id UUID,p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_task project_tasks%ROWTYPE; v_count INT;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_task FROM project_tasks WHERE id=p_task_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المهمة غير موجودة'; END IF;
+  PERFORM 1 FROM project_tasks WHERE company_id=p_company_id AND project_id=v_task.project_id FOR UPDATE;
+  IF EXISTS(
+    WITH RECURSIVE tree AS (
+      SELECT id,progress FROM project_tasks WHERE id=p_task_id AND company_id=p_company_id
+      UNION ALL SELECT child.id,child.progress FROM project_tasks child JOIN tree parent ON child.parent_task_id=parent.id
+        WHERE child.company_id=p_company_id AND child.project_id=v_task.project_id
+    ) SELECT 1 FROM tree WHERE COALESCE(progress,0)>0
+  ) THEN RAISE EXCEPTION 'لا يمكن حذف مهمة أو مهمة فرعية بدأ تنفيذها'; END IF;
+  WITH RECURSIVE tree AS (
+    SELECT id FROM project_tasks WHERE id=p_task_id AND company_id=p_company_id
+    UNION ALL SELECT child.id FROM project_tasks child JOIN tree parent ON child.parent_task_id=parent.id
+      WHERE child.company_id=p_company_id AND child.project_id=v_task.project_id
+  ) DELETE FROM project_tasks WHERE id IN(SELECT id FROM tree) AND company_id=p_company_id;
+  GET DIAGNOSTICS v_count=ROW_COUNT;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values)
+  VALUES(p_company_id,p_user_id,'delete','project_task',p_task_id,to_jsonb(v_task));
+  RETURN jsonb_build_object('id',p_task_id,'deleted',TRUE,'deleted_tasks',v_count);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.delete_unstarted_project_task_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_unstarted_project_task_atomic(UUID,UUID,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.delete_draft_tender_atomic(p_company_id UUID,p_tender_id UUID,p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_tender tenders%ROWTYPE;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.status<>'draft' OR v_tender.project_id IS NOT NULL THEN RAISE EXCEPTION 'لا يمكن حذف مناقصة دخلت دورة العمل'; END IF;
+  IF EXISTS(SELECT 1 FROM bonds WHERE tender_id=p_tender_id AND company_id=p_company_id) THEN RAISE EXCEPTION 'لا يمكن حذف مناقصة مرتبطة بضمان'; END IF;
+  DELETE FROM tenders WHERE id=p_tender_id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values)
+  VALUES(p_company_id,p_user_id,'delete','tender',p_tender_id,to_jsonb(v_tender));
+  RETURN jsonb_build_object('id',p_tender_id,'deleted',TRUE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.delete_draft_tender_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_draft_tender_atomic(UUID,UUID,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.convert_won_tender_to_project_atomic(p_company_id UUID,p_tender_id UUID,p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_tender tenders%ROWTYPE; v_project JSONB; v_end DATE;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.project_id IS NOT NULL THEN RETURN jsonb_build_object('project',jsonb_build_object('id',v_tender.project_id),'tender_id',p_tender_id,'already_processed',TRUE); END IF;
+  IF v_tender.status<>'won' THEN RAISE EXCEPTION 'يمكن تحويل العطاءات الرابحة فقط إلى مشروع'; END IF;
+  IF COALESCE(v_tender.estimated_value,0)<=0 THEN RAISE EXCEPTION 'قيمة المناقصة غير صالحة لإنشاء مشروع'; END IF;
+  v_end:=CASE WHEN COALESCE(v_tender.project_duration_months,0)>0 THEN CURRENT_DATE+(v_tender.project_duration_months*30) ELSE NULL END;
+  v_project:=create_project_atomic(p_company_id,v_tender.title,v_tender.contact_id,v_tender.estimated_value,
+    CURRENT_DATE,v_end,'active',COALESCE(v_tender.description,''),COALESCE(v_tender.project_location,''),'[]'::JSONB,FALSE,p_user_id);
+  UPDATE projects SET tender_id=p_tender_id WHERE id=(v_project->>'id')::UUID AND company_id=p_company_id
+    RETURNING to_jsonb(projects.*) INTO v_project;
+  UPDATE tenders SET project_id=(v_project->>'id')::UUID,updated_at=now() WHERE id=p_tender_id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'convert_to_project','tender',p_tender_id,jsonb_build_object('project_id',v_project->>'id'));
+  RETURN jsonb_build_object('project',v_project,'tender_id',p_tender_id,'already_processed',FALSE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.convert_won_tender_to_project_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.convert_won_tender_to_project_atomic(UUID,UUID,UUID) TO service_role;
+
+-- Tenders and their converted projects reference each other. SET NULL on
+-- deletion prevents that legitimate lifecycle link from deadlocking tenant
+-- reset/deletion ordering while preserving both links during normal use.
+ALTER TABLE tenders DROP CONSTRAINT IF EXISTS tenders_project_id_fkey;
+ALTER TABLE tenders ADD CONSTRAINT tenders_project_id_fkey FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE projects DROP CONSTRAINT IF EXISTS projects_tender_id_fkey;
+ALTER TABLE projects ADD CONSTRAINT projects_tender_id_fkey FOREIGN KEY(tender_id) REFERENCES tenders(id) ON DELETE SET NULL;

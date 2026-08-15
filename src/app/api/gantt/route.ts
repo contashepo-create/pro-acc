@@ -234,19 +234,18 @@ export async function DELETE(request: NextRequest) {
 
     if (!taskId) return error('task_id مطلوب');
 
-    const { data: task } = await s.from('project_tasks').select('id, progress')
-      .eq('id', taskId).eq('company_id', auth.companyId).maybeSingle();
-    if (!task) return notFound();
-    if (Number((task as any).progress) > 0) return error('لا يمكن حذف مهمة بدأ تنفيذها؛ حدّث حالتها بدلاً من ذلك', 409);
-
-    const { data: startedChildren } = await s.from('project_tasks').select('id')
-      .eq('parent_task_id', taskId).eq('company_id', auth.companyId).gt('progress', 0).limit(1);
-    if (startedChildren?.length) return error('لا يمكن حذف مهمة لها مهام فرعية بدأ تنفيذها', 409);
-    await s.from('project_tasks').delete().eq('parent_task_id', taskId).eq('company_id', auth.companyId);
-    const { error: deleteError } = await s.from('project_tasks').delete().eq('id', taskId).eq('company_id', auth.companyId);
-    if (deleteError) throw deleteError;
-
-    return success({ deleted: true });
+    const { data: result, error: deleteError } = await s.rpc('delete_unstarted_project_task_atomic', {
+      p_company_id: auth.companyId,
+      p_task_id: taskId,
+      p_user_id: auth.userId,
+    });
+    if (deleteError) {
+      const message = String(deleteError.message || 'تعذر حذف المهمة');
+      if (/غير موجود/.test(message)) return notFound();
+      if (/بدأ تنفيذها/.test(message)) return error(message, 409);
+      throw deleteError;
+    }
+    return success(result);
   } catch (err) {
     return handleApiError(err);
   }
