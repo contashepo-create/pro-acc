@@ -3,7 +3,6 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, notFound, parseBody } from '@/lib/api-helpers';
 import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
-import { randomInt } from 'crypto';
 
 const sb = () => getSupabase();
 
@@ -126,131 +125,11 @@ export async function PATCH(
     }
 
     if (body.action === 'change_plan') {
-      // Change subscription plan - requires master password
-      const masterHeader = request.headers.get('x-master-password');
-      if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
-      if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
-
-      const { data: plan } = await s.from('subscription_plans')
-        .select('id, code, name, duration_days')
-        .eq('id', body.plan_id)
-        .maybeSingle();
-
-      if (!plan) return error('الباقة غير موجودة');
-
-      const now = new Date();
-      const endDate = new Date();
-      if (body.duration_days) {
-        endDate.setDate(endDate.getDate() + body.duration_days);
-      } else if ((plan as any).duration_days) {
-        endDate.setDate(endDate.getDate() + (plan as any).duration_days);
-      } else {
-        endDate.setMonth(endDate.getMonth() + 1);
-      }
-
-      // Get next subscriber number if new subscription
-      let subscriberNumber: number | null = null;
-      const { data: existingSub } = await s.from('subscriptions')
-        .select('id, subscriber_number')
-        .eq('company_id', id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (existingSub && (existingSub as any).subscriber_number) {
-        subscriberNumber = (existingSub as any).subscriber_number;
-      } else {
-        const { data: seqResult } = await s.rpc('nextval', { seq: 'subscriber_number_seq' }).single();
-        try {
-          subscriberNumber = seqResult as any || Number(randomInt(10000, 99999));
-        } catch {
-          subscriberNumber = seqResult as any || 10000 + Math.floor(Date.now() % 90000);
-        }
-      }
-
-      if (existingSub) {
-        // Update existing subscription
-        await s.from('subscriptions')
-          .update({
-            plan_id: body.plan_id,
-            plan_code: (plan as any).code,
-            status: 'active',
-            start_date: now.toISOString().split('T')[0],
-            end_date: endDate.toISOString().split('T')[0],
-            subscriber_number: subscriberNumber,
-            auto_renew: body.auto_renew || false,
-          })
-          .eq('id', (existingSub as any).id);
-      } else {
-        // Create new subscription
-        await s.from('subscriptions')
-          .insert({
-            company_id: id,
-            plan_id: body.plan_id,
-            plan_code: (plan as any).code,
-            status: 'active',
-            start_date: now.toISOString().split('T')[0],
-            end_date: endDate.toISOString().split('T')[0],
-            subscriber_number: subscriberNumber,
-            auto_renew: body.auto_renew || false,
-          });
-      }
-
-      // Send notification to company
-      try {
-        await s.from('notifications').insert({
-          company_id: id,
-          title: 'تم تغيير باقة اشتراكك',
-          message: `تم تغيير باقتك إلى: ${(plan as any).name}. تنتهي في: ${endDate.toISOString().split('T')[0]}`,
-          type: 'subscription',
-          is_read: false,
-        });
-      } catch {}
-
-      await auditLog(__admin.adminId, 'change_company_plan',
-        JSON.stringify({ companyName: company.name, planName: (plan as any).name }), 'company', id);
-
-      return success({ message: `تم تغيير الباقة إلى ${(plan as any).name}` });
+      return error('تغيير الباقة المدفوعة يتم فقط عبر طلب ترقية معتمد أو كود تفعيل', 409);
     }
 
     if (body.action === 'extend_subscription') {
-      const masterHeader = request.headers.get('x-master-password');
-      if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
-      if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
-
-      const { data: sub } = await s.from('subscriptions')
-        .select('id, end_date, status')
-        .eq('company_id', id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!sub) return error('لا يوجد اشتراك لهذه الشركة');
-
-      const currentEnd = new Date((sub as any).end_date || new Date());
-      const newEnd = new Date(currentEnd);
-      newEnd.setDate(newEnd.getDate() + (body.days || 30));
-
-      await s.from('subscriptions')
-        .update({ end_date: newEnd.toISOString().split('T')[0], status: 'active' })
-        .eq('id', (sub as any).id);
-
-      try {
-        await s.from('notifications').insert({
-          company_id: id,
-          title: 'تم تمديد اشتراكك',
-          message: `تم تمديد اشتراكك ${body.days || 30} يوم. تاريخ الانتهاء الجديد: ${newEnd.toISOString().split('T')[0]}`,
-          type: 'subscription',
-          is_read: false,
-        });
-      } catch {}
-
-      await auditLog(__admin.adminId, 'extend_subscription',
-        JSON.stringify({ companyName: company.name, days: body.days || 30 }), 'company', id);
-
-      return success({ message: `تم تمديد الاشتراك ${body.days || 30} يوم` });
+      return error('تمديد الاشتراك المدفوع يتطلب دفعاً معتمداً أو كود تفعيل؛ التجربة تمدد من المسار المخصص', 409);
     }
 
     if (body.action === 'cancel_subscription') {

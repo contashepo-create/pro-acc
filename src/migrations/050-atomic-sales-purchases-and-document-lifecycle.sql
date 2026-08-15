@@ -1530,3 +1530,39 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.respond_approval_request_atomic(UUID,UUID,TEXT,UUID,TEXT) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.respond_approval_request_atomic(UUID,UUID,TEXT,UUID,TEXT) TO service_role;
+
+UPDATE subscriptions s SET trial_extended_by=NULL
+WHERE trial_extended_by IS NOT NULL AND NOT EXISTS(SELECT 1 FROM admin_users a WHERE a.id=s.trial_extended_by);
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_trial_extended_by_fkey;
+ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_trial_extended_by_fkey
+  FOREIGN KEY(trial_extended_by) REFERENCES admin_users(id) ON DELETE SET NULL;
+
+CREATE OR REPLACE FUNCTION public.extend_company_trial_atomic(
+  p_company_id UUID,p_admin_id UUID,p_days INT,p_reason TEXT DEFAULT ''
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_sub subscriptions%ROWTYPE; v_old_end DATE; v_new_end DATE;
+BEGIN
+  IF p_days<>7 OR length(COALESCE(p_reason,''))>500 THEN RAISE EXCEPTION 'بيانات تمديد التجربة غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM admin_users WHERE id=p_admin_id AND is_active=TRUE) THEN RAISE EXCEPTION 'المدير غير صالح'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM companies WHERE id=p_company_id) THEN RAISE EXCEPTION 'الشركة غير موجودة'; END IF;
+  SELECT * INTO v_sub FROM subscriptions WHERE company_id=p_company_id ORDER BY created_at DESC LIMIT 1 FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'لا يوجد اشتراك لهذه الشركة'; END IF;
+  IF v_sub.status<>'trial' THEN RAISE EXCEPTION 'التمديد متاح فقط للباقات التجريبية'; END IF;
+  IF COALESCE(v_sub.trial_extended,FALSE) THEN
+    RETURN jsonb_build_object('id',v_sub.id,'end_date',v_sub.end_date,'trial_end_date',v_sub.trial_end_date,'already_extended',TRUE);
+  END IF;
+  v_old_end:=COALESCE(v_sub.trial_end_date,v_sub.end_date,CURRENT_DATE);
+  v_new_end:=v_old_end+p_days;
+  UPDATE subscriptions SET end_date=v_new_end,trial_end_date=v_new_end,trial_extended=TRUE,
+    trial_extended_by=p_admin_id,trial_extended_at=now(),original_end_date=v_old_end,updated_at=now()
+    WHERE id=v_sub.id RETURNING * INTO v_sub;
+  INSERT INTO admin_audit_log(admin_id,action,details,target_type,target_id)
+  VALUES(p_admin_id,'extend_trial',format('Extended trial by %s days. Reason: %s',p_days,COALESCE(NULLIF(trim(p_reason),''),'N/A')),'company',p_company_id);
+  INSERT INTO notifications(company_id,type,title,message)
+  VALUES(p_company_id,'subscription','تم تمديد الفترة التجريبية','تم تمديد فترتك التجريبية 7 أيام إضافية. تنتهي الآن في '||v_new_end::TEXT);
+  RETURN jsonb_build_object('id',v_sub.id,'end_date',v_sub.end_date,'trial_end_date',v_sub.trial_end_date,'already_extended',FALSE);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.extend_company_trial_atomic(UUID,UUID,INT,TEXT) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.extend_company_trial_atomic(UUID,UUID,INT,TEXT) TO service_role;

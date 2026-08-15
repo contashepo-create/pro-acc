@@ -396,6 +396,15 @@ async function smokeAtomicWriters(ids) {
   const u2=registration.rows[0].result.user.id;
   const contact2='67000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Other tenant client','client')`,[contact2,c2]);
+  const trialBefore=(await db.query(`SELECT end_date FROM subscriptions WHERE company_id=$1 ORDER BY created_at DESC LIMIT 1`,[c2])).rows[0].end_date;
+  const trialRace=await Promise.all([
+    db.query(`SELECT extend_company_trial_atomic($1,$2,7,'test') result`,[c2,'90000000-0000-4000-8000-000000000001']),
+    db.query(`SELECT extend_company_trial_atomic($1,$2,7,'test') result`,[c2,'90000000-0000-4000-8000-000000000001']),
+  ]);
+  assert.equal(trialRace.filter(x=>x.rows[0].result.already_extended===false).length,1);
+  const trialAfter=(await db.query(`SELECT end_date,trial_extended FROM subscriptions WHERE company_id=$1 ORDER BY created_at DESC LIMIT 1`,[c2])).rows[0];
+  assert.equal((new Date(trialAfter.end_date)-new Date(trialBefore))/86400000,7);
+  assert.equal(trialAfter.trial_extended,true);
   await assert.rejects(()=>db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,CURRENT_DATE,CURRENT_DATE,$3::jsonb,0,FALSE,'',0,NULL,$4)`,[
     c,contact2,JSON.stringify([{description:'Cross tenant',quantity:1,unitPrice:10,discount:0}]),u,
   ]));

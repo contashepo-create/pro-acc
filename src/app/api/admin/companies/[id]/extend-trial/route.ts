@@ -26,66 +26,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     if (reason && String(reason).length > 500) return error('السبب طويل جداً', 400);
 
-    const s = sb();
-
-    // Get current subscription
-    const { data: sub, error: subErr } = await s.from('subscriptions')
-      .select('id, status, trial_extended, end_date')
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (subErr || !sub) {
-      return error('لا يوجد اشتراك لهذه الشركة', 404);
-    }
-
-    const subData = sub as Record<string, any>;
-
-    if (subData.status !== 'trial') {
-      return error('التمديد متاح فقط للباقات التجريبية', 400);
-    }
-
-    if (subData.trial_extended) {
-      return error('تم تمديد هذه الفترة التجريبية من قبل. لا يمكن التمديد مرة أخرى', 400);
-    }
-
-    const currentEndDate = new Date(subData.end_date);
-    const newEndDate = new Date(currentEndDate.getTime() + days * 86400000);
-
-    const { data: updated, error: updateErr } = await s.from('subscriptions')
-      .update({
-        end_date: newEndDate.toISOString().split('T')[0],
-        trial_extended: true,
-        trial_extended_by: __admin.adminId,
-        trial_extended_at: new Date().toISOString(),
-        original_end_date: subData.end_date,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', subData.id)
-      .select()
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    // Audit log
-    await s.from('admin_audit_log').insert({
-      admin_id: __admin.adminId,
-      action: 'extend_trial',
-      details: `Extended trial for company ${companyId} by ${days} days. Reason: ${reason || 'N/A'}`,
-      target_type: 'company',
-      target_id: companyId,
+    const { data: result, error: extendError } = await sb().rpc('extend_company_trial_atomic', {
+      p_company_id: companyId,
+      p_admin_id: __admin.adminId,
+      p_days: days,
+      p_reason: typeof reason === 'string' ? reason.trim() : '',
     });
-
-    // Notify company
-    await s.from('notifications').insert({
-      company_id: companyId,
-      title: 'تم تمديد الفترة التجريبية',
-      body: `تم تمديد فترتك التجريبية 7 أيام إضافية. تنتهي الآن في ${newEndDate.toLocaleDateString('ar-EG')}`,
-      type: 'subscription',
+    if (extendError) {
+      const message = String(extendError.message || 'تعذر تمديد الفترة التجريبية');
+      if (/الشركة غير موجودة|لا يوجد اشتراك/.test(message)) return error(message, 404);
+      if (/تمديد|مسبق|صالح/.test(message)) return error(message, 409);
+      throw extendError;
+    }
+    const row = result as Record<string, unknown>;
+    return success({
+      subscription: row,
+      message: row.already_extended
+        ? 'تم تمديد هذه الفترة التجريبية مسبقاً'
+        : `تم تمديد الفترة التجريبية 7 أيام. تنتهي الآن في ${row.end_date}`,
     });
-
-    return success({ subscription: updated, message: `تم تمديد الفترة التجريبية 7 أيام. تنتهي الآن في ${newEndDate.toISOString().split('T')[0]}` });
   } catch (e) {
     return adminJsonError(e);
   }
