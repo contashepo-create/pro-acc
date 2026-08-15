@@ -45,11 +45,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Invalid callback data format' });
     }
     
-    const action = parts[0] as 'approve' | 'reject';
-    const userId = parts[parts.length - 1];
-    const requesterId = parts[parts.length - 2];
-    const transactionId = parts[parts.length - 3];
-    const transactionType = parts.slice(1, parts.length - 3).join('_');
+    if (parts[0] !== 'approve') {
+      return NextResponse.json({ success: false, message: 'Invalid callback prefix' });
+    }
+    const action = parts[1] as 'approve' | 'reject';
+    const requesterId = parts[parts.length - 1];
+    const transactionId = parts[parts.length - 2];
+    const transactionType = parts.slice(2, parts.length - 2).join('_');
     
     if (!['approve', 'reject'].includes(action)) {
       return NextResponse.json({ success: false, message: 'Invalid action' });
@@ -78,7 +80,7 @@ export async function POST(request: NextRequest) {
       });
     }
     
-    return NextResponse.json({ success: true, result });
+    return NextResponse.json({ success: result.success, result }, { status: result.success ? 200 : 409 });
   } catch (err) {
     console.error('Error handling Telegram callback:', err);
     return NextResponse.json({ success: false, message: 'Internal server error' }, { status: 500 });

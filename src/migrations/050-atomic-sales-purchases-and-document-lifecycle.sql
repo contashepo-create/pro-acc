@@ -1384,3 +1384,35 @@ GRANT EXECUTE ON FUNCTION public.update_voucher_receipt_atomic(UUID,UUID,DATE,UU
 GRANT EXECUTE ON FUNCTION public.cancel_voucher_receipt_atomic(UUID,UUID,UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION public.update_voucher_disbursement_atomic(UUID,UUID,DATE,UUID,BOOLEAN,UUID,BOOLEAN,NUMERIC,UUID,TEXT,UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION public.cancel_voucher_disbursement_atomic(UUID,UUID,UUID) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.deactivate_inactive_expired_companies(p_cutoff TIMESTAMPTZ)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_sub subscriptions%ROWTYPE; v_companies INT:=0; v_users INT:=0; v_rows INT;
+BEGIN
+  IF p_cutoff IS NULL OR p_cutoff>now()-INTERVAL '14 days' THEN RAISE EXCEPTION 'فترة عدم النشاط غير صالحة'; END IF;
+  FOR v_sub IN
+    SELECT s.* FROM subscriptions s
+    JOIN companies c ON c.id=s.company_id
+    WHERE COALESCE(c.is_active,TRUE)=TRUE
+      AND s.status IN ('trial','expired','cancelled')
+      AND COALESCE(s.trial_end_date,s.end_date,s.updated_at::DATE)<p_cutoff::DATE
+      AND NOT EXISTS(
+        SELECT 1 FROM users u WHERE u.company_id=s.company_id AND u.is_active=TRUE
+          AND COALESCE(u.last_activity,u.last_login,u.created_at)>=p_cutoff
+      )
+    ORDER BY s.company_id FOR UPDATE OF s
+  LOOP
+    UPDATE companies SET is_active=FALSE WHERE id=v_sub.company_id AND COALESCE(is_active,TRUE)=TRUE;
+    GET DIAGNOSTICS v_rows=ROW_COUNT; v_companies:=v_companies+v_rows;
+    UPDATE users SET is_active=FALSE WHERE company_id=v_sub.company_id AND is_active=TRUE;
+    GET DIAGNOSTICS v_rows=ROW_COUNT; v_users:=v_users+v_rows;
+    UPDATE subscriptions SET status='cancelled',auto_renew=FALSE,updated_at=now() WHERE id=v_sub.id;
+    INSERT INTO security_audit_log(company_id,action,details)
+    VALUES(v_sub.company_id,'inactive_company_deactivated',jsonb_build_object('cutoff',p_cutoff,'subscription_id',v_sub.id));
+  END LOOP;
+  RETURN jsonb_build_object('deactivated_companies',v_companies,'deactivated_users',v_users);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.deactivate_inactive_expired_companies(TIMESTAMPTZ) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.deactivate_inactive_expired_companies(TIMESTAMPTZ) TO service_role;

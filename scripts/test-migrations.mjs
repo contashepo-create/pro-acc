@@ -392,6 +392,25 @@ async function smokeAtomicWriters(ids) {
     'Owner','hash','verify',NOW()+INTERVAL '1 day',$1::jsonb) result`,[JSON.stringify(registrationAccounts)]);
   assert.ok(registration.rows[0].result.company.id);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM subscriptions s JOIN companies c ON c.id=s.company_id WHERE c.email='second@example.test'`)).rows[0].count),1);
+  const c2=registration.rows[0].result.company.id;
+  const u2=registration.rows[0].result.user.id;
+  const contact2='67000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Other tenant client','client')`,[contact2,c2]);
+  await assert.rejects(()=>db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,CURRENT_DATE,CURRENT_DATE,$3::jsonb,0,FALSE,'',0,NULL,$4)`,[
+    c,contact2,JSON.stringify([{description:'Cross tenant',quantity:1,unitPrice:10,discount:0}]),u,
+  ]));
+  await assert.rejects(()=>db.query(`SELECT cancel_sales_invoice_atomic($1,$2,'',$3)`,[c2,atomicSale.id,u2]));
+  assert.equal((await db.query(`SELECT status FROM invoices WHERE id=$1 AND company_id=$2`,[atomicSale.id,c])).rows[0].status,'partial');
+
+  const expiredCompany='66000000-0000-4000-8000-000000000001';
+  const expiredUser='66000000-0000-4000-8000-000000000002';
+  await db.query(`INSERT INTO companies(id,name,is_active) VALUES($1,'Expired tenant',TRUE)`,[expiredCompany]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active,created_at,last_activity) VALUES($1,$2,'expired@example.test','x','Old','admin',TRUE,NOW()-INTERVAL '30 days',NOW()-INTERVAL '30 days')`,[expiredUser,expiredCompany]);
+  await db.query(`INSERT INTO subscriptions(company_id,plan_code,status,start_date,end_date) VALUES($1,'start','expired',CURRENT_DATE-60,CURRENT_DATE-30)`,[expiredCompany]);
+  const deactivated=(await db.query(`SELECT deactivate_inactive_expired_companies(NOW()-INTERVAL '16 days') result`)).rows[0].result;
+  assert.ok(Number(deactivated.deactivated_companies)>=1);
+  assert.equal((await db.query(`SELECT is_active FROM companies WHERE id=$1`,[expiredCompany])).rows[0].is_active,false);
+  assert.equal((await db.query(`SELECT count(*)::int count FROM companies WHERE id=$1`,[expiredCompany])).rows[0].count,1);
 
   const codeHash=createHash('sha256').update('123456').digest('hex');
   const session={step:'approved_and_code_sent',code_hash:codeHash,attempts:0,requester_id:u,expires_at:new Date(Date.now()+300000).toISOString()};
