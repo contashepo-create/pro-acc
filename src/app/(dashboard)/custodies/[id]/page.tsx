@@ -150,7 +150,9 @@ export default function CustodyFilePage() {
         <p className="text-xs text-text-muted mt-3">التاريخ: {formatDate(file.date)} — المصروف يُخصم من 1150 فلا يُصرف نقداً مرة أخرى. الإغلاق لا يتم إلا بتأكيد.</p>
       </Card>
 
-      <Modal isOpen={modal === 'add'} onClose={() => setModal(null)} title="تعزيز الملف" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>إلغاء</Button><Button disabled={saving} onClick={() => post(`/api/custodies/${id}/add`, form)}>ترحيل التعزيز</Button></div>}>
+      <Modal isOpen={modal === 'add'} onClose={() => setModal(null)} title="تعزيز الملف" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>إلغاء</Button><Button disabled={saving} onClick={() => post(`/api/custodies/${id}/add`, {
+        amount: form.amount, date: form.date, bank_safe_id: form.bank_safe_id, description: form.description,
+      })}>ترحيل التعزيز</Button></div>}>
         <div className="space-y-3">
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />

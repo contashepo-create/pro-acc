@@ -5,28 +5,11 @@
  * - الإغلاق بتأكيد فقط: عجز → 1160 / زيادة → 2140
  */
 import { getSupabase } from '@/lib/supabase-client';
-import { createJournalEntry } from '@/lib/journal-utils';
-import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export const OPEN_STATUSES = new Set(['open', 'partially_settled']);
-
-export async function resolveCustodyAccounts(companyId: string) {
-  const s = sb();
-  const { data: custody } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_CUSTODIES).maybeSingle();
-  const { data: advance } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.EMPLOYEE_ADVANCES).maybeSingle();
-  const { data: accrued } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.ACCRUED_SALARIES).maybeSingle();
-  const { data: expense } = await s.from('accounts').select('id').eq('company_id', companyId).eq('code', ACCOUNT_CODES.DIRECT_COSTS).maybeSingle();
-  if (!custody?.id) throw new Error('حساب عُهد الموظفين (1150) غير موجود — راجع دليل الحسابات');
-  return {
-    custodyId: custody.id,
-    advanceId: advance?.id || null,
-    accruedId: accrued?.id || null,
-    defaultExpenseId: expense?.id || null,
-  };
-}
 
 export async function loadCustodyFile(companyId: string, id: string) {
   const s = sb();
@@ -85,52 +68,4 @@ export function assertFileOpen(file: { status?: string }) {
   if (file.status === 'settled' || file.status === 'closed') {
     throw new Error('ملف العهدة مغلق — لا يمكن تسجيل حركات عليه');
   }
-}
-
-export async function nextFileNumber(companyId: string): Promise<string> {
-  const s = sb();
-  const year = new Date().getFullYear();
-  const { count } = await s.from('custodies')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId);
-  return `عهدة-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
-}
-
-export async function recordCustodyTx(
-  companyId: string,
-  custodyId: string,
-  type: string,
-  amount: number,
-  description: string,
-  userId: string,
-  extra: Record<string, unknown> = {},
-) {
-  const s = sb();
-  const { data, error } = await s.from('custody_transactions').insert({
-    company_id: companyId,
-    custody_id: custodyId,
-    type,
-    amount,
-    description,
-    created_by: userId,
-    ...extra,
-  }).select('*').single();
-  if (error) throw error;
-  return data;
-}
-
-export async function syncCustodyTotals(companyId: string, custodyId: string) {
-  const file = await loadCustodyFile(companyId, custodyId);
-  if (!file) return null;
-  // عمود status في بعض القواعد لا يقبل partially_settled
-  const status = file.is_closed ? 'settled' : 'open';
-  await sb().from('custodies').update({
-    amount: file.total_received,
-    total_received: file.total_received,
-    total_expenses: file.total_expenses,
-    remaining_amount: file.remaining_amount,
-    status,
-    updated_at: new Date().toISOString(),
-  }).eq('id', custodyId).eq('company_id', companyId);
-  return { ...file, status };
 }

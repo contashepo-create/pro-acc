@@ -120,7 +120,7 @@ export default function EmployeesPage() {
       const res = await fetch(`/api/employees/${employee.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        toast.success('تم حذف الموظف بنجاح');
+        toast.success('تم تعطيل الموظف بنجاح');
         fetchData();
       } else {
         toast.error(json.message || 'فشل الحذف');
@@ -147,8 +147,9 @@ export default function EmployeesPage() {
       render: (row: any) => (
         <ActionButtons
           item={row}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
+          onEdit={row.is_active ? handleEdit : undefined}
+          onDelete={row.is_active ? handleDelete : undefined}
+          deleteMode="deactivate"
         />
       ),
     },

@@ -27,7 +27,7 @@ export default function PayrollPage() {
       setLoading(true);
       const [payRes, empRes] = await Promise.all([
         fetch('/api/payroll', { credentials: 'same-origin' }),
-        fetch('/api/employees', { credentials: 'same-origin' }),
+        fetch('/api/employees?active=true', { credentials: 'same-origin' }),
       ]);
       const [payJson, empJson] = await Promise.all([payRes.json(), empRes.json()]);
       if (payJson.success) setRecords(payJson.data?.records || []);

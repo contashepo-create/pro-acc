@@ -1,53 +1,47 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission, parseBody, getPaginationParams } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { employeeAdvanceCreateSchema } from '@/lib/hr-validation';
 
-const sb = () => getSupabase();
+const ADVANCE_COLUMNS = `id,employee_id,amount,remaining_amount,date,reason,journal_entry_id,
+  voucher_disbursement_id,custody_id,type,status,approved_at,created_at,employees(name)`;
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'employee_advances', 'read');
-    const s = sb();
-    const {page,pageSize}=getPaginationParams(new URL(request.url));
-    const offset=(page-1)*pageSize;
-    const { data: advances, error: queryErr, count } = await s.from('employee_advances')
-      .select('*, employees(name)',{count:'exact'})
-      .eq('company_id', auth.companyId)
-      .order('date', { ascending: false })
-      .range(offset,offset+pageSize-1);
-    if (queryErr) throw queryErr;
-    return success({ advances: advances || [], total:count||0, page, pageSize });
-  } catch (err) {
-    return handleApiError(err);
+    const { page, pageSize } = getPaginationParams(new URL(request.url));
+    const offset = (page - 1) * pageSize;
+    const { data, error: queryError, count } = await getSupabase().from('employee_advances')
+      .select(ADVANCE_COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId)
+      .order('date', { ascending: false }).range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
+    const advances = (data || []).map((advance: any) => ({
+      ...advance, employee_name: advance.employees?.name || '', employees: undefined,
+    }));
+    return success({ advances, total: count || 0, page, pageSize });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'employee_advances', 'create');
-    const s = sb();
-    const body = await parseBody<{ employee_id?: string; amount?: number | string; date?: string; reason?: string; bank_safe_id?: string }>(request);
-
-    if (!body.employee_id || !body.amount || !body.bank_safe_id) return error('الموظف والمبلغ والخزينة/البنك مطلوبة');
-
-    const amount = Number(body.amount);
-    if (!Number.isFinite(amount) || amount <= 0 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) return error('المبلغ غير صالح');
-
-    const date = body.date || new Date().toISOString().split('T')[0];
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return error('التاريخ غير صالح');
-    if (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.length > 2000)) return error('السبب غير صالح');
-    const { data: advance, error: rpcErr } = await s.rpc('create_employee_advance', {
+    const parsed = employeeAdvanceCreateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات السلفة غير صالحة');
+    const input = parsed.data;
+    const { data: advance, error: rpcError } = await getSupabase().rpc('create_employee_advance', {
       p_company_id: auth.companyId,
-      p_employee_id: body.employee_id,
-      p_date: date,
-      p_amount: amount,
-      p_reason: body.reason?.trim() || '',
-      p_bank_safe_id: body.bank_safe_id,
+      p_employee_id: input.employee_id,
+      p_date: input.date || new Date().toISOString().slice(0, 10),
+      p_amount: input.amount,
+      p_reason: input.reason || '',
+      p_bank_safe_id: input.bank_safe_id,
       p_created_by: auth.userId,
     });
-    if (rpcErr) throw rpcErr;
+    if (rpcError) throw rpcError;
     return success(advance, 201);
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

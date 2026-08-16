@@ -141,8 +141,8 @@ async function seedLedger() {
   await db.query(`INSERT INTO companies(id,name) VALUES($1,'Test')`, [ids.company]);
   await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active)
     VALUES($1,$2,'admin@example.test','x','Admin','admin',true)`, [ids.user, ids.company]);
-  await db.query(`INSERT INTO employees(id,company_id,name,salary,hire_date,is_active)
-    VALUES($1,$2,'Employee',1000,'2026-01-01',true)`, [ids.employee, ids.company]);
+  ids.employee=(await db.query(`SELECT create_employee_atomic($1,'Employee','','',1000,'','','2026-01-01',$2) result`,
+    [ids.company,ids.user])).rows[0].result.id;
   await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Client','both')`,[ids.contact,ids.company]);
   await db.query(`INSERT INTO projects(id,company_id,name,start_date,status) VALUES($1,$2,'Project','2026-01-01','active')`,[ids.project,ids.company]);
 
@@ -151,7 +151,7 @@ async function seedLedger() {
     ['3000', 'Equity', 'equity', false], ['3100', 'Capital', 'equity', false],
     ['3200', 'Retained earnings', 'equity', false], ['1230',  'Assets', 'asset', true], ['1290', 'Accumulated depreciation', 'asset', true],
     ['1130', 'Receivables', 'asset', false], ['1135', 'Accrued revenue', 'asset', false], ['4100', 'Revenue', 'revenue', false], ['4200', 'Other revenue', 'revenue', false], ['5100', 'Expense', 'expense', false],
-    ['5210', 'Salaries', 'expense', false], ['5400', 'General expense', 'expense', false],
+    ['5210', 'Salaries', 'expense', false], ['5260', 'Depreciation expense', 'expense', false], ['5400', 'General expense', 'expense', false],
     ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2145', 'Goods received not invoiced', 'liability', false], ['2150', 'Subcontractor payables', 'liability', false], ['2160', 'Retentions', 'liability', false], ['2180', 'Customer advances', 'liability', false],
     ['1160', 'Advances', 'asset', false], ['1150', 'Custodies', 'asset', false], ['1170', 'Inventory', 'asset', false],
     ['1180', 'VAT input', 'asset', false], ['2120', 'VAT output', 'liability', false],
@@ -557,7 +557,7 @@ async function smokeAtomicWriters(ids) {
   assert.equal(converted[0].rows[0].result.id,converted[1].rows[0].result.id);
   assert.equal((await db.query(`SELECT count(*)::int count FROM projects WHERE id=$1 AND company_id=$2`,[converted[0].rows[0].result.id,c])).rows[0].count,1);
 
-  await db.query(`SELECT create_fixed_asset($1,'Machine','A1','equipment','2026-02-01',500,5,'straight_line','','',$2,$3)`, [c, b, u]);
+  const machine=(await db.query(`SELECT create_fixed_asset($1,'Machine','A1','equipment','2026-02-01',500,5,'straight_line','','',$2,$3) result`, [c, b, u])).rows[0].result;
   const newBank=await db.query(`SELECT create_bank_safe($1,'New Bank','bank','123',500,$2) result`,[c,u]);
   assert.ok(newBank.rows[0].result.opening_journal_entry_id);
   const emptySafe=await db.query(`SELECT create_bank_safe($1,'Empty Safe','safe','',0,$2) result`,[c,u]);
@@ -963,6 +963,70 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND entity_type='custody' AND entity_id=$2`,[
     c,guardedCustody.id,
   ])).rows[0].count)>=3,true);
+
+  const guardedEmployee=(await db.query(`SELECT create_employee_atomic($1,'Guard Employee','010','','600','Ops','Tester','2026-02-01',$2) result`,[
+    c,u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT update_employee_atomic($1,$2,'{"salary":700}'::jsonb,$3)`,[
+    c,guardedEmployee.id,u2,
+  ]));
+  await assert.rejects(()=>db.query(`SELECT deactivate_employee_atomic($1,$2,$3)`,[c,guardedEmployee.id,u2]));
+  await assert.rejects(()=>db.query(`UPDATE employees SET salary=999 WHERE id=$1`,[guardedEmployee.id]));
+  assert.equal(Number((await db.query(`SELECT salary FROM employees WHERE id=$1`,[guardedEmployee.id])).rows[0].salary),600);
+
+  const guardedAdvance=(await db.query(`SELECT create_employee_advance($1,$2,'2026-03-01',40,'guarded advance',$3,$4) result`,[
+    c,guardedEmployee.id,b,u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT update_employee_advance_note_atomic($1,$2,'foreign',$3)`,[
+    c,guardedAdvance.id,u2,
+  ]));
+  await assert.rejects(()=>db.query(`UPDATE employee_advances SET amount=1 WHERE id=$1`,[guardedAdvance.id]));
+  const payrollRace=await Promise.allSettled([1,2].map(()=>db.query(
+    `SELECT post_payroll_batch($1,'2026-03-01',ARRAY[$2]::UUID[],$3) result`,[c,guardedEmployee.id,u],
+  )));
+  assert.equal(payrollRace.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(payrollRace.filter((result)=>result.status==='rejected').length,1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM payroll WHERE company_id=$1 AND employee_id=$2 AND date='2026-03-01'`,[
+    c,guardedEmployee.id,
+  ])).rows[0].count),1);
+  await assert.rejects(()=>db.query(`UPDATE payroll SET net_pay=1 WHERE company_id=$1 AND employee_id=$2`,[c,guardedEmployee.id]));
+  await assert.rejects(()=>db.query(`SELECT cancel_employee_advance_atomic($1,$2,$3)`,[c,guardedAdvance.id,u]));
+  const cancellableAdvance=(await db.query(`SELECT create_employee_advance($1,$2,'2026-03-02',25,'cancel me',$3,$4) result`,[
+    c,guardedEmployee.id,b,u,
+  ])).rows[0].result;
+  const cancelledAdvance=(await db.query(`SELECT cancel_employee_advance_atomic($1,$2,$3) result`,[
+    c,cancellableAdvance.id,u,
+  ])).rows[0].result;
+  assert.equal(cancelledAdvance.status,'cancelled');
+  assert.ok(cancelledAdvance.reversal_journal_id);
+
+  const fixedMetadata=(await db.query(`SELECT update_fixed_asset_metadata_atomic($1,$2,'{"notes":"guarded"}'::jsonb,$3) result`,[
+    c,machine.id,u,
+  ])).rows[0].result;
+  assert.equal(fixedMetadata.notes,'guarded');
+  await assert.rejects(()=>db.query(`SELECT update_fixed_asset_metadata_atomic($1,$2,'{"notes":"cross"}'::jsonb,$3)`,[
+    c,machine.id,u2,
+  ]));
+  await assert.rejects(()=>db.query(`UPDATE fixed_assets SET purchase_cost=1 WHERE id=$1`,[machine.id]));
+  const depreciationRace=await Promise.all([
+    db.query(`SELECT depreciate_fixed_assets_batch($1,'2026-03-01',$2) result`,[c,u]),
+    db.query(`SELECT depreciate_fixed_assets_batch($1,'2026-03-01',$2) result`,[c,u]),
+  ]);
+  assert.equal(depreciationRace.reduce((sum,result)=>sum+Number(result.rows[0].result.count),0),1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM depreciation_log WHERE company_id=$1 AND asset_id=$2 AND date='2026-03-01'`,[
+    c,machine.id,
+  ])).rows[0].count),1);
+  await assert.rejects(()=>db.query(`INSERT INTO depreciation_log(company_id,asset_id,date,amount,journal_entry_id)
+    SELECT $1,$2,'2026-04-01',1,journal_entry_id FROM fixed_assets WHERE id=$2`,[c,machine.id]));
+  const disposable=(await db.query(`SELECT create_fixed_asset($1,'Disposable','D1','equipment','2026-03-02',50,5,'straight_line','','',$2,$3) result`,[
+    c,b,u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT dispose_fixed_asset_atomic($1,$2,$3)`,[c,disposable.id,u2]));
+  assert.equal((await db.query(`SELECT status FROM fixed_assets WHERE id=$1`,[disposable.id])).rows[0].status,'active');
+  const disposed=(await db.query(`SELECT dispose_fixed_asset_atomic($1,$2,$3) result`,[c,disposable.id,u])).rows[0].result;
+  assert.equal(disposed.status,'disposed');
+  assert.ok(disposed.reversal_journal_id);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND entity_type IN('employee','employee_advance','payroll','fixed_asset','fixed_assets')`,[c])).rows[0].count)>=8,true);
 
   await assert.rejects(()=>db.query(`SELECT update_contact_atomic($1,$2,$3::jsonb,$4)`,[
     c,contact2,JSON.stringify({name:'Cross tenant overwrite'}),u,

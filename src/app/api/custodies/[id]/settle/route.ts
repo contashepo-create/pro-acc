@@ -1,53 +1,45 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { loadCustodyFile, assertFileOpen, round2 } from '@/lib/custody';
+import { loadCustodyFile, assertFileOpen } from '@/lib/custody';
+import { custodyUuid, settleCustodySchema } from '@/lib/custody-validation';
 
-/**
- * إغلاق ملف عهدة — يتطلب confirm: true
- * المتبقي بعد المصروفات:
- *   مرتجع نقدي → مدين الصندوق / دائن 1150
- *   عجز بعد المرتجع → مدين 1160 سلفة / دائن 1150 + سجل سلفة على الراتب
- */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/** Confirmed closure: returned cash goes back to its safe and any remaining
+ * shortage becomes an employee advance, atomically with the closing entry. */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireModulePermission(req, 'custodies', 'approve');
+    const auth = await requireModulePermission(request, 'custodies', 'approve');
     const { id } = await params;
-    const data = await parseBody(req);
-
-    if (data.confirm !== true) {
-      return error('إغلاق الملف يتطلب تأكيداً صريحاً (confirm: true)');
-    }
+    if (!custodyUuid.safeParse(id).success) return error('معرف ملف العهدة غير صالح');
+    const parsed = settleCustodySchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات إغلاق العهدة غير صالحة');
+    const input = parsed.data;
 
     const file = await loadCustodyFile(auth.companyId, id);
     if (!file) return error('ملف العهدة غير موجود', 404);
     assertFileOpen(file);
+    const returnedCash = input.returned_cash || 0;
+    const bankSafeId = input.bank_safe_id || file.bank_safe_id || null;
+    if (returnedCash > 0 && !bankSafeId) return error('حدد الخزينة لاستلام المرتجع');
 
-    const date = data.date || new Date().toISOString().split('T')[0];
-    const returnedCash = round2(parseFloat(data.returned_cash) || 0);
-    if (!Number.isFinite(returnedCash) || returnedCash<0) return error('المرتجع لا يكون سالباً');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) return error('التاريخ غير صالح');
-    const bankSafeId = data.bank_safe_id || file.bank_safe_id || null;
-    if (returnedCash>0 && !bankSafeId) return error('حدد الخزينة لاستلام المرتجع');
-    const s = getSupabase();
-    const { data: settled, error: rpcErr } = await s.rpc('settle_custody_file', {
+    const { data: settled, error: rpcError } = await getSupabase().rpc('settle_custody_file', {
       p_company_id: auth.companyId,
       p_custody_id: id,
-      p_date: date,
+      p_date: input.date || new Date().toISOString().slice(0, 10),
       p_returned_cash: returnedCash,
       p_bank_safe_id: bankSafeId,
-      p_description: typeof data.description === 'string' ? data.description.trim() : '',
+      p_description: input.description || '',
       p_created_by: auth.userId,
     });
-    if (rpcErr) throw rpcErr;
-    const result = settled as Record<string,any>;
+    if (rpcError) throw rpcError;
+    const result = settled as Record<string, any>;
     return success({
       ...result,
-      message: Number(result.shortage)>0
+      message: Number(result.shortage) > 0
         ? `أُغلق الملف. عجز ${result.shortage} سلفة على راتب الموظف`
         : 'أُغلق الملف دون عجز',
     });
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
