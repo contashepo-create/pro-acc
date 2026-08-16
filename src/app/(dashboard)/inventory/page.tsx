@@ -91,7 +91,7 @@ export default function InventoryPage() {
       if (json.success) {
         fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        alert(json.message || 'فشل التعطيل');
       }
     } catch (e) {
       alert('خطأ في الاتصال بالخادم');
@@ -113,6 +113,7 @@ export default function InventoryPage() {
           item={row}
           onEdit={handleEdit}
           onDelete={handleDelete}
+          deleteMode="deactivate"
         />
       ),
     },

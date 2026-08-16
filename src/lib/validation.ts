@@ -219,21 +219,24 @@ export const invoiceSchema = z.object({
 // matching the DB columns — unlike the sales invoice API which is camelCase.
 
 export const purchaseInvoiceItemSchema = z.object({
-  description: z.string().min(1, 'البيان مطلوب'),
-  quantity: z.number().positive('الكمية يجب أن تكون أكبر من صفر'),
-  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً'),
+  description: z.string().trim().min(1, 'البيان مطلوب').max(50, 'البيان يجب ألا يتجاوز 50 حرفاً'),
+  quantity: z.number().positive('الكمية يجب أن تكون أكبر من صفر')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'الكمية يجب ألا تتجاوز منزلتين'),
+  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'السعر يجب ألا يتجاوز منزلتين'),
   // UI hint only — the server always recomputes line totals.
   total: z.number().optional(),
-});
+}).strict();
 
 export const purchaseInvoiceSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'تاريخ الفاتورة غير صالح' }),
   supplier_id: z.string().uuid('رقم المورد غير صالح'),
   purchase_order_id: z.string().uuid('رقم أمر الشراء غير صالح').optional().nullable(),
-  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل'),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').max(200, 'عدد البنود يتجاوز الحد المسموح'),
   // Fraction (0.15 = 15%). Unbounded previously — negative/huge rates were accepted.
-  tax_rate: z.number().min(0, 'نسبة الضريبة لا يمكن أن تكون سالبة').max(1, 'نسبة الضريبة غير صالحة').optional().default(0),
-  notes: z.string().optional(),
+  tax_rate: z.number().min(0, 'نسبة الضريبة لا يمكن أن تكون سالبة').max(1, 'نسبة الضريبة غير صالحة')
+    .refine((value) => Math.abs(value * 10000 - Math.round(value * 10000)) < 1e-8, 'نسبة الضريبة غير صالحة').optional().default(0),
+  notes: z.string().max(2000).optional(),
   project_id: z.string().uuid().optional().nullable(),
   custody_id: z.string().uuid().optional().nullable(),
   link_to_project: z.boolean().optional(),
@@ -243,27 +246,28 @@ export const purchaseInvoiceUpdateSchema = z.object({
   status: z.enum(['unpaid', 'partial', 'paid', 'cancelled'] as const, {
     message: 'حالة الفاتورة غير صالحة',
   }).optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(2000).optional(),
 }).strict();
 
 export const purchaseOrderSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }),
   supplier_id: z.string().uuid('رقم المورد غير صالح'),
-  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل'),
-  notes: z.string().optional(),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').max(200, 'عدد البنود يتجاوز الحد المسموح'),
+  notes: z.string().max(2000).optional(),
 }).strict();
 
 export const purchaseOrderUpdateSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
   supplier_id: z.string().uuid('رقم المورد غير صالح').optional(),
-  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').optional(),
-  notes: z.string().optional(),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').max(200, 'عدد البنود يتجاوز الحد المسموح').optional(),
+  notes: z.string().max(2000).optional(),
 }).strict();
 
 // Goods receipt against a PO: explicit per-item quantities must be POSITIVE —
 // a negative value previously reduced received_quantity AND deducted stock.
 export const purchaseReceiveSchema = z.object({
-  quantities: z.record(z.string(), z.number().positive('كمية الاستلام يجب أن تكون أكبر من صفر')).optional(),
+  quantities: z.record(z.string().uuid('معرّف بند الاستلام غير صالح'), z.number().positive('كمية الاستلام يجب أن تكون أكبر من صفر')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'كمية الاستلام يجب ألا تتجاوز منزلتين')).optional(),
   date: z.string().refine(isValidDateString, { message: 'تاريخ الاستلام غير صالح' }).optional(),
 }).strict();
 
@@ -392,8 +396,10 @@ export const inventoryMovementSchema = z.object({
   type: z.enum(['add', 'issue', 'adjust', 'adjustment', 'transfer', 'return'] as const, {
     message: 'نوع العملية غير مدعوم',
   }),
-  quantity: z.number().min(0, 'الكمية يجب أن لا تكون سالبة'),
-  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً').optional(),
+  quantity: z.number().min(0, 'الكمية يجب أن لا تكون سالبة')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'الكمية يجب ألا تتجاوز منزلتين'),
+  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'السعر يجب ألا يتجاوز منزلتين').optional(),
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
   notes: z.string().max(500).optional(),
   to_warehouse_id: z.string().uuid('مستودع الوجهة غير صالح').optional().nullable(),

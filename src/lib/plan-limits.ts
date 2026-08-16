@@ -69,8 +69,12 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
   // Plans that include branches/warehouses (Pro+ have branches:true) allocate one
   // default branch+warehouse on company creation. Everything beyond that must be
   // paid via the extra_branches add-on.
-  const planIncludesBranches = !!(plan?.features_modules && (plan.features_modules as any).branches);
-  const baseBranches = planIncludesBranches ? 1 : 0;
+  const planIncludesBranches = !!(plan?.features_modules && (
+    (plan.features_modules as Record<string, unknown>).branches ||
+    (plan.features_modules as Record<string, unknown>).warehouses
+  ));
+  const configuredBranches = plan?.max_branches;
+  const baseBranches = configuredBranches == null ? (planIncludesBranches ? 1 : 0) : Number(configuredBranches);
   const maxBranches = baseBranches + extraBranches;
 
   const features = plan?.features_modules && typeof plan.features_modules === 'object'

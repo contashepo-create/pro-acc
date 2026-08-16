@@ -143,7 +143,7 @@ async function seedLedger() {
     VALUES($1,$2,'admin@example.test','x','Admin','admin',true)`, [ids.user, ids.company]);
   await db.query(`INSERT INTO employees(id,company_id,name,salary,hire_date,is_active)
     VALUES($1,$2,'Employee',1000,'2026-01-01',true)`, [ids.employee, ids.company]);
-  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Client','client')`,[ids.contact,ids.company]);
+  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Client','both')`,[ids.contact,ids.company]);
   await db.query(`INSERT INTO projects(id,company_id,name,start_date,status) VALUES($1,$2,'Project','2026-01-01','active')`,[ids.project,ids.company]);
 
   const accounts = [
@@ -152,8 +152,8 @@ async function seedLedger() {
     ['3200', 'Retained earnings', 'equity', false], ['1230',  'Assets', 'asset', true], ['1290', 'Accumulated depreciation', 'asset', true],
     ['1130', 'Receivables', 'asset', false], ['1135', 'Accrued revenue', 'asset', false], ['4100', 'Revenue', 'revenue', false], ['4200', 'Other revenue', 'revenue', false], ['5100', 'Expense', 'expense', false],
     ['5210', 'Salaries', 'expense', false], ['5400', 'General expense', 'expense', false],
-    ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2150', 'Subcontractor payables', 'liability', false], ['2160', 'Retentions', 'liability', false], ['2180', 'Customer advances', 'liability', false],
-    ['1160', 'Advances', 'asset', false], ['1150', 'Custodies', 'asset', false],
+    ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2145', 'Goods received not invoiced', 'liability', false], ['2150', 'Subcontractor payables', 'liability', false], ['2160', 'Retentions', 'liability', false], ['2180', 'Customer advances', 'liability', false],
+    ['1160', 'Advances', 'asset', false], ['1150', 'Custodies', 'asset', false], ['1170', 'Inventory', 'asset', false],
     ['1180', 'VAT input', 'asset', false], ['2120', 'VAT output', 'liability', false],
   ];
   ids.accounts = {};
@@ -295,6 +295,200 @@ async function smokeAdminSupport(ids) {
   assert.equal((await db.query(`SELECT status FROM support_tickets WHERE id=$1`,[ticketId])).rows[0].status,'resolved');
   assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND type='support'`,[ids.company])).rows[0].count),2);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM admin_audit_log WHERE admin_id=$1 AND target_id=$2`,[adminId,ticketId])).rows[0].count),1);
+}
+
+async function smokePurchasingAndInventory(ids) {
+  const { company: c, user: u, contact: supplier } = ids;
+  const c2='93000000-0000-4000-8000-000000000010';
+  const u2='93000000-0000-4000-8000-000000000011';
+
+  const warehouse1=(await db.query(`SELECT create_warehouse_atomic($1,'Runtime main warehouse','Cairo',$2) result`,[c,u])).rows[0].result;
+  const warehouse2=(await db.query(`SELECT create_warehouse_atomic($1,'Runtime branch warehouse','Giza',$2) result`,[c,u])).rows[0].result;
+  const foreignWarehouse='95000000-0000-4000-8000-000000000001';
+  await db.query(`INSERT INTO warehouses(id,company_id,name,location,is_active) VALUES($1,$2,'Foreign warehouse','Other',TRUE)`,[foreignWarehouse,c2]);
+
+  const item=(await db.query(`SELECT create_inventory_item_atomic($1,'RUNTIME-STEEL','Runtime steel','kg',$2,'materials',$3) result`,[
+    c,warehouse1.id,u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT create_inventory_item_atomic($1,'CROSS','Cross tenant','unit',$2,'',$3)`,[
+    c,foreignWarehouse,u,
+  ]));
+  await assert.rejects(()=>db.query(`INSERT INTO inventory_items(company_id,code,name,unit,warehouse_id,quantity,unit_price)
+    VALUES($1,'DIRECT-CROSS','Direct cross','unit',$2,0,0)`,[c,foreignWarehouse]));
+
+  const addOne=(await db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'add',10,100,'2026-03-01','opening',NULL,$4) result`,[
+    c,item.id,warehouse1.id,u,
+  ])).rows[0].result;
+  const addTwo=(await db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'add',10,200,'2026-03-02','weighted',NULL,$4) result`,[
+    c,item.id,warehouse1.id,u,
+  ])).rows[0].result;
+  let stock=(await db.query(`SELECT quantity,unit_price FROM inventory_items WHERE id=$1 AND company_id=$2`,[item.id,c])).rows[0];
+  assert.equal(Number(stock.quantity),20);
+  assert.equal(Number(stock.unit_price),150);
+  assert.equal(Number(addOne.transaction.balance_before),0);
+  assert.equal(Number(addTwo.transaction.balance_after),20);
+  for (const journalId of [addOne.journal_entry_id,addTwo.journal_entry_id]) {
+    const totals=(await db.query(`SELECT COALESCE(sum(debit),0) debit,COALESCE(sum(credit),0) credit
+      FROM journal_lines WHERE journal_entry_id=$1 AND company_id=$2`,[journalId,c])).rows[0];
+    assert.equal(Number(totals.debit),Number(totals.credit));
+  }
+
+  const issueRace=await Promise.allSettled([1,2].map((n)=>db.query(
+    `SELECT post_inventory_movement_atomic($1,$2,$3,'issue',12,NULL,'2026-03-03',$4,NULL,$5) result`,
+    [c,item.id,warehouse1.id,`concurrent issue ${n}`,u],
+  )));
+  assert.equal(issueRace.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(issueRace.filter((result)=>result.status==='rejected').length,1);
+  stock=(await db.query(`SELECT quantity,unit_price FROM inventory_items WHERE id=$1`,[item.id])).rows[0];
+  assert.equal(Number(stock.quantity),8);
+  assert.equal(Number(stock.unit_price),150);
+
+  const journalCountBeforeTransfer=Number((await db.query(`SELECT count(*) count FROM journal_entries
+    WHERE company_id=$1 AND reference_type='inventory_movement'`,[c])).rows[0].count);
+  const transfer=(await db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'transfer',3,NULL,'2026-03-04','branch transfer',$4,$5) result`,[
+    c,item.id,warehouse1.id,warehouse2.id,u,
+  ])).rows[0].result;
+  assert.equal(Number(transfer.source_quantity),5);
+  assert.equal(Number(transfer.target_quantity),3);
+  assert.equal(transfer.journal_entry_id,null);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries
+    WHERE company_id=$1 AND reference_type='inventory_movement'`,[c])).rows[0].count),journalCountBeforeTransfer);
+  assert.equal(Number((await db.query(`SELECT quantity FROM inventory_items WHERE company_id=$1 AND warehouse_id=$2 AND code='RUNTIME-STEEL'`,[
+    c,warehouse2.id,
+  ])).rows[0].quantity),3);
+
+  await assert.rejects(()=>db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'add',1,1,'2026-03-05','cross tenant',NULL,$4)`,[
+    c2,item.id,foreignWarehouse,u2,
+  ]));
+  await assert.rejects(()=>db.query(`SELECT update_inventory_item_atomic($1,$2,'{"name":"cross"}'::jsonb,$3)`,[c2,item.id,u2]));
+  await assert.rejects(()=>db.query(`SELECT update_inventory_transaction_note_atomic($1,$2,'cross',$3)`,[
+    c2,addOne.transaction.id,u2,
+  ]));
+  await assert.rejects(()=>db.query(`INSERT INTO inventory_transactions(
+    company_id,item_id,warehouse_id,type,quantity,unit_price,total_value,date,created_by
+  ) VALUES($1,$2,$3,'add',1,1,1,'2026-03-05',$4)`,[c2,item.id,foreignWarehouse,u2]));
+
+  // Failure after entering the function leaves no stock, journal, transaction,
+  // or audit residue for an isolated tenant whose ledger is incomplete.
+  const rollbackCompany='95000000-0000-4000-8000-000000000010';
+  const rollbackUser='95000000-0000-4000-8000-000000000011';
+  const rollbackWarehouse='95000000-0000-4000-8000-000000000012';
+  const rollbackItem='95000000-0000-4000-8000-000000000013';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Inventory rollback tenant')`,[rollbackCompany]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active)
+    VALUES($1,$2,'inventory-rollback@example.test','x','Rollback user','admin',TRUE)`,[rollbackUser,rollbackCompany]);
+  await db.query(`INSERT INTO warehouses(id,company_id,name,is_active) VALUES($1,$2,'Rollback warehouse',TRUE)`,[
+    rollbackWarehouse,rollbackCompany,
+  ]);
+  await db.query(`INSERT INTO inventory_items(id,company_id,code,name,unit,warehouse_id,quantity,unit_price,is_active)
+    VALUES($1,$2,'ROLLBACK','Rollback item','unit',$3,0,0,TRUE)`,[rollbackItem,rollbackCompany,rollbackWarehouse]);
+  await assert.rejects(()=>db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'add',5,10,'2026-03-01','must roll back',NULL,$4)`,[
+    rollbackCompany,rollbackItem,rollbackWarehouse,rollbackUser,
+  ]));
+  assert.equal(Number((await db.query(`SELECT quantity FROM inventory_items WHERE id=$1`,[rollbackItem])).rows[0].quantity),0);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM inventory_transactions WHERE company_id=$1`,[rollbackCompany])).rows[0].count),0);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1`,[rollbackCompany])).rows[0].count),0);
+
+  const order=(await db.query(`SELECT create_purchase_order_atomic($1,$2,'2026-03-05',$3::jsonb,'partial lifecycle',$4) result`,[
+    c,supplier,JSON.stringify([
+      {description:'PO-RUNTIME-STEEL',quantity:4,unit_price:25},
+      {description:'PO-RUNTIME-CEMENT',quantity:2,unit_price:50},
+    ]),u,
+  ])).rows[0].result;
+  assert.equal(Number(order.total),200);
+  const orderLines=(await db.query(`SELECT id,description,quantity,received_quantity FROM purchase_order_items
+    WHERE company_id=$1 AND purchase_order_id=$2 ORDER BY id`,[c,order.id])).rows;
+  const firstLine=orderLines[0];
+  const firstPartial=Math.min(1,Number(firstLine.quantity));
+  const partial=(await db.query(`SELECT receive_purchase_order_atomic($1,$2,$3::jsonb,'2026-03-06',$4) result`,[
+    c,order.id,JSON.stringify({[firstLine.id]:firstPartial}),u,
+  ])).rows[0].result;
+  assert.equal(partial.status,'partial');
+
+  // First line mutates before the oversized second line is reached; the thrown
+  // statement must roll the earlier stock and receipt updates back as well.
+  const beforeRollback=(await db.query(`SELECT id,quantity,received_quantity FROM purchase_order_items
+    WHERE purchase_order_id=$1 ORDER BY id`,[order.id])).rows;
+  const rollbackQuantities={
+    [beforeRollback[0].id]:Number(beforeRollback[0].quantity)-Number(beforeRollback[0].received_quantity),
+    [beforeRollback[1].id]:Number(beforeRollback[1].quantity)+1,
+  };
+  const transactionCountBefore=Number((await db.query(`SELECT count(*) count FROM inventory_transactions
+    WHERE company_id=$1 AND reference_type='purchase_order' AND reference_id=$2`,[c,order.id])).rows[0].count);
+  await assert.rejects(()=>db.query(`SELECT receive_purchase_order_atomic($1,$2,$3::jsonb,'2026-03-07',$4)`,[
+    c,order.id,JSON.stringify(rollbackQuantities),u,
+  ]));
+  const afterRollback=(await db.query(`SELECT id,received_quantity FROM purchase_order_items
+    WHERE purchase_order_id=$1 ORDER BY id`,[order.id])).rows;
+  assert.deepEqual(afterRollback.map((line)=>Number(line.received_quantity)),beforeRollback.map((line)=>Number(line.received_quantity)));
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM inventory_transactions
+    WHERE company_id=$1 AND reference_type='purchase_order' AND reference_id=$2`,[c,order.id])).rows[0].count),transactionCountBefore);
+
+  const fullyReceived=(await db.query(`SELECT receive_purchase_order_atomic($1,$2,NULL,'2026-03-08',$3) result`,[
+    c,order.id,u,
+  ])).rows[0].result;
+  assert.equal(fullyReceived.status,'received');
+  const receiptLedger=(await db.query(`SELECT a.code,COALESCE(sum(l.debit),0) debit,COALESCE(sum(l.credit),0) credit
+    FROM journal_lines l JOIN journal_entries j ON j.id=l.journal_entry_id
+    JOIN accounts a ON a.id=l.account_id
+    WHERE j.company_id=$1 AND j.reference_type='purchase_order_receipt' AND j.reference_id=$2
+    GROUP BY a.code`,[c,order.id])).rows;
+  assert.equal(receiptLedger.filter((line)=>line.code==='1170').reduce((sum,line)=>sum+Number(line.debit),0),200);
+  assert.equal(receiptLedger.filter((line)=>line.code==='2145').reduce((sum,line)=>sum+Number(line.credit),0),200);
+
+  const concurrentOrder=(await db.query(`SELECT create_purchase_order_atomic($1,$2,'2026-03-05',$3::jsonb,'concurrent receipt',$4) result`,[
+    c,supplier,JSON.stringify([{description:'PO-CONCURRENT',quantity:5,unit_price:30}]),u,
+  ])).rows[0].result;
+  const receiptRace=await Promise.all([
+    db.query(`SELECT receive_purchase_order_atomic($1,$2,NULL,'2026-03-08',$3) result`,[c,concurrentOrder.id,u]),
+    db.query(`SELECT receive_purchase_order_atomic($1,$2,NULL,'2026-03-08',$3) result`,[c,concurrentOrder.id,u]),
+  ]);
+  assert.equal(receiptRace.filter((result)=>result.rows[0].result.already_processed===true).length,1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM inventory_transactions
+    WHERE company_id=$1 AND reference_type='purchase_order' AND reference_id=$2`,[c,concurrentOrder.id])).rows[0].count),1);
+
+  const invoiceItems=JSON.stringify([
+    {description:'PO-RUNTIME-STEEL',quantity:4,unit_price:25},
+    {description:'PO-RUNTIME-CEMENT',quantity:2,unit_price:50},
+  ]);
+  const invoice=(await db.query(`SELECT create_purchase_invoice_atomic($1,$2,$3,NULL,NULL,FALSE,'2026-03-08',$4::jsonb,0,'linked invoice',$5) result`,[
+    c,supplier,order.id,invoiceItems,u,
+  ])).rows[0].result;
+  assert.equal(Number(invoice.total),200);
+  assert.equal(Number(invoice.paid_amount),0);
+  const invoiceLedger=(await db.query(`SELECT a.code,l.debit,l.credit FROM journal_lines l
+    JOIN accounts a ON a.id=l.account_id WHERE l.company_id=$1 AND l.journal_entry_id=$2`,[c,invoice.journal_entry_id])).rows;
+  assert.equal(invoiceLedger.filter((line)=>line.code==='2145').reduce((sum,line)=>sum+Number(line.debit),0),200);
+  assert.equal(invoiceLedger.filter((line)=>line.code==='2110').reduce((sum,line)=>sum+Number(line.credit),0),200);
+  await assert.rejects(()=>db.query(`SELECT create_purchase_invoice_atomic($1,$2,$3,NULL,NULL,FALSE,'2026-03-08',$4::jsonb,0,'duplicate',$5)`,[
+    c,supplier,order.id,invoiceItems,u,
+  ]));
+  await assert.rejects(()=>db.query(`INSERT INTO purchase_order_items(
+    company_id,purchase_order_id,description,quantity,received_quantity,unit_price,total
+  ) VALUES($1,$2,'cross tenant line',1,0,1,1)`,[c2,order.id]));
+  await assert.rejects(()=>db.query(`INSERT INTO purchase_invoice_items(
+    company_id,purchase_invoice_id,description,quantity,unit_price,total
+  ) VALUES($1,$2,'cross tenant line',1,1,1)`,[c2,invoice.id]));
+
+  const concurrentInvoiceItems=JSON.stringify([{description:'PO-CONCURRENT',quantity:5,unit_price:30}]);
+  const invoiceRace=await Promise.allSettled([1,2].map((n)=>db.query(
+    `SELECT create_purchase_invoice_atomic($1,$2,$3,NULL,NULL,FALSE,'2026-03-08',$4::jsonb,0,$5,$6) result`,
+    [c,supplier,concurrentOrder.id,concurrentInvoiceItems,`invoice race ${n}`,u],
+  )));
+  assert.equal(invoiceRace.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(invoiceRace.filter((result)=>result.status==='rejected').length,1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM purchase_invoices
+    WHERE company_id=$1 AND purchase_order_id=$2 AND status<>'cancelled'`,[c,concurrentOrder.id])).rows[0].count),1);
+
+  await assert.rejects(()=>db.query(`SELECT receive_purchase_order_atomic($1,$2,NULL,'2026-03-08',$3)`,[c2,order.id,u2]));
+  await assert.rejects(()=>db.query(`SELECT create_purchase_invoice_atomic($1,$2,$3,NULL,NULL,FALSE,'2026-03-08',$4::jsonb,0,'cross tenant',$5)`,[
+    c2,supplier,order.id,invoiceItems,u2,
+  ]));
+  await assert.rejects(()=>db.query(`UPDATE purchase_orders SET company_id=$1 WHERE id=$2`,[c2,order.id]));
+  assert.equal((await db.query(`SELECT company_id FROM purchase_orders WHERE id=$1`,[order.id])).rows[0].company_id,c);
+
+  assert.ok(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1
+    AND entity_type IN('warehouse','inventory_item','inventory_transaction','purchase_order','purchase_invoice')`,[c])).rows[0].count)>=10);
 }
 
 async function smokeAtomicWriters(ids) {
@@ -870,6 +1064,7 @@ try {
   const ids = await seedLedger();
   await smokeAdminEntitlements(ids);
   await smokeAdminSupport(ids);
+  await smokePurchasingAndInventory(ids);
   await smokeAtomicWriters(ids);
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
