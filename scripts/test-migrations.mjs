@@ -1736,6 +1736,85 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number((await db.query('SELECT count(*) count FROM users WHERE company_id=$1',[c])).rows[0].count),retainedUsers);
 }
 
+/**
+ * Tenant isolation under Supabase's role model (migration 063).
+ *
+ * Everything else in this suite runs as the database owner, which BYPASSES row
+ * level security — so a broken policy stays invisible here no matter how many
+ * atomic writers pass. Supabase serves requests as `anon`/`authenticated`,
+ * roles that RLS genuinely applies to. These assertions run as `authenticated`
+ * with a forged JWT claim, which is the only way the following regressions are
+ * observable:
+ *
+ *   - a legacy `USING (true)` policy left on `invoices` by 011 that OR-ed the
+ *     real isolation policy away and exposed every tenant's invoices;
+ *   - a policy keyed to a GUC (`app.current_company`) that nothing sets, which
+ *     silently denies all rows;
+ *   - a SECURITY DEFINER helper reachable by `anon` without a pinned
+ *     search_path.
+ */
+async function smokeTenantIsolationUnderRls() {
+  const A = '78000000-0000-4000-8000-00000000000a';
+  const B = '78000000-0000-4000-8000-00000000000b';
+  const ca = '78000000-0000-4000-8000-00000000000c';
+  const cb = '78000000-0000-4000-8000-00000000000d';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'RLS tenant A'),($2,'RLS tenant B')`, [A, B]);
+  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'RLS A','both'),($3,$4,'RLS B','both')`,
+    [ca, A, cb, B]);
+  await db.query(`INSERT INTO invoices(company_id,number,date,due_date,contact_id,
+      subtotal,vat_rate,tax_rate,vat_amount,tax_amount,total)
+    VALUES($1,9001,CURRENT_DATE,CURRENT_DATE,$3,100,0,0,0,0,100),
+          ($2,9001,CURRENT_DATE,CURRENT_DATE,$4,200,0,0,0,0,200)`, [A, B, ca, cb]);
+
+  // Every tenant table must use ONE policy shape. A second shape means a table
+  // drifted away from 027 and is either leaking or dead.
+  const shapes = await db.query(`
+    SELECT DISTINCT pg_get_expr(pol.polqual, pol.polrelid) AS expr
+    FROM pg_policy pol
+    JOIN pg_class c ON c.oid = pol.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND EXISTS (SELECT 1 FROM pg_attribute a
+                  WHERE a.attrelid = c.oid AND a.attname = 'company_id' AND NOT a.attisdropped)`);
+  assert.deepEqual(shapes.rows.map((r) => r.expr), ['(company_id = tenant_company_id())'],
+    'every tenant policy must use the canonical tenant_company_id() shape');
+
+  // No tenant table may have RLS on with no policy: that denies all rows.
+  const denyAll = await db.query(`
+    SELECT c.relname AS tbl FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname='public' AND c.relkind='r' AND c.relrowsecurity
+      AND EXISTS (SELECT 1 FROM pg_attribute a
+                  WHERE a.attrelid=c.oid AND a.attname='company_id' AND NOT a.attisdropped)
+      AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)`);
+  assert.deepEqual(denyAll.rows.map((r) => r.tbl), [], 'tenant tables with RLS on must carry a policy');
+
+  // SECURITY DEFINER without a pinned search_path is a privilege-escalation
+  // vector, and the reachable-by-anon one is the worst case.
+  const unpinned = await db.query(`
+    SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname='public' AND p.prosecdef
+      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig,'{}')) cfg WHERE cfg LIKE 'search_path=%')`);
+  assert.deepEqual(unpinned.rows.map((r) => r.proname), [],
+    'SECURITY DEFINER functions must pin search_path');
+
+  // The behavioural proof: read `invoices` as a role RLS applies to.
+  await db.exec('GRANT SELECT ON invoices TO authenticated');
+  await db.exec('SET ROLE authenticated');
+  await db.query(`SELECT set_config('request.jwt.claims', $1, false)`, [JSON.stringify({ company_id: A })]);
+  const visible = await db.query('SELECT company_id FROM invoices WHERE number = 9001');
+  await db.exec('RESET ROLE');
+  assert.equal(visible.rows.length, 1, 'tenant A must not see tenant B invoices');
+  assert.equal(visible.rows[0].company_id, A);
+
+  // A missing/blank claim must deny rather than expose everything.
+  await db.exec('SET ROLE authenticated');
+  await db.query(`SELECT set_config('request.jwt.claims', '', false)`);
+  const anonymous = await db.query('SELECT company_id FROM invoices WHERE number = 9001');
+  await db.exec('RESET ROLE');
+  assert.equal(anonymous.rows.length, 0, 'a request without a company claim must see nothing');
+}
+
 try {
   await applyMigrations();
   await smokeInitialSetup();
@@ -1749,6 +1828,7 @@ try {
   await smokeAtomicWriters(ids);
   await smokeCriticalPath();
   await smokeRealConcurrency();
+  await smokeTenantIsolationUnderRls();
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
   await db.close();
