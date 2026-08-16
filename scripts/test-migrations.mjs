@@ -1802,14 +1802,33 @@ async function smokeTenantIsolationUnderRls() {
       AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)`);
   assert.deepEqual(denyAll.rows.map((r) => r.tbl), [], 'tenant tables with RLS on must carry a policy');
 
-  // SECURITY DEFINER without a pinned search_path is a privilege-escalation
-  // vector, and the reachable-by-anon one is the worst case.
+  // Supabase's linter (0011_function_search_path_mutable) flags EVERY
+  // function without a pinned search_path, not just SECURITY DEFINER ones —
+  // an unpinned function resolves object names through the caller's
+  // search_path, which is a name-shadowing vector for any function that
+  // privileged code (RPCs, triggers, policies) calls. 064 pins the whole
+  // catalogue; this asserts no later migration regresses it. Extension-owned
+  // members (deptype 'e') are excluded, same as 064's sweep.
   const unpinned = await db.query(`
-    SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname='public' AND p.prosecdef
-      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig,'{}')) cfg WHERE cfg LIKE 'search_path=%')`);
+    SELECT p.proname FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    JOIN pg_language l ON l.oid = p.prolang
+    WHERE n.nspname='public' AND p.prokind IN ('f','p') AND l.lanname IN ('sql','plpgsql')
+      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig,'{}')) cfg WHERE cfg LIKE 'search_path=%')
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')`);
   assert.deepEqual(unpinned.rows.map((r) => r.proname), [],
-    'SECURITY DEFINER functions must pin search_path');
+    'every function must pin search_path (Supabase linter 0011)');
+
+  // Materialized views bypass RLS entirely, so API roles must never hold
+  // privileges on them (Supabase linter 0016_materialized_view_in_api).
+  const mvGrants = await db.query(`
+    SELECT c.relname FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname='public' AND c.relkind='m'
+      AND (has_table_privilege('anon', c.oid, 'SELECT')
+        OR has_table_privilege('authenticated', c.oid, 'SELECT'))`);
+  assert.deepEqual(mvGrants.rows.map((r) => r.relname), [],
+    'materialized views must not be readable by anon/authenticated');
 
   // The behavioural proof: read `invoices` as a role RLS applies to.
   await db.exec('GRANT SELECT ON invoices TO authenticated');

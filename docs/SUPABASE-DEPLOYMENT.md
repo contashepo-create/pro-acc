@@ -112,6 +112,41 @@ RESET ROLE;
 `USING (true)` policy from `011`, which OR-combined with the isolation policy
 and exposed every tenant's invoices to any `authenticated` request.
 
+## 3.5 Reading the live linter report (captured 2026-08-17)
+
+The Supabase database linter output from the live project settled several open
+questions. Read it as **evidence about the live state**, not just as warnings:
+
+- **`invoices` still carries `company_isolation` with `USING (true)`** — the
+  exact policy `063` deletes as its first act. Its presence PROVES `063` has
+  not been applied to the live database yet. Until it is, any RLS-bound
+  request can read every tenant's invoices. Applying the migrations (section 1)
+  is what fixes this; do not hand-delete the policy from the dashboard, or the
+  linter report and the migration history will disagree about what happened.
+- **`public.rls_auto_enable()` exists on the live instance but in NO migration
+  in this repository.** It was created directly on the instance (dashboard SQL
+  editor or the Supabase assistant), it is SECURITY DEFINER, and `anon` can
+  call it over `/rest/v1/rpc/`. `064` revokes API-role EXECUTE on it
+  defensively but deliberately does not drop an object it doesn't own — drop
+  it manually after confirming nothing references it (query in `064`'s
+  header). Its existence also means someone attempted an RLS enablement
+  outside the migration flow; expect the live catalogue to differ from a
+  CI-built one until `063`/`064` run.
+- **`mv_trial_balance` selectable by `anon`/`authenticated`** — the single
+  worst finding, because materialized views BYPASS RLS: this is a live
+  cross-tenant read of every company's trial balance for anyone with the anon
+  key, today, regardless of policies. `064` revokes it (and every other MV,
+  and future ones via the same sweep). This also confirms the earlier warning
+  in this document: the live instance DOES have grants to API roles that the
+  CI-built schema never had.
+- **19 `function_search_path_mutable` warnings** — all legacy functions from
+  `007`–`038`, before the repo convention of pinning `search_path`. `064` pins
+  the entire catalogue generically and the migration test now asserts no
+  function regresses to unpinned, so this class cannot reappear.
+
+After applying `063` + `064`, re-run the linter: every finding above should
+clear except anything created outside the repo since this capture.
+
 ## 4. Known divergence to keep in mind
 
 `src/migrations/` (68 files, the live suite run by `run.ts`) and

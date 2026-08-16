@@ -12,7 +12,7 @@
 
 ## قواعد إضافة ميجريشن جديد
 1. أنشئ ملفاً جديداً داخل `src/migrations/` باسم `NNN-وصف-قصير.sql` حيث `NNN` هو
-   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `063`).
+   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `064`).
    لا تعتمد على الرقم المكتوب هنا — اقرأه من القرص حتى لا يتقادم:
    ```bash
    ls src/migrations/*.sql | sed 's#.*/##' | cut -d- -f1 | sort -n | tail -1
@@ -66,3 +66,14 @@ application path still omits them.
 ### 023-fix-child-rows-company-id.sql
 Same class of bug as 022, on line/item tables (`invoice_items`,
 `quotation_items`, `purchase_invoice_items`, `purchase_order_items`, ...).
+
+### 064-supabase-linter-hardening.sql
+Fixes every finding class from the live Supabase database linter report
+(captured 2026-08-17): pins `search_path` on ALL remaining unpinned functions
+(19 legacy warnings, swept from the catalogue not a list), widens the pin to
+`public, extensions, pg_temp` for `digest()` callers (pgcrypto lives in the
+`extensions` schema on hosted Supabase), revokes `anon`/`authenticated` from
+every materialized view (`mv_trial_balance` was readable cross-tenant — MVs
+bypass RLS), converts `tenant_company_id()` to SECURITY INVOKER, and revokes
+API-role EXECUTE on the out-of-repo `rls_auto_enable()` if present. See
+`docs/SUPABASE-DEPLOYMENT.md` §3.5 for how to read the linter report itself.
