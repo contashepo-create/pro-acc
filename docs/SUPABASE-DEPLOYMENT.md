@@ -171,6 +171,45 @@ The re-run linter reports **zero WARN findings**. What remains is INFO-level
 widen access. If a table here ever needs API-role reads (none does today),
 grant it deliberately with a scoped policy in a migration.
 
+### 3.6.1 `rls_auto_enable` / `ensure_rls` — removed 2026-08-17 (historical record)
+
+The out-of-repo objects found on the live instance were removed after
+verification (`DROP EVENT TRIGGER ensure_rls; DROP FUNCTION
+public.rls_auto_enable();`, both confirmed gone). For the record, the event
+trigger fired on `ddl_command_end` for `CREATE TABLE` / `CREATE TABLE AS` /
+`SELECT INTO`, and the function body was:
+
+```sql
+CREATE OR REPLACE FUNCTION public.rls_auto_enable()
+ RETURNS event_trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'pg_catalog'
+AS $function$
+DECLARE
+  cmd record;
+BEGIN
+  FOR cmd IN
+    SELECT * FROM pg_event_trigger_ddl_commands()
+    WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+      AND object_type IN ('table','partitioned table')
+  LOOP
+     IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') ... THEN
+      EXECUTE format('alter table if exists %s enable row level security', cmd.object_identity);
+     END IF;
+  END LOOP;
+END;
+$function$
+```
+
+Why it was removed rather than kept: it enabled RLS on every new table but
+**never installed a policy**, which is what produced the 54 deny-all tenant
+tables found before 063 ran. 063's catalogue-driven enrolment supersedes it —
+it both enables RLS and installs the canonical tenant policy, idempotently,
+for any table carrying `company_id`. Two RLS-enabling mechanisms racing each
+other (one managed in-repo, one invisible on the instance) is exactly the
+state drift this runbook exists to prevent.
+
 ## 4. Known divergence to keep in mind
 
 `src/migrations/` (68 files, the live suite run by `run.ts`) and
