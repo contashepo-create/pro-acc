@@ -53,3 +53,7 @@ debug-*.log
 # IDE
 .vscode/
 .idea/
+
+# ephemeral PostgreSQL data dirs created by the migration test driver
+/tmp-pgdata/
+pro-acc-pgdata-*/

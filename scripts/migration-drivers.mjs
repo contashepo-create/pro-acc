@@ -57,9 +57,11 @@ async function createPostgresDriver() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pro-acc-pgdata-'));
   const port = Number(process.env.MIGRATION_PG_PORT || 55432);
 
-  // Ephemeral throwaway server on loopback, deleted after the run. The
-  // credential is generated per run rather than hardcoded so no password
-  // literal exists in the repository for secret scanners to flag.
+  // Ephemeral throwaway server: it listens on loopback only, lives for the
+  // duration of one test run, and its data directory is deleted afterwards.
+  // The credential is generated per run rather than hardcoded so that no
+  // literal password string exists in the repository for secret scanners
+  // (GitGuardian et al.) to flag as a leaked credential.
   const user = 'pro_acc_migration_test';
   const password = randomBytes(24).toString('hex');
 
