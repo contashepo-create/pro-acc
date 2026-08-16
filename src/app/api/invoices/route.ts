@@ -3,13 +3,13 @@ import { success, error, parseBody, requireModulePermission, handleApiError } fr
 import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const INVOICE_STATUSES = new Set(['unpaid', 'partial', 'paid', 'cancelled']);
 
-/**
- * GET /api/invoices
- * جلب جميع الفواتير
- */
+/** GET /api/invoices - tenant-scoped invoice list. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'invoices', 'read');
@@ -21,9 +21,13 @@ export async function GET(request: NextRequest) {
     const clientId = url.searchParams.get('client_id');
     const dateFrom = url.searchParams.get('from');
     const dateTo = url.searchParams.get('to');
+    if (status && !INVOICE_STATUSES.has(status)) return error('حالة الفاتورة غير صالحة');
+    if (clientId && !UUID_RE.test(clientId)) return error('معرّف العميل غير صالح');
+    if ((dateFrom && !isValidDate(dateFrom)) || (dateTo && !isValidDate(dateTo))
+      || (dateFrom && dateTo && dateFrom > dateTo)) return error('فترة الفواتير غير صالحة');
 
     let query = s.from('invoices')
-      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at, contacts(name)', { count: 'exact' })
+      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at', { count: 'exact' })
       .eq('company_id', auth.companyId)
       .is('deleted_at', null);
     if (status) query = query.eq('status', status);
@@ -35,45 +39,27 @@ export async function GET(request: NextRequest) {
     const { data, error: queryError, count } = await query
       .order('date', { ascending: false }).order('number', { ascending: false })
       .range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
 
-    if (queryError) {
-      // Schema-drift resilience: if a column (e.g. deleted_at / zatca_qr /
-      // journal_entry_id) or the contacts embed is missing in the DB, PostgREST
-      // 500s the whole page. Retry with a guaranteed-safe minimal select and
-      // resolve client names in a separate query instead of locking the user out.
-      const em = `${queryError.message || ''} ${queryError.details || ''} ${queryError.hint || ''} ${queryError.code || ''}`;
-      const schemaDrift = /column|relationship|could not find|does not exist|PGRST|42P01|42703/i.test(em);
-      if (!schemaDrift) throw queryError;
-      console.error('[invoices] primary query failed (schema drift?), retrying minimal select:', em);
-
-      let fallback = s.from('invoices')
-        .select('id, number, contact_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, created_at', { count: 'exact' })
-        .eq('company_id', auth.companyId);
-      if (status) fallback = fallback.eq('status', status);
-      if (clientId) fallback = fallback.eq('contact_id', clientId);
-      if (dateFrom) fallback = fallback.gte('date', dateFrom);
-      if (dateTo) fallback = fallback.lte('date', dateTo);
-
-      const { data: fData, error: fErr, count: fCount } = await fallback
-        .order('date', { ascending: false }).order('number', { ascending: false })
-        .range(offset, offset + pageSize - 1);
-      if (fErr) throw fErr;
-
-      const contactIds = [...new Set((fData || []).map((i: any) => i.contact_id).filter(Boolean))] as string[];
-      const names: Record<string, string> = {};
-      if (contactIds.length > 0) {
-        const { data: cs } = await s.from('contacts').select('id, name').in('id', contactIds).eq('company_id', auth.companyId);
-        for (const c of cs || []) names[(c as any).id] = (c as any).name;
-      }
-      const invoices = (fData || []).map((i: any) => ({ ...i, client_name: names[i.contact_id] || '' }));
-      return success({ invoices, total: fCount || 0, page, pageSize, totalPages: Math.ceil((fCount || 0) / pageSize) || 1 });
+    const contactIds = [...new Set((data || []).map((invoice: any) => invoice.contact_id).filter(Boolean))] as string[];
+    const contactNames: Record<string, string> = {};
+    if (contactIds.length) {
+      const { data: contacts, error: contactsError } = await s.from('contacts')
+        .select('id, name').eq('company_id', auth.companyId).in('id', contactIds);
+      if (contactsError) throw contactsError;
+      for (const contact of contacts || []) contactNames[(contact as any).id] = (contact as any).name;
     }
-
-    const invoices = (data || []).map((i: any) => ({
-      ...i, client_name: i.contacts?.name || '',
+    const invoices = (data || []).map((invoice: any) => ({
+      ...invoice,
+      client_name: contactNames[invoice.contact_id] || '',
     }));
-
-    return success({ invoices, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) || 1 });
+    return success({
+      invoices,
+      total: count || 0,
+      page,
+      pageSize,
+      totalPages: Math.ceil((count || 0) / pageSize) || 1,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -157,16 +143,16 @@ export async function POST(request: NextRequest) {
     // creation remains committed even when seller tax metadata is incomplete.
     let zatcaQRData: string | null = null;
     try {
-      const { data: company, error: companyError } = await s.from('companies')
-        .select('name, tax_number').eq('id', auth.companyId).maybeSingle();
-      if (companyError) throw companyError;
-      const sellerName = (company as { name?: string } | null)?.name || '';
-      const vatNumber = (company as { tax_number?: string } | null)?.tax_number || '';
-      if (sellerName && /^\d{15}$/.test(vatNumber)) {
+      const taxSnapshot = invoice.tax_snapshot as Record<string, any> | undefined;
+      const seller = taxSnapshot?.seller as Record<string, any> | undefined;
+      const sellerName = typeof seller?.name === 'string' ? seller.name.trim() : '';
+      const vatNumber = typeof seller?.vat_number === 'string' ? seller.vat_number.trim() : '';
+      const createdAt = new Date(String(invoice.created_at));
+      if (sellerName && /^\d{15}$/.test(vatNumber) && Number.isFinite(createdAt.getTime())) {
         const qrPayload = {
           sellerName,
           vatNumber,
-          timestamp: new Date(date).toISOString(),
+          timestamp: `${date}T${createdAt.toISOString().slice(11, 19)}Z`,
           invoiceTotal: Number(invoice.total),
           vatTotal: Number(invoice.vat_amount || 0),
         };

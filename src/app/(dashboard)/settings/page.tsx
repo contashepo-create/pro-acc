@@ -555,8 +555,8 @@ export default function SettingsPage() {
             </div>
           </Card>
 
-          {/* Tax Invoice Type (ZATCA Compliance) */}
-          <Card title="نوع الفاتورة الضريبية وفق متطلبات هيئة الزكاة والضريبة والجمارك (ZATCA)">
+          {/* Presentation label only; this does not attest regulatory compliance. */}
+          <Card title="تصنيف عرض الفاتورة الضريبية (B2B / B2C)">
             <div className="space-y-3">
               <p className="text-xs text-text-muted leading-relaxed">
                 حدد كيفية تسمية وتصنيف الفواتير الصادرة لعملائك:
@@ -690,7 +690,7 @@ export default function SettingsPage() {
               </label>
               <label className="flex items-center gap-2.5 cursor-pointer">
                 <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showQR} onChange={e => setInvoiceSettings({ ...invoiceSettings, showQR: e.target.checked })} />
-                <span>إظهار رمز الاستجابة السريع (ZATCA QR Code)</span>
+                <span>إظهار رمز ZATCA للمرحلة الأولى (TLV 1–5)</span>
               </label>
               <label className="flex items-center gap-2.5 cursor-pointer">
                 <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showSignatureArea} onChange={e => setInvoiceSettings({ ...invoiceSettings, showSignatureArea: e.target.checked })} />

@@ -1,126 +1,174 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateUBLInvoice } from '@/lib/zatca';
+import { generateUBLInvoice, generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const moneyMatches = (left: number, right: number) => Math.abs(left - right) <= 0.01;
+
+type PartySnapshot = {
+  name?: unknown;
+  vat_number?: unknown;
+  commercial_registration?: unknown;
+  address?: unknown;
+  country_code?: unknown;
+  currency_code?: unknown;
+};
+
+type TaxSnapshot = { seller?: PartySnapshot; buyer?: PartySnapshot };
+
+const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
+const countryCode = (value: unknown, fallback = 'SA') => {
+  const code = text(value).toUpperCase();
+  return /^[A-Z]{2}$/.test(code) ? code : fallback;
+};
 
 /**
- * GET /api/invoices/[id]/zatca - Generate ZATCA UBL XML and QR data for an invoice
- * Returns both the QR code data (base64 TLV) and the full UBL 2.1 XML document
+ * Generate deterministic ZATCA-oriented artifacts from immutable invoice facts.
+ * The UBL payload is intentionally unsigned; no Phase 2 clearance/reporting is
+ * performed by this endpoint.
  */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const auth = await requireApiAuth(request);
+    const auth = await requireModulePermission(request, 'invoices', 'read');
     const { id } = await params;
+    if (!UUID_RE.test(id)) return error('معرّف الفاتورة غير صالح', 400);
     const s = sb();
 
-    // Fetch the invoice
-    const { data: invoice } = await s.from('invoices')
-      .select('id, number, date, due_date, subtotal, tax_rate, tax_amount, total, notes, contact_id, zatca_qr')
+    const { data: invoice, error: invoiceError } = await s.from('invoices')
+      .select('id, number, date, subtotal, vat_rate, vat_amount, total, status, created_at, tax_snapshot')
       .eq('id', id)
       .eq('company_id', auth.companyId)
+      .is('deleted_at', null)
       .maybeSingle();
+    if (invoiceError) throw invoiceError;
+    if (!invoice || (invoice as Record<string, unknown>).status === 'cancelled') return notFound();
 
-    if (!invoice) return error('الفاتورة غير موجودة');
-    const inv = invoice as {
-      id: string; number: number; date: string; due_date: string;
-      subtotal: number; tax_rate: number; tax_amount: number; total: number;
-      notes: string; contact_id: string; zatca_qr: string | null;
-    };
-
-    // Fetch invoice items
-    const { data: items, error: itemsError } = await s.from('invoice_items')
+    const { data: itemRows, error: itemsError } = await s.from('invoice_items')
       .select('id, description, quantity, unit_price, total')
       .eq('invoice_id', id)
-      .eq('company_id', auth.companyId);
+      .eq('company_id', auth.companyId)
+      .order('id');
     if (itemsError) throw itemsError;
 
-    // Fetch company info (seller)
-    const { data: company } = await s.from('companies')
-      .select('name, tax_number, address, phone, email, currency_symbol, country_code')
-      .eq('id', auth.companyId)
-      .maybeSingle();
-    const seller = company as { name?: string; tax_number?: string; address?: string; currency_symbol?: string; country_code?: string } | null;
+    const inv = invoice as Record<string, unknown>;
+    const snapshot = (inv.tax_snapshot || {}) as TaxSnapshot;
+    const seller = snapshot.seller || {};
+    const buyer = snapshot.buyer || {};
+    const sellerName = text(seller.name);
+    const sellerVatNumber = text(seller.vat_number);
+    const buyerName = text(buyer.name);
+    const buyerVatNumber = text(buyer.vat_number);
+    const currency = text(seller.currency_code).toUpperCase();
 
-    // Fetch client info (buyer)
-    const { data: contact } = await s.from('contacts')
-      .select('id, name, tax_number, address, email')
-      .eq('id', inv.contact_id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    const buyer = contact as { name?: string; tax_number?: string; address?: string } | null;
-
-    // Generate QR data if not already stored
-    let qrData = inv.zatca_qr;
-    if (!qrData && seller?.tax_number && /^\d{15}$/.test(seller.tax_number)) {
-      const { generateZatcaQRData } = await import('@/lib/zatca');
-      try {
-        qrData = generateZatcaQRData({
-          sellerName: seller.name || '',
-          vatNumber: seller.tax_number,
-          timestamp: new Date(inv.date).toISOString(),
-          invoiceTotal: parseFloat(String(inv.total)),
-          vatTotal: parseFloat(String(inv.tax_amount)),
-        });
-        // Store for future use
-        await s.from('invoices').update({ zatca_qr: qrData }).eq('id', id).eq('company_id', auth.companyId);
-      } catch {
-        // ignore
-      }
+    if (!sellerName || !buyerName || !/^\d{15}$/.test(sellerVatNumber)
+      || (buyerVatNumber !== '' && !/^\d{15}$/.test(buyerVatNumber))
+      || !/^[A-Z]{3}$/.test(currency)) {
+      return error('بيانات الهوية الضريبية المحفوظة مع الفاتورة غير مكتملة أو غير صالحة', 422);
     }
 
-    // Generate UBL XML
-    let ublXml: string | null = null;
-    try {
-      ublXml = generateUBLInvoice({
-        uuid: inv.id,
-        number: inv.number,
-        issueDate: inv.date,
-        issueTime: new Date().toISOString().split('T')[1]?.substring(0, 8) || '00:00:00',
-        invoiceTypeCode: '388', // Tax Invoice
-        currencyCode: 'SAR',
-        seller: {
-          name: seller?.name || '',
-          vatNumber: seller?.tax_number || '',
-          address: seller?.address ? { city: seller.address, country: 'SA' } : undefined,
-        },
-        buyer: {
-          name: buyer?.name || '',
-          vatNumber: buyer?.tax_number || undefined,
-          address: buyer?.address ? { city: buyer.address, country: 'SA' } : undefined,
-        },
-        items: (items || []).map((item: { id: string; description: string; quantity: number; unit_price: number; total: number }, idx: number) => ({
-          id: String(idx + 1),
-          description: item.description,
-          quantity: parseFloat(String(item.quantity)),
-          unitPrice: parseFloat(String(item.unit_price)),
-          vatRate: parseFloat(String(inv.tax_rate)),
-          total: parseFloat(String(item.total)),
-        })),
-        amounts: {
-          lineExtensionAmount: parseFloat(String(inv.subtotal)),
-          taxExclusiveAmount: parseFloat(String(inv.subtotal)),
-          taxInclusiveAmount: parseFloat(String(inv.total)),
-          taxAmount: parseFloat(String(inv.tax_amount)),
-        },
-        vatRate: parseFloat(String(inv.tax_rate)),
-        paymentMeansCode: '10', // Cash
-        notes: inv.notes ? [inv.notes] : undefined,
-      });
-    } catch (ublErr) {
-      console.warn('UBL XML generation failed:', ublErr);
+    const issueDate = text(inv.date);
+    const createdAt = new Date(text(inv.created_at));
+    if (!isValidDate(issueDate) || !Number.isFinite(createdAt.getTime())) {
+      return error('بيانات إصدار الفاتورة غير صالحة', 409);
     }
+    const issueTime = createdAt.toISOString().slice(11, 19);
+    const issueTimestamp = `${issueDate}T${issueTime}Z`;
+
+    const invoiceNumber = Number(inv.number);
+    const subtotal = Number(inv.subtotal);
+    const vatRate = Number(inv.vat_rate);
+    const vatAmount = Number(inv.vat_amount);
+    const total = Number(inv.total);
+    const items = (itemRows || []).map((item: Record<string, unknown>) => ({
+      id: text(item.id),
+      description: text(item.description),
+      quantity: Number(item.quantity),
+      unitPrice: Number(item.unit_price),
+      vatRate,
+      total: Number(item.total),
+    }));
+    const itemSubtotal = roundMoney(items.reduce((sum, item) => sum + item.total, 0));
+    const invalidAmounts = !items.length || !Number.isInteger(invoiceNumber) || invoiceNumber <= 0
+      || ![subtotal, vatRate, vatAmount, total].every(Number.isFinite)
+      || subtotal < 0 || vatRate < 0 || vatRate > 1 || vatAmount < 0 || total < 0
+      || items.some((item) => !item.description
+        || ![item.quantity, item.unitPrice, item.total].every(Number.isFinite)
+        || item.quantity <= 0 || item.unitPrice < 0 || item.total < 0)
+      || !moneyMatches(itemSubtotal, subtotal)
+      || !moneyMatches(roundMoney(subtotal * vatRate), vatAmount)
+      || !moneyMatches(roundMoney(subtotal + vatAmount), total);
+    if (invalidAmounts) {
+      return error('البيانات المالية للفاتورة غير متسقة؛ تعذر إنشاء مستند ضريبي موثوق', 409);
+    }
+    if (vatRate === 0) {
+      return error('لا تحتوي الفاتورة على تصنيف وسبب الإعفاء/النسبة الصفرية اللازمين للمستند الضريبي', 422);
+    }
+
+    const qrPayload = {
+      sellerName,
+      vatNumber: sellerVatNumber,
+      timestamp: issueTimestamp,
+      invoiceTotal: total,
+      vatTotal: vatAmount,
+    };
+    const qrValidation = validateInvoiceForZatca(qrPayload);
+    if (!qrValidation.valid) {
+      return error(`تعذر إنشاء رمز الفاتورة الضريبية: ${qrValidation.errors.join('، ')}`, 422);
+    }
+    const qrData = generateZatcaQRData(qrPayload);
+
+    const sellerCountry = countryCode(seller.country_code);
+    const buyerCountry = countryCode(buyer.country_code, sellerCountry);
+    const ublXml = generateUBLInvoice({
+      uuid: String(inv.id),
+      number: invoiceNumber,
+      issueDate,
+      issueTime,
+      invoiceTypeCode: '388',
+      invoiceTypeName: buyerVatNumber ? '0100000' : '0200000',
+      currencyCode: currency,
+      seller: {
+        name: sellerName,
+        vatNumber: sellerVatNumber,
+        registrationNumber: text(seller.commercial_registration) || undefined,
+        address: text(seller.address) ? { street: text(seller.address), country: sellerCountry } : { country: sellerCountry },
+      },
+      buyer: {
+        name: buyerName,
+        vatNumber: buyerVatNumber || undefined,
+        address: text(buyer.address) ? { street: text(buyer.address), country: buyerCountry } : { country: buyerCountry },
+      },
+      items,
+      amounts: {
+        lineExtensionAmount: subtotal,
+        taxExclusiveAmount: subtotal,
+        taxInclusiveAmount: total,
+        taxAmount: vatAmount,
+      },
+      vatRate,
+    });
 
     return success({
       invoiceId: id,
-      invoiceNumber: inv.number,
-      qrData,          // Base64 TLV for QR code rendering
-      ublXml,          // Full UBL 2.1 XML document
-      hasValidVATNumber: !!(seller?.tax_number && /^\d{15}$/.test(seller.tax_number)),
+      invoiceNumber,
+      qrData,
+      ublXml,
+      artifact: {
+        format: 'ubl_2_1_unsigned',
+        qrProfile: 'zatca_phase_1_tlv_tags_1_to_5',
+        cryptographicallySigned: false,
+        hashChained: false,
+        clearanceSubmitted: false,
+        reportingSubmitted: false,
+        phase2Compliant: false,
+      },
     });
   } catch (err) {
     return handleApiError(err);

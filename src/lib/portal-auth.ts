@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 
 const PORTAL_TOKEN_TTL_SECONDS = 15 * 60;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface PortalTokenPayload {
   contactId: string;
@@ -26,7 +27,7 @@ function sameSignature(actual: string, expected: string): boolean {
 
 /** Creates a one-time-delivery, short-lived magic-link credential for a contact. */
 export function createPortalToken(contact: Pick<PortalTokenPayload, 'contactId' | 'companyId' | 'email'>): string {
-  if (!contact.contactId || !contact.companyId || !contact.email) {
+  if (!UUID_RE.test(contact.contactId) || !UUID_RE.test(contact.companyId) || !contact.email) {
     throw new Error('Portal contact context is incomplete');
   }
   const now = Math.floor(Date.now() / 1000);
@@ -57,8 +58,8 @@ export function verifyPortalToken(token: string): PortalTokenPayload | null {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
     const p = payload as Record<string, unknown>;
     if (
-      typeof p.contactId !== 'string' || !p.contactId ||
-      typeof p.companyId !== 'string' || !p.companyId ||
+      typeof p.contactId !== 'string' || !UUID_RE.test(p.contactId) ||
+      typeof p.companyId !== 'string' || !UUID_RE.test(p.companyId) ||
       typeof p.email !== 'string' || !p.email ||
       typeof p.iat !== 'number' || !Number.isInteger(p.iat) ||
       typeof p.exp !== 'number' || !Number.isInteger(p.exp)

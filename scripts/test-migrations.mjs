@@ -373,6 +373,8 @@ async function smokeAtomicWriters(ids) {
   await db.query(`SELECT update_bank_reconciliation($1,$2,NULL,TRUE,$3)`,[c,bankRec.rows[0].result.id,u]);
   await assert.rejects(()=>db.query(`SELECT delete_pending_bank_reconciliation($1,$2,$3)`,[c,bankRec.rows[0].result.id,u]));
 
+  await db.query(`UPDATE companies SET tax_number='300000000000003',country_code='SA',currency_code='SAR' WHERE id=$1`,[c]);
+  await db.query(`UPDATE contacts SET tax_number='310000000000003',address='Original buyer address' WHERE id=$1 AND company_id=$2`,[contact,c]);
   const atomicSale=(await db.query(`SELECT create_sales_invoice_atomic($1,$2,$3,'2026-02-01','2026-03-01',$4::jsonb,0.15,TRUE,'sale',50,$5,$6) result`,[
     c,contact,project,JSON.stringify([{description:'Atomic sale',quantity:2,unitPrice:50,discount:0}]),b,u,
   ])).rows[0].result;
@@ -382,9 +384,24 @@ async function smokeAtomicWriters(ids) {
   assert.ok(atomicSale.journal_entry_id);
   assert.ok(atomicSale.voucher_receipt_id);
   assert.equal((await db.query(`SELECT count(*)::int count FROM invoice_items WHERE invoice_id=$1`,[atomicSale.id])).rows[0].count,1);
+  const taxDocument=(await db.query(`SELECT vat_rate,tax_rate,vat_amount,tax_amount,tax_snapshot FROM invoices WHERE id=$1 AND company_id=$2`,[atomicSale.id,c])).rows[0];
+  assert.equal(Number(taxDocument.vat_rate),0.15);
+  assert.equal(Number(taxDocument.tax_rate),0.15);
+  assert.equal(Number(taxDocument.vat_amount),15);
+  assert.equal(Number(taxDocument.tax_amount),15);
+  assert.equal(taxDocument.tax_snapshot.seller.vat_number,'300000000000003');
+  assert.equal(taxDocument.tax_snapshot.buyer.name,'Client');
+  const frozenSnapshot=JSON.stringify(taxDocument.tax_snapshot);
+  await db.query(`UPDATE companies SET name='Renamed after issue',tax_number='399999999999993' WHERE id=$1`,[c]);
+  await db.query(`UPDATE contacts SET name='Renamed buyer',tax_number='319999999999993' WHERE id=$1 AND company_id=$2`,[contact,c]);
+  assert.equal(JSON.stringify((await db.query(`SELECT tax_snapshot FROM invoices WHERE id=$1`,[atomicSale.id])).rows[0].tax_snapshot),frozenSnapshot);
+  await assert.rejects(()=>db.query(`UPDATE invoices SET total=116 WHERE id=$1 AND company_id=$2`,[atomicSale.id,c]));
+  await assert.rejects(()=>db.query(`UPDATE invoice_items SET total=99 WHERE invoice_id=$1 AND company_id=$2`,[atomicSale.id,c]));
+  await assert.rejects(()=>db.query(`INSERT INTO invoice_items(company_id,invoice_id,description,quantity,unit_price,total) VALUES($1,$2,'late line',1,1,1)`,[c,atomicSale.id]));
   const cancellableSale=(await db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,'2026-02-01','2026-03-01',$3::jsonb,0,FALSE,'',0,NULL,$4) result`,[
     c,contact,JSON.stringify([{description:'Cancel sale',quantity:1,unitPrice:25,discount:0}]),u,
   ])).rows[0].result;
+  assert.equal(Number((await db.query(`SELECT vat_rate FROM invoices WHERE id=$1`,[cancellableSale.id])).rows[0].vat_rate),0);
   const cancelledSale=(await db.query(`SELECT cancel_sales_invoice_atomic($1,$2,'mistake',$3) result`,[c,cancellableSale.id,u])).rows[0].result;
   assert.ok(cancelledSale.reversal_journal_id);
   assert.equal(cancelledSale.status,'cancelled');
@@ -715,6 +732,15 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number(vatFiling.output_vat),Number(vatSummary.outputVat));
   assert.equal(Number(vatFiling.input_vat),Number(vatSummary.inputVat));
   await assert.rejects(()=>db.query(`SELECT create_vat_return_filing_atomic($1,'2026-01-01','2026-02-28','filed','duplicate',$2)`,[c,u]));
+  await assert.rejects(()=>db.query(`SELECT create_vat_return_filing_atomic($1,'2026-02-15','2026-03-31','draft','overlap',$2)`,[c,u]));
+  const filingRace=await Promise.allSettled([
+    db.query(`SELECT create_vat_return_filing_atomic($1,'2026-04-01','2026-05-31','filed','race one',$2)`,[c,u]),
+    db.query(`SELECT create_vat_return_filing_atomic($1,'2026-05-01','2026-06-30','filed','race two',$2)`,[c,u]),
+  ]);
+  assert.equal(filingRace.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(filingRace.filter((result)=>result.status==='rejected').length,1);
+  await db.query(`SELECT create_vat_return_filing_atomic($1,'2026-07-01','2026-07-15','draft','draft one',$2)`,[c,u]);
+  await db.query(`SELECT create_vat_return_filing_atomic($1,'2026-07-10','2026-07-31','draft','draft two',$2)`,[c,u]);
   await assert.rejects(()=>db.query(`SELECT create_vat_return_filing_atomic($1,'2026-03-01','2026-03-31','filed','cross',$2)`,[c2,u]));
 
   const expiredCompany='66000000-0000-4000-8000-000000000001';

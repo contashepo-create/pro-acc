@@ -96,6 +96,7 @@ jest.mock('@/lib/usage-limits', () => ({
 
 import { POST as invoicesPOST } from '@/app/api/invoices/route';
 import { PATCH as invoicePATCH } from '@/app/api/invoices/[id]/route';
+import { GET as invoiceZatcaGET } from '@/app/api/invoices/[id]/zatca/route';
 
 const C1 = 'company-1';
 const CLIENT = '00000000-0000-4000-8000-0000000000c1';
@@ -234,7 +235,7 @@ describe('PATCH /api/invoices/[id] — lifecycle RPC', () => {
   });
 
   test('refuses to mark paid without a receipt allocation', async () => {
-    const res = await invoicePATCH(authedRequest({ status: 'paid' }), paramsOf('inv-1'));
+    const res = await invoicePATCH(authedRequest({ status: 'paid' }), paramsOf('30000000-0000-4000-8000-000000000001'));
     expect(res.status).toBe(400);
     expect((await res.json()).message).toMatch(/سند قبض|مدفوعة/);
     expect(mockDb.rpcCalls).toHaveLength(0);
@@ -242,19 +243,92 @@ describe('PATCH /api/invoices/[id] — lifecycle RPC', () => {
 
   test('cancels through one tenant-scoped reversal transaction', async () => {
     mockDb.rpcImpl = async () => ({ data: { id: 'inv-1', status: 'cancelled', reversal_id: 'je-r1' }, error: null });
-    const res = await invoicePATCH(authedRequest({ status: 'cancelled', notes: 'سبب' }), paramsOf('inv-1'));
+    const res = await invoicePATCH(authedRequest({ status: 'cancelled', notes: 'سبب' }), paramsOf('30000000-0000-4000-8000-000000000001'));
     expect(res.status).toBe(200);
     expect(mockDb.rpcCalls).toEqual([{
       name: 'cancel_sales_invoice_atomic',
       params: {
         p_company_id: C1,
-        p_invoice_id: 'inv-1',
+        p_invoice_id: '30000000-0000-4000-8000-000000000001',
         p_notes: 'سبب',
         p_user_id: 'u1',
       },
     }]);
     expect(insertsOf('journal_entries')).toHaveLength(0);
     expect(insertsOf('journal_lines')).toHaveLength(0);
+  });
+});
+
+describe('GET /api/invoices/[id]/zatca — immutable tenant tax document', () => {
+  const invoiceId = '30000000-0000-4000-8000-000000000001';
+  const invoiceRow = {
+    id: invoiceId,
+    company_id: C1,
+    number: 7,
+    date: '2026-08-01',
+    subtotal: 100,
+    vat_rate: 0.15,
+    vat_amount: 15,
+    // Deliberately wrong legacy aliases: the endpoint must ignore them.
+    tax_rate: 15,
+    tax_amount: 0,
+    total: 115,
+    status: 'unpaid',
+    deleted_at: null,
+    created_at: '2026-08-01T10:11:12Z',
+    tax_snapshot: {
+      seller: {
+        name: 'البائع وقت الإصدار', vat_number: '300000000000003',
+        commercial_registration: 'CR-1', address: 'عنوان البائع',
+        country_code: 'SA', currency_code: 'SAR',
+      },
+      buyer: { name: 'المشتري وقت الإصدار', vat_number: '310000000000003', address: 'عنوان المشتري', country_code: 'SA' },
+    },
+  };
+
+  beforeEach(() => {
+    const data = baseDb();
+    data.invoices = [invoiceRow];
+    data.invoice_items = [{
+      id: 'line-1', company_id: C1, invoice_id: invoiceId,
+      description: 'خدمة', quantity: 1, unit_price: 100, total: 100,
+    }];
+    // Current master data differs; historical output must use tax_snapshot.
+    data.companies[0] = { ...data.companies[0], name: 'اسم البائع الجديد', tax_number: '399999999999993' };
+    mockDb = makeDb(data);
+  });
+
+  test('uses modern VAT facts and frozen parties and labels the output unsigned', async () => {
+    const res = await invoiceZatcaGET(authedRequest(), paramsOf(invoiceId));
+    expect(res.status).toBe(200);
+    const payload = (await res.json()).data;
+    expect(payload.ublXml).toContain('البائع وقت الإصدار');
+    expect(payload.ublXml).not.toContain('اسم البائع الجديد');
+    expect(payload.ublXml).toContain('<cbc:Percent>15</cbc:Percent>');
+    expect(payload.ublXml).toContain('<cbc:TaxAmount currencyID="SAR">15.00</cbc:TaxAmount>');
+    expect(payload.artifact).toMatchObject({
+      format: 'ubl_2_1_unsigned', cryptographicallySigned: false,
+      clearanceSubmitted: false, reportingSubmitted: false, phase2Compliant: false,
+    });
+  });
+
+  test('does not expose an invoice owned by another company', async () => {
+    const db = baseDb();
+    db.invoices = [{ ...invoiceRow, company_id: 'company-2' }];
+    db.invoice_items = [];
+    mockDb = makeDb(db);
+    const res = await invoiceZatcaGET(authedRequest(), paramsOf(invoiceId));
+    expect(res.status).toBe(404);
+  });
+
+  test('refuses to serialize inconsistent financial source facts', async () => {
+    mockDb = makeDb({
+      ...baseDb(),
+      invoices: [{ ...invoiceRow, vat_amount: 0 }],
+      invoice_items: [{ id: 'line-1', company_id: C1, invoice_id: invoiceId, description: 'خدمة', quantity: 1, unit_price: 100, total: 100 }],
+    });
+    const res = await invoiceZatcaGET(authedRequest(), paramsOf(invoiceId));
+    expect(res.status).toBe(409);
   });
 });
 

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
@@ -15,7 +16,7 @@ export async function GET(request: NextRequest) {
     const to = url.searchParams.get('to') || new Date().toISOString().slice(0, 10);
     const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
     const pageSize = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('page_size') || '100', 10) || 100));
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return error('فترة التقرير غير صالحة');
+    if (!isValidDate(from) || !isValidDate(to) || from > to) return error('فترة التقرير غير صالحة');
 
     const [summaryResult, linesResult, invoicesResult, purchasesResult] = await Promise.all([
       s.rpc('get_vat_return_summary', { p_company_id: auth.companyId, p_from: from, p_to: to }),
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
         p_company_id: auth.companyId, p_from: from, p_to: to,
         p_limit: pageSize, p_offset: (page - 1) * pageSize,
       }),
-      s.from('invoices').select('id, number, date, subtotal, tax_amount, total', { count: 'exact' })
+      s.from('invoices').select('id, number, date, subtotal, tax_amount:vat_amount, total', { count: 'exact' })
         .eq('company_id', auth.companyId).gte('date', from).lte('date', to)
         .neq('status', 'cancelled').is('deleted_at', null).order('date').range(0, 99),
       s.from('purchase_invoices').select('id, number, date, subtotal, tax_amount, total', { count: 'exact' })
@@ -62,7 +63,8 @@ export async function GET(request: NextRequest) {
       },
       pagination: { page, pageSize, total: totalCount, totalPages: Math.ceil(totalCount / pageSize) },
       reconciliationPreviewTruncated: (invoicesResult.count || 0) > 100 || (purchasesResult.count || 0) > 100,
-      zatca_compliant: true, vat_rate: 0.15,
+      accountingBasis: 'posted_vat_control_accounts',
+      complianceAttestation: null,
     });
   } catch (err) {
     return handleApiError(err);

@@ -1,18 +1,9 @@
 /**
- * ZATCA Phase 2 — QR Code Generation (TLV Encoding)
- * 
- * Implements the simplified invoice QR code as specified by ZATCA:
- * https://zatca.gov.sa/en/E-Invoices/Pages/Electronic-invoices.aspx
- * 
- * The QR code contains a TLV (Tag-Length-Value) encoded string with:
- * - Tag 1: Seller name
- * - Tag 2: VAT registration number
- * - Tag 3: Invoice timestamp (ISO 8601)
- * - Tag 4: Invoice total (with VAT)
- * - Tag 5: VAT total
- * 
- * For Phase 2 (simplified), this is sufficient.
- * Phase 2 (standard) requires additional fields and cryptographic stamp.
+ * ZATCA Phase 1 QR payload (TLV tags 1–5).
+ *
+ * Phase 2 simplified invoices require additional cryptographic QR fields and
+ * reporting. This module does not implement those capabilities and must not be
+ * presented as a Phase 2 compliance implementation.
  */
 
 /**
@@ -21,6 +12,7 @@
  */
 function tlvEncode(tag: number, value: string): Buffer {
   const valueBuffer = Buffer.from(value, 'utf-8');
+  if (valueBuffer.length > 255) throw new Error(`TLV value for tag ${tag} exceeds 255 bytes`);
   const tagBuffer = Buffer.from([tag]);
   const lengthBuffer = Buffer.from([valueBuffer.length]);
   return Buffer.concat([tagBuffer, lengthBuffer, valueBuffer]);
@@ -39,10 +31,7 @@ interface InvoiceQRData {
   vatTotal: number;
 }
 
-/**
- * Generate ZATCA-compliant QR code data (base64 encoded TLV)
- * This produces the string that should be encoded in the QR code
- */
+/** Generate a ZATCA Phase 1 tags 1–5 QR payload (base64 TLV). */
 export function generateZatcaQRData(data: InvoiceQRData): string {
   const { sellerName, vatNumber, timestamp, invoiceTotal, vatTotal } = data;
 
@@ -50,6 +39,8 @@ export function generateZatcaQRData(data: InvoiceQRData): string {
   if (!/^\d{15}$/.test(vatNumber)) {
     throw new Error('VAT number must be 15 digits');
   }
+  const validation = validateInvoiceForZatca(data);
+  if (!validation.valid) throw new Error(validation.errors.join('; '));
 
   // Build TLV blocks
   const tlv1 = tlvEncode(1, sellerName);
@@ -89,11 +80,11 @@ export function validateInvoiceForZatca(data: InvoiceQRData): { valid: boolean; 
   if (!data.timestamp || isNaN(Date.parse(data.timestamp))) {
     errors.push('وقت الفاتورة غير صحيح');
   }
-  if (typeof data.invoiceTotal !== 'number' || data.invoiceTotal < 0) {
-    errors.push('المبلغ الإجمالي يجب أن يكون رقماً موجباً');
+  if (typeof data.invoiceTotal !== 'number' || !Number.isFinite(data.invoiceTotal) || data.invoiceTotal < 0) {
+    errors.push('المبلغ الإجمالي يجب أن يكون رقماً غير سالب');
   }
-  if (typeof data.vatTotal !== 'number' || data.vatTotal < 0) {
-    errors.push('مبلغ الضريبة يجب أن يكون رقماً موجباً');
+  if (typeof data.vatTotal !== 'number' || !Number.isFinite(data.vatTotal) || data.vatTotal < 0) {
+    errors.push('مبلغ الضريبة يجب أن يكون رقماً غير سالب');
   }
   if (data.vatTotal > data.invoiceTotal) {
     errors.push('مبلغ الضريبة لا يمكن أن يكون أكبر من الإجمالي');

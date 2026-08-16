@@ -1,14 +1,14 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
 
 function validPeriod(from: unknown, to: unknown): from is string {
-  return typeof from === 'string' && typeof to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(from)
-    && /^\d{4}-\d{2}-\d{2}$/.test(to) && Number.isFinite(Date.parse(from))
-    && Number.isFinite(Date.parse(to)) && from <= to;
+  return typeof from === 'string' && typeof to === 'string'
+    && isValidDate(from) && isValidDate(to) && from <= to;
 }
 
 async function loadSummary(companyId: string, from: string, to: string) {
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     const [summary, previous, salesResult, purchasesResult] = await Promise.all([
       loadSummary(auth.companyId, periodFrom, periodTo),
       loadSummary(auth.companyId, previousFrom, previousTo),
-      s.from('invoices').select('id, number, date, subtotal, tax_amount, total, status', { count: 'exact' })
+      s.from('invoices').select('id, number, date, subtotal, vat_amount, total, status', { count: 'exact' })
         .eq('company_id', auth.companyId).gte('date', periodFrom).lte('date', periodTo)
         .neq('status', 'cancelled').is('deleted_at', null).order('date').range(0, 499),
       s.from('purchase_invoices').select('id, number, date, subtotal, tax_amount, total, status', { count: 'exact' })
@@ -58,9 +58,9 @@ export async function GET(request: NextRequest) {
     const netVAT = outputVAT - inputVAT;
     const previousNetVAT = number(previous.outputVat) - number(previous.inputVat);
     const periodEnd = new Date(`${periodTo}T00:00:00Z`);
-    const quarterEndMonth = Math.ceil((periodEnd.getUTCMonth() + 1) / 3) * 3;
-    const quarterEnd = new Date(Date.UTC(periodEnd.getUTCFullYear(), quarterEndMonth, 0));
-    const deadline = new Date(quarterEnd.getTime() + 28 * 86400000);
+    // Saudi VAT returns are due by the last day of the month following the
+    // filing period, whether the taxpayer files monthly or quarterly.
+    const deadline = new Date(Date.UTC(periodEnd.getUTCFullYear(), periodEnd.getUTCMonth() + 2, 0));
 
     return success({
       vatReturn: {
@@ -102,16 +102,32 @@ export async function POST(request: NextRequest) {
     if (!validPeriod(body.period_from, body.period_to)) return error('فترة الضريبة غير صالحة');
     if (body.status && !['draft', 'filed'].includes(body.status)) return error('حالة الإقرار غير صالحة');
     if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) return error('الملاحظات طويلة جداً');
+    const status = body.status || 'draft';
+    const fromTime = Date.parse(`${body.period_from}T00:00:00Z`);
+    const toTime = Date.parse(`${body.period_to}T00:00:00Z`);
+    const today = new Date().toISOString().slice(0, 10);
+    if (body.period_to > today || Math.floor((toTime - fromTime) / 86400000) > 365) {
+      return error('فترة الإقرار يجب ألا تتجاوز 366 يوماً أو تنتهي في المستقبل');
+    }
+    if (status === 'filed' && auth.role !== 'admin') {
+      const { hasModulePermission } = await import('@/lib/permissions');
+      if (!await hasModulePermission(auth.userId, auth.companyId, 'tax_returns', 'approve')) {
+        return error('ليس لديك صلاحية اعتماد الإقرار الضريبي', 403);
+      }
+    }
 
     const { data, error: filingError } = await sb().rpc('create_vat_return_filing_atomic', {
       p_company_id: auth.companyId,
       p_period_from: body.period_from,
       p_period_to: body.period_to,
-      p_status: body.status || 'draft',
+      p_status: status,
       p_notes: body.notes?.trim() || '',
       p_user_id: auth.userId,
     });
     if (filingError?.code === '23505') return error('يوجد إقرار محفوظ لهذه الفترة بالفعل', 409);
+    if (filingError && /overlapping vat filing period/i.test(filingError.message || '')) {
+      return error('تتداخل الفترة مع إقرار ضريبي معتمد أو مقدم', 409);
+    }
     if (filingError) throw filingError;
     return success(data, 201);
   } catch (err) {

@@ -4,12 +4,16 @@ import { createHmac } from 'crypto';
 import { createPortalToken, verifyPortalToken } from '@/lib/portal-auth';
 
 describe('portal magic-link tokens', () => {
-  const contact = { contactId: 'contact-1', companyId: 'company-1', email: 'Client@Example.com' };
+  const contact = {
+    contactId: '10000000-0000-4000-8000-000000000001',
+    companyId: '20000000-0000-4000-8000-000000000001',
+    email: 'Client@Example.com',
+  };
 
   test('creates a short-lived token and normalizes its email claim', () => {
     const token = createPortalToken(contact);
     expect(verifyPortalToken(token)).toMatchObject({
-      contactId: 'contact-1', companyId: 'company-1', email: 'client@example.com',
+      contactId: contact.contactId, companyId: contact.companyId, email: 'client@example.com',
     });
   });
 

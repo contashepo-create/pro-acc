@@ -20,6 +20,7 @@ export async function GET(request: NextRequest) {
       .eq('id', auth.contactId)
       .eq('company_id', auth.companyId)
       .eq('email', auth.email)
+      .eq('is_active', true)
       .maybeSingle();
     if (contactError) throw contactError;
     if (!contact) return error('رابط الدخول غير صالح أو انتهت صلاحيته', 401);
@@ -28,6 +29,8 @@ export async function GET(request: NextRequest) {
       .select('id, number, date, due_date, subtotal, vat_amount, total, status, zatca_qr, notes')
       .eq('company_id', auth.companyId)
       .eq('contact_id', auth.contactId)
+      .is('deleted_at', null)
+      .neq('status', 'cancelled')
       .order('date', { ascending: false });
     if (invoiceError) throw invoiceError;
 

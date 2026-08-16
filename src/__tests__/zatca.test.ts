@@ -1,5 +1,5 @@
 /**
- * Tests for ZATCA Phase 2 QR Code and UBL XML generation
+ * Tests for Phase 1 QR payloads and unsigned UBL XML generation
  */
 
 import { generateZatcaQRData, validateInvoiceForZatca } from '../lib/zatca/qr-code';
@@ -113,9 +113,9 @@ describe('UBL XML Generation', () => {
     ],
     amounts: {
       lineExtensionAmount: 1150,
-      taxExclusiveAmount: 1000,
-      taxInclusiveAmount: 1150,
-      taxAmount: 150,
+      taxExclusiveAmount: 1150,
+      taxInclusiveAmount: 1322.50,
+      taxAmount: 172.50,
     },
     vatRate: 0.15,
     paymentMeansCode: '10',
@@ -151,17 +151,32 @@ describe('UBL XML Generation', () => {
     expect(xml).toContain('مواد بناء');
   });
 
-  test('should include monetary totals', () => {
+  test('should include financially consistent monetary totals', () => {
     const xml = generateUBLInvoice(ublData);
     expect(xml).toContain('1150.00');
-    expect(xml).toContain('1000.00');
-    expect(xml).toContain('150.00');
+    expect(xml).toContain('172.50');
+    expect(xml).toContain('1322.50');
+  });
+
+  test('should calculate line VAT from the net line extension amount', () => {
+    const xml = generateUBLInvoice(ublData);
+    expect(xml).toContain('<cbc:TaxAmount currencyID="SAR">150.00</cbc:TaxAmount>');
+    expect(xml).toContain('<cbc:TaxAmount currencyID="SAR">22.50</cbc:TaxAmount>');
+  });
+
+  test('should reject inconsistent source totals', () => {
+    expect(() => generateUBLInvoice({
+      ...ublData,
+      amounts: { ...ublData.amounts, taxAmount: 150 },
+    })).toThrow('Inconsistent UBL invoice totals');
   });
 
   test('should escape XML special characters', () => {
     const dataWithSpecialChars = {
       ...ublData,
-      items: [{ ...ublData.items[0], description: 'خدمة <خاصة> & "مهمة"' }],
+      items: ublData.items.map((item, index) => index === 0
+        ? { ...item, description: 'خدمة <خاصة> & "مهمة"' }
+        : item),
     };
     const xml = generateUBLInvoice(dataWithSpecialChars);
     expect(xml).toContain('&lt;خاصة&gt;');
