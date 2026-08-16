@@ -22,6 +22,9 @@ type Op = { op: string; col?: string; val?: any };
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
   let insertCounter = 0;
+  // Lets a test simulate a database rejecting a write, to prove the route
+  // reports the failure instead of answering {updated:true}.
+  const tableErrors = new Map<string, { message: string; code?: string }>();
 
   const from = (table: string) => {
     const ops: Op[] = [];
@@ -73,13 +76,19 @@ function makeDb(db: Record<string, Row[]>) {
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) =>
-        Promise.resolve({ data: applyFilters(), count: applyFilters().length, error: null }).then(onF, onR),
+      then: (onF: any, onR: any) => {
+        const failure = tableErrors.get(table);
+        if (failure) return Promise.resolve({ data: null, count: 0, error: failure }).then(onF, onR);
+        return Promise.resolve({ data: applyFilters(), count: applyFilters().length, error: null }).then(onF, onR);
+      },
     };
     return api;
   };
 
-  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
+  const db_: any = {
+    from, calls, rpcCalls: [] as Array<{ name: string; params: any }>,
+    failTable: (table: string, error: { message: string; code?: string }) => tableErrors.set(table, error),
+  };
   db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `missing ${name}` } });
   db_.rpc = (name: string, params: any) => {
     db_.rpcCalls.push({ name, params });
@@ -171,6 +180,36 @@ describe('settings PUT — privilege escalation fix', () => {
     const upd = updatesOf('companies')[0];
     expect(upd.mut.payload.vat_rate).toBe(0.15);
     expect(upd.mut.payload.name).toBe('شركة جديدة');
+  });
+
+  test('the company update is filtered by id only — companies has no company_id column', async () => {
+    mockDb = makeDb(baseDb());
+    const res = await settingsPUT(authedAs('u-admin', 'admin', { company: { tax_number: '3001' } }));
+    expect(res.status).toBe(200);
+    const upd = updatesOf('companies')[0];
+    // `companies` is keyed by id and has NO company_id column. Adding
+    // .eq('company_id', ...) made PostgREST reject the statement (42703), and
+    // because the error was ignored the route still answered {updated:true} —
+    // so changing the tax number or VAT rate silently did nothing.
+    const cols = upd.ops.filter((o: any) => o.op === 'eq').map((o: any) => o.col);
+    expect(cols).toContain('id');
+    expect(cols).not.toContain('company_id');
+  });
+
+  test('a failed company update surfaces as an error instead of a false success', async () => {
+    mockDb = makeDb(baseDb());
+    mockDb.failTable('companies', { message: 'column companies.company_id does not exist', code: '42703' });
+    const res = await settingsPUT(authedAs('u-admin', 'admin', { company: { vat_rate: 0.15 } }));
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect((await res.json()).success).toBe(false);
+  });
+
+  test('a failed settings upsert surfaces as an error instead of a false success', async () => {
+    mockDb = makeDb(baseDb());
+    mockDb.failTable('settings', { message: 'write failed' });
+    const res = await settingsPUT(authedAs('u-mgr', 'manager', { settings: { notif_invoice: 'true' } }));
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect((await res.json()).success).toBe(false);
   });
 
   test('admin rejected for an invalid vat_rate (> 1)', async () => {

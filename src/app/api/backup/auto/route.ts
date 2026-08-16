@@ -63,15 +63,30 @@ export async function POST(request: NextRequest) {
       'custodies', 'boq_items', 'daily_workers', 'salary_sheets',
     ];
 
+    // The reported size/record counts are what the operator uses to judge
+    // whether the backup is healthy. Swallowing a read error into an empty
+    // array made a broken backup look like an empty-but-successful one, and
+    // PostgREST's default row ceiling silently capped large tables.
     for (const table of tables) {
-      try {
-        const { data } = await s.from(table)
+      const rows: unknown[] = [];
+      const pageSize = 1000;
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error: pageError } = await s.from(table)
           .select('*')
-          .eq('company_id', auth.companyId);
-        exportData[table] = data || [];
-      } catch {
-        exportData[table] = [];
+          .eq('company_id', auth.companyId)
+          .order('id', { ascending: true })
+          .range(offset, offset + pageSize - 1);
+        if (pageError) {
+          const missingTable = pageError.code === '42P01'
+            || /does not exist|Could not find/i.test(pageError.message || '');
+          if (missingTable) { rows.length = 0; break; }
+          throw new Error(`تعذر قراءة الجدول ${table}: ${pageError.message}`);
+        }
+        const page = data || [];
+        rows.push(...page);
+        if (page.length < pageSize) break;
       }
+      exportData[table] = rows;
     }
 
     const backupPayload = {

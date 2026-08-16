@@ -1,22 +1,37 @@
-import { PGlite } from '@electric-sql/pglite';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createDriver } from './migration-drivers.mjs';
 
 const migrationsDir = path.resolve('src/migrations');
-const db = new PGlite();
+// MIGRATION_DRIVER=postgres runs this exact suite against a REAL PostgreSQL
+// server (genuine pgcrypto, real locking/concurrency) instead of in-process
+// PGlite, so "migrations apply cleanly from scratch" is proven on the engine
+// the product actually deploys to.
+const db = await createDriver();
 
 async function applyMigrations() {
-  // Supabase pre-creates these roles. PGlite does not ship pgcrypto, so the
-  // digest shim only lets the rest of the migration compile in this test; a
-  // deployed PostgreSQL/Supabase instance still executes CREATE EXTENSION.
+  // Supabase pre-creates these roles.
   await db.exec(`
     CREATE ROLE anon;
     CREATE ROLE authenticated;
     CREATE ROLE service_role;
-    CREATE FUNCTION digest(text,text) RETURNS bytea LANGUAGE sql IMMUTABLE
-      AS $$ SELECT decode(md5($1),'hex') $$;
+  `);
+  if (db.hasPgcrypto) {
+    // A real server runs the genuine extension, exactly like Supabase, so the
+    // migrations' own CREATE EXTENSION statements are left intact below.
+    await db.exec('CREATE EXTENSION IF NOT EXISTS pgcrypto;');
+  } else {
+    // PGlite does not ship pgcrypto, so the digest shim only lets the rest of
+    // the migration compile in this test; a deployed PostgreSQL/Supabase
+    // instance still executes CREATE EXTENSION.
+    await db.exec(`
+      CREATE FUNCTION digest(text,text) RETURNS bytea LANGUAGE sql IMMUTABLE
+        AS $$ SELECT decode(md5($1),'hex') $$;
+    `);
+  }
+  await db.exec(`
     CREATE TABLE _migrations(
       id SERIAL PRIMARY KEY, filename TEXT NOT NULL UNIQUE,
       applied_at TIMESTAMPTZ DEFAULT NOW()
@@ -31,8 +46,11 @@ async function applyMigrations() {
     let sql = fs.readFileSync(path.join(migrationsDir, filename), 'utf8')
       .replace(/^\s*BEGIN\s*;\s*$/gim, '')
       .replace(/^\s*COMMIT\s*;\s*$/gim, '')
-      .replace(/^CREATE EXTENSION IF NOT EXISTS pgcrypto;\s*$/gim, '')
       .trim();
+    if (!db.hasPgcrypto) {
+      // Only strip the extension when the engine genuinely cannot provide it.
+      sql = sql.replace(/^CREATE EXTENSION IF NOT EXISTS pgcrypto;\s*$/gim, '').trim();
+    }
     await db.exec('BEGIN');
     try {
       if (sql) await db.exec(sql);
@@ -565,6 +583,183 @@ async function smokePurchasingAndInventory(ids) {
 
   assert.ok(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1
     AND entity_type IN('warehouse','inventory_item','inventory_transaction','purchase_order','purchase_invoice')`,[c])).rows[0].count)>=10);
+}
+
+/**
+ * Real critical path (CPM), migration 062.
+ *
+ * Network:  A(3d) → B(2d) → D(4d)
+ *           A(3d) → C(1d) → D(4d)
+ * Critical path is A→B→D (9 days); C carries 1 day of float. The previous
+ * heuristic would have marked every unstarted task critical, including C.
+ */
+async function smokeCriticalPath() {
+  const c='77000000-0000-4000-8000-000000000001';
+  const u='77000000-0000-4000-8000-000000000002';
+  const contact='77000000-0000-4000-8000-000000000003';
+  const c2='77000000-0000-4000-8000-000000000004';
+  const u2='77000000-0000-4000-8000-000000000005';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'CPM tenant A'),($2,'CPM tenant B')`,[c,c2]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES
+    ($1,$2,'cpm-a@example.test','x','CPM A','admin',TRUE),
+    ($3,$4,'cpm-b@example.test','x','CPM B','admin',TRUE)`,[u,c,u2,c2]);
+  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'CPM client','both')`,[contact,c]);
+  const project=(await db.query(`SELECT create_project_atomic($1,'CPM project',$2,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,
+    [c,contact,u])).rows[0].result.id;
+
+  const makeTask=async(name,start,end)=>(await db.query(`SELECT create_project_task_atomic($1,$2::jsonb,$3) result`,
+    [c,JSON.stringify({project_id:project,name,start_date:start,end_date:end}),u])).rows[0].result.id;
+  const taskA=await makeTask('A','2026-01-01','2026-01-03');
+  const taskB=await makeTask('B','2026-01-04','2026-01-05');
+  const taskC=await makeTask('C','2026-01-04','2026-01-04');
+  const taskD=await makeTask('D','2026-01-06','2026-01-09');
+  const link=(successor,predecessor,lag=0)=>db.query(
+    `SELECT create_task_dependency_atomic($1,$2,$3,$4,$5)`,[c,successor,predecessor,lag,u]);
+  await link(taskB,taskA); await link(taskC,taskA); await link(taskD,taskB); await link(taskD,taskC);
+
+  const cpm=(await db.query(`SELECT get_project_critical_path($1,$2) result`,[c,project])).rows[0].result;
+  const byId=Object.fromEntries(cpm.tasks.map((task)=>[task.id,task]));
+  assert.equal(Number(cpm.projectDuration),9);
+  assert.equal(byId[taskA].isCritical,true);
+  assert.equal(byId[taskB].isCritical,true);
+  assert.equal(byId[taskD].isCritical,true);
+  // The whole point of a real CPM: a task with slack is NOT critical.
+  assert.equal(byId[taskC].isCritical,false);
+  assert.equal(Number(byId[taskC].totalFloat),1);
+  assert.equal(Number(byId[taskA].earliestStart),0);
+  assert.equal(Number(byId[taskD].earliestFinish),9);
+  assert.deepEqual(cpm.criticalPath,[taskA,taskB,taskD]);
+
+  // Lag pushes the successor out and lengthens the schedule.
+  const taskE=await makeTask('E','2026-01-10','2026-01-11');
+  await link(taskE,taskD,3);
+  const lagged=(await db.query(`SELECT get_project_critical_path($1,$2) result`,[c,project])).rows[0].result;
+  assert.equal(Number(lagged.projectDuration),14);
+
+  // Cycles must be rejected: they make CPM meaningless and non-terminating.
+  await assert.rejects(()=>link(taskA,taskE));
+  // Self-links, cross-project links and cross-tenant actors are rejected.
+  await assert.rejects(()=>link(taskA,taskA));
+  await assert.rejects(()=>db.query(`SELECT create_task_dependency_atomic($1,$2,$3,0,$4)`,[c,taskB,taskA,u2]));
+  await assert.rejects(()=>db.query(`SELECT create_task_dependency_atomic($1,$2,$3,0,$4)`,[c2,taskB,taskA,u2]));
+  // Direct writes bypass the cycle/tenant checks, so the guard must block them.
+  await assert.rejects(()=>db.query(
+    `INSERT INTO project_task_dependencies(company_id,project_id,successor_task_id,predecessor_task_id)
+     VALUES($1,$2,$3,$4)`,[c,project,taskC,taskB]));
+  // Another tenant cannot read this project's schedule.
+  const foreign=(await db.query(`SELECT get_project_critical_path($1,$2) result`,[c2,project])).rows[0].result;
+  assert.deepEqual(foreign.criticalPath,[]);
+  assert.deepEqual(foreign.tasks,[]);
+
+  // Removing the edge returns the successor to an independent schedule.
+  const edge=(await db.query(
+    `SELECT id FROM project_task_dependencies WHERE company_id=$1 AND successor_task_id=$2 AND predecessor_task_id=$3`,
+    [c,taskC,taskA])).rows[0].id;
+  await assert.rejects(()=>db.query(`SELECT delete_task_dependency_atomic($1,$2,$3)`,[c2,edge,u2]));
+  await db.query(`SELECT delete_task_dependency_atomic($1,$2,$3)`,[c,edge,u]);
+  assert.equal(Number((await db.query(
+    `SELECT count(*) count FROM project_task_dependencies WHERE id=$1`,[edge])).rows[0].count),0);
+  assert.equal(Number((await db.query(
+    `SELECT count(*) count FROM audit_log WHERE entity_type='project_task_dependency' AND company_id=$1`,
+    [c])).rows[0].count),6);
+}
+
+/**
+ * TRUE concurrency, only meaningful on a real PostgreSQL server.
+ *
+ * PGlite multiplexes one in-process connection, so every "race" test that runs
+ * there is actually sequential and proves nothing about locking. These cases
+ * open independent connections and hit the same rows simultaneously, which is
+ * the only way advisory locks, FOR UPDATE and unique constraints are really
+ * exercised.
+ */
+async function smokeRealConcurrency() {
+  if (!db.supportsRealConcurrency) return;
+
+  const c='78000000-0000-4000-8000-000000000001';
+  const u='78000000-0000-4000-8000-000000000002';
+  const contact='78000000-0000-4000-8000-000000000003';
+  const c2='78000000-0000-4000-8000-000000000004';
+  const u2='78000000-0000-4000-8000-000000000005';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Race tenant A'),($2,'Race tenant B')`,[c,c2]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES
+    ($1,$2,'race-a@example.test','x','Race A','admin',TRUE),
+    ($3,$4,'race-b@example.test','x','Race B','admin',TRUE)`,[u,c,u2,c2]);
+  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Race client','both')`,[contact,c]);
+  const project=(await db.query(`SELECT create_project_atomic($1,'Race project',$2,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,
+    [c,contact,u])).rows[0].result.id;
+
+  // Two concurrent budgets for the SAME project+category must not both win, or
+  // the same actual cost would be counted against two budgets and variance
+  // reporting would silently lie.
+  const budgetAttempts=await Promise.allSettled([0,1].map(()=>db.withConnection((conn)=>
+    conn.query(`SELECT create_project_budget_atomic($1,$2,'materials',NULL,1000,'total',NULL,$3)`,[c,project,u]))));
+  assert.equal(budgetAttempts.filter((r)=>r.status==='fulfilled').length,1);
+  assert.equal(Number((await db.query(
+    `SELECT count(*) count FROM project_budgets WHERE company_id=$1 AND project_id=$2 AND category='materials'`,
+    [c,project])).rows[0].count),1);
+
+  // Concurrent journal numbering must never hand out a duplicate number:
+  // duplicated journal numbers break the audit trail and statutory numbering.
+  const numbers=await Promise.all(Array.from({length:8},()=>db.withConnection(async(conn)=>
+    Number((await conn.query(`SELECT next_journal_number($1,2026) n`,[c])).rows[0].n))));
+  assert.equal(new Set(numbers).size,numbers.length);
+
+  // Concurrent invoice numbering, same guarantee.
+  const invoiceNumbers=await Promise.all(Array.from({length:8},()=>db.withConnection(async(conn)=>
+    Number((await conn.query(`SELECT next_invoice_number($1,2026) n`,[c])).rows[0].n))));
+  assert.equal(new Set(invoiceNumbers).size,invoiceNumbers.length);
+
+  // Numbering must be isolated per tenant: tenant B starts its own series and
+  // cannot consume or observe tenant A's sequence.
+  const foreignNumber=Number((await db.query(`SELECT next_journal_number($1,2026) n`,[c2])).rows[0].n);
+  assert.equal(foreignNumber,1);
+
+  // Concurrent balanced journal entries from separate connections must all
+  // commit and all stay balanced.
+  const cash='78000000-0000-4000-8000-000000000010';
+  const revenue='78000000-0000-4000-8000-000000000011';
+  await db.query(`INSERT INTO accounts(id,company_id,code,name,type,is_header) VALUES
+    ($1,$2,'1000','Race cash','asset',FALSE),($3,$2,'4100','Race revenue','revenue',FALSE)`,[cash,c,revenue]);
+  const postings=await Promise.all(Array.from({length:5},(_,index)=>db.withConnection((conn)=>
+    conn.query(`SELECT create_journal_entry($1,'2026-02-01','general',$2,$3,$4::jsonb) result`,[
+      c,`Concurrent posting ${index}`,u,
+      JSON.stringify([{accountId:cash,debit:100,credit:0},{accountId:revenue,debit:0,credit:100}]),
+    ]))));
+  assert.equal(postings.length,5);
+  const postedNumbers=postings.map((row)=>Number(row.rows[0].result.number));
+  assert.equal(new Set(postedNumbers).size,5);
+  const unbalanced=await db.query(`
+    SELECT je.id FROM journal_entries je JOIN journal_lines jl ON jl.journal_entry_id=je.id
+    WHERE je.company_id=$1 GROUP BY je.id HAVING sum(jl.debit)<>sum(jl.credit)`,[c]);
+  assert.equal(unbalanced.rows.length,0);
+
+  // Concurrent duplicate task-dependency edges must collapse to exactly one.
+  const makeTask=async(name,start,end)=>(await db.query(`SELECT create_project_task_atomic($1,$2::jsonb,$3) result`,
+    [c,JSON.stringify({project_id:project,name,start_date:start,end_date:end}),u])).rows[0].result.id;
+  const first=await makeTask('Race A','2026-01-01','2026-01-02');
+  const second=await makeTask('Race B','2026-01-03','2026-01-04');
+  const edgeAttempts=await Promise.allSettled([0,1].map(()=>db.withConnection((conn)=>
+    conn.query(`SELECT create_task_dependency_atomic($1,$2,$3,0,$4)`,[c,second,first,u]))));
+  assert.equal(edgeAttempts.filter((r)=>r.status==='fulfilled').length,1);
+  assert.equal(Number((await db.query(
+    `SELECT count(*) count FROM project_task_dependencies WHERE successor_task_id=$1 AND predecessor_task_id=$2`,
+    [second,first])).rows[0].count),1);
+
+  // Two connections racing to build opposite edges must not create a cycle.
+  const third=await makeTask('Race C','2026-01-05','2026-01-06');
+  const cycleAttempts=await Promise.allSettled([
+    db.withConnection((conn)=>conn.query(`SELECT create_task_dependency_atomic($1,$2,$3,0,$4)`,[c,third,second,u])),
+    db.withConnection((conn)=>conn.query(`SELECT create_task_dependency_atomic($1,$2,$3,0,$4)`,[c,second,third,u])),
+  ]);
+  assert.ok(cycleAttempts.filter((r)=>r.status==='fulfilled').length>=1);
+  const cycleCheck=await db.query(`
+    WITH RECURSIVE reach(a,b) AS (
+      SELECT predecessor_task_id,successor_task_id FROM project_task_dependencies WHERE company_id=$1
+      UNION SELECT r.a,d.successor_task_id FROM reach r
+        JOIN project_task_dependencies d ON d.predecessor_task_id=r.b AND d.company_id=$1
+    ) SELECT count(*) count FROM reach WHERE a=b`,[c]);
+  assert.equal(Number(cycleCheck.rows[0].count),0);
 }
 
 async function smokeAtomicWriters(ids) {
@@ -1284,10 +1479,14 @@ async function smokeAtomicWriters(ids) {
   const activationHash=createHash('sha256').update(activationPlaintext).digest('hex');
   await db.query(`SELECT create_activation_code_batch_atomic($1,'start',1,$2,CURRENT_DATE+7,NULL,NULL,'runtime',$3::jsonb)`,
     [adminId,c2,JSON.stringify([activationHash])]);
-  // PGlite's test-only digest shim uses MD5 because pgcrypto is unavailable;
-  // production PostgreSQL keeps the SHA-256 value inserted above.
-  await db.query(`UPDATE activation_codes SET code_hash=$1 WHERE code_hash=$2`,
-    [createHash('md5').update(activationPlaintext).digest('hex'),activationHash]);
+  // PGlite's test-only digest shim uses MD5 because pgcrypto is unavailable,
+  // so the stored hash must be rewritten to match what the shim will compute.
+  // On a real PostgreSQL/Supabase server pgcrypto genuinely hashes SHA-256, so
+  // the value inserted above is already correct and must be left untouched.
+  if (!db.hasPgcrypto) {
+    await db.query(`UPDATE activation_codes SET code_hash=$1 WHERE code_hash=$2`,
+      [createHash('md5').update(activationPlaintext).digest('hex'),activationHash]);
+  }
   const activationResult=(await db.query(`SELECT redeem_activation_code($1,$2,$3) result`,[c2,u2,activationPlaintext])).rows[0].result;
   assert.equal(activationResult.type,'plan');
   assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND user_id=$2 AND action='redeem_activation_code'`,[c2,u2])).rows[0].count),1);
@@ -1548,6 +1747,8 @@ try {
   await smokeAdminSupport(ids);
   await smokePurchasingAndInventory(ids);
   await smokeAtomicWriters(ids);
+  await smokeCriticalPath();
+  await smokeRealConcurrency();
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
   await db.close();

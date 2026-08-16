@@ -46,12 +46,27 @@ export async function GET(request: NextRequest) {
       // Get detailed statistics for each ad
       const enrichedAds = await Promise.all(
         (ads || []).map(async (ad: any) => {
-          const { data: views, error: viewsError } = await s.from('ad_views')
-            .select('user_id, company_id').eq('advertisement_id', ad.id).limit(5000);
-          if (viewsError) throw viewsError;
-
-          const uniqueUsers = new Set((views || []).map((v: any) => v.user_id));
-          const uniqueCompanies = new Set((views || []).map((v: any) => v.company_id));
+          // Distinct counts must consider every view. Capping the read at
+          // 5,000 rows silently understated reach for any popular ad, and the
+          // understatement was invisible because the number still looked
+          // plausible. Page through instead of truncating.
+          const uniqueUsers = new Set<string>();
+          const uniqueCompanies = new Set<string>();
+          const viewPageSize = 1000;
+          for (let offset = 0; ; offset += viewPageSize) {
+            const { data: views, error: viewsError } = await s.from('ad_views')
+              .select('user_id, company_id')
+              .eq('advertisement_id', ad.id)
+              .order('id', { ascending: true })
+              .range(offset, offset + viewPageSize - 1);
+            if (viewsError) throw viewsError;
+            const page = views || [];
+            for (const view of page as any[]) {
+              if (view.user_id) uniqueUsers.add(view.user_id);
+              if (view.company_id) uniqueCompanies.add(view.company_id);
+            }
+            if (page.length < viewPageSize) break;
+          }
 
           return {
             ...ad,

@@ -36,11 +36,16 @@ function makeDb(db: Record<string, Row[]>) {
           return true;
         })
       );
+    // `range` must behave like PostgREST (inclusive bounds) so that paginated
+    // readers such as the backup exporter terminate instead of re-reading the
+    // first page forever.
+    let rangeBounds: { from: number; to: number } | null = null;
     const api: any = {
       select: () => api,
       eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
       neq: () => api, in: () => api, is: () => api, or: () => api,
       gte: () => api, lte: () => api, order: () => api, limit: () => api,
+      range: (from: number, to: number) => { rangeBounds = { from, to }; ops.push({ op: 'range', val: [from, to] }); return api; },
       insert: (p: any) => { mut.kind = 'insert'; mut.payload = p; return api; },
       update: (p: any) => { mut.kind = 'update'; mut.payload = p; return api; },
       upsert: (p: any) => { mut.kind = 'upsert'; mut.payload = p; return api; },
@@ -51,8 +56,11 @@ function makeDb(db: Record<string, Row[]>) {
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) =>
-        Promise.resolve({ data: applyFilters(), count: applyFilters().length, error: null }).then(onF, onR),
+      then: (onF: any, onR: any) => {
+        const all = applyFilters();
+        const page = rangeBounds ? all.slice(rangeBounds.from, rangeBounds.to + 1) : all;
+        return Promise.resolve({ data: page, count: all.length, error: null }).then(onF, onR);
+      },
     };
     return api;
   };
