@@ -908,6 +908,84 @@ async function smokeAtomicWriters(ids) {
   const foreignProject=(await db.query(`SELECT create_project_atomic($1,'Foreign delivery',$2,500,'2026-04-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,[
     c2,contact2,u2,
   ])).rows[0].result;
+
+  // CRM, contracts, tenders, bonds and reminders are tenant-bound RPC-only
+  // lifecycles even for a service-role database client.
+  await assert.rejects(()=>db.query(`INSERT INTO crm_contacts(company_id,name,type,assigned_to,created_by) VALUES($1,'Direct','lead',$2,$2)`,[c,u]));
+  const crm=(await db.query(`SELECT create_crm_contact_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({name:'Guarded lead',type:'lead',assigned_to:u,estimated_value:100}),u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT update_crm_contact_atomic($1,$2,'{"name":"Cross"}'::jsonb,$3)`,[c2,crm.id,u2]));
+  await assert.rejects(()=>db.query(`SELECT update_crm_contact_atomic($1,$2,$3::jsonb,$4)`,[
+    c,crm.id,JSON.stringify({assigned_to:u2}),u,
+  ]));
+  const followup=(await db.query(`SELECT create_crm_followup_atomic($1,$2,$3::jsonb,$4) result`,[
+    c,crm.id,JSON.stringify({type:'call',scheduled_at:'2026-09-01T10:00:00Z',notes:'Tenant follow-up'}),u,
+  ])).rows[0].result;
+  assert.ok(followup.id);
+  await assert.rejects(()=>db.query(`SELECT create_crm_followup_atomic($1,$2,$3::jsonb,$4)`,[
+    c2,crm.id,JSON.stringify({scheduled_at:'2026-09-01T10:00:00Z'}),u2,
+  ]));
+
+  const draftContract=(await db.query(`SELECT create_contract_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({title:'Guarded draft contract',type:'client',project_id:guardedProject.id,contact_id:contact,
+      start_date:'2026-04-01',end_date:'2026-12-31',value:500,status:'draft'}),u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`UPDATE contracts SET value=1 WHERE id=$1`,[draftContract.id]));
+  await assert.rejects(()=>db.query(`SELECT update_contract_atomic($1,$2,'{"description":"Cross"}'::jsonb,$3)`,[c2,draftContract.id,u2]));
+  await assert.rejects(()=>db.query(`SELECT create_contract_atomic($1,$2::jsonb,$3)`,[
+    c,JSON.stringify({title:'Cross contract',project_id:foreignProject.id,start_date:'2026-04-01',end_date:'2026-12-31',value:1}),u,
+  ]));
+  const document=(await db.query(`SELECT create_contract_document_atomic($1,$2,'contract.pdf','application/pdf',$3,100,'runtime',$4) result`,[
+    c,draftContract.id,`storage:contract-documents/${c}/${draftContract.id}/runtime.pdf`,u,
+  ])).rows[0].result;
+  assert.ok(document.id);
+  await assert.rejects(()=>db.query(`INSERT INTO contract_documents(contract_id,company_id,filename,uploaded_by) VALUES($1,$2,'direct.pdf',$3)`,[
+    draftContract.id,c,u,
+  ]));
+  const deletedContract=(await db.query(`SELECT delete_draft_contract_atomic($1,$2,$3) result`,[c,draftContract.id,u])).rows[0].result;
+  assert.equal(deletedContract.storage_paths.length,1);
+  const activeContract=(await db.query(`SELECT create_contract_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({title:'Active contract',start_date:'2026-04-01',end_date:'2026-12-31',value:500,status:'active'}),u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT update_contract_atomic($1,$2,'{"value":1}'::jsonb,$3)`,[c,activeContract.id,u]));
+  await assert.rejects(()=>db.query(`SELECT delete_draft_contract_atomic($1,$2,$3)`,[c,activeContract.id,u]));
+
+  const bond=(await db.query(`SELECT create_bond_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({title:'Guarded bond',type:'performance_bond',amount:50,issue_date:'2026-04-01',expiry_date:'2026-12-31',
+      project_id:guardedProject.id,contact_id:contact}),u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`UPDATE bonds SET amount=1 WHERE id=$1`,[bond.id]));
+  await assert.rejects(()=>db.query(`SELECT update_bond_atomic($1,$2,'{"amount":1}'::jsonb,$3)`,[c2,bond.id,u2]));
+  const bondRace=await Promise.all([
+    db.query(`SELECT transition_bond_atomic($1,$2,'release','',$3) result`,[c,bond.id,u]),
+    db.query(`SELECT transition_bond_atomic($1,$2,'release','',$3) result`,[c,bond.id,u]),
+  ]);
+  assert.equal(bondRace.filter((result)=>result.rows[0].result.already_processed===false).length,1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_type='bond' AND entity_id=$1 AND action='release'`,[bond.id])).rows[0].count),1);
+
+  await db.query(`SELECT update_contact_atomic($1,$2,$3::jsonb,$4)`,[c,contact,JSON.stringify({phone:'201000000000'}),u]);
+  const reminderInvoice=(await db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,'2026-02-01','2026-03-01',$3::jsonb,0.15,TRUE,'sale',0,NULL,$4) result`,[
+    c,contact,JSON.stringify([{description:'Reminder invoice',quantity:1,unitPrice:10,discount:0}]),u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`INSERT INTO reminder_log(company_id,invoice_id,channel,status,sent_by) VALUES($1,$2,'whatsapp','sent',$3)`,[
+    c,reminderInvoice.id,u,
+  ]));
+  await assert.rejects(()=>db.query(`SELECT begin_invoice_reminder_attempt_atomic($1,$2,$3)`,[c2,reminderInvoice.id,u2]));
+  const reminderRace=await Promise.allSettled([
+    db.query(`SELECT begin_invoice_reminder_attempt_atomic($1,$2,$3) result`,[c,reminderInvoice.id,u]),
+    db.query(`SELECT begin_invoice_reminder_attempt_atomic($1,$2,$3) result`,[c,reminderInvoice.id,u]),
+  ]);
+  assert.equal(reminderRace.filter((result)=>result.status==='fulfilled').length,1);
+  const reminder=reminderRace.find((result)=>result.status==='fulfilled').value.rows[0].result;
+  const finishedReminder=(await db.query(`SELECT finish_invoice_reminder_attempt_atomic($1,$2,$3,TRUE,'https://wa.me/test',NULL) result`,[
+    c,reminder.reminder_id,u,
+  ])).rows[0].result;
+  assert.equal(finishedReminder.status,'sent');
+  assert.equal((await db.query(`SELECT finish_invoice_reminder_attempt_atomic($1,$2,$3,TRUE,'https://wa.me/test',NULL) result`,[
+    c,reminder.reminder_id,u,
+  ])).rows[0].result.already_processed,true);
+
   await assert.rejects(()=>db.query(`SELECT create_boq_item_atomic($1,$2,'CROSS','cross','u',1,1,$3)`,[
     c,foreignProject.id,u,
   ]));
@@ -1281,27 +1359,45 @@ async function smokeAtomicWriters(ids) {
   await db.query(`SELECT delete_custom_module_atomic($1,$2,$3)`,[c,moduleId,u]);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM user_permissions WHERE company_id=$1 AND module='Runtime module'`,[c])).rows[0].count),0);
 
-  const parentTask='63000000-0000-4000-8000-000000000001';
-  const childTask='63000000-0000-4000-8000-000000000002';
-  const grandTask='63000000-0000-4000-8000-000000000003';
-  await db.query(`INSERT INTO project_tasks(id,company_id,project_id,name,start_date,end_date,progress,created_by) VALUES
-    ($1,$4,$5,'Parent','2026-01-01','2026-01-02',0,$6),($2,$4,$5,'Child','2026-01-01','2026-01-02',0,$6),($3,$4,$5,'Grand','2026-01-01','2026-01-02',0,$6)`,[parentTask,childTask,grandTask,c,project,u]);
-  await db.query(`UPDATE project_tasks SET parent_task_id=$1 WHERE id=$2`,[parentTask,childTask]);
-  await db.query(`UPDATE project_tasks SET parent_task_id=$1 WHERE id=$2`,[childTask,grandTask]);
+  const parentTask=(await db.query(`SELECT create_project_task_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({project_id:project,name:'Parent',start_date:'2026-01-01',end_date:'2026-01-02',progress:0}),u,
+  ])).rows[0].result.id;
+  const childTask=(await db.query(`SELECT create_project_task_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({project_id:project,name:'Child',start_date:'2026-01-01',end_date:'2026-01-02',progress:0,parent_task_id:parentTask}),u,
+  ])).rows[0].result.id;
+  const grandTask=(await db.query(`SELECT create_project_task_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({project_id:project,name:'Grand',start_date:'2026-01-01',end_date:'2026-01-02',progress:0,parent_task_id:childTask}),u,
+  ])).rows[0].result.id;
+  await assert.rejects(()=>db.query(`SELECT create_project_task_atomic($1,$2::jsonb,$3)`,[
+    c,JSON.stringify({project_id:foreignProject.id,name:'Cross task',start_date:'2026-01-01',end_date:'2026-01-02'}),u,
+  ]));
+  await assert.rejects(()=>db.query(`SELECT update_project_task_atomic($1,$2,$3::jsonb,$4)`,[
+    c,parentTask,JSON.stringify({parent_task_id:grandTask}),u,
+  ]));
+  await assert.rejects(()=>db.query(`UPDATE project_tasks SET name='Direct' WHERE id=$1`,[parentTask]));
   const deletedTasks=(await db.query(`SELECT delete_unstarted_project_task_atomic($1,$2,$3) result`,[c,parentTask,u])).rows[0].result;
   assert.equal(Number(deletedTasks.deleted_tasks),3);
 
-  const wonTender='62000000-0000-4000-8000-000000000001';
-  await db.query(`INSERT INTO tenders(id,company_id,title,client_name,contact_id,estimated_value,status,project_duration_months,created_by) VALUES($1,$2,'Won runtime tender','Client',$3,500,'won',2,$4)`,[wonTender,c,contact,u]);
+  await assert.rejects(()=>db.query(`INSERT INTO tenders(company_id,title,client_name,status,created_by) VALUES($1,'Direct tender','Client','draft',$2)`,[c,u]));
+  const wonTender=(await db.query(`SELECT create_tender_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({title:'Won runtime tender',client_name:'Client',contact_id:contact,estimated_value:500,
+      project_duration_months:2,status:'preparing'}),u,
+  ])).rows[0].result.id;
+  await assert.rejects(()=>db.query(`SELECT update_tender_atomic($1,$2,'{"title":"Cross"}'::jsonb,$3)`,[c2,wonTender,u2]));
+  await db.query(`SELECT transition_tender_atomic($1,$2,'submitted','',$3)`,[c,wonTender,u]);
+  await db.query(`SELECT transition_tender_atomic($1,$2,'won','',$3)`,[c,wonTender,u]);
   const tenderRace=await Promise.all([
     db.query(`SELECT convert_won_tender_to_project_atomic($1,$2,$3) result`,[c,wonTender,u]),
     db.query(`SELECT convert_won_tender_to_project_atomic($1,$2,$3) result`,[c,wonTender,u]),
   ]);
   assert.equal(tenderRace.filter(x=>x.rows[0].result.already_processed===false).length,1);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM projects WHERE company_id=$1 AND tender_id=$2`,[c,wonTender])).rows[0].count),1);
-  const draftTender='62000000-0000-4000-8000-000000000002';
-  await db.query(`INSERT INTO tenders(id,company_id,title,client_name,status,created_by) VALUES($1,$2,'Draft runtime tender','Client','draft',$3)`,[draftTender,c,u]);
-  await db.query(`INSERT INTO tender_cost_items(tender_id,company_id,category,amount,created_by) VALUES($1,$2,'materials',10,$3)`,[draftTender,c,u]);
+  const draftTender=(await db.query(`SELECT create_tender_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({title:'Draft runtime tender',client_name:'Client'}),u,
+  ])).rows[0].result.id;
+  await db.query(`SELECT create_tender_cost_item_atomic($1,$2,$3::jsonb,$4)`,[
+    c,draftTender,JSON.stringify({category:'materials',amount:10}),u,
+  ]);
   await db.query(`SELECT delete_draft_tender_atomic($1,$2,$3)`,[c,draftTender,u]);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM tender_cost_items WHERE tender_id=$1`,[draftTender])).rows[0].count),0);
 

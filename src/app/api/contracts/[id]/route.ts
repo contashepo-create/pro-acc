@@ -1,45 +1,33 @@
 import { randomUUID } from 'crypto';
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
 import { hasAllowedMagicBytes } from '@/lib/safe-input';
+import { contractDocumentSchema, contractUpdateSchema, relationshipUuid } from '@/lib/relationship-validation';
 
 const sb = () => getSupabase();
 
-/**
- * GET /api/contracts/[id] — Get contract details + attached documents
- */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'contracts', 'read');
     const { id } = await params;
+    if (!relationshipUuid.safeParse(id).success) return error('معرف العقد غير صالح');
     const s = sb();
-
-    const { data: contract } = await s.from('contracts')
-      .select('*, projects(name), contacts(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
+    const { data: contract, error: contractError } = await s.from('contracts').select('*, projects(name), contacts(name)')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (contractError) throw contractError;
     if (!contract) return notFound();
-
-    // Get attached documents
-    const { data: documents } = await s.from('contract_documents')
-      // Never embed base64/storage references in the contract response.
+    const { data: documents, error: documentsError } = await s.from('contract_documents')
       .select('id, filename, content_type, file_size, description, uploaded_by, uploaded_at')
-      .eq('contract_id', id)
-      .eq('company_id', auth.companyId)
-      .order('uploaded_at', { ascending: false });
-
-    const c = contract as Record<string, unknown>;
+      .eq('contract_id', id).eq('company_id', auth.companyId).order('uploaded_at', { ascending: false });
+    if (documentsError) throw documentsError;
+    const row = contract as Record<string, unknown>;
+    const project = row.projects as { name?: string } | null;
+    const contact = row.contacts as { name?: string } | null;
     return success({
-      ...c,
-      project_name: (c.projects as { name?: string } | null)?.name || null,
-      contact_name: (c.contacts as { name?: string } | null)?.name || null,
+      ...row,
+      project_name: project?.name || null,
+      contact_name: contact?.name || null,
       documents: documents || [],
     });
   } catch (err) {
@@ -47,160 +35,79 @@ export async function GET(
   }
 }
 
-/**
- * PUT /api/contracts/[id] — Update contract details
- */
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'contracts', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody<Record<string, unknown>>(request);
-
-    const { data: existing } = await s.from('contracts')
-      .select('id, status, value, project_id, contact_id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!existing) return notFound();
-    if (body.project_id) {
-      const { data: project } = await s.from('projects').select('id')
-        .eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!project) return error('المشروع غير موجود', 404);
+    if (!relationshipUuid.safeParse(id).success) return error('معرف العقد غير صالح');
+    const parsed = contractUpdateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { data, error: updateError } = await sb().rpc('update_contract_atomic', {
+      p_company_id: auth.companyId,
+      p_contract_id: id,
+      p_patch: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (updateError) {
+      const message = String(updateError.message || '');
+      if (message.includes('غير موجود')) return notFound();
+      if (message.includes('لا يمكن') || message.includes('انتقال حالة')) return error(message, 409);
+      if (message.includes('غير صالحة')) return error(message);
+      throw updateError;
     }
-    if (body.contact_id) {
-      const { data: contact } = await s.from('contacts').select('id')
-        .eq('id', body.contact_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!contact) return error('الطرف غير موجود', 404);
-    }
-    if (body.value !== undefined) {
-      const value = Number(body.value);
-      if (!Number.isFinite(value) || value < 0) return error('قيمة العقد غير صالحة');
-      if ((existing as any).status !== 'draft' && value !== Number((existing as any).value)) {
-        return error('لا يمكن تغيير قيمة عقد بعد تفعيله دون أمر تغيير موثق', 409);
-      }
-    }
-    if (body.status !== undefined) {
-      const transitions: Record<string, string[]> = {
-        draft: ['active', 'terminated'], active: ['completed', 'expired', 'terminated'],
-        completed: [], expired: ['terminated'], terminated: [],
-      };
-      if (!(transitions[(existing as any).status] || []).includes(String(body.status))) {
-        return error('انتقال حالة العقد غير صالح', 409);
-      }
-    }
-
-    const updateData: Record<string, unknown> = {};
-    const allowedFields = ['title', 'type', 'project_id', 'contact_id', 'start_date', 'end_date', 'value', 'description', 'status'];
-    for (const field of allowedFields) {
-      if (body[field] !== undefined) updateData[field] = body[field];
-    }
-
-    if (Object.keys(updateData).length === 0) return error('لا توجد بيانات للتحديث');
-
-    const { data: updated, error: updateErr } = await s.from('contracts')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    return success(updated);
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * DELETE /api/contracts/[id] — Delete contract
- */
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'contracts', 'delete');
     const { id } = await params;
+    if (!relationshipUuid.safeParse(id).success) return error('معرف العقد غير صالح');
     const s = sb();
-
-    const { data: contract } = await s.from('contracts')
-      .select('id, status').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!contract) return notFound();
-    if ((contract as any).status !== 'draft') {
-      return error('لا يمكن حذف عقد فعّال أو منتهٍ؛ استخدم حالة الإنهاء للحفاظ على السجل', 409);
+    const { data, error: deleteError } = await s.rpc('delete_draft_contract_atomic', {
+      p_company_id: auth.companyId,
+      p_contract_id: id,
+      p_user_id: auth.userId,
+    });
+    if (deleteError) {
+      const message = String(deleteError.message || '');
+      if (message.includes('غير موجود')) return notFound();
+      if (message.includes('لا يمكن حذف')) return error(message, 409);
+      throw deleteError;
     }
 
-    const { data: documents } = await s.from('contract_documents')
-      .select('id, file_data').eq('contract_id', id).eq('company_id', auth.companyId);
-    const paths = (documents || []).map((doc: any) => String(doc.file_data || ''))
-      .filter((ref: string) => ref.startsWith('storage:contract-documents/'))
-      .map((ref: string) => ref.slice('storage:contract-documents/'.length))
-      .filter((path: string) => path.startsWith(`${auth.companyId}/${id}/`) && !path.includes('..'));
-
-    // Deleting the parent is one database statement; ON DELETE CASCADE removes
-    // all document rows atomically. Remove storage objects only afterwards so
-    // a database failure can never leave live metadata pointing at lost files.
-    const { error: deleteErr } = await s.from('contracts')
-      .delete().eq('id', id).eq('company_id', auth.companyId);
-    if (deleteErr) throw deleteErr;
+    const paths = Array.isArray((data as { storage_paths?: unknown })?.storage_paths)
+      ? (data as { storage_paths: unknown[] }).storage_paths.filter((path): path is string =>
+          typeof path === 'string' && path.startsWith(`${auth.companyId}/${id}/`) && !path.includes('..'))
+      : [];
     if (paths.length) {
       const { error: storageError } = await s.storage.from('contract-documents').remove(paths);
       if (storageError) console.error('Orphan contract document cleanup failed:', storageError);
     }
-
-    return success({ deleted: true });
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * POST /api/contracts/[id]/documents — Upload a document for a contract
- * Accepts base64-encoded file data
- */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+/** POST /api/contracts/[id] — upload private storage object, then atomically record tenant metadata. */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'contracts', 'create');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody<{
-      filename: string;
-      content_type: string;
-      file_data: string; // base64 encoded
-      description?: string;
-    }>(request);
-
-    if (!body.filename || !body.file_data) {
-      return error('اسم الملف ومحتواه مطلوبان');
-    }
-
-    // Verify contract exists
-    const { data: contract } = await s.from('contracts')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!contract) return notFound();
-
-    if (body.filename.length > 255 || (body.description && body.description.length > 1000)) return error('بيانات الملف طويلة جداً');
-    const mime = body.content_type;
-    if (!['image/jpeg', 'image/png', 'application/pdf'].includes(mime)) return error('نوع الملف غير مدعوم');
-    let buffer: Buffer;
-    try {
-      const raw = body.file_data.includes(',') ? body.file_data.slice(body.file_data.indexOf(',') + 1) : body.file_data;
-      if (!/^[A-Za-z0-9+/=\r\n]+$/.test(raw)) return error('ترميز الملف غير صالح');
-      buffer = Buffer.from(raw, 'base64');
-    } catch {
-      return error('ترميز الملف غير صالح');
-    }
+    if (!relationshipUuid.safeParse(id).success) return error('معرف العقد غير صالح');
+    const parsed = contractDocumentSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const body = parsed.data;
+    const raw = body.file_data.includes(',') ? body.file_data.slice(body.file_data.indexOf(',') + 1) : body.file_data;
+    if (!/^[A-Za-z0-9+/=\r\n]+$/.test(raw)) return error('ترميز الملف غير صالح');
+    const buffer = Buffer.from(raw, 'base64');
     if (buffer.length === 0 || buffer.length > 10 * 1024 * 1024) return error('حجم الملف يجب ألا يتجاوز 10 ميجابايت');
-    if (!hasAllowedMagicBytes(buffer, mime)) return error('محتوى الملف لا يطابق نوعه');
+    if (!hasAllowedMagicBytes(buffer, body.content_type)) return error('محتوى الملف لا يطابق نوعه');
+
     try {
       const { getCompanyPlanLimits, countUsedStorageBytes } = await import('@/lib/plan-limits');
       const limits = await getCompanyPlanLimits(auth.companyId);
@@ -213,31 +120,29 @@ export async function POST(
       return error('تعذر التحقق من مساحة التخزين. حاول لاحقاً.', 503);
     }
 
-    const docId = generateId();
-    const extension = mime === 'application/pdf' ? 'pdf' : mime === 'image/png' ? 'png' : 'jpg';
+    const extension = body.content_type === 'application/pdf' ? 'pdf' : body.content_type === 'image/png' ? 'png' : 'jpg';
     const objectPath = `${auth.companyId}/${id}/${randomUUID()}.${extension}`;
+    const s = sb();
     const { error: uploadError } = await s.storage.from('contract-documents')
-      .upload(objectPath, buffer, { contentType: mime, upsert: false });
+      .upload(objectPath, buffer, { contentType: body.content_type, upsert: false });
     if (uploadError) throw uploadError;
 
-    const { data: doc, error: docErr } = await s.from('contract_documents')
-      .insert({
-        id: docId, contract_id: id, company_id: auth.companyId,
-        filename: body.filename.replace(/[\u0000-\u001f]/g, '').slice(0, 255),
-        content_type: mime,
-        file_data: `storage:contract-documents/${objectPath}`,
-        file_size: buffer.length,
-        description: body.description?.trim() || null,
-        uploaded_by: auth.userId,
-      })
-      .select('id, filename, content_type, file_size, description, uploaded_at')
-      .single();
-    if (docErr) {
+    const { data, error: metadataError } = await s.rpc('create_contract_document_atomic', {
+      p_company_id: auth.companyId,
+      p_contract_id: id,
+      p_filename: body.filename,
+      p_content_type: body.content_type,
+      p_storage_reference: `storage:contract-documents/${objectPath}`,
+      p_file_size: buffer.length,
+      p_description: body.description || null,
+      p_user_id: auth.userId,
+    });
+    if (metadataError) {
       await s.storage.from('contract-documents').remove([objectPath]);
-      throw docErr;
+      if (String(metadataError.message || '').includes('غير صالحة')) return error('العقد غير موجود أو بيانات المستند غير صالحة', 404);
+      throw metadataError;
     }
-
-    return success(doc, 201);
+    return success(data, 201);
   } catch (err) {
     return handleApiError(err);
   }
