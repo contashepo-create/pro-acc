@@ -1,68 +1,76 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireManagerOrAbove, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
+import { z } from 'zod';
+import { success, error, notFound, requireManagerOrAbove, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const updateSchema = z.object({
+  closingBalance: z.number().finite()
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'الرصيد الختامي غير صالح')
+    .optional(),
+  status: z.literal('completed').optional(),
+}).strict();
+const COLUMNS = 'id, bank_safe_id, date, closing_balance, system_balance, difference, status, created_by, completed_by, completed_at, created_at';
+const ITEM_COLUMNS = 'id, reconciliation_id, transaction_type, amount, date, is_cleared';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'banks', 'read');
     const { id } = await params;
-    const s = sb();
-    const { data: rec, error: recError } = await s.from('bank_reconciliation')
-      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (recError) throw recError;
-    if (!rec) return error('Not found', 404);
-    const { data: items, error: itemsErr } = await s.from('bank_reconciliation_items')
-      .select('*').eq('reconciliation_id', id).eq('company_id', auth.companyId).order('date');
-    if (itemsErr) throw itemsErr;
-    return success({ ...rec, items: items || [] });
-  } catch (e) { return handleApiError(e); }
+    if (!UUID_RE.test(id)) return error('معرّف المطابقة غير صالح');
+    const { data, error: queryError } = await sb().from('bank_reconciliation').select(COLUMNS)
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (queryError) throw queryError;
+    if (!data) return notFound();
+    const { data: items, error: itemsError } = await sb().from('bank_reconciliation_items').select(ITEM_COLUMNS)
+      .eq('reconciliation_id', id).eq('company_id', auth.companyId).order('date').order('id');
+    if (itemsError) throw itemsError;
+    return success({ ...data, items: items || [] });
+  } catch (err) {
+    return handleApiError(err);
+  }
 }
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'banks', 'update');
     const { id } = await params;
-    const body = await parseBody<Record<string, any>>(req);
-    let closing: number | null = null;
-    if (body.closingBalance !== undefined) {
-      closing = Number(body.closingBalance);
-      if (!Number.isFinite(closing) || Math.abs(closing * 100 - Math.round(closing * 100)) > 1e-8) return error('الرصيد الختامي غير صالح');
-    }
-    if (body.status !== undefined && body.status !== 'completed') return error('الانتقال المسموح هو pending إلى completed فقط');
-    if (closing === null && body.status === undefined) return error('لا توجد حقول قابلة للتعديل');
-
-    // Locks pending state and refreshes the as-of ledger snapshot before update
-    // or completion, preventing concurrent completion/edit races.
-    const { data, error: updateErr } = await sb().rpc('update_bank_reconciliation', {
+    if (!UUID_RE.test(id)) return error('معرّف المطابقة غير صالح');
+    const parsed = updateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    if (!Object.keys(parsed.data).length) return error('لا توجد حقول قابلة للتعديل');
+    const { data, error: updateError } = await sb().rpc('update_bank_reconciliation', {
       p_company_id: auth.companyId,
       p_reconciliation_id: id,
-      p_closing_balance: closing,
-      p_complete: body.status === 'completed',
+      p_closing_balance: parsed.data.closingBalance ?? null,
+      p_complete: parsed.data.status === 'completed',
       p_user_id: auth.userId,
     });
-    if (updateErr) {
-      if (String(updateErr.message || '').includes('غير موجودة')) return error('Not found', 404);
-      throw updateErr;
-    }
+    const message = String(updateError?.message || '');
+    if (message.includes('غير موجودة')) return notFound();
+    if (message.includes('المكتملة')) return error(message, 409);
+    if (updateError) throw updateError;
     return success(data);
-  } catch (e) { return handleApiError(e); }
+  } catch (err) {
+    return handleApiError(err);
+  }
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireManagerOrAbove(req);
     const { id } = await params;
-    const { error: deleteErr } = await sb().rpc('delete_pending_bank_reconciliation', {
-      p_company_id: auth.companyId,
-      p_reconciliation_id: id,
-      p_user_id: auth.userId,
+    if (!UUID_RE.test(id)) return error('معرّف المطابقة غير صالح');
+    const { error: deleteError } = await sb().rpc('delete_pending_bank_reconciliation', {
+      p_company_id: auth.companyId, p_reconciliation_id: id, p_user_id: auth.userId,
     });
-    if (deleteErr) {
-      if (String(deleteErr.message || '').includes('غير موجودة')) return error('Not found', 404);
-      throw deleteErr;
-    }
+    const message = String(deleteError?.message || '');
+    if (message.includes('غير موجودة')) return notFound();
+    if (message.includes('مكتملة')) return error(message, 409);
+    if (deleteError) throw deleteError;
     return success({ deleted: true });
-  } catch (e) { return handleApiError(e); }
+  } catch (err) {
+    return handleApiError(err);
+  }
 }

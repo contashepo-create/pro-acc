@@ -1,84 +1,85 @@
 import { NextRequest } from 'next/server';
+import { z } from 'zod';
 import { success, error, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+const money = z.number().finite().nonnegative()
+  .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'القيمة يجب ألا تتجاوز منزلتين');
+const createSchema = z.object({
+  name: z.string().trim().min(1, 'اسم الصندوق مطلوب').max(200),
+  initial_balance: money.optional().default(0),
+  daily_limit: money.optional().default(5000),
+  currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'رمز العملة غير صالح').optional().default('SAR'),
+  custodian_id: z.string().uuid('أمين الصندوق غير صالح').nullable().optional(),
+  notes: z.string().trim().max(1000).nullable().optional(),
+  account_id: z.string().uuid('حساب الصندوق غير صالح').nullable().optional(),
+  funding_account_id: z.string().uuid('حساب التمويل غير صالح').nullable().optional(),
+}).strict();
+const actionSchema = z.object({
+  box_id: z.string().uuid('الصندوق غير صالح'),
+  action: z.enum(['reconcile', 'close'], { message: 'عملية غير صالحة' }),
+  physical_count: money.optional(),
+  notes: z.string().trim().max(1000).optional(),
+}).strict();
 
-/** POST /api/petty-cash/boxes — create a ledger-linked petty-cash box. */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'petty_cash', 'create');
-    const body = await parseBody<Record<string, any>>(request);
-    if (typeof body.name !== 'string' || !body.name.trim()) return error('اسم الصندوق مطلوب');
-    const initialBalance = Number(body.initial_balance ?? 0);
-    const dailyLimit = Number(body.daily_limit ?? 5000);
-    if (![initialBalance, dailyLimit].every((value) => Number.isFinite(value) && value >= 0 && Math.abs(value * 100 - Math.round(value * 100)) < 1e-8)) {
-      return error('الرصيد الافتتاحي أو الحد اليومي غير صالح', 422);
-    }
-    if ((body.notes !== undefined && body.notes !== null && typeof body.notes !== 'string') ||
-        (body.currency !== undefined && typeof body.currency !== 'string')) return error('بيانات الصندوق غير صالحة', 422);
-
-    // Account validation, optional opening journal, box creation and audit are
-    // one transaction. account_id defaults to 1110 and opening funding to 3000.
-    const { data, error: createErr } = await sb().rpc('create_petty_cash_box', {
+    const parsed = createSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const value = parsed.data;
+    const { data, error: createError } = await sb().rpc('create_petty_cash_box', {
       p_company_id: auth.companyId,
-      p_name: body.name,
-      p_initial_balance: initialBalance,
-      p_daily_limit: dailyLimit,
-      p_currency: body.currency || 'SAR',
-      p_custodian_id: body.custodian_id || null,
-      p_notes: body.notes || '',
-      p_account_id: body.account_id || null,
-      p_funding_account_id: body.funding_account_id || null,
+      p_name: value.name,
+      p_initial_balance: value.initial_balance,
+      p_daily_limit: value.daily_limit,
+      p_currency: value.currency,
+      p_custodian_id: value.custodian_id || null,
+      p_notes: value.notes || '',
+      p_account_id: value.account_id || null,
+      p_funding_account_id: value.funding_account_id || null,
       p_user_id: auth.userId,
     });
-    if (createErr) throw createErr;
+    const message = String(createError?.message || '');
+    if (message.includes('غير صالح')) return error(message, 404);
+    if (createError) throw createError;
     return success(data, 201);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/** PUT /api/petty-cash/boxes — reconcile or close a box atomically. */
 export async function PUT(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'petty_cash', 'update');
-    const body = await parseBody<Record<string, any>>(request);
-    if (!body.box_id) return error('box_id مطلوب');
-    const s = sb();
-
-    if (body.action === 'reconcile') {
-      const physical = Number(body.physical_count);
-      if (!Number.isFinite(physical) || physical < 0 || Math.abs(physical * 100 - Math.round(physical * 100)) > 1e-8) {
-        return error('الجرد الفعلي غير صالح', 422);
-      }
-      const { data, error: reconcileErr } = await s.rpc('reconcile_petty_cash_box', {
+    const parsed = actionSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const value = parsed.data;
+    if (value.action === 'reconcile') {
+      if (value.physical_count === undefined) return error('الجرد الفعلي مطلوب');
+      const { data, error: reconcileError } = await sb().rpc('reconcile_petty_cash_box', {
         p_company_id: auth.companyId,
-        p_box_id: body.box_id,
-        p_physical_count: physical,
-        p_notes: typeof body.notes === 'string' ? body.notes : '',
+        p_box_id: value.box_id,
+        p_physical_count: value.physical_count,
+        p_notes: value.notes || '',
         p_user_id: auth.userId,
       });
-      if (reconcileErr) throw reconcileErr;
-      const row = data as Record<string, any>;
-      return success({
-        system_balance: Number(row.system_balance),
-        physical_count: Number(row.physical_count),
-        difference: Number(row.difference),
-        status: row.status,
-      });
+      const message = String(reconcileError?.message || '');
+      if (message.includes('غير موجود')) return error('الصندوق غير موجود', 404);
+      if (reconcileError) throw reconcileError;
+      const row = (data || {}) as Record<string, unknown>;
+      return success({ system_balance: Number(row.system_balance), physical_count: Number(row.physical_count),
+        difference: Number(row.difference), status: row.status });
     }
-
-    if (body.action === 'close') {
-      const { error: closeErr } = await s.rpc('close_petty_cash_box', {
-        p_company_id: auth.companyId,
-        p_box_id: body.box_id,
-        p_user_id: auth.userId,
-      });
-      if (closeErr) throw closeErr;
-      return success({ closed: true });
-    }
-    return error('عملية غير صالحة');
+    const { data, error: closeError } = await sb().rpc('close_petty_cash_box', {
+      p_company_id: auth.companyId, p_box_id: value.box_id, p_user_id: auth.userId,
+    });
+    const message = String(closeError?.message || '');
+    if (message.includes('غير موجود')) return error('الصندوق غير موجود', 404);
+    if (message.includes('رصيد غير صفري')) return error(message, 409);
+    if (closeError) throw closeError;
+    return success({ closed: true, box: data });
   } catch (err) {
     return handleApiError(err);
   }

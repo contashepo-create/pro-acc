@@ -1,47 +1,47 @@
 import { NextRequest } from 'next/server';
+import { z } from 'zod';
 import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getAccountBalanceFromJournal } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
+const money = z.number().finite().refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8,
+  'الرصيد الافتتاحي يجب ألا يتجاوز منزلتين');
+const createSchema = z.object({
+  name: z.string().trim().min(1, 'اسم الخزينة/البنك مطلوب').max(200),
+  type: z.enum(['bank', 'safe'], { message: 'النوع يجب أن يكون بنكاً أو خزينة' }),
+  account_number: z.string().trim().max(100).nullable().optional(),
+  opening_balance: money.optional().default(0),
+}).strict();
+const COLUMNS = 'id, name, type, account_number, account_id, opening_balance, opening_journal_entry_id, is_active, created_at, updated_at, accounts!account_id(code, name)';
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'banks', 'read');
-    const s = sb();
     const { page, pageSize } = getPaginationParams(request.url);
-
     const offset = (page - 1) * pageSize;
-    const { data, error: queryError, count } = await s.from('banks_safes')
-      .select('*, accounts(code, name)', { count: 'exact' })
-      .eq('company_id', auth.companyId)
-      .order('type')
-      .order('name')
-      .range(offset, offset + pageSize - 1);
-
+    const { data, error: queryError, count } = await sb().from('banks_safes')
+      .select(COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId)
+      .order('type').order('name').range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-
-    // حساب الرصيد لكل بنك/خزينة من القيود المحاسبية
-    const banksWithBalance = await Promise.all((data || []).map(async (bs: any) => {
-      let openingBalance = parseFloat(bs.opening_balance) || 0;
-      let currentBalance = 0;
-      
-      if (bs.account_id) {
-        // حساب الرصيد الحالي من جميع القيود (يشمل الافتتاحي + العمليات) — مقيد بالشركة
-        currentBalance = await getAccountBalanceFromJournal(bs.account_id, auth.companyId);
-      }
-
-      return {
-        ...bs,
-        account_code: bs.accounts?.code || null,
-        account_name: bs.accounts?.name || null,
-        opening_balance: openingBalance,
-        current_balance: currentBalance,
-        balance: currentBalance,
-      };
+    const ids = (data || []).map((row) => row.id);
+    const { data: balances, error: balanceError } = ids.length
+      ? await sb().rpc('get_bank_safe_balances', { p_company_id: auth.companyId, p_bank_safe_ids: ids })
+      : { data: [], error: null };
+    if (balanceError) throw balanceError;
+    const balanceMap = new Map((balances || []).map((row: Record<string, unknown>) => [
+      String(row.bank_safe_id), Number(row.current_balance) || 0,
+    ]));
+    const banks = (data || []).map((value: Record<string, unknown>) => ({
+      ...value,
+      account_code: (value.accounts as { code?: string } | null)?.code || null,
+      account_name: (value.accounts as { name?: string } | null)?.name || null,
+      accounts: undefined,
+      configured_opening_balance: Number(value.opening_balance) || 0,
+      opening_balance: Number(value.opening_balance) || 0,
+      current_balance: balanceMap.get(String(value.id)) || 0,
+      balance: balanceMap.get(String(value.id)) || 0,
     }));
-
-    return success({ banks: banksWithBalance, total: count || 0, page, pageSize });
+    return success({ banks, total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
   }
@@ -50,36 +50,21 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'banks', 'create');
-    const s = sb();
-    const data = await parseBody(request);
-    const { name, type, account_number, opening_balance } = data;
-
-    if (!name || !type) return error('name, type are required');
-    if (typeof name !== 'string' || name.trim().length === 0 || name.length > 200) {
-      return error('اسم الخزينة/البنك غير صالح');
-    }
-    if (type !== 'bank' && type !== 'safe') {
-      return error('النوع يجب أن يكون bank أو safe');
-    }
-
-    const parsedOpeningBalance = opening_balance === undefined || opening_balance === null || opening_balance === '' ? 0 : Number(opening_balance);
-    if (!Number.isFinite(parsedOpeningBalance) || Math.abs(parsedOpeningBalance * 100 - Math.round(parsedOpeningBalance * 100)) > 1e-8) return error('الرصيد الافتتاحي غير صالح');
-    if (account_number !== undefined && account_number !== null && (typeof account_number !== 'string' || account_number.length > 100)) return error('رقم الحساب غير صالح');
-
-    // Child-code allocation, account + bank creation, optional opening entry,
-    // linkage and audit are serialized and committed in one transaction.
-    const { data: result, error: createErr } = await s.rpc('create_bank_safe', {
+    const parsed = createSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const value = parsed.data;
+    const { data, error: createError } = await sb().rpc('create_bank_safe', {
       p_company_id: auth.companyId,
-      p_name: name.trim(),
-      p_type: type,
-      p_account_number: account_number || '',
-      p_opening_balance: parsedOpeningBalance,
+      p_name: value.name,
+      p_type: value.type,
+      p_account_number: value.account_number || '',
+      p_opening_balance: value.opening_balance,
       p_user_id: auth.userId,
     });
-    if (createErr) throw createErr;
-    return success(result, 201);
+    if (createError?.code === '23505') return error('اسم البنك أو الخزينة مستخدم مسبقاً', 409);
+    if (createError) throw createError;
+    return success(data, 201);
   } catch (err) {
-    console.error('Error in POST /api/banks:', err);
     return handleApiError(err);
   }
 }

@@ -47,7 +47,10 @@ export default function BanksPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(editingBank ? {
+          name: form.name,
+          account_number: form.account_number,
+        } : {
           name: form.name,
           type: form.type,
           account_number: form.account_number,
@@ -112,6 +115,7 @@ export default function BanksPage() {
           item={row}
           onEdit={handleEdit}
           onDelete={handleDelete}
+          deleteMode="deactivate"
         />
       ),
     },
@@ -127,9 +131,9 @@ export default function BanksPage() {
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingBank(null); }} title={editingBank ? `تعديل: ${editingBank.name}` : 'إضافة بنك/خزينة'} size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingBank(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e:any)=>setForm({...form, name: e.target.value})} placeholder="مثلاً: البنك الأهلي - حساب رئيسي" />
-          <Select label="النوع" value={form.type} onChange={(value)=>setForm({...form, type: value})} options={[{ value: 'bank', label: 'بنك' }, { value: 'safe', label: 'صندوق' }]} />
+          <Select label="النوع" value={form.type} disabled={!!editingBank} onChange={(value)=>setForm({...form, type: value})} options={[{ value: 'bank', label: 'بنك' }, { value: 'safe', label: 'صندوق' }]} />
           <Input label="رقم الحساب" value={form.account_number} onChange={(e:any)=>setForm({...form, account_number: e.target.value})} placeholder="1234567890" />
-          <Input label="الرصيد الافتتاحي" type="number" value={form.opening_balance} onChange={(e:any)=>setForm({...form, opening_balance: parseFloat(e.target.value) || 0})} placeholder="0" />
+          <Input label="الرصيد الافتتاحي" type="number" disabled={!!editingBank} value={form.opening_balance} onChange={(e:any)=>setForm({...form, opening_balance: parseFloat(e.target.value) || 0})} placeholder="0" />
           {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>

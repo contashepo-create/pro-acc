@@ -706,8 +706,9 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number(atomicPurchase.total),105);
   assert.ok(atomicPurchase.journal_entry_id);
   assert.equal((await db.query(`SELECT cancel_purchase_invoice_atomic($1,$2,'error',$3) result`,[c,atomicPurchase.id,u])).rows[0].result.status,'cancelled');
-  const custodyFile='69000000-0000-4000-8000-000000000001';
-  await db.query(`INSERT INTO custodies(id,company_id,employee_id,amount,total_received,total_expenses,remaining_amount,date,status,project_id) VALUES($1,$2,$3,200,200,0,200,'2026-01-01','open',$4)`,[custodyFile,c,e,project]);
+  const custodyFile=(await db.query(`SELECT open_custody_file($1,$2,'2026-02-01',200,'Purchase custody',$3,$4,$5) result`,[
+    c,e,b,project,u,
+  ])).rows[0].result.id;
   const custodyPurchase=(await db.query(`SELECT create_purchase_invoice_atomic($1,$2,NULL,NULL,$3,TRUE,'2026-02-02',$4::jsonb,0,'custody purchase',$5) result`,[
     c,contact,custodyFile,JSON.stringify([{description:'Site item',quantity:1,unit_price:50}]),u,
   ])).rows[0].result;
@@ -892,6 +893,77 @@ async function smokeAtomicWriters(ids) {
   const u2=registration.rows[0].result.user.id;
   const contact2='67000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Other tenant client','client')`,[contact2,c2]);
+
+  // Cash/bank/POS SECURITY DEFINER boundaries must reject foreign actors and
+  // links even though the database client itself has service-role privileges.
+  const guardedSafe=(await db.query(`SELECT create_bank_safe($1,'Guarded Safe','safe','',0,$2) result`,[c,u])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT deactivate_bank_safe($1,$2,$3)`,[c,guardedSafe.id,u2]));
+  assert.equal((await db.query(`SELECT is_active FROM banks_safes WHERE id=$1`,[guardedSafe.id])).rows[0].is_active,true);
+  await assert.rejects(()=>db.query(`SELECT update_bank_safe_metadata_atomic($1,$2,'{"name":"cross"}'::jsonb,$3)`,[
+    c,guardedSafe.id,u2,
+  ]));
+  const guardedReconciliation=(await db.query(`SELECT create_bank_reconciliation($1,$2,'2026-12-31',500,'[]'::jsonb,$3) result`,[
+    c,newBank.rows[0].result.id,u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT update_bank_reconciliation($1,$2,500,FALSE,$3)`,[
+    c,guardedReconciliation.id,u2,
+  ]));
+  assert.equal((await db.query(`SELECT status FROM bank_reconciliation WHERE id=$1`,[guardedReconciliation.id])).rows[0].status,'pending');
+  await assert.rejects(()=>db.query(`INSERT INTO bank_reconciliation_items(company_id,reconciliation_id,transaction_type,amount,date)
+    VALUES($1,$2,'cross',1,'2026-12-31')`,[c2,guardedReconciliation.id]));
+
+  const activeCash=(await db.query(`SELECT id,reason,amount FROM cash_transactions WHERE company_id=$1 AND status='active' ORDER BY created_at DESC LIMIT 1`,[c])).rows[0];
+  await assert.rejects(()=>db.query(`SELECT update_cash_transaction_note($1,$2,'foreign actor',$3)`,[c,activeCash.id,u2]));
+  assert.equal((await db.query(`SELECT reason FROM cash_transactions WHERE id=$1`,[activeCash.id])).rows[0].reason,activeCash.reason);
+  await assert.rejects(()=>db.query(`UPDATE cash_transactions SET amount=amount+1 WHERE id=$1`,[activeCash.id]));
+  const cashCountBefore=Number((await db.query(`SELECT count(*) count FROM cash_transactions WHERE company_id=$1`,[c])).rows[0].count);
+  await assert.rejects(()=>db.query(`SELECT post_cash_transaction($1,'2026-02-08','revenue',10,$2,NULL,$3,NULL,NULL,'foreign actor','',0,$4)`,[
+    c,a['4100'],b,u2,
+  ]));
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM cash_transactions WHERE company_id=$1`,[c])).rows[0].count),cashCountBefore);
+  const preciseCash=(await db.query(`SELECT post_cash_transaction($1,'2026-02-08','revenue',100,$2,NULL,$3,NULL,NULL,'precise tax','',0.1234,$4) result`,[
+    c,a['4100'],b,u,
+  ])).rows[0].result;
+  assert.equal(Number((await db.query(`SELECT tax_rate FROM cash_transactions WHERE id=$1`,[preciseCash.id])).rows[0].tax_rate),0.1234);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND entity_type='cash_transaction' AND entity_id=$2 AND action='post'`,[
+    c,preciseCash.id,
+  ])).rows[0].count),1);
+  const guardedTerminal=(await db.query(`SELECT create_pos_terminal_atomic($1,'GUARDED-POS','Guarded POS',$2,NULL,$3) result`,[c,b,u])).rows[0].result;
+  assert.ok(guardedTerminal.id);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_type='pos_terminal' AND entity_id=$1`,[guardedTerminal.id])).rows[0].count),1);
+  await assert.rejects(()=>db.query(`SELECT create_pos_terminal_atomic($1,'CROSS-POS','Cross POS',$2,NULL,$3)`,[c2,b,u2]));
+  await assert.rejects(()=>db.query(`INSERT INTO pos_terminals(company_id,code,name,bank_safe_id) VALUES($1,'DIRECT-CROSS','Cross',$2)`,[c2,b]));
+  const bankBalances=await db.query(`SELECT current_balance FROM get_bank_safe_balances($1,ARRAY[$2]::UUID[])`,[c,b]);
+  assert.equal(bankBalances.rows.length,1);
+  await assert.rejects(()=>db.query(`INSERT INTO audit_log(company_id,user_id,action) VALUES($1,$2,'cross')`,[c,u2]));
+
+  const guardedCustody=(await db.query(`SELECT open_custody_file($1,$2,'2026-02-09',100,'guarded custody',$3,NULL,$4) result`,[
+    c,e,b,u,
+  ])).rows[0].result;
+  const custodyMetadata=(await db.query(`SELECT update_custody_metadata_atomic($1,$2,'{"notes":"audited metadata"}'::jsonb,$3) result`,[
+    c,guardedCustody.id,u,
+  ])).rows[0].result;
+  assert.equal(custodyMetadata.notes,'audited metadata');
+  await assert.rejects(()=>db.query(`SELECT update_custody_metadata_atomic($1,$2,'{"notes":"foreign actor"}'::jsonb,$3)`,[
+    c,guardedCustody.id,u2,
+  ]));
+  await assert.rejects(()=>db.query(`SELECT add_custody_funds($1,$2,'2026-02-09',1,'cross',$3,$4)`,[
+    c2,guardedCustody.id,b,u2,
+  ]));
+  await assert.rejects(()=>db.query(`UPDATE custodies SET notes='direct bypass' WHERE id=$1`,[guardedCustody.id]));
+  await assert.rejects(()=>db.query(`INSERT INTO custody_transactions(company_id,custody_id,type,amount,description,created_by)
+    VALUES($1,$2,'addition',1,'direct bypass',$3)`,[c,guardedCustody.id,u]));
+  const custodyExpenseRace=await Promise.allSettled([1,2].map(()=>db.query(
+    `SELECT post_custody_expense($1,$2,'2026-02-10',80,'race expense',$3,NULL,FALSE,NULL,NULL,$4)`,
+    [c,guardedCustody.id,a['5100'],u],
+  )));
+  assert.equal(custodyExpenseRace.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(custodyExpenseRace.filter((result)=>result.status==='rejected').length,1);
+  assert.equal(Number((await db.query(`SELECT remaining_amount FROM custodies WHERE id=$1`,[guardedCustody.id])).rows[0].remaining_amount),20);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND entity_type='custody' AND entity_id=$2`,[
+    c,guardedCustody.id,
+  ])).rows[0].count)>=3,true);
+
   await assert.rejects(()=>db.query(`SELECT update_contact_atomic($1,$2,$3::jsonb,$4)`,[
     c,contact2,JSON.stringify({name:'Cross tenant overwrite'}),u,
   ]));
