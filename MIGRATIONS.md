@@ -12,7 +12,7 @@
 
 ## قواعد إضافة ميجريشن جديد
 1. أنشئ ملفاً جديداً داخل `src/migrations/` باسم `NNN-وصف-قصير.sql` حيث `NNN` هو
-   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `063`).
+   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `064`).
    لا تعتمد على الرقم المكتوب هنا — اقرأه من القرص حتى لا يتقادم:
    ```bash
    ls src/migrations/*.sql | sed 's#.*/##' | cut -d- -f1 | sort -n | tail -1
@@ -29,6 +29,18 @@
 - `012-atomic-journal-entry-insert.sql` + `012-enhanced-custody-system.sql`
 - `015-branding-and-features.sql` + `015-fix-schema-mismatches.sql`
 - `016-approval-system.sql` + `016-payment-portal-contracts.sql`
+
+## ⚠️ تعارض معروف: `company_telegram_configs` يُعرَّف مرتين (016 مقابل 020)
+- `016-approval-system.sql` (سطر ~99) ينشئ الجدول بـ **`company_id UUID PRIMARY KEY`** (بدون عمود `id`).
+- `020-telegram-system.sql` (سطر 5) ينشئه بـ **`id UUID PRIMARY KEY` + `UNIQUE(company_id)`**.
+- كلاهما `CREATE TABLE IF NOT EXISTS`، والمشغّل يطبّق 016 أولاً ⇒ **شكل 016 هو الساري فعلياً**
+  و`CREATE TABLE` في 020 لا يفعل شيئاً بصمت (فلا يوجد عمود `id` ولا `created_at` في الجدول الفعلي).
+- **هذا غير مكسور حالياً**: كل كود التطبيق (`src/lib/notifications.ts`،
+  `src/app/api/settings/telegram/route.ts`) وكل الـ RPCs اللاحقة (049، 056، 059)
+  تتعامل مع الجدول عبر `company_id` فقط، و049 يضيف `reset_session_data` بـ `ADD COLUMN IF NOT EXISTS`.
+- **عند كتابة أي كود جديد** يمس هذا الجدول: اعتمد شكل 016 (المفتاح `company_id`، لا تفترض وجود `id`).
+- التوحيد الفعلي (إضافة `id`/`created_at` أو إعادة بناء المفتاح) يتطلب ميجريشن مدروساً على بيانات
+  الإنتاج الحقيقية — لا تعِد تسمية أو تعدّل 016/020 نفسيهما (انظر قاعدة الأرقام المجمّدة أعلاه).
 
 ## الملفات المرجعية والأنظمة القديمة
 - `supabase-full-schema.sql` هو **لقطة مرجعية (dump)** للاطلاع فقط — ليس مصدر تغييرات.
@@ -54,3 +66,14 @@ application path still omits them.
 ### 023-fix-child-rows-company-id.sql
 Same class of bug as 022, on line/item tables (`invoice_items`,
 `quotation_items`, `purchase_invoice_items`, `purchase_order_items`, ...).
+
+### 064-supabase-linter-hardening.sql
+Fixes every finding class from the live Supabase database linter report
+(captured 2026-08-17): pins `search_path` on ALL remaining unpinned functions
+(19 legacy warnings, swept from the catalogue not a list), widens the pin to
+`public, extensions, pg_temp` for `digest()` callers (pgcrypto lives in the
+`extensions` schema on hosted Supabase), revokes `anon`/`authenticated` from
+every materialized view (`mv_trial_balance` was readable cross-tenant — MVs
+bypass RLS), converts `tenant_company_id()` to SECURITY INVOKER, and revokes
+API-role EXECUTE on the out-of-repo `rls_auto_enable()` if present. See
+`docs/SUPABASE-DEPLOYMENT.md` §3.5 for how to read the linter report itself.

@@ -112,6 +112,104 @@ RESET ROLE;
 `USING (true)` policy from `011`, which OR-combined with the isolation policy
 and exposed every tenant's invoices to any `authenticated` request.
 
+## 3.5 Reading the live linter report (captured 2026-08-17)
+
+The Supabase database linter output from the live project settled several open
+questions. Read it as **evidence about the live state**, not just as warnings:
+
+- **`invoices` still carries `company_isolation` with `USING (true)`** — the
+  exact policy `063` deletes as its first act. Its presence PROVES `063` has
+  not been applied to the live database yet. Until it is, any RLS-bound
+  request can read every tenant's invoices. Applying the migrations (section 1)
+  is what fixes this; do not hand-delete the policy from the dashboard, or the
+  linter report and the migration history will disagree about what happened.
+- **`public.rls_auto_enable()` exists on the live instance but in NO migration
+  in this repository.** It was created directly on the instance (dashboard SQL
+  editor or the Supabase assistant), it is SECURITY DEFINER, and `anon` can
+  call it over `/rest/v1/rpc/`. `064` revokes API-role EXECUTE on it
+  defensively but deliberately does not drop an object it doesn't own — drop
+  it manually after confirming nothing references it (query in `064`'s
+  header). Its existence also means someone attempted an RLS enablement
+  outside the migration flow; expect the live catalogue to differ from a
+  CI-built one until `063`/`064` run.
+- **`mv_trial_balance` selectable by `anon`/`authenticated`** — the single
+  worst finding, because materialized views BYPASS RLS: this is a live
+  cross-tenant read of every company's trial balance for anyone with the anon
+  key, today, regardless of policies. `064` revokes it (and every other MV,
+  and future ones via the same sweep). This also confirms the earlier warning
+  in this document: the live instance DOES have grants to API roles that the
+  CI-built schema never had.
+- **19 `function_search_path_mutable` warnings** — all legacy functions from
+  `007`–`038`, before the repo convention of pinning `search_path`. `064` pins
+  the entire catalogue generically and the migration test now asserts no
+  function regresses to unpinned, so this class cannot reappear.
+
+After applying `063` + `064`, re-run the linter: every finding above should
+clear except anything created outside the repo since this capture.
+
+## 3.6 Post-apply linter state (verified live, 2026-08-17)
+
+`000` + `044`–`064` were applied to the live project on 2026-08-17 (69 rows in
+`_migrations`, all 9 verification checks green: 0 tenant tables without RLS,
+0 deny-all tenant tables, 1 policy shape, 0 `USING (true)` policies, 0 unpinned
+functions, 122 atomic RPCs present).
+
+The re-run linter reports **zero WARN findings**. What remains is INFO-level
+`rls_enabled_no_policy` on ~16 tables — and that is deliberate, not debt:
+
+- They are all **system tables without `company_id`** (`_migrations`,
+  `admin_users`, `admin_sessions`, `refresh_tokens`, `password_reset_*`,
+  `companies`, `subscription_plans`, `app_settings`, ...), so they are outside
+  063's tenant-isolation scope by definition.
+- RLS was switched on for them by the out-of-repo `rls_auto_enable()` run.
+  With no policies that means **deny-all for `anon`/`authenticated`** — the
+  correct posture for auth secrets and admin tables, and a safety net given
+  the ~2058 default table grants Supabase hands to API roles.
+- The service role bypasses RLS, so the application is unaffected.
+
+**Do not "fix" these INFO findings by adding policies.** A policy would only
+widen access. If a table here ever needs API-role reads (none does today),
+grant it deliberately with a scoped policy in a migration.
+
+### 3.6.1 `rls_auto_enable` / `ensure_rls` — removed 2026-08-17 (historical record)
+
+The out-of-repo objects found on the live instance were removed after
+verification (`DROP EVENT TRIGGER ensure_rls; DROP FUNCTION
+public.rls_auto_enable();`, both confirmed gone). For the record, the event
+trigger fired on `ddl_command_end` for `CREATE TABLE` / `CREATE TABLE AS` /
+`SELECT INTO`, and the function body was:
+
+```sql
+CREATE OR REPLACE FUNCTION public.rls_auto_enable()
+ RETURNS event_trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'pg_catalog'
+AS $function$
+DECLARE
+  cmd record;
+BEGIN
+  FOR cmd IN
+    SELECT * FROM pg_event_trigger_ddl_commands()
+    WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+      AND object_type IN ('table','partitioned table')
+  LOOP
+     IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') ... THEN
+      EXECUTE format('alter table if exists %s enable row level security', cmd.object_identity);
+     END IF;
+  END LOOP;
+END;
+$function$
+```
+
+Why it was removed rather than kept: it enabled RLS on every new table but
+**never installed a policy**, which is what produced the 54 deny-all tenant
+tables found before 063 ran. 063's catalogue-driven enrolment supersedes it —
+it both enables RLS and installs the canonical tenant policy, idempotently,
+for any table carrying `company_id`. Two RLS-enabling mechanisms racing each
+other (one managed in-repo, one invisible on the instance) is exactly the
+state drift this runbook exists to prevent.
+
 ## 4. Known divergence to keep in mind
 
 `src/migrations/` (68 files, the live suite run by `run.ts`) and
