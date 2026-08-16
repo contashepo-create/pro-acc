@@ -1,0 +1,66 @@
+# gitleaks configuration for pro-acc.
+#
+# Extends the upstream default ruleset (AWS keys, private keys, generic
+# high-entropy assignments, and ~150 provider-specific patterns) and adds the
+# credential shapes this project actually handles.
+
+title = "pro-acc secret scanning"
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Project-specific rules
+# ---------------------------------------------------------------------------
+
+# Telegram bot tokens: <numeric bot id>:<35-char base64url secret>.
+# A real token of this shape was committed to this repository once; the CI
+# gate exists so it cannot happen silently again.
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram bot token"
+regex = '''[0-9]{8,10}:A[A-Za-z0-9_-]{34}'''
+keywords = ["telegram", "bot"]
+
+# Supabase service_role / anon JWTs. The service_role key bypasses RLS
+# entirely, so it must never reach the repository.
+[[rules]]
+id = "supabase-service-key"
+description = "Supabase service_role or anon JWT"
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}'''
+keywords = ["eyj"]
+
+# Postgres/Supabase connection strings carrying an inline password.
+[[rules]]
+id = "postgres-connection-uri"
+description = "PostgreSQL connection string with inline password"
+regex = '''postgres(?:ql)?://[^:\s/]+:[^@\s]+@[^\s/'"]+'''
+keywords = ["postgres://", "postgresql://"]
+
+# The secrets .env.example tells operators to generate with `openssl rand`.
+[[rules]]
+id = "app-shared-secret"
+description = "Application shared secret assigned a literal value"
+regex = '''(?i)\b(TOKEN_SECRET|ADMIN_TOKEN_SECRET|BACKUP_SECRET|PORTAL_SECRET|CRON_SECRET|PRO_ACCOUNTANT_LICENSE_SALT)\s*[:=]\s*['"]?([A-Za-z0-9+/_-]{24,})['"]?'''
+keywords = ["token_secret", "backup_secret", "portal_secret", "cron_secret", "license_salt"]
+
+[allowlist]
+description = "Placeholders, fixtures, and documentation examples"
+
+paths = [
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.next/''',
+  '''(^|/)\.gitleaks\.toml$''',
+]
+
+# Values that are deliberately fake: the committed template, CI's throwaway
+# secrets, and test fixtures. Each pattern is narrow so a real secret sitting
+# next to them is still reported.
+regexes = [
+  '''your-(anon|service-role|project|strong-random)[A-Za-z0-9-]*''',
+  '''(?i)(change|replace)-me''',
+  '''(?i)\b(example|placeholder|dummy|sample|fake|test-only)\b''',
+  '''ci-(test-secret|license-salt)[A-Za-z0-9-]*''',
+  '''postgres(?:ql)?://(postgres:postgres|user:password)@''',
+]
