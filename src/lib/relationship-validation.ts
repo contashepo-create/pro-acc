@@ -116,6 +116,20 @@ export const ganttUpdateSchema = z.object({
   assigned_to: nullableUuid, estimated_hours: ganttFields.estimated_hours, actual_hours: ganttFields.actual_hours,
 }).strict().refine((value) => Object.keys(value).length > 0, 'لا توجد بيانات للتحديث');
 
+/**
+ * Finish-to-start dependency edge used by the Gantt critical path (CPM).
+ * `lag_days` may be negative to model overlap ("lead"), which construction
+ * schedules rely on; the database mirrors the same [-365, 365] bound.
+ */
+export const taskDependencyCreateSchema = z.object({
+  successor_task_id: uuid,
+  predecessor_task_id: uuid,
+  lag_days: z.coerce.number().int('عدد أيام الفارق يجب أن يكون صحيحاً').min(-365).max(365).optional(),
+}).strict().refine(
+  (value) => value.successor_task_id !== value.predecessor_task_id,
+  { message: 'لا يمكن ربط المهمة بنفسها', path: ['predecessor_task_id'] },
+);
+
 export const reminderActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('send_all_overdue') }).strict(),
   z.object({ action: z.literal('send_single'), invoice_id: uuid }).strict(),

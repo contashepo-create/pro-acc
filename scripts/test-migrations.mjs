@@ -585,6 +585,85 @@ async function smokePurchasingAndInventory(ids) {
     AND entity_type IN('warehouse','inventory_item','inventory_transaction','purchase_order','purchase_invoice')`,[c])).rows[0].count)>=10);
 }
 
+/**
+ * Real critical path (CPM), migration 062.
+ *
+ * Network:  A(3d) → B(2d) → D(4d)
+ *           A(3d) → C(1d) → D(4d)
+ * Critical path is A→B→D (9 days); C carries 1 day of float. The previous
+ * heuristic would have marked every unstarted task critical, including C.
+ */
+async function smokeCriticalPath() {
+  const c='77000000-0000-4000-8000-000000000001';
+  const u='77000000-0000-4000-8000-000000000002';
+  const contact='77000000-0000-4000-8000-000000000003';
+  const c2='77000000-0000-4000-8000-000000000004';
+  const u2='77000000-0000-4000-8000-000000000005';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'CPM tenant A'),($2,'CPM tenant B')`,[c,c2]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES
+    ($1,$2,'cpm-a@example.test','x','CPM A','admin',TRUE),
+    ($3,$4,'cpm-b@example.test','x','CPM B','admin',TRUE)`,[u,c,u2,c2]);
+  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'CPM client','both')`,[contact,c]);
+  const project=(await db.query(`SELECT create_project_atomic($1,'CPM project',$2,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,
+    [c,contact,u])).rows[0].result.id;
+
+  const makeTask=async(name,start,end)=>(await db.query(`SELECT create_project_task_atomic($1,$2::jsonb,$3) result`,
+    [c,JSON.stringify({project_id:project,name,start_date:start,end_date:end}),u])).rows[0].result.id;
+  const taskA=await makeTask('A','2026-01-01','2026-01-03');
+  const taskB=await makeTask('B','2026-01-04','2026-01-05');
+  const taskC=await makeTask('C','2026-01-04','2026-01-04');
+  const taskD=await makeTask('D','2026-01-06','2026-01-09');
+  const link=(successor,predecessor,lag=0)=>db.query(
+    `SELECT create_task_dependency_atomic($1,$2,$3,$4,$5)`,[c,successor,predecessor,lag,u]);
+  await link(taskB,taskA); await link(taskC,taskA); await link(taskD,taskB); await link(taskD,taskC);
+
+  const cpm=(await db.query(`SELECT get_project_critical_path($1,$2) result`,[c,project])).rows[0].result;
+  const byId=Object.fromEntries(cpm.tasks.map((task)=>[task.id,task]));
+  assert.equal(Number(cpm.projectDuration),9);
+  assert.equal(byId[taskA].isCritical,true);
+  assert.equal(byId[taskB].isCritical,true);
+  assert.equal(byId[taskD].isCritical,true);
+  // The whole point of a real CPM: a task with slack is NOT critical.
+  assert.equal(byId[taskC].isCritical,false);
+  assert.equal(Number(byId[taskC].totalFloat),1);
+  assert.equal(Number(byId[taskA].earliestStart),0);
+  assert.equal(Number(byId[taskD].earliestFinish),9);
+  assert.deepEqual(cpm.criticalPath,[taskA,taskB,taskD]);
+
+  // Lag pushes the successor out and lengthens the schedule.
+  const taskE=await makeTask('E','2026-01-10','2026-01-11');
+  await link(taskE,taskD,3);
+  const lagged=(await db.query(`SELECT get_project_critical_path($1,$2) result`,[c,project])).rows[0].result;
+  assert.equal(Number(lagged.projectDuration),14);
+
+  // Cycles must be rejected: they make CPM meaningless and non-terminating.
+  await assert.rejects(()=>link(taskA,taskE));
+  // Self-links, cross-project links and cross-tenant actors are rejected.
+  await assert.rejects(()=>link(taskA,taskA));
+  await assert.rejects(()=>db.query(`SELECT create_task_dependency_atomic($1,$2,$3,0,$4)`,[c,taskB,taskA,u2]));
+  await assert.rejects(()=>db.query(`SELECT create_task_dependency_atomic($1,$2,$3,0,$4)`,[c2,taskB,taskA,u2]));
+  // Direct writes bypass the cycle/tenant checks, so the guard must block them.
+  await assert.rejects(()=>db.query(
+    `INSERT INTO project_task_dependencies(company_id,project_id,successor_task_id,predecessor_task_id)
+     VALUES($1,$2,$3,$4)`,[c,project,taskC,taskB]));
+  // Another tenant cannot read this project's schedule.
+  const foreign=(await db.query(`SELECT get_project_critical_path($1,$2) result`,[c2,project])).rows[0].result;
+  assert.deepEqual(foreign.criticalPath,[]);
+  assert.deepEqual(foreign.tasks,[]);
+
+  // Removing the edge returns the successor to an independent schedule.
+  const edge=(await db.query(
+    `SELECT id FROM project_task_dependencies WHERE company_id=$1 AND successor_task_id=$2 AND predecessor_task_id=$3`,
+    [c,taskC,taskA])).rows[0].id;
+  await assert.rejects(()=>db.query(`SELECT delete_task_dependency_atomic($1,$2,$3)`,[c2,edge,u2]));
+  await db.query(`SELECT delete_task_dependency_atomic($1,$2,$3)`,[c,edge,u]);
+  assert.equal(Number((await db.query(
+    `SELECT count(*) count FROM project_task_dependencies WHERE id=$1`,[edge])).rows[0].count),0);
+  assert.equal(Number((await db.query(
+    `SELECT count(*) count FROM audit_log WHERE entity_type='project_task_dependency' AND company_id=$1`,
+    [c])).rows[0].count),6);
+}
+
 async function smokeAtomicWriters(ids) {
   const { company: c, user: u, employee: e, bank: b, contact, project, accounts: a } = ids;
 
@@ -1570,6 +1649,7 @@ try {
   await smokeAdminSupport(ids);
   await smokePurchasingAndInventory(ids);
   await smokeAtomicWriters(ids);
+  await smokeCriticalPath();
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
   await db.close();
