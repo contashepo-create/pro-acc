@@ -7,6 +7,22 @@ on:
     branches: [main]
 
 jobs:
+  # Runs before (and independently of) the main job: a leaked credential is
+  # worth failing fast on, and this needs no database or npm install.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, not just the tip, so a secret that was
+          # committed and later deleted is still caught.
+          fetch-depth: 0
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
   quality:
     runs-on: ubuntu-latest
     services:
@@ -58,26 +74,3 @@ jobs:
       # concurrency races that PGlite cannot exercise.
       - name: Migrations + concurrency (real PostgreSQL)
         run: npm run test:migrations:pg
-    branches: [main]
-
-jobs:
-  # Runs before (and independently of) the main job: a leaked credential is
-  # worth failing fast on, and this needs no database or npm install.
-  secret-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # gitleaks scans history, not just the tip, so a secret that was
-          # committed and later deleted is still caught.
-          fetch-depth: 0
-      - name: Scan for committed secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
-
-  quality:
-    runs-on: ubuntu-latest
-    services:
-
