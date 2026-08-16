@@ -1,133 +1,58 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { PROJECT_EXPENSE_CODES } from '@/lib/constants';
+import { deliveryUuid, projectExpenseUpdateSchema } from '@/lib/project-delivery-validation';
 
-const sb = () => getSupabase();
+async function findExpense(companyId: string, id: string) {
+  const { data, error: queryError } = await getSupabase().from('project_expenses')
+    .select('id,project_id,expense_type,description,amount,date,contact_id,journal_entry_id,status,approved_by,approved_at,notes,created_at,updated_at,projects(name),contacts(name),users(name)')
+    .eq('id', id).eq('company_id', companyId).maybeSingle();
+  if (queryError) throw queryError;
+  return data;
+}
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'projects', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: expense, error: queryErr } = await s.from('project_expenses')
-      .select('*, projects(name), contacts(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (queryErr) throw queryErr;
-    if (!expense) return notFound();
-
-    const result = expense as Record<string, any>;
-    result.project_name = result.projects?.name || null;
-    result.contact_name = result.contacts?.name || null;
-
-    return success(result);
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المصروف غير صالح');
+    const expense = await findExpense(auth.companyId, id);
+    return expense ? success(expense) : error('المصروف غير موجود', 404);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'projects', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody(req);
-
-    const { data: existing } = await s.from('project_expenses')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const oldExpense = existing as any;
-    if (oldExpense.journal_entry_id && Object.keys(body).some((field) => field!=='notes')) {
-      return error('لا يمكن تعديل بيانات مصروف مرحّل؛ ألغِه بقيد عكسي وأنشئ مصروفاً جديداً', 409);
-    }
-    if (body.notes!==undefined && (typeof body.notes!=='string' || body.notes.length>2000)) return error('الملاحظات غير صالحة');
-    if (body.amount !== undefined && (!Number.isFinite(Number(body.amount)) || Number(body.amount) <= 0 || Math.abs(Number(body.amount) * 100 - Math.round(Number(body.amount) * 100)) > 1e-8)) return error('المبلغ غير صالح');
-    if (body.date !== undefined && !Number.isFinite(Date.parse(body.date))) return error('التاريخ غير صالح');
-    if (body.contact_id) {
-      const { data: contact } = await s.from('contacts').select('id')
-        .eq('id', body.contact_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!contact) return error('الطرف غير موجود', 404);
-    }
-    const updateData: any = {};
-
-    if (body.description !== undefined) updateData.description = body.description;
-    if (body.amount !== undefined) updateData.amount = body.amount;
-    if (body.date !== undefined) updateData.date = body.date;
-    if (body.contact_id !== undefined) updateData.contact_id = body.contact_id;
-    if (body.notes !== undefined) updateData.notes = body.notes;
-
-    if (body.expense_type !== undefined) {
-      if (!PROJECT_EXPENSE_CODES[body.expense_type]) return error('نوع المصروف غير صالح');
-      updateData.expense_type = body.expense_type;
-      updateData.account_code = PROJECT_EXPENSE_CODES[body.expense_type];
-    }
-    if (Object.keys(updateData).length===0) return error('لا توجد حقول صالحة للتعديل');
-
-    const { data: updated, error: updateErr } = await s.from('project_expenses')
-      .update(updateData)
-      .eq('id', id).eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    return success(updated);
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المصروف غير صالح');
+    const parsed = projectExpenseUpdateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'لا يُسمح إلا بتعديل الملاحظات');
+    if (!await findExpense(auth.companyId, id)) return error('المصروف غير موجود', 404);
+    const { data, error: rpcError } = await getSupabase().rpc('update_project_expense_note_atomic', {
+      p_company_id: auth.companyId, p_expense_id: id, p_notes: parsed.data.notes || '', p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'projects', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('project_expenses')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const expense = existing as any;
-
-    if (expense.status === 'rejected') return error('المصروف ملغى بالفعل', 409);
-    if (expense.journal_entry_id) {
-      const { data: cancelled, error: rpcErr } = await s.rpc('cancel_project_expense', {
-        p_company_id: auth.companyId,
-        p_expense_id: id,
-        p_user_id: auth.userId,
-      });
-      if (rpcErr) throw rpcErr;
-      return success(cancelled);
-    }
-
-    if (expense.status !== 'draft') return error('لا يمكن حذف مصروف دخل دورة الموافقة', 409);
-    const { error: deleteError } = await s.from('project_expenses').delete()
-      .eq('id', id).eq('company_id', auth.companyId).eq('status', 'draft');
-    if (deleteError) throw deleteError;
-    return success({ deleted: true });
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المصروف غير صالح');
+    if (!await findExpense(auth.companyId, id)) return error('المصروف غير موجود', 404);
+    const { data, error: rpcError } = await getSupabase().rpc('cancel_project_expense', {
+      p_company_id: auth.companyId, p_expense_id: id, p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

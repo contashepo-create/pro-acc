@@ -2,9 +2,9 @@ import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { sumProjectJournal, sumProjectsJournal } from '@/lib/project-costs';
+import { deliveryDate, deliveryUuid } from '@/lib/project-delivery-validation';
 
 const number = (value: unknown) => Number(value) || 0;
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,8 +14,8 @@ export async function GET(request: NextRequest) {
     const projectId = url.searchParams.get('project_id');
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
-    if (projectId && !uuid.test(projectId)) return error('معرّف المشروع غير صالح');
-    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    if (projectId && !deliveryUuid.safeParse(projectId).success) return error('معرّف المشروع غير صالح');
+    if ((from && !deliveryDate.safeParse(from).success) || (to && !deliveryDate.safeParse(to).success) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
 
     if (projectId) {
       const { data: project, error: projectError } = await s.from('projects')

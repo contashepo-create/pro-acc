@@ -144,7 +144,8 @@ async function seedLedger() {
   ids.employee=(await db.query(`SELECT create_employee_atomic($1,'Employee','','',1000,'','','2026-01-01',$2) result`,
     [ids.company,ids.user])).rows[0].result.id;
   await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Client','both')`,[ids.contact,ids.company]);
-  await db.query(`INSERT INTO projects(id,company_id,name,start_date,status) VALUES($1,$2,'Project','2026-01-01','active')`,[ids.project,ids.company]);
+  ids.project=(await db.query(`SELECT create_project_atomic($1,'Project',$2,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,
+    [ids.company,ids.contact,ids.user])).rows[0].result.id;
 
   const accounts = [
     ['1000', 'Bank', 'asset', false], ['1110', 'Safes parent', 'asset', false], ['1120', 'Banks parent', 'asset', false],
@@ -893,6 +894,72 @@ async function smokeAtomicWriters(ids) {
   const u2=registration.rows[0].result.user.id;
   const contact2='67000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Other tenant client','client')`,[contact2,c2]);
+
+  // Project delivery SECURITY DEFINER boundaries must enforce tenant, actor,
+  // lifecycle, direct-write, and concurrent-numbering invariants internally.
+  await assert.rejects(()=>db.query(`INSERT INTO projects(company_id,name,contract_value,start_date,status)
+    VALUES($1,'Direct bypass',10,'2026-04-01','active')`,[c]));
+  await assert.rejects(()=>db.query(`SELECT create_project_atomic($1,'Foreign actor',$2,10,'2026-04-01',NULL,'active','','','[]'::jsonb,FALSE,$3)`,[
+    c,contact,u2,
+  ]));
+  const guardedProject=(await db.query(`SELECT create_project_atomic($1,'Guarded delivery',$2,500,'2026-04-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,[
+    c,contact,u,
+  ])).rows[0].result;
+  const foreignProject=(await db.query(`SELECT create_project_atomic($1,'Foreign delivery',$2,500,'2026-04-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,[
+    c2,contact2,u2,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT create_boq_item_atomic($1,$2,'CROSS','cross','u',1,1,$3)`,[
+    c,foreignProject.id,u,
+  ]));
+  await assert.rejects(()=>db.query(`INSERT INTO boq_items(company_id,project_id,item_code,description,unit,quantity,unit_price,total)
+    VALUES($1,$2,'DIRECT','bypass','u',1,1,1)`,[c,guardedProject.id]));
+  const boqRace=await Promise.allSettled([1,2].map(()=>db.query(
+    `SELECT create_boq_item_atomic($1,$2,'RACE','race','u',1,10,$3) result`,[c,guardedProject.id,u],
+  )));
+  assert.equal(boqRace.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(boqRace.filter((result)=>result.status==='rejected').length,1);
+  const guardedBoq=boqRace.find((result)=>result.status==='fulfilled').value.rows[0].result;
+  await db.query(`SELECT update_boq_item_atomic($1,$2,'{"quantity":2}'::jsonb,$3)`,[c,guardedBoq.id,u]);
+  await assert.rejects(()=>db.query(`UPDATE boq_items SET quantity=3 WHERE id=$1`,[guardedBoq.id]));
+  await assert.rejects(()=>db.query(`SELECT update_boq_item_atomic($1,$2,'{"quantity":3}'::jsonb,$3)`,[c2,guardedBoq.id,u2]));
+
+  const changeRace=await Promise.all([1,2].map((index)=>db.query(
+    `SELECT create_change_order_atomic($1,$2,$3,'',25,'submitted',$4) result`,[c,guardedProject.id,`Change ${index}`,u],
+  )));
+  assert.equal(new Set(changeRace.map((result)=>result.rows[0].result.number)).size,2);
+  const guardedChange=changeRace[0].rows[0].result;
+  await db.query(`SELECT update_change_order_atomic($1,$2,'{"status":"approved"}'::jsonb,$3)`,[c,guardedChange.id,u]);
+  await assert.rejects(()=>db.query(`SELECT update_change_order_atomic($1,$2,'{"change_amount":1}'::jsonb,$3)`,[c,guardedChange.id,u]));
+  await assert.rejects(()=>db.query(`UPDATE change_orders SET change_amount=1 WHERE id=$1`,[guardedChange.id]));
+  await assert.rejects(()=>db.query(`SELECT update_change_order_atomic($1,$2,'{"status":"invoiced"}'::jsonb,$3)`,[c2,guardedChange.id,u2]));
+  await db.query(`SELECT update_change_order_atomic($1,$2,'{"status":"invoiced"}'::jsonb,$3)`,[c,guardedChange.id,u]);
+
+  await assert.rejects(()=>db.query(`UPDATE progress_billing SET gross_amount=1 WHERE id=$1`,[progressClaim.id]));
+  await assert.rejects(()=>db.query(`UPDATE project_expenses SET amount=1 WHERE id=$1`,[projectExpense.rows[0].result.id]));
+  const guardedEquipment=(await db.query(`SELECT create_equipment_atomic($1,$2::jsonb,$3) result`,[
+    c,JSON.stringify({name:'Guarded loader',type:'heavy',assigned_project_id:guardedProject.id,purchase_cost:100}),u,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT create_equipment_atomic($1,$2::jsonb,$3)`,[
+    c,JSON.stringify({name:'Cross loader',type:'heavy',assigned_project_id:foreignProject.id}),u,
+  ]));
+  await assert.rejects(()=>db.query(`UPDATE equipment SET status='maintenance' WHERE id=$1`,[guardedEquipment.id]));
+  await assert.rejects(()=>db.query(`INSERT INTO equipment_maintenance(company_id,equipment_id,maintenance_date,description,cost)
+    VALUES($1,$2,'2026-04-02','direct',1)`,[c,guardedEquipment.id]));
+  const maintenance=(await db.query(`SELECT record_equipment_maintenance_atomic($1,$2,'2026-04-02','routine','service',10,'','2026-05-02','',$3) result`,[
+    c,guardedEquipment.id,u,
+  ])).rows[0].result;
+  assert.ok(maintenance.id);
+  await assert.rejects(()=>db.query(`SELECT record_equipment_maintenance_atomic($1,$2,'2026-04-03','routine','cross',0,'',NULL,'',$3)`,[
+    c2,guardedEquipment.id,u2,
+  ]));
+  await db.query(`SELECT decommission_equipment_atomic($1,$2,$3)`,[c,guardedEquipment.id,u]);
+  await assert.rejects(()=>db.query(`INSERT INTO daily_workers(company_id,name,daily_wage) VALUES($1,'direct',10)`,[c]));
+  const guardedWorker=(await db.query(`SELECT create_daily_worker_atomic($1,'Guard worker','010',100,$2) result`,[c,u])).rows[0].result;
+  await db.query(`SELECT update_daily_worker_atomic($1,$2,'{"daily_wage":110}'::jsonb,$3)`,[c,guardedWorker.id,u]);
+  await assert.rejects(()=>db.query(`SELECT update_daily_worker_atomic($1,$2,'{"daily_wage":1}'::jsonb,$3)`,[c2,guardedWorker.id,u2]));
+  await db.query(`SELECT deactivate_daily_worker_atomic($1,$2,$3)`,[c,guardedWorker.id,u]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND entity_type IN
+    ('boq_item','change_order','equipment','equipment_maintenance','daily_worker')`,[c])).rows[0].count)>=10,true);
 
   // Cash/bank/POS SECURITY DEFINER boundaries must reject foreign actors and
   // links even though the database client itself has service-role privileges.

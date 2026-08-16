@@ -175,7 +175,12 @@ export default function ProjectsPage() {
       // دمج بنود جدول الكميات (BOQ) مع بيانات المشروع لإرسالها بالكامل في طلب واحد
       const payload = {
         ...form,
-        items: boqItems.filter(item => item.description.trim() !== '')
+        items: boqItems.filter(item => item.description.trim() !== '').map((item) => ({
+          description: String(item.description).trim(),
+          unit: String(item.unit || 'واحدة').trim(),
+          quantity: Number(item.quantity),
+          unit_price: Number(item.unit_price),
+        })),
       };
 
       const res = await fetch(url, {
@@ -241,7 +246,7 @@ export default function ProjectsPage() {
   };
 
   const handleDelete = async (project: any) => {
-    if (!confirm(`هل أنت متأكد تماماً من حذف المشروع "${project.name}"؟ سيتم حذف جميع بنود الكميات والمستندات التابعة له.`)) return;
+    if (!confirm(`هل تريد إلغاء المشروع "${project.name}"؟ لا يمكن إلغاء مشروع له آثار مالية قائمة، ولن تُحذف السجلات التاريخية.`)) return;
     try {
       const res = await fetch(`/api/projects/${project.id}`, { method: 'DELETE' });
       const json = await res.json();

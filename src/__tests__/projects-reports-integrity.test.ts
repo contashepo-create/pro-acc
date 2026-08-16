@@ -53,6 +53,8 @@ import { GET as projectCostsGET } from '@/app/api/projects/costs/route';
 
 const C1 = 'company-1'; const USER = 'u1';
 const CLIENT = '00000000-0000-4000-8000-000000000c01';
+const PROJECT = '00000000-0000-4000-8000-000000000d01';
+const FOREIGN_PROJECT = '00000000-0000-4000-8000-000000000d02';
 function baseDb() {
   return {
     users: [{ id: USER, company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
@@ -103,26 +105,30 @@ describe('project atomic lifecycle boundary', () => {
     expect(mockDb.rpcCalls).toHaveLength(0);
   });
 
-  test('project update sends only whitelisted payload and trusted identity', async () => {
-    const response = await projectPUT(request({ name: 'جديد', company_id: 'attacker', created_by: 'attacker' }, 'PUT'), params('p1'));
+  test('project update rejects unknown identity fields and sends trusted identity', async () => {
+    mockDb = makeDb({ ...baseDb(), projects: [{ id: PROJECT, company_id: C1 }] });
+    expect((await projectPUT(request({ name: 'جديد', company_id: 'attacker', created_by: 'attacker' }, 'PUT'), params(PROJECT))).status).toBe(400);
+    expect(mockDb.rpcCalls).toHaveLength(0);
+    const response = await projectPUT(request({ name: 'جديد' }, 'PUT'), params(PROJECT));
     expect(response.status).toBe(200);
     expect(rpc('update_project_atomic')!.params).toMatchObject({
-      p_company_id: C1, p_project_id: 'p1', p_user_id: USER, p_payload: { name: 'جديد' },
+      p_company_id: C1, p_project_id: PROJECT, p_user_id: USER, p_payload: { name: 'جديد' },
     });
   });
 
   test('DELETE is a tenant-scoped audited cancellation RPC, never a hard delete', async () => {
-    const response = await projectDELETE(request(undefined, 'DELETE'), params('p1'));
+    mockDb = makeDb({ ...baseDb(), projects: [{ id: PROJECT, company_id: C1 }] });
+    const response = await projectDELETE(request(undefined, 'DELETE'), params(PROJECT));
     expect(response.status).toBe(200);
-    expect(rpc('cancel_empty_project_atomic')!.params).toEqual({ p_company_id: C1, p_project_id: 'p1', p_user_id: USER });
+    expect(rpc('cancel_empty_project_atomic')!.params).toEqual({ p_company_id: C1, p_project_id: PROJECT, p_user_id: USER });
     expect(mockDb.calls.filter((call) => call.mut.kind === 'delete')).toHaveLength(0);
   });
 });
 
 describe('project reads and costs', () => {
   test('single-project IDOR is blocked by a company-scoped parent lookup', async () => {
-    mockDb = makeDb({ ...baseDb(), projects: [{ id: 'p-x', company_id: 'company-2' }] });
-    const response = await projectGET(request(undefined, 'GET'), params('p-x'));
+    mockDb = makeDb({ ...baseDb(), projects: [{ id: FOREIGN_PROJECT, company_id: 'company-2' }] });
+    const response = await projectGET(request(undefined, 'GET'), params(FOREIGN_PROJECT));
     expect(response.status).toBe(404);
     expect(mockDb.calls.find((call) => call.table === 'projects')!.ops).toContainEqual({ op: 'eq', col: 'company_id', val: C1 });
   });
@@ -142,25 +148,25 @@ describe('project reads and costs', () => {
 
   test('cost report verifies the parent tenant and aggregates each tagged line once', async () => {
     mockDb = makeDb({ ...baseDb(),
-      projects: [{ id: 'p1', company_id: C1 }],
+      projects: [{ id: PROJECT, company_id: C1 }],
       journal_lines: [
-        { company_id: C1, project_id: 'p1', debit: 100, credit: 0, accounts: { code: '5100', name: 'تكلفة', type: 'expense' } },
-        { company_id: C1, project_id: 'p1', debit: 0, credit: 180, accounts: { code: '4100', name: 'إيراد', type: 'revenue' } },
-        { company_id: 'company-2', project_id: 'p1', debit: 999, credit: 0, accounts: { code: '5100', name: 'أجنبي', type: 'expense' } },
+        { company_id: C1, project_id: PROJECT, debit: 100, credit: 0, accounts: { code: '5100', name: 'تكلفة', type: 'expense' } },
+        { company_id: C1, project_id: PROJECT, debit: 0, credit: 180, accounts: { code: '4100', name: 'إيراد', type: 'revenue' } },
+        { company_id: 'company-2', project_id: PROJECT, debit: 999, credit: 0, accounts: { code: '5100', name: 'أجنبي', type: 'expense' } },
       ],
     });
-    const response = await projectCostsGET(request(undefined, 'GET', 'http://localhost/api/projects/costs?projectId=p1'));
+    const response = await projectCostsGET(request(undefined, 'GET', `http://localhost/api/projects/costs?projectId=${PROJECT}`));
     const json = await response.json();
     expect(json.data).toMatchObject({ grand_total: 100, total_revenue: 180, net_profit: 80 });
     const linesCall = mockDb.calls.find((call) => call.table === 'journal_lines')!;
     expect(linesCall.ops).toEqual(expect.arrayContaining([
-      { op: 'eq', col: 'project_id', val: 'p1' }, { op: 'eq', col: 'company_id', val: C1 },
+      { op: 'eq', col: 'project_id', val: PROJECT }, { op: 'eq', col: 'company_id', val: C1 },
     ]));
   });
 
   test('cost report returns 404 for another tenant project before reading journal lines', async () => {
-    mockDb = makeDb({ ...baseDb(), projects: [{ id: 'p-x', company_id: 'company-2' }] });
-    const response = await projectCostsGET(request(undefined, 'GET', 'http://localhost/api/projects/costs?projectId=p-x'));
+    mockDb = makeDb({ ...baseDb(), projects: [{ id: FOREIGN_PROJECT, company_id: 'company-2' }] });
+    const response = await projectCostsGET(request(undefined, 'GET', `http://localhost/api/projects/costs?projectId=${FOREIGN_PROJECT}`));
     expect(response.status).toBe(404);
     expect(mockDb.calls.filter((call) => call.table === 'journal_lines')).toHaveLength(0);
   });

@@ -88,8 +88,14 @@ export default function ChangeOrdersPage() {
     try {
       const url = editingId ? `/api/change-orders/${editingId}` : '/api/change-orders';
       const method = editingId ? 'PATCH' : 'POST';
+      const payload = editingId ? {
+        title: form.title,
+        description: form.description,
+        change_amount: form.change_amount,
+        status: form.status,
+      } : form;
       const res = await fetch(url, {
-        method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form),
+        method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.success) { toast.success(editingId ? 'تم تحديث أمر التغيير' : 'تم إنشاء أمر التغيير'); setShowModal(false); setEditingId(null); fetchData(); }

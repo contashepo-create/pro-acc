@@ -1,21 +1,25 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { deliveryUuid, progressBillingUpdateSchema } from '@/lib/project-delivery-validation';
 
-const sb = () => getSupabase();
+async function findClaim(companyId: string, id: string) {
+  const { data, error: queryError } = await getSupabase().from('progress_billing')
+    .select('id,project_id,claim_number,date,description,gross_amount,retention_rate,retention_amount,net_amount,tax_rate,tax_amount,total_amount,status,is_final,created_at,updated_at,projects(name)')
+    .eq('id', id).eq('company_id', companyId).maybeSingle();
+  if (queryError) throw queryError;
+  return data;
+}
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'progress_billing', 'read');
     const { id } = await params;
-    const { data: claim, error: queryError } = await sb().from('progress_billing')
-      .select('*, projects(name)').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (queryError) throw queryError;
-    if (!claim) return notFound();
-    const row = claim as Record<string, any>;
-    return success({ ...row, project_name: row.projects?.name || null });
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المستخلص غير صالح');
+    const claim = await findClaim(auth.companyId, id);
+    return claim ? success(claim) : error('المستخلص غير موجود', 404);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
@@ -23,40 +27,29 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const auth = await requireModulePermission(req, 'progress_billing', 'update');
     const { id } = await params;
-    const body = await parseBody<Record<string, any>>(req);
-    const s = sb();
-    if (body.status === 'cancelled') {
-      const { data: cancelled, error: cancelError } = await s.rpc('cancel_progress_billing_atomic', {
-        p_company_id: auth.companyId,
-        p_claim_id: id,
-        p_user_id: auth.userId,
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المستخلص غير صالح');
+    const parsed = progressBillingUpdateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات التعديل غير صالحة');
+    const claim = await findClaim(auth.companyId, id);
+    if (!claim) return error('المستخلص غير موجود', 404);
+    if (parsed.data.status === 'cancelled') {
+      const { data, error: rpcError } = await getSupabase().rpc('cancel_progress_billing_atomic', {
+        p_company_id: auth.companyId, p_claim_id: id, p_user_id: auth.userId,
       });
-      if (cancelError) throw cancelError;
-      return success(cancelled);
+      if (rpcError) throw rpcError;
+      return success(data);
     }
-    if (body.status !== undefined) return error('انتقال حالة المستخلص غير صالح');
-    const financialFields = ['date','gross_amount','retention_rate','retention_percentage','tax_rate','tax_amount','net_amount','project_id'];
-    if (financialFields.some((field) => body[field] !== undefined)) {
-      return error('لا يمكن تعديل القيم المالية لمستخلص مُرحّل. ألغِه وأنشئ مستخلصاً جديداً.', 409);
-    }
-    const claimNumber = typeof body.claim_number === 'string' ? body.claim_number.trim() : null;
-    const description = typeof body.description === 'string' ? body.description
-      : (typeof body.notes === 'string' ? body.notes : null);
-    if (claimNumber === null && description === null && body.is_final === undefined) {
-      return error('لا توجد تغييرات مسموحة');
-    }
-    const { data: updated, error: updateError } = await s.rpc('update_progress_billing_metadata', {
-      p_company_id: auth.companyId,
-      p_claim_id: id,
-      p_claim_number: claimNumber,
-      p_description: description,
-      p_is_final: body.is_final === undefined ? null : Boolean(body.is_final),
+    const { data, error: rpcError } = await getSupabase().rpc('update_progress_billing_metadata', {
+      p_company_id: auth.companyId, p_claim_id: id,
+      p_claim_number: parsed.data.claim_number ?? claim.claim_number,
+      p_description: parsed.data.description ?? parsed.data.notes ?? claim.description ?? '',
+      p_is_final: parsed.data.is_final ?? claim.is_final,
       p_user_id: auth.userId,
     });
-    if (updateError) throw updateError;
-    return success(updated);
-  } catch (err) {
-    return handleApiError(err);
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
@@ -64,15 +57,14 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   try {
     const auth = await requireModulePermission(req, 'progress_billing', 'delete');
     const { id } = await params;
-    const s = sb();
-    const { data: cancelled, error: cancelError } = await s.rpc('cancel_progress_billing_atomic', {
-      p_company_id: auth.companyId,
-      p_claim_id: id,
-      p_user_id: auth.userId,
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المستخلص غير صالح');
+    if (!await findClaim(auth.companyId, id)) return error('المستخلص غير موجود', 404);
+    const { data, error: rpcError } = await getSupabase().rpc('cancel_progress_billing_atomic', {
+      p_company_id: auth.companyId, p_claim_id: id, p_user_id: auth.userId,
     });
-    if (cancelError) throw cancelError;
-    return success(cancelled);
-  } catch (err) {
-    return handleApiError(err);
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

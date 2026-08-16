@@ -40,7 +40,7 @@ export default function BoqPage() {
       ]);
       if (boqJson.success) setItems(boqJson.data?.items || []);
       else setError(boqJson.message || 'فشل');
-      if (projJson.success) setProjects(projJson.data?.projects || []);
+      if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -56,7 +56,13 @@ export default function BoqPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(editingItem ? {
+          code: form.code,
+          description: form.description,
+          unit: form.unit,
+          quantity: form.quantity,
+          unit_price: form.unit_price,
+        } : form),
       });
       const json = await res.json();
       if (json.success) {

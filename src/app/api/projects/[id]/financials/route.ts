@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { deliveryUuid } from '@/lib/project-delivery-validation';
 
 const sb = () => getSupabase();
 
@@ -21,57 +22,57 @@ export async function GET(
   try {
     const auth = await requireModulePermission(req, 'projects', 'read');
     const { id } = await params;
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المشروع غير صالح');
     const s = sb();
 
     // Project info
-    const { data: project } = await s.from('projects')
+    const { data: project, error: projectError } = await s.from('projects')
       .select('id, name, contract_value, status, tax_enabled, tax_rate, contacts(name)')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (projectError) throw projectError;
     if (!project) return error('المشروع غير موجود', 404);
 
     const p = project as any;
     const contractValue = parseFloat(p.contract_value) || 0;
 
     // Invoices for this project
-    const { data: invoices } = await s.from('invoices')
+    const { data: invoices, error: invoicesError } = await s.from('invoices')
       .select('id, number, date, subtotal, tax_amount, total, paid_amount, status')
       .eq('project_id', id).eq('company_id', auth.companyId)
       .neq('status', 'cancelled').order('date');
+    if (invoicesError) throw invoicesError;
 
     const invoicedNet = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.subtotal) || 0), 0);
     const invoicedGross = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
     const paidAmount = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.paid_amount) || 0), 0);
 
     // Credit notes for this project
-    const { data: creditNotes } = await s.from('credit_notes')
+    const { data: creditNotes, error: creditNotesError } = await s.from('credit_notes')
       .select('id, number, date, total, reason')
       .eq('project_id', id).eq('company_id', auth.companyId)
       .neq('status', 'cancelled').order('date');
+    if (creditNotesError) throw creditNotesError;
 
     const creditNoteAmount = (creditNotes || []).reduce((sum: number, cn: any) => sum + (parseFloat(cn.total) || 0), 0);
-
-    // Client advances for this project (via voucher receipts linked to project invoices)
-    const { data: advances } = await s.from('client_advances')
-      .select('id, amount, date, status')
-      .eq('company_id', auth.companyId)
-      .order('date');
 
     const { sumProjectJournal } = await import('@/lib/project-costs');
     const journal = await sumProjectJournal(auth.companyId, id);
 
-    const { data: expenses } = await s.from('project_expenses')
+    const { data: expenses, error: expensesError } = await s.from('project_expenses')
       .select('id, expense_type, amount, date, description, tax_amount')
       .eq('project_id', id).eq('company_id', auth.companyId)
       .order('date');
+    if (expensesError) throw expensesError;
 
     // المصدر المعتمد: قيود المشروع (تشمل فواتير العهدة والمشتريات الموسومة).
     const totalExpenses = journal.expenses;
 
     // Progress billing
-    const { data: progressBilling } = await s.from('progress_billing')
+    const { data: progressBilling, error: billingError } = await s.from('progress_billing')
       .select('id, claim_number, date, gross_amount, net_amount, tax_amount, is_final, status')
       .eq('project_id', id).eq('company_id', auth.companyId)
       .order('date');
+    if (billingError) throw billingError;
 
     const progressTotal = (progressBilling || []).reduce((sum: number, pb: any) => sum + (parseFloat(pb.gross_amount) || 0), 0);
 

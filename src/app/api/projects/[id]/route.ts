@@ -1,100 +1,74 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { deliveryUuid, projectUpdateSchema } from '@/lib/project-delivery-validation';
 
-const sb = () => getSupabase();
+const PROJECT_COLUMNS = `id,name,client_id,contract_value,start_date,end_date,status,description,location,budget,
+  tax_enabled,tax_rate,closed_at,closed_by,closure_journal_entry_id,created_at,updated_at,contacts(name)`;
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+async function findProject(companyId: string, id: string) {
+  const { data, error: queryError } = await getSupabase().from('projects').select(PROJECT_COLUMNS)
+    .eq('id', id).eq('company_id', companyId).maybeSingle();
+  if (queryError) throw queryError;
+  return data;
+}
+
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'projects', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: project } = await s.from('projects')
-      .select('*, contacts(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المشروع غير صالح');
+    const project = await findProject(auth.companyId, id);
     if (!project) return notFound();
-
-    const { data: boq } = await s.from('boq_items')
-      .select('*').eq('project_id', id).eq('company_id', auth.companyId).order('id');
-
-    const p = project as any;
-    return success({
-      ...p,
-      client_id: p.client_id || p.contact_id || '',
-      client_name: p.contacts?.name || null,
-      boq_items: boq || [],
-    });
-  } catch (err) {
-    return handleApiError(err);
+    const { data: boq, error: boqError } = await getSupabase().from('boq_items')
+      .select('id,project_id,item_code,code,description,unit,quantity,unit_price,total,parent_id,level,created_at')
+      .eq('project_id', id).eq('company_id', auth.companyId).order('item_code');
+    if (boqError) throw boqError;
+    const row = project as any;
+    return success({ ...row, client_id: row.client_id || '', client_name: row.contacts?.name || null, contacts: undefined, boq_items: boq || [] });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireManagerOrAbove(request);
+    const auth = await requireModulePermission(request, 'projects', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await request.json();
-
-    const payload: Record<string, unknown> = {};
-    for (const key of ['name','client_id','contract_value','start_date','end_date','budget','status','description','location']) {
-      if (body[key] !== undefined) payload[key] = body[key];
-    }
-    const items = Array.isArray(body.items) ? body.items
-      .filter((item: any) => item && String(item.description || '').trim())
-      .map((item: any) => ({
-        description: String(item.description).trim(),
-        unit: typeof item.unit === 'string' ? item.unit.trim() : 'واحدة',
-        quantity: Number(item.quantity),
-        unit_price: Number(item.unit_price),
-      })) : null;
-    if (items?.some((item: any) => !Number.isFinite(item.quantity) || item.quantity <= 0
-      || !Number.isFinite(item.unit_price) || item.unit_price < 0)) {
-      return error('أحد بنود جدول الكميات غير صالح');
-    }
-    const { data: updated, error: updateError } = await s.rpc('update_project_atomic', {
-      p_company_id: auth.companyId,
-      p_project_id: id,
-      p_payload: payload,
-      p_items: items,
-      p_user_id: auth.userId,
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المشروع غير صالح');
+    const raw = await parseBody<Record<string, unknown>>(request);
+    const parsed = projectUpdateSchema.safeParse({
+      ...raw,
+      ...(raw.client_id !== undefined ? { client_id: raw.client_id || null } : {}),
+      ...(raw.end_date !== undefined ? { end_date: raw.end_date || null } : {}),
     });
-    if (updateError) throw updateError;
-    return success(updated);
-  } catch (err) {
-    return handleApiError(err);
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات المشروع غير صالحة');
+    if (!await findProject(auth.companyId, id)) return notFound();
+    const { items, auto_invoice: _autoInvoice, ...payload } = parsed.data;
+    const normalizedItems = items?.map(({ total: _total, ...item }) => item) ?? null;
+    const { data, error: rpcError } = await getSupabase().rpc('update_project_atomic', {
+      p_company_id: auth.companyId, p_project_id: id, p_payload: payload,
+      p_items: normalizedItems, p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireManagerOrAbove(request);
+    const auth = await requireModulePermission(request, 'projects', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    // Keep the project as an auditable cancelled record. The RPC refuses
-    // cancellation while any tenant-owned financial effect remains.
-    const { data: cancelled, error: cancelError } = await s.rpc('cancel_empty_project_atomic', {
-      p_company_id: auth.companyId,
-      p_project_id: id,
-      p_user_id: auth.userId,
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المشروع غير صالح');
+    if (!await findProject(auth.companyId, id)) return notFound();
+    const { data, error: rpcError } = await getSupabase().rpc('cancel_empty_project_atomic', {
+      p_company_id: auth.companyId, p_project_id: id, p_user_id: auth.userId,
     });
-    if (cancelError) throw cancelError;
-    return success(cancelled);
-  } catch (err) {
-    return handleApiError(err);
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
