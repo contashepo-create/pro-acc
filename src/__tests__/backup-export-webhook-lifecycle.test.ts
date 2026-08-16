@@ -12,9 +12,14 @@
  *  - the Telegram webhook is an unauthenticated internet endpoint: it must
  *    verify the shared secret, refuse to act without it, and never retry-loop.
  */
+import { randomBytes } from 'crypto';
+
+// Generated per run rather than written as literals: hardcoded credential
+// strings are what secret scanners flag, and normalising them in tests is how
+// real leaks eventually slip through.
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
-process.env.TELEGRAM_WEBHOOK_SECRET = 'telegram-webhook-secret-value';
-process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token';
+process.env.TELEGRAM_WEBHOOK_SECRET = randomBytes(24).toString('hex');
+process.env.TELEGRAM_BOT_TOKEN = randomBytes(16).toString('hex');
 
 import { createToken } from '@/lib/auth';
 
@@ -207,7 +212,7 @@ describe('telegram webhook security', () => {
   test('a wrong secret is rejected without touching the database', async () => {
     const response = await telegramWebhookPOST(webhookRequest(
       { callback_query: { id: 'q1', data: 'approval:approve:a-1', message: { chat: { id: '55' } } } },
-      'not-the-real-secret-value-xx',
+      randomBytes(24).toString('hex'),
     ));
     expect(response.status).toBe(403);
     expect(mockDb.rpcCalls).toHaveLength(0);
