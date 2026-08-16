@@ -176,6 +176,81 @@ async function seedLedger() {
   return ids;
 }
 
+async function smokePostedLedgerReports() {
+  const c1='67000000-0000-4000-8000-000000000001';
+  const u1='67000000-0000-4000-8000-000000000002';
+  const c2='67000000-0000-4000-8000-000000000003';
+  const u2='67000000-0000-4000-8000-000000000004';
+  const asset='67000000-0000-4000-8000-000000000010';
+  const revenue='67000000-0000-4000-8000-000000000011';
+  const materials='67000000-0000-4000-8000-000000000012';
+  const labor='67000000-0000-4000-8000-000000000013';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Report tenant A'),($2,'Report tenant B')`,[c1,c2]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES
+    ($1,$2,'report-a@example.test','x','Report A','admin',TRUE),
+    ($3,$4,'report-b@example.test','x','Report B','admin',TRUE)`,[u1,c1,u2,c2]);
+  await db.query(`INSERT INTO accounts(id,company_id,code,name,type,is_header) VALUES
+    ($1,$2,'1000','Report cash','asset',FALSE),($3,$2,'4100','Historical revenue','revenue',FALSE),
+    ($4,$2,'5100','Materials expense','expense',FALSE),($5,$2,'5200','Labor expense','expense',FALSE)`,
+    [asset,c1,revenue,materials,labor]);
+  const project1=(await db.query(`SELECT create_project_atomic($1,'Report project A',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c1,u1])).rows[0].result.id;
+  const project2=(await db.query(`SELECT create_project_atomic($1,'Report project B',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c2,u2])).rows[0].result.id;
+
+  await db.query(`SELECT create_journal_entry($1,'2026-01-10','general','Posted revenue',$2,$3::jsonb)`,[
+    c1,u1,JSON.stringify([{accountId:asset,debit:100,credit:0},{accountId:revenue,debit:0,credit:100}]),
+  ]);
+  await db.query(`UPDATE accounts SET is_active=FALSE WHERE id=$1`,[revenue]);
+  const draft=(await db.query(`SELECT create_journal_entry($1,'2026-01-11','general','Draft expense',$2,$3::jsonb) result`,[
+    c1,u1,JSON.stringify([
+      {accountId:materials,debit:500,credit:0,projectId:project1},
+      {accountId:asset,debit:0,credit:500,projectId:project1},
+    ]),
+  ])).rows[0].result;
+  await db.query(`UPDATE journal_entries SET status='draft' WHERE id=$1`,[draft.id]);
+  await db.query(`SELECT create_journal_entry($1,'2026-01-12','general','Posted project expense',$2,$3::jsonb)`,[
+    c1,u1,JSON.stringify([
+      {accountId:materials,debit:25,credit:0,projectId:project1},
+      {accountId:asset,debit:0,credit:25,projectId:project1},
+    ]),
+  ]);
+  const rejected=(await db.query(`SELECT create_journal_entry($1,'2026-01-13','general','Rejected source',$2,$3::jsonb) result`,[
+    c1,u1,JSON.stringify([{accountId:materials,debit:7,credit:0},{accountId:asset,debit:0,credit:7}]),
+  ])).rows[0].result;
+  await db.query(`SELECT post_journal_reversal($1,$2,'report_test',$2,'Reject test',$3)`,[c1,rejected.id,u1]);
+  await db.query(`UPDATE journal_entries SET status='rejected' WHERE id=$1`,[rejected.id]);
+
+  const summary=(await db.query(`SELECT get_financial_summary($1,NULL,'2026-12-31') result`,[c1])).rows[0].result;
+  assert.equal(Number(summary.revenue),100);
+  assert.equal(Number(summary.expenses),25);
+  const foreignSummary=(await db.query(`SELECT get_financial_summary($1,NULL,'2026-12-31') result`,[c2])).rows[0].result;
+  assert.equal(Number(foreignSummary.revenue),0);
+  assert.equal(Number(foreignSummary.expenses),0);
+  const inactiveRow=(await db.query(`SELECT * FROM get_financial_statement_rows($1,NULL,'2026-12-31') WHERE account_id=$2`,[c1,revenue])).rows[0];
+  assert.equal(Number(inactiveRow.cumulative_credit),100);
+  const trialRow=(await db.query(`SELECT * FROM get_trial_balance_rows($1,'2026-12-31') WHERE account_id=$2`,[c1,revenue])).rows[0];
+  assert.equal(Number(trialRow.credit),100);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM get_general_ledger($1,NULL,NULL,NULL,NULL,NULL,500,0)
+    WHERE line_id IN(SELECT id FROM journal_lines WHERE journal_entry_id=$2)`,[c1,draft.id])).rows[0].count),0);
+
+  const budget=(await db.query(`SELECT create_project_budget_atomic($1,$2,'materials','','100','total','Runtime',$3) result`,[c1,project1,u1])).rows[0].result;
+  const budgetRows=await db.query(`SELECT * FROM get_project_budget_rows($1,$2)`,[c1,project1]);
+  assert.equal(budgetRows.rows.length,1);
+  assert.equal(Number(budgetRows.rows[0].actual_spent),25);
+  assert.equal((await db.query(`SELECT count(*)::int count FROM get_project_budget_rows($1,$2)`,[c2,project1])).rows[0].count,0);
+  await assert.rejects(()=>db.query(`SELECT create_project_budget_atomic($1,$2,'materials','','100','total','Cross',$3)`,[c2,project1,u2]));
+  await assert.rejects(()=>db.query(`SELECT create_project_budget_atomic($1,$2,'other','','-1','total','Invalid',$3)`,[c1,project1,u1]));
+  await assert.rejects(()=>db.query(`INSERT INTO project_budgets(company_id,project_id,category,amount,created_by) VALUES($1,$2,'other',1,$3)`,[c1,project1,u1]));
+  const race=await Promise.allSettled([
+    db.query(`SELECT create_project_budget_atomic($1,$2,'labor','','50','total','Race',$3)`,[c1,project1,u1]),
+    db.query(`SELECT create_project_budget_atomic($1,$2,'labor','','50','total','Race',$3)`,[c1,project1,u1]),
+  ]);
+  assert.equal(race.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(race.filter((result)=>result.status==='rejected').length,1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND entity_type='project_budget'`,[c1])).rows[0].count),2);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM project_budgets WHERE id=$1 AND company_id=$2`,[budget.id,c1])).rows[0].count),1);
+  assert.ok(project2);
+}
+
 async function smokeAdminEntitlements(ids) {
   const adminId='90000000-0000-4000-8000-000000000001';
   const inactiveAdmin='90000000-0000-4000-8000-000000000099';
@@ -1457,7 +1532,8 @@ async function smokeAtomicWriters(ids) {
   assert.equal(invalid.rows[0].result.status,'invalid_code');
   const reset=await db.query(`SELECT reset_company_business_data($1,$2,$3) result`,[c,u,codeHash]);
   assert.equal(reset.rows[0].result.status,'reset_success');
-  assert.equal(Number((await db.query('SELECT count(*) count FROM journal_entries')).rows[0].count),0);
+  assert.equal(Number((await db.query('SELECT count(*) count FROM journal_entries WHERE company_id=$1',[c])).rows[0].count),0);
+  assert.ok(Number((await db.query('SELECT count(*) count FROM journal_entries WHERE company_id<>$1',[c])).rows[0].count)>0);
   assert.equal(Number((await db.query('SELECT count(*) count FROM users WHERE company_id=$1',[c])).rows[0].count),retainedUsers);
 }
 
@@ -1467,6 +1543,7 @@ try {
   await smokeAdminOtp();
   await smokeAdminGlobalConfiguration();
   const ids = await seedLedger();
+  await smokePostedLedgerReports();
   await smokeAdminEntitlements(ids);
   await smokeAdminSupport(ids);
   await smokePurchasingAndInventory(ids);

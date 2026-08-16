@@ -12,8 +12,10 @@ export async function GET(request: NextRequest) {
     const s = getSupabase();
     const year = new Date().getUTCFullYear();
     const [invoiceResult, monthlyResult] = await Promise.all([
-      s.from('invoices').select('id, contact_id, total, date', { count: 'exact' })
-        .eq('company_id', auth.companyId).neq('status', 'cancelled').is('deleted_at', null)
+      s.from('invoices').select('id, contact_id, total, date, journal_entries!inner(id)', { count: 'exact' })
+        .eq('company_id', auth.companyId).eq('journal_entries.company_id', auth.companyId)
+        .eq('journal_entries.status', 'posted').is('journal_entries.deleted_at', null)
+        .neq('status', 'cancelled').is('deleted_at', null)
         .order('date', { ascending: false }).range(0, 4999),
       s.rpc('get_monthly_profit_loss', { p_company_id: auth.companyId, p_year: year }),
     ]);

@@ -1,189 +1,78 @@
 import { NextRequest } from 'next/server';
-import { success, requireApiAuth, handleApiError, parseBody } from '@/lib/api-helpers';
+import { z } from 'zod';
+import { success, error, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-const sb = () => getSupabase();
+const requestSchema = z.object({ message: z.string().trim().min(1).max(1000) }).strict();
+const amount = (value: unknown) => Number(value) || 0;
 
-/**
- * POST /api/assistant - Smart AI Assistant
- * Provides contextual suggestions based on user's question and company data
- */
+/** A deterministic assistant backed by one tenant-scoped posted-ledger snapshot. */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
-    const s = sb();
-    const { message } = await parseBody<{ message?: string }>(request);
+    const auth = await requireModulePermission(request, 'reports', 'read');
+    const parsed = requestSchema.safeParse(await parseBody<unknown>(request));
+    if (!parsed.success) return error('الرسالة مطلوبة ويجب ألا تتجاوز 1000 حرف');
 
-    if (!message) {
-      return success({ response: 'كيف يمكنني مساعدتك؟' });
+    const message = parsed.data.message.toLowerCase();
+    const financialIntent = ['ميزان', 'أرباح', 'خسائر', 'ربح', 'إيراد', 'مصروف', 'profit'].some((word) => message.includes(word));
+    const invoiceIntent = message.includes('فاتور') || message.includes('invoice');
+    const journalIntent = message.includes('قيد') || message.includes('journal');
+    const contactIntent = ['عميل', 'مورد', 'client', 'supplier'].some((word) => message.includes(word));
+    const projectIntent = message.includes('مشروع') || message.includes('project');
+
+    if (!financialIntent && !invoiceIntent && !journalIntent && !contactIntent && !projectIntent) {
+      return success({
+        response: '🤖 **مرحباً! أنا مساعدك المحاسبي.**\n\nيمكنني تلخيص الأرباح والمصروفات، الفواتير المستحقة، القيود المنشورة، الأطراف، والمشاريع.\n\nجرّب أن تسأل: "كم أرباحي؟" أو "ما قيمة الفواتير المتأخرة؟"',
+        suggestions: [
+          { text: 'كم أرباحي؟' }, { text: 'كم فاتورة متأخرة؟' },
+          { text: 'ملخص المشاريع' }, { text: 'عدد العملاء' },
+        ],
+      });
     }
 
-    const lowerMsg = message.toLowerCase();
-    let response = '';
-    let suggestions: Array<{ text: string; action?: string }> = [];
+    const { data, error: snapshotError } = await getSupabase().rpc('get_assistant_company_snapshot', {
+      p_company_id: auth.companyId,
+    });
+    if (snapshotError) throw snapshotError;
+    const snapshot = (data || {}) as Record<string, unknown>;
 
-    // Financial analysis queries
-    if (lowerMsg.includes('ميزان') || lowerMsg.includes('أرباح') || lowerMsg.includes('خسائر') || lowerMsg.includes('profit')) {
-      const { data: jeData } = await s.from('journal_lines')
-        .select('debit, credit')
-        .eq('company_id', auth.companyId)
-        .in('account_id', (
-          await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('type', 'revenue')
-        ).data?.map((a: { id: string }) => a.id) || []);
-      
-      const totalRevenue = (jeData || []).reduce((sum: number, l: { debit: number; credit: number }) => sum + (parseFloat(String(l.credit)) || 0), 0);
-      
-      const { data: expenseData } = await s.from('journal_lines')
-        .select('debit, credit')
-        .eq('company_id', auth.companyId)
-        .in('account_id', (
-          await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('type', 'expense')
-        ).data?.map((a: { id: string }) => a.id) || []);
-      
-      const totalExpenses = (expenseData || []).reduce((sum: number, l: { debit: number; credit: number }) => sum + (parseFloat(String(l.debit)) || 0), 0);
-      const profit = totalRevenue - totalExpenses;
-
-      response = `📊 **تحليل مالي:**\n\n`;
-      response += `• إجمالي الإيرادات: ${totalRevenue.toFixed(2)} ر.س\n`;
-      response += `• إجمالي المصروفات: ${totalExpenses.toFixed(2)} ر.س\n`;
-      response += `• ${profit >= 0 ? '✅ صافي الربح' : '❌ صافي الخسارة'}: ${Math.abs(profit).toFixed(2)} ر.س\n`;
-      
-      if (totalRevenue > 0) {
-        const margin = (profit / totalRevenue * 100).toFixed(1);
-        response += `• هامش الربح: ${margin}%\n`;
-      }
-
-      suggestions = [
-        { text: 'عرض قائمة الدخل', action: '/reports' },
-        { text: 'تحليل المصروفات', action: '/reports' },
-      ];
+    if (financialIntent) {
+      const revenue = amount(snapshot.revenue);
+      const expenses = amount(snapshot.expenses);
+      const profit = amount(snapshot.netProfit);
+      const margin = revenue === 0 ? null : (profit / revenue) * 100;
+      return success({
+        response: `📊 **تحليل الدفتر المنشور:**\n\n• صافي الإيرادات: ${revenue.toFixed(2)} ر.س\n• صافي المصروفات: ${expenses.toFixed(2)} ر.س\n• ${profit >= 0 ? '✅ صافي الربح' : '❌ صافي الخسارة'}: ${Math.abs(profit).toFixed(2)} ر.س${margin === null ? '' : `\n• هامش الربح: ${margin.toFixed(1)}%`}`,
+        suggestions: [{ text: 'عرض قائمة الدخل', action: '/reports' }, { text: 'تحليل المصروفات', action: '/reports' }],
+      });
     }
 
-    // Invoice queries
-    else if (lowerMsg.includes('فاتور') || lowerMsg.includes('invoice')) {
-      const { count: unpaid } = await s.from('invoices')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', auth.companyId)
-        .eq('status', 'unpaid');
-      
-      const { count: overdue } = await s.from('invoices')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', auth.companyId)
-        .eq('status', 'unpaid')
-        .lt('due_date', new Date().toISOString().split('T')[0]);
-      
-      const { data: total } = await s.from('invoices')
-        .select('total')
-        .eq('company_id', auth.companyId);
-      
-      const grandTotal = (total || []).reduce((sum: number, inv: { total: number }) => sum + (parseFloat(String(inv.total)) || 0), 0);
-
-      response = `📄 **ملخص الفواتير:**\n\n`;
-      response += `• إجمالي الفواتير: ${(total || []).length} فاتورة\n`;
-      response += `• إجمالي المبالغ: ${grandTotal.toFixed(2)} ر.س\n`;
-      response += `• فواتير غير مدفوعة: ${unpaid || 0}\n`;
-      response += `• فواتير متأخرة: ${overdue || 0} ⚠️\n`;
-
-      suggestions = [
-        { text: 'إنشاء فاتورة جديدة', action: '/invoices' },
-        { text: 'الفواتير المتأخرة', action: '/invoices?status=unpaid' },
-      ];
+    if (invoiceIntent) {
+      return success({
+        response: `📄 **ملخص الفواتير المرحلة:**\n\n• فواتير غير مسددة: ${amount(snapshot.unpaidInvoices)}\n• الرصيد المستحق: ${amount(snapshot.outstandingInvoices).toFixed(2)} ر.س\n• الرصيد المتأخر: ${amount(snapshot.overdueInvoices).toFixed(2)} ر.س`,
+        suggestions: [{ text: 'إنشاء فاتورة جديدة', action: '/invoices' }, { text: 'الفواتير المتأخرة', action: '/invoices?status=unpaid' }],
+      });
     }
 
-    // Journal entry queries
-    else if (lowerMsg.includes('قيد') || lowerMsg.includes('journal')) {
-      const { count: totalEntries } = await s.from('journal_entries')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', auth.companyId);
-      
-      const currentMonth = new Date().toISOString().substring(0, 7);
-      const { count: monthEntries } = await s.from('journal_entries')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', auth.companyId)
-        .ilike('date', `${currentMonth}%`);
-
-      response = `📒 **ملخص القيود اليومية:**\n\n`;
-      response += `• إجمالي القيود: ${totalEntries || 0} قيد\n`;
-      response += `• قيود هذا الشهر: ${monthEntries || 0} قيد\n`;
-
-      suggestions = [
-        { text: 'إضافة قيد جديد', action: '/journal' },
-        { text: 'عرض آخر القيود', action: '/journal' },
-      ];
+    if (journalIntent) {
+      return success({
+        response: `📒 **ملخص القيود المنشورة:**\n\n• إجمالي القيود: ${amount(snapshot.journalEntries)}\n• قيود هذا الشهر: ${amount(snapshot.monthJournalEntries)}`,
+        suggestions: [{ text: 'إضافة قيد جديد', action: '/journal' }, { text: 'عرض آخر القيود', action: '/journal' }],
+      });
     }
 
-    // Client/customer queries
-    else if (lowerMsg.includes('عميل') || lowerMsg.includes('مورد') || lowerMsg.includes('client')) {
-      const { count: clients } = await s.from('contacts')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', auth.companyId)
-        .eq('type', 'client');
-      
-      const { count: suppliers } = await s.from('contacts')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', auth.companyId)
-        .eq('type', 'supplier');
-
-      response = `👥 **ملخص الأطراف:**\n\n`;
-      response += `• العملاء: ${clients || 0}\n`;
-      response += `• الموردين: ${suppliers || 0}\n`;
-      response += `• الإجمالي: ${(clients || 0) + (suppliers || 0)}\n`;
-
-      suggestions = [
-        { text: 'عرض العملاء', action: '/clients' },
-        { text: 'إضافة عميل جديد', action: '/clients' },
-      ];
+    if (contactIntent) {
+      return success({
+        response: `👥 **ملخص الأطراف:**\n\n• العملاء: ${amount(snapshot.clients)}\n• الموردون: ${amount(snapshot.suppliers)}`,
+        suggestions: [{ text: 'عرض العملاء', action: '/clients' }, { text: 'إضافة عميل جديد', action: '/clients' }],
+      });
     }
 
-    // Project queries
-    else if (lowerMsg.includes('مشروع') || lowerMsg.includes('project')) {
-      const { data: projects } = await s.from('projects')
-        .select('id, name, status, budget, actual_cost')
-        .eq('company_id', auth.companyId);
-
-      const active = (projects || []).filter((p: { status: string }) => p.status === 'active').length;
-      const completed = (projects || []).filter((p: { status: string }) => p.status === 'completed').length;
-
-      response = `🏗️ **ملخص المشاريع:**\n\n`;
-      response += `• إجمالي المشاريع: ${(projects || []).length}\n`;
-      response += `• مشاريع نشطة: ${active}\n`;
-      response += `• مشاريع مكتملة: ${completed}\n`;
-
-      if ((projects || []).length > 0) {
-        response += `\n**المشاريع النشطة:**\n`;
-        (projects as Array<{ name: string; status: string }>)
-          .filter(p => p.status === 'active')
-          .slice(0, 5)
-          .forEach(p => { response += `• ${p.name}\n`; });
-      }
-
-      suggestions = [
-        { text: 'عرض المشاريع', action: '/projects' },
-        { text: 'تكاليف المشاريع', action: '/projects' },
-      ];
-    }
-
-    // General help
-    else {
-      response = `🤖 **مرحباً! أنا مساعدك المحاسبي.**\n\n`;
-      response += `يمكنني مساعدتك في:\n\n`;
-      response += `• 📊 **التحليل المالي** — اسأل عن الأرباح، الإيرادات، المصروفات\n`;
-      response += `• 📄 **الفواتير** — حالة الفواتير، المتأخرة، الملخصات\n`;
-      response += `• 📒 **القيود اليومية** — عدد القيود، ملخصات الشهر\n`;
-      response += `• 👥 **العملاء والموردين** — الأعداد والملخصات\n`;
-      response += `• 🏗️ **المشاريع** — حالة المشاريع والتكاليف\n`;
-      response += `• 💡 **اقتراحات** — نصائح لتحسين إدارة financesك\n\n`;
-      response += `جرّب أن تسأل: "كم أرباحي؟" أو "كم فاتورة متأخرة؟"`;
-
-      suggestions = [
-        { text: 'كم أرباحي؟' },
-        { text: 'كم فاتورة متأخرة؟' },
-        { text: 'ملخص المشاريع' },
-        { text: 'عدد العملاء' },
-      ];
-    }
-
-    return success({ response, suggestions });
+    const names = Array.isArray(snapshot.activeProjectNames) ? snapshot.activeProjectNames.map(String) : [];
+    return success({
+      response: `🏗️ **ملخص المشاريع:**\n\n• إجمالي المشاريع: ${amount(snapshot.totalProjects)}\n• مشاريع نشطة: ${amount(snapshot.activeProjects)}\n• مشاريع مكتملة: ${amount(snapshot.completedProjects)}${names.length ? `\n\n**المشاريع النشطة:**\n${names.map((name) => `• ${name}`).join('\n')}` : ''}`,
+      suggestions: [{ text: 'عرض المشاريع', action: '/projects' }, { text: 'تكاليف المشاريع', action: '/projects' }],
+    });
   } catch (err) {
     return handleApiError(err);
   }

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
+import { parseReportPagination } from '@/lib/report-validation';
 
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
@@ -14,8 +15,9 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const from = url.searchParams.get('from') || '1900-01-01';
     const to = url.searchParams.get('to') || new Date().toISOString().slice(0, 10);
-    const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
-    const pageSize = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('page_size') || '100', 10) || 100));
+    const pagination = parseReportPagination(url.searchParams);
+    if (!pagination) return error('بيانات التصفح غير صالحة');
+    const { page, pageSize } = pagination;
     if (!isValidDate(from) || !isValidDate(to) || from > to) return error('فترة التقرير غير صالحة');
 
     const [summaryResult, linesResult, invoicesResult, purchasesResult] = await Promise.all([
@@ -24,12 +26,17 @@ export async function GET(request: NextRequest) {
         p_company_id: auth.companyId, p_from: from, p_to: to,
         p_limit: pageSize, p_offset: (page - 1) * pageSize,
       }),
-      s.from('invoices').select('id, number, date, subtotal, tax_amount:vat_amount, total', { count: 'exact' })
-        .eq('company_id', auth.companyId).gte('date', from).lte('date', to)
-        .neq('status', 'cancelled').is('deleted_at', null).order('date').range(0, 99),
-      s.from('purchase_invoices').select('id, number, date, subtotal, tax_amount, total', { count: 'exact' })
-        .eq('company_id', auth.companyId).gte('date', from).lte('date', to)
-        .neq('status', 'cancelled').order('date').range(0, 99),
+      s.from('invoices')
+        .select('id, number, date, subtotal, tax_amount:vat_amount, total, journal_entries!inner(id)', { count: 'exact' })
+        .eq('company_id', auth.companyId).eq('journal_entries.company_id', auth.companyId)
+        .eq('journal_entries.status', 'posted').is('journal_entries.deleted_at', null)
+        .gte('date', from).lte('date', to).neq('status', 'cancelled').is('deleted_at', null)
+        .order('date').range(0, 99),
+      s.from('purchase_invoices')
+        .select('id, number, date, subtotal, tax_amount, total, journal_entries!inner(id)', { count: 'exact' })
+        .eq('company_id', auth.companyId).eq('journal_entries.company_id', auth.companyId)
+        .eq('journal_entries.status', 'posted').is('journal_entries.deleted_at', null)
+        .gte('date', from).lte('date', to).neq('status', 'cancelled').order('date').range(0, 99),
     ]);
     for (const result of [summaryResult, linesResult, invoicesResult, purchasesResult]) if (result.error) throw result.error;
 

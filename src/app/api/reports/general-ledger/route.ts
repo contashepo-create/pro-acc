@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
+import { parseReportPagination } from '@/lib/report-validation';
 
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
@@ -18,9 +20,10 @@ export async function GET(request: NextRequest) {
     const to = url.searchParams.get('to');
     const costCenterId = url.searchParams.get('cost_center_id');
     const branchId = url.searchParams.get('branch_id');
-    const page = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1', 10) || 1);
-    const pageSize = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('page_size') || '100', 10) || 100));
-    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    const pagination = parseReportPagination(url.searchParams);
+    if (!pagination) return error('بيانات التصفح غير صالحة');
+    const { page, pageSize } = pagination;
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
     if ((accountId && !uuid.test(accountId)) || (costCenterId && !uuid.test(costCenterId)) || (branchId && !uuid.test(branchId))) return error('معرّف المرشح غير صالح');
 
     let account: any = null;
@@ -33,11 +36,15 @@ export async function GET(request: NextRequest) {
       account = result.data;
     }
     if (costCenterId) {
-      const { data } = await s.from('cost_centers').select('id').eq('id', costCenterId).eq('company_id', auth.companyId).maybeSingle();
+      const { data, error: costCenterError } = await s.from('cost_centers').select('id')
+        .eq('id', costCenterId).eq('company_id', auth.companyId).maybeSingle();
+      if (costCenterError) throw costCenterError;
       if (!data) return error('مركز التكلفة غير موجود', 404);
     }
     if (branchId) {
-      const { data } = await s.from('branches').select('id').eq('id', branchId).eq('company_id', auth.companyId).maybeSingle();
+      const { data, error: branchError } = await s.from('branches').select('id')
+        .eq('id', branchId).eq('company_id', auth.companyId).maybeSingle();
+      if (branchError) throw branchError;
       if (!data) return error('الفرع غير موجود', 404);
     }
 

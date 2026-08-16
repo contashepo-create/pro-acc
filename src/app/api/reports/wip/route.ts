@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { computeWip, type WipInput } from '@/lib/construction';
 
@@ -15,24 +15,11 @@ export async function GET(request: NextRequest) {
     const auth = await requireModulePermission(request, 'financial_reports', 'read');
     const s = sb();
 
-    // Active projects with their contract values.
-    let projects: any[] | null = null;
-    const primary = await s.from('projects')
-      .select('id, name, contract_value, status, contacts(name)')
-      .eq('company_id', auth.companyId)
-      .eq('status', 'active');
-    if (primary.error) {
-      const fb = await s.from('projects')
-        .select('id, name, contract_value, status, client_id')
-        .eq('company_id', auth.companyId)
-        .eq('status', 'active');
-      if (fb.error) throw fb.error;
-      projects = fb.data;
-    } else {
-      projects = primary.data;
-    }
-
-    const projectIds = (projects || []).map((p: any) => p.id);
+    const { data: projects, error: projectsError } = await s.rpc('get_report_projects', {
+      p_company_id: auth.companyId, p_active_only: true,
+    });
+    if (projectsError) throw projectsError;
+    const projectIds = (projects || []).map((project: any) => project.project_id);
     let costsByProject: Record<string, number> = {};
     let billedByProject: Record<string, number> = {};
 
@@ -52,12 +39,12 @@ export async function GET(request: NextRequest) {
     const rows = (projects || []).map((p: any) => {
       const input: WipInput = {
         contractAmount: parseFloat(String(p.contract_value)) || 0,
-        costsIncurred: costsByProject[p.id] || 0,
-        billedToDate: billedByProject[p.id] || 0,
+        costsIncurred: costsByProject[p.project_id] || 0,
+        billedToDate: billedByProject[p.project_id] || 0,
       };
       const wip = computeWip(input);
       return {
-        project_id: p.id, project_name: p.name, client_name: p.contacts?.name || null,
+        project_id: p.project_id, project_name: p.name, client_name: p.client_name || null,
         contract_amount: input.contractAmount, costs_incurred: input.costsIncurred,
         billed_to_date: input.billedToDate, ...wip,
       };

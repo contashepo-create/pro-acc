@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const number = (value: unknown) => Number(value) || 0;
 
@@ -10,7 +11,7 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
-    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
     const { data, error: queryError } = await getSupabase().rpc('get_account_period_totals', {
       p_company_id: auth.companyId, p_account_type: 'expense', p_from: from, p_to: to,
     });

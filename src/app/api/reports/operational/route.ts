@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
+import { parseReportPagination } from '@/lib/report-validation';
 
 const number = (value: unknown) => Number(value) || 0;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -13,13 +15,16 @@ export async function GET(req: NextRequest) {
     const type = req.nextUrl.searchParams.get('type') || 'project-costs';
     const from = req.nextUrl.searchParams.get('from');
     const to = req.nextUrl.searchParams.get('to');
-    const page = Math.max(1, Number.parseInt(req.nextUrl.searchParams.get('page') || '1', 10) || 1);
-    const pageSize = Math.min(500, Math.max(1, Number.parseInt(req.nextUrl.searchParams.get('page_size') || '100', 10) || 100));
+    const pagination = parseReportPagination(req.nextUrl.searchParams);
+    if (!pagination) return error('بيانات التصفح غير صالحة');
+    const { page, pageSize } = pagination;
     if (!['project-costs', 'material-issuances', 'inventory-transfers'].includes(type)) return error('نوع التقرير غير صالح');
     if (projectId && !uuid.test(projectId)) return error('معرّف المشروع غير صالح');
-    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
     if (projectId) {
-      const { data: project } = await s.from('projects').select('id').eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+      const { data: project, error: projectError } = await s.from('projects').select('id')
+        .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+      if (projectError) throw projectError;
       if (!project) return error('المشروع غير موجود', 404);
     }
 
@@ -44,7 +49,7 @@ export async function GET(req: NextRequest) {
 
     let query = s.from('inventory_transactions')
       .select(type === 'material-issuances' ? '*, inventory_items(name, code), projects(name)' : '*, inventory_items(name, code)', { count: 'exact' })
-      .eq('company_id', auth.companyId);
+      .eq('company_id', auth.companyId).eq('status', 'posted');
     query = type === 'material-issuances' ? query.in('type', ['issue', 'return']) : query.eq('type', 'transfer');
     if (projectId) query = query.eq('project_id', projectId);
     if (from) query = query.gte('date', from);

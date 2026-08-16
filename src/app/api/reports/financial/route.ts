@@ -1,220 +1,108 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import {
-  loadReportAccounts,
-  loadReportJournalEntries,
-  loadReportJournalLines,
-  resolveLineAccountId,
-} from '@/lib/report-journal';
+import { isValidDate } from '@/lib/utils';
 
-const sb = () => getSupabase();
+const amount = (value: unknown) => Number(value) || 0;
 
 /**
- * GET /api/reports/financial
- * Financial statements (Trial Balance, Income Statement, Balance Sheet)
- * Built with professional double-entry accounting precision:
- * - Trial Balance: tracks opening balance, period debit/credit, and ending balance.
- * - Income Statement: period revenues and expenses between `from` and `to`.
- * - Balance Sheet: point-in-time cumulative position as of `to` date with net earnings included in equity.
+ * Posted-ledger financial statements. Aggregation happens in PostgreSQL so the
+ * result is not affected by PostgREST row limits; inactive historical accounts
+ * remain visible and draft/pending journals are excluded.
  */
-export async function GET(req: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(req, 'reports', 'read');
-    const s = sb();
-    const url = new URL(req.url);
+    const auth = await requireModulePermission(request, 'reports', 'read');
+    const url = new URL(request.url);
     const type = url.searchParams.get('type') || 'trial_balance';
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
     if (!['trial_balance', 'income_statement', 'balance_sheet'].includes(type)) return error('نوع التقرير غير صالح');
-    if ((from && (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !Number.isFinite(Date.parse(from))))
-      || (to && (!/^\d{4}-\d{2}-\d{2}$/.test(to) || !Number.isFinite(Date.parse(to))))
-      || (from && to && from > to)) return error('فترة التقرير غير صالحة');
-
-    const accounts = await loadReportAccounts(s, auth.companyId);
-    if (!accounts || accounts.length === 0) {
-      return success({ accounts: [], total_debit: 0, total_credit: 0 });
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) {
+      return error('فترة التقرير غير صالحة');
     }
 
-    const byId = new Set(accounts.map((a) => a.id));
-    const byCode = new Map(accounts.map((a) => [a.code, a.id]));
-
-    // Cumulative up to `to`. Period vs opening is split below using `from`.
-    const totalJes = await loadReportJournalEntries(s, auth.companyId, { to });
-    const totalJeIds = totalJes.map((je) => je.id);
-
-    const periodJeIdSet = new Set<string>();
-    const priorJeIdSet = new Set<string>();
-    for (const je of totalJes) {
-      if (from && je.date < from) priorJeIdSet.add(je.id);
-      else periodJeIdSet.add(je.id);
-    }
-
-    const rawLines = totalJeIds.length > 0
-      ? await loadReportJournalLines(s, auth.companyId, totalJeIds)
-      : [];
-    const allLines = rawLines.map((l) => ({
-      ...l,
-      account_id: resolveLineAccountId(l, byId, byCode),
+    const { data, error: queryError } = await getSupabase().rpc('get_financial_statement_rows', {
+      p_company_id: auth.companyId,
+      p_from: from || null,
+      p_to: to || null,
+    });
+    if (queryError) throw queryError;
+    const rows = (data || []).map((row: any) => ({
+      id: row.account_id,
+      code: row.account_code,
+      name: row.account_name,
+      type: row.account_type,
+      openingDebit: amount(row.opening_debit),
+      openingCredit: amount(row.opening_credit),
+      periodDebit: amount(row.period_debit),
+      periodCredit: amount(row.period_credit),
+      cumulativeDebit: amount(row.cumulative_debit),
+      cumulativeCredit: amount(row.cumulative_credit),
     }));
 
-    // Accumulate balances
-    const openingMap: Record<string, { debit: number; credit: number }> = {};
-    const periodMap: Record<string, { debit: number; credit: number }> = {};
-    const cumulativeMap: Record<string, { debit: number; credit: number }> = {};
-
-    for (const l of allLines) {
-      const accId = l.account_id;
-      if (!accId) continue;
-      const debit = parseFloat(l.debit) || 0;
-      const credit = parseFloat(l.credit) || 0;
-
-      // Cumulative (all up to `to`)
-      if (!cumulativeMap[accId]) cumulativeMap[accId] = { debit: 0, credit: 0 };
-      cumulativeMap[accId].debit += debit;
-      cumulativeMap[accId].credit += credit;
-
-      // Prior / Opening (< from)
-      if (priorJeIdSet.has(l.journal_entry_id)) {
-        if (!openingMap[accId]) openingMap[accId] = { debit: 0, credit: 0 };
-        openingMap[accId].debit += debit;
-        openingMap[accId].credit += credit;
-      }
-
-      // Period (from .. to)
-      if (periodJeIdSet.has(l.journal_entry_id)) {
-        if (!periodMap[accId]) periodMap[accId] = { debit: 0, credit: 0 };
-        periodMap[accId].debit += debit;
-        periodMap[accId].credit += credit;
-      }
-    }
-
-    // ==========================================
-    // 1. ميزان المراجعة (Trial Balance)
-    // ==========================================
     if (type === 'trial_balance') {
-      let totalDebit = 0;
-      let totalCredit = 0;
-
-      const result = accounts.map((a: any) => {
-        // When from is provided, show period movements; balance is cumulative
-        const period = from ? (periodMap[a.id] || { debit: 0, credit: 0 }) : (cumulativeMap[a.id] || { debit: 0, credit: 0 });
-        const cumulative = cumulativeMap[a.id] || { debit: 0, credit: 0 };
-
-        const balance = cumulative.debit - cumulative.credit;
-
-        let normal_balance: string;
-        if (['asset', 'expense'].includes(a.type)) {
-          normal_balance = balance >= 0 ? 'debit' : 'credit';
-        } else {
-          normal_balance = balance <= 0 ? 'credit' : 'debit';
-        }
-
-        totalDebit += period.debit;
-        totalCredit += period.credit;
-
-        return { 
-          id: a.id, 
-          code: a.code, 
-          name: a.name, 
-          type: a.type, 
-          total_debit: period.debit, 
-          total_credit: period.credit, 
-          balance, 
-          normal_balance 
+      const accounts = rows.map((row: any) => {
+        const balance = row.cumulativeDebit - row.cumulativeCredit;
+        const normalDebit = ['asset', 'expense'].includes(row.type);
+        return {
+          id: row.id, code: row.code, name: row.name, type: row.type,
+          opening_debit: row.openingDebit,
+          opening_credit: row.openingCredit,
+          total_debit: row.periodDebit,
+          total_credit: row.periodCredit,
+          balance,
+          normal_balance: normalDebit ? (balance >= 0 ? 'debit' : 'credit') : (balance <= 0 ? 'credit' : 'debit'),
         };
-      }).sort((a, b) => a.code.localeCompare(b.code));
-
-      return success({ accounts: result, total_debit: totalDebit, total_credit: totalCredit });
+      });
+      return success({
+        accounts,
+        total_debit: accounts.reduce((sum: number, row: any) => sum + row.total_debit, 0),
+        total_credit: accounts.reduce((sum: number, row: any) => sum + row.total_credit, 0),
+      });
     }
 
-    // ==========================================
-    // 2. قائمة الدخل (Income Statement / P&L)
-    // ==========================================
     if (type === 'income_statement') {
-      // Income statement strictly reflects the requested period (between `from` and `to`)
-      const revenue = accounts.filter((a: any) => a.type === 'revenue').map((a: any) => {
-        const p = from ? (periodMap[a.id] || { debit: 0, credit: 0 }) : (cumulativeMap[a.id] || { debit: 0, credit: 0 });
-        return { id: a.id, code: a.code, name: a.name, amount: Math.max(0, p.credit - p.debit) };
-      }).filter(r => r.amount > 0).sort((a, b) => a.code.localeCompare(b.code));
-
-      const expenses = accounts.filter((a: any) => a.type === 'expense').map((a: any) => {
-        const p = from ? (periodMap[a.id] || { debit: 0, credit: 0 }) : (cumulativeMap[a.id] || { debit: 0, credit: 0 });
-        return { id: a.id, code: a.code, name: a.name, amount: Math.max(0, p.debit - p.credit) };
-      }).filter(e => e.amount > 0).sort((a, b) => a.code.localeCompare(b.code));
-
-      const totalRevenue = revenue.reduce((s, r) => s + r.amount, 0);
-      const totalExpenses = expenses.reduce((s, r) => s + r.amount, 0);
-      const netIncome = totalRevenue - totalExpenses;
-
-      return success({ 
-        revenue, 
-        expenses, 
-        total_revenue: totalRevenue, 
-        total_expenses: totalExpenses, 
-        net_income: netIncome 
+      const revenue = rows.filter((row: any) => row.type === 'revenue').map((row: any) => ({
+        id: row.id, code: row.code, name: row.name, amount: row.periodCredit - row.periodDebit,
+      })).filter((row: any) => Math.abs(row.amount) >= 0.005);
+      const expenses = rows.filter((row: any) => row.type === 'expense').map((row: any) => ({
+        id: row.id, code: row.code, name: row.name, amount: row.periodDebit - row.periodCredit,
+      })).filter((row: any) => Math.abs(row.amount) >= 0.005);
+      const totalRevenue = revenue.reduce((sum: number, row: any) => sum + row.amount, 0);
+      const totalExpenses = expenses.reduce((sum: number, row: any) => sum + row.amount, 0);
+      return success({
+        revenue, expenses,
+        total_revenue: totalRevenue,
+        total_expenses: totalExpenses,
+        net_income: totalRevenue - totalExpenses,
       });
     }
 
-    // ==========================================
-    // 3. الميزانية العمومية (Balance Sheet)
-    // ==========================================
-    if (type === 'balance_sheet') {
-      // Balance sheet is cumulative point-in-time as of `to` date
-      const assets = accounts.filter((a: any) => a.type === 'asset').map((a: any) => {
-        const c = cumulativeMap[a.id] || { debit: 0, credit: 0 };
-        return { id: a.id, code: a.code, name: a.name, balance: c.debit - c.credit };
-      }).filter(a => a.balance !== 0).sort((a, b) => a.code.localeCompare(b.code));
-
-      const liabilities = accounts.filter((a: any) => a.type === 'liability').map((a: any) => {
-        const c = cumulativeMap[a.id] || { debit: 0, credit: 0 };
-        return { id: a.id, code: a.code, name: a.name, balance: c.credit - c.debit };
-      }).filter(l => l.balance !== 0).sort((a, b) => a.code.localeCompare(b.code));
-
-      const equity = accounts.filter((a: any) => a.type === 'equity').map((a: any) => {
-        const c = cumulativeMap[a.id] || { debit: 0, credit: 0 };
-        return { id: a.id, code: a.code, name: a.name, balance: c.credit - c.debit };
-      }).filter(e => e.balance !== 0).sort((a, b) => a.code.localeCompare(b.code));
-
-      // Calculate cumulative net income from revenue & expenses up to `to` date
-      const cumulativeRevenue = accounts.filter((a: any) => a.type === 'revenue').reduce((sum, a) => {
-        const c = cumulativeMap[a.id] || { debit: 0, credit: 0 };
-        return sum + (c.credit - c.debit);
-      }, 0);
-      
-      const cumulativeExpenses = accounts.filter((a: any) => a.type === 'expense').reduce((sum, a) => {
-        const c = cumulativeMap[a.id] || { debit: 0, credit: 0 };
-        return sum + (c.debit - c.credit);
-      }, 0);
-      
-      const currentYearNetIncome = cumulativeRevenue - cumulativeExpenses;
-
-      // Add current period earnings to equity
-      const equityWithNetIncome = [
-        ...equity,
-        {
-          id: 'virtual-current-year-net-income',
-          code: '3300-V',
-          name: 'الأرباح (الخسائر) المتراكمة حتى تاريخ التقرير',
-          balance: currentYearNetIncome
-        }
-      ];
-
-      const totalAssets = assets.reduce((s, r) => s + r.balance, 0);
-      const totalLiabilities = liabilities.reduce((s, r) => s + r.balance, 0);
-      const totalEquity = equityWithNetIncome.reduce((s, r) => s + r.balance, 0);
-
-      return success({ 
-        assets, 
-        liabilities, 
-        equity: equityWithNetIncome, 
-        total_assets: totalAssets, 
-        total_liabilities: totalLiabilities, 
-        total_equity: totalEquity 
-      });
-    }
-
-    return error('Invalid report type');
+    const assets = rows.filter((row: any) => row.type === 'asset').map((row: any) => ({
+      id: row.id, code: row.code, name: row.name, balance: row.cumulativeDebit - row.cumulativeCredit,
+    })).filter((row: any) => Math.abs(row.balance) >= 0.005);
+    const liabilities = rows.filter((row: any) => row.type === 'liability').map((row: any) => ({
+      id: row.id, code: row.code, name: row.name, balance: row.cumulativeCredit - row.cumulativeDebit,
+    })).filter((row: any) => Math.abs(row.balance) >= 0.005);
+    const equity = rows.filter((row: any) => row.type === 'equity').map((row: any) => ({
+      id: row.id, code: row.code, name: row.name, balance: row.cumulativeCredit - row.cumulativeDebit,
+    })).filter((row: any) => Math.abs(row.balance) >= 0.005);
+    const cumulativeRevenue = rows.filter((row: any) => row.type === 'revenue')
+      .reduce((sum: number, row: any) => sum + row.cumulativeCredit - row.cumulativeDebit, 0);
+    const cumulativeExpenses = rows.filter((row: any) => row.type === 'expense')
+      .reduce((sum: number, row: any) => sum + row.cumulativeDebit - row.cumulativeCredit, 0);
+    const equityWithNetIncome = [...equity, {
+      id: 'virtual-current-year-net-income', code: '3300-V',
+      name: 'الأرباح (الخسائر) المتراكمة حتى تاريخ التقرير',
+      balance: cumulativeRevenue - cumulativeExpenses,
+    }];
+    return success({
+      assets, liabilities, equity: equityWithNetIncome,
+      total_assets: assets.reduce((sum: number, row: any) => sum + row.balance, 0),
+      total_liabilities: liabilities.reduce((sum: number, row: any) => sum + row.balance, 0),
+      total_equity: equityWithNetIncome.reduce((sum: number, row: any) => sum + row.balance, 0),
+    });
   } catch (err) {
     return handleApiError(err);
   }

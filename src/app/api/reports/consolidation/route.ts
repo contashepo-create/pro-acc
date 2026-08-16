@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
     const auth = await requireModulePermission(request, 'financial_reports', 'read');
     const url = new URL(request.url);
     const asOfDate = url.searchParams.get('as_of_date') || new Date().toISOString().split('T')[0];
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate) || !Number.isFinite(Date.parse(asOfDate))) return error('تاريخ التقرير غير صالح');
+    if (!isValidDate(asOfDate)) return error('تاريخ التقرير غير صالح');
 
     const { data, error: queryError } = await sb().rpc('get_trial_balance_rows', {
       p_company_id: auth.companyId, p_as_of: asOfDate,

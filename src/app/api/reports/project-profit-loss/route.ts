@@ -62,11 +62,11 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const { data: projects, error: projectsError } = await s.from('projects')
-      .select('id, name, contract_value, client_id, contacts!client_id(name), status')
-      .eq('company_id', auth.companyId).order('name');
+    const { data: projects, error: projectsError } = await s.rpc('get_report_projects', {
+      p_company_id: auth.companyId, p_active_only: false,
+    });
     if (projectsError) throw projectsError;
-    const projectIds = (projects || []).map((project: any) => project.id);
+    const projectIds = (projects || []).map((project: any) => project.project_id);
     const [journalMap, billingResult] = await Promise.all([
       sumProjectsJournal(auth.companyId, projectIds, from, to),
       s.rpc('get_project_billing_totals', { p_company_id: auth.companyId, p_project_ids: projectIds, p_from: from, p_to: to }),
@@ -75,12 +75,12 @@ export async function GET(request: NextRequest) {
     const billingMap = new Map((billingResult.data || []).map((row: any) => [row.project_id, row]));
     const result = (projects || []).map((project: any) => {
       const contractValue = number(project.contract_value);
-      const revenue = journalMap[project.id]?.revenue || 0;
-      const costs = journalMap[project.id]?.expenses || 0;
+      const revenue = journalMap[project.project_id]?.revenue || 0;
+      const costs = journalMap[project.project_id]?.expenses || 0;
       const profit = revenue - costs;
       return {
-        id: project.id, name: project.name, client_name: project.contacts?.name || null,
-        contract_value: contractValue, billed_amount: number((billingMap.get(project.id) as any)?.net_billed),
+        id: project.project_id, name: project.name, client_name: project.client_name || null,
+        contract_value: contractValue, billed_amount: number((billingMap.get(project.project_id) as any)?.net_billed),
         revenue, costs, profit, profit_margin: revenue ? (profit / revenue) * 100 : 0, status: project.status,
       };
     });

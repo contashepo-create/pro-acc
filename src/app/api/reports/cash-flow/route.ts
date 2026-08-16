@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { loadReportJournalEntries, loadReportJournalLines } from '@/lib/report-journal';
+import { isValidDate } from '@/lib/utils';
 
 const number = (value: unknown) => Number(value) || 0;
 
@@ -15,7 +16,7 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
-    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
 
     const { listCashBankAccountIds } = await import('@/lib/account-resolve');
     const cashAccountIds = await listCashBankAccountIds(s, auth.companyId);

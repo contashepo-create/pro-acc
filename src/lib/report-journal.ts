@@ -17,8 +17,9 @@ export async function loadReportAccounts(supabase: any, companyId: string) {
   let res = await load(true);
   if (res.error && MISSING_COL.test(res.error.message || '')) res = await load(false);
   if (res.error) throw res.error;
-  return res.data.filter((account: any) => account.is_active !== false) as Array<{
-    id: string; code: string; name: string; type: string; is_header?: boolean;
+  // An inactive account is closed to new postings, not erased from history.
+  return res.data as Array<{
+    id: string; code: string; name: string; type: string; is_header?: boolean; is_active?: boolean;
   }>;
 }
 
@@ -30,7 +31,12 @@ export async function loadReportJournalEntries(
   const load = async (withDeleted: boolean) => {
     const out: any[] = [];
     for (let offset = 0; ; offset += PAGE) {
-      let query = supabase.from('journal_entries').select('id, date, number, description, reference_type, reference_id').eq('company_id', companyId)
+      let query = supabase.from('journal_entries')
+        .select('id, date, number, description, reference_type, reference_id, status, reversed_by')
+        .eq('company_id', companyId)
+        // Reversed sources remain alongside their posted reversals so the pair
+        // nets to zero. Draft/pending entries never enter financial reports.
+        .or('status.eq.posted,reversed_by.not.is.null')
         .order('date').order('id').range(offset, offset + PAGE - 1);
       if (withDeleted) query = query.is('deleted_at', null);
       if (opts.to) query = query.lte('date', opts.to);
