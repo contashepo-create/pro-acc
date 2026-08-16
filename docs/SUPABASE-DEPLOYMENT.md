@@ -147,6 +147,30 @@ questions. Read it as **evidence about the live state**, not just as warnings:
 After applying `063` + `064`, re-run the linter: every finding above should
 clear except anything created outside the repo since this capture.
 
+## 3.6 Post-apply linter state (verified live, 2026-08-17)
+
+`000` + `044`–`064` were applied to the live project on 2026-08-17 (69 rows in
+`_migrations`, all 9 verification checks green: 0 tenant tables without RLS,
+0 deny-all tenant tables, 1 policy shape, 0 `USING (true)` policies, 0 unpinned
+functions, 122 atomic RPCs present).
+
+The re-run linter reports **zero WARN findings**. What remains is INFO-level
+`rls_enabled_no_policy` on ~16 tables — and that is deliberate, not debt:
+
+- They are all **system tables without `company_id`** (`_migrations`,
+  `admin_users`, `admin_sessions`, `refresh_tokens`, `password_reset_*`,
+  `companies`, `subscription_plans`, `app_settings`, ...), so they are outside
+  063's tenant-isolation scope by definition.
+- RLS was switched on for them by the out-of-repo `rls_auto_enable()` run.
+  With no policies that means **deny-all for `anon`/`authenticated`** — the
+  correct posture for auth secrets and admin tables, and a safety net given
+  the ~2058 default table grants Supabase hands to API roles.
+- The service role bypasses RLS, so the application is unaffected.
+
+**Do not "fix" these INFO findings by adding policies.** A policy would only
+widen access. If a table here ever needs API-role reads (none does today),
+grant it deliberately with a scoped policy in a migration.
+
 ## 4. Known divergence to keep in mind
 
 `src/migrations/` (68 files, the live suite run by `run.ts`) and
