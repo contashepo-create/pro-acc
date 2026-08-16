@@ -51,6 +51,7 @@ const navGroups: NavGroup[] = [
     icon: HardHat,
     items: [
       { id: 'projects', label: 'المشاريع' },
+      { id: 'gantt', label: 'المخطط الزمني' },
       { id: 'boq', label: 'بنود الكميات' },
       { id: 'progress-billing', label: 'الفواتير المرحلية' },
       { id: 'quotations', label: 'عروض الأسعار' },
