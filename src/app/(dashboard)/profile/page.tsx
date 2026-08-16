@@ -38,6 +38,14 @@ export default function ProfilePage() {
   }, [user?.name, user?.email]);
 
   const handleSaveProfile = async () => {
+    // فخ شائع: المستخدم يملأ حقول كلمة المرور ثم يضغط «حفظ التغييرات» الذي
+    // لا يرسلها إطلاقاً — فيرى «نجاح» بينما كلمة المرور لم تتغير. نمنع الحفظ
+    // ونوجّهه لزر تغيير كلمة المرور بدل تركه يعتقد أن التغيير تم.
+    if (oldPassword || newPassword || confirmPassword) {
+      setMessage('❌ لديك بيانات في حقول كلمة المرور — استخدم زر «تغيير كلمة المرور» أسفل تلك الحقول، أو أفرغها ثم احفظ');
+      setPasswordMsg('⬇️ اضغط زر «تغيير كلمة المرور» هنا بالأسفل لتغييرها');
+      return;
+    }
     setSaving(true);
     setMessage('');
     try {
@@ -155,27 +163,36 @@ export default function ProfilePage() {
         </Card>
       </div>
 
-      {/* تغيير كلمة المرور */}
-      <Card className="p-6">
-        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+      {/* تغيير كلمة المرور — نموذج مستقل بزر أساسي بارز.
+          كان الزر هنا variant="outline" فبدا نصاً عادياً؛ المستخدمون ملأوا
+          الحقول ثم ضغطوا «حفظ التغييرات» في البطاقة الأخرى وظنوا أن كلمة
+          المرور تغيّرت. */}
+      <Card className="p-6 border-2 border-amber-200">
+        <h3 className="text-lg font-bold mb-1 flex items-center gap-2">
           <Shield size={20} /> تغيير كلمة المرور
         </h3>
-        
+        <p className="text-sm text-gray-500 mb-4">
+          هذه الحقول مستقلة عن «البيانات الشخصية» أعلاه — بعد ملئها اضغط الزر الأصفر أدناه، وسيتم تسجيل خروجك لإعادة الدخول بكلمة المرور الجديدة.
+        </p>
+
         {passwordMsg && (
           <div className={`mb-4 p-3 rounded-lg text-sm ${passwordMsg.includes('✅') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
             {passwordMsg}
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Input label="كلمة المرور الحالية" type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} autoComplete="current-password" />
-          <Input label={`كلمة المرور الجديدة (${MIN_PASSWORD_LENGTH} أحرف على الأقل)`} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" />
-          <Input label="تأكيد كلمة المرور" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" />
-        </div>
-        
-        <Button onClick={handleChangePassword} className="mt-4" variant="outline" disabled={changingPassword}>
-          {changingPassword ? 'جاري التغيير...' : 'تغيير كلمة المرور'}
-        </Button>
+        <form onSubmit={(e) => { e.preventDefault(); handleChangePassword(); }}>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Input label="كلمة المرور الحالية" type="password" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} autoComplete="current-password" />
+            <Input label={`كلمة المرور الجديدة (${MIN_PASSWORD_LENGTH} أحرف على الأقل)`} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" />
+            <Input label="تأكيد كلمة المرور" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" />
+          </div>
+
+          <Button type="submit" className="mt-4 !bg-amber-500 hover:!bg-amber-600 !text-white !border-amber-500 font-bold px-6" disabled={changingPassword}>
+            <Shield size={16} className="ml-1" />
+            {changingPassword ? 'جاري التغيير...' : 'تغيير كلمة المرور الآن'}
+          </Button>
+        </form>
       </Card>
     </div>
   );
