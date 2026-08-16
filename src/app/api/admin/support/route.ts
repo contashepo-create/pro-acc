@@ -2,9 +2,9 @@ import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
+import { adminSupportPatchSchema } from '@/lib/communication-validation';
 
 const VALID_STATUS = new Set(['open','in_progress','resolved','closed']);
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(req: NextRequest) {
   try {
@@ -29,19 +29,15 @@ export async function GET(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const admin = await requireAdmin(req);
-    const input = await parseBody<Record<string, unknown>>(req);
-    const id = typeof input.id === 'string' ? input.id : '';
-    if (!UUID.test(id)) return error('id غير صالح');
-    if (input.status !== undefined && (typeof input.status !== 'string' || !VALID_STATUS.has(input.status))) return error('حالة غير صالحة');
-    if (input.admin_notes !== undefined && (typeof input.admin_notes !== 'string' || input.admin_notes.length > 2000)) return error('رد الإدارة طويل جداً');
-    if (input.status === undefined && input.admin_notes === undefined) return error('لا توجد حقول قابلة للتحديث');
+    const parsed = adminSupportPatchSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات تحديث التذكرة غير صالحة');
 
     const { data, error: updateError } = await getSupabase().rpc('admin_update_support_ticket', {
       p_admin_id: admin.adminId,
-      p_ticket_id: id,
-      p_status: input.status ?? null,
-      p_admin_notes: input.admin_notes ?? null,
-      p_notes_set: input.admin_notes !== undefined,
+      p_ticket_id: parsed.data.id,
+      p_status: parsed.data.status ?? null,
+      p_admin_notes: parsed.data.admin_notes ?? null,
+      p_notes_set: parsed.data.admin_notes !== undefined,
     });
     if (updateError) throw updateError;
     if ((data as any)?.not_found) return error('التذكرة غير موجودة', 404);

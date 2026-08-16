@@ -1,59 +1,36 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { companyMessageSchema } from '@/lib/communication-validation';
 
-const sb = () => getSupabase();
+const MESSAGE_COLUMNS = 'id,company_id,sender_id,subject,body,is_read,read_at,created_at,sender:users!sender_id(id,name,email)';
 
 export async function GET(request: NextRequest) {
   try {
-    const { companyId } = await requireModulePermission(request, 'messages', 'read');
+    const auth = await requireModulePermission(request, 'messages', 'read');
     const { searchParams } = new URL(request.url);
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
-    const limit = 50;
-    const offset = (page - 1) * limit;
-    const s = sb();
-
-    const { count } = await s.from('messages')
-      .select('*', { count: 'exact', head: true })
-      .eq('company_id', companyId);
-
-    const { data: messages } = await s.from('messages')
-      .select('id, subject, body, direction, is_read, created_at')
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-
-    const total = count || 0;
-    return success({ messages: messages || [], total, page, pages: Math.ceil(total / limit) });
-  } catch (err) {
-    if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
-    return serverError(err);
+    const limit = Math.min(Math.max(Number(searchParams.get('limit')) || 50, 1), 100);
+    const offset = Math.max(Number(searchParams.get('offset')) || 0, 0);
+    const { data, error: queryError, count } = await getSupabase().from('messages').select(MESSAGE_COLUMNS, { count: 'exact' })
+      .eq('company_id', auth.companyId).is('deleted_at', null).order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+    if (queryError) throw queryError;
+    return success({ messages: data || [], total: count || 0, limit, offset });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { companyId } = await requireModulePermission(request, 'messages', 'create');
-    const body = await parseBody<{ subject: string; body: string }>(request);
-
-    if (!body.subject?.trim() || body.subject.length > 200) return error('عنوان الرسالة مطلوب وبحد أقصى 200 حرف');
-    if (!body.body?.trim() || body.body.length > 5000) return error('نص الرسالة مطلوب وبحد أقصى 5000 حرف');
-
-    const s = sb();
-    const { data: result, error: insertError } = await s.from('messages')
-      .insert({
-        company_id: companyId,
-        subject: body.subject.trim(),
-        body: body.body.trim(),
-        direction: 'company_to_admin',
-      })
-      .select('id, created_at')
-      .single();
-
-    if (insertError) throw insertError;
-    return success({ message: result }, 201);
-  } catch (err) {
-    if (err instanceof Error && err.message === 'غير مصرح به') return handleApiError(err);
-    return serverError(err);
+    const auth = await requireModulePermission(request, 'messages', 'create');
+    const parsed = companyMessageSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات الرسالة غير صالحة');
+    const { data, error: rpcError } = await getSupabase().rpc('send_company_message_atomic', {
+      p_company_id: auth.companyId, p_user_id: auth.userId, p_subject: parsed.data.subject, p_body: parsed.data.body,
+    });
+    if (rpcError) throw rpcError;
+    return success(data, 201);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

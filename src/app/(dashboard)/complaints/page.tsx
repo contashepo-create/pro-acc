@@ -46,7 +46,7 @@ export default function ComplaintsPage() {
       const res = await fetch(`/api/complaints/${editing.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ subject: form.subject, body: form.body, ...(form.status === 'closed' ? { status: 'closed' } : {}) }),
       });
       const json = await res.json();
       if (json.success) { setEditing(null); fetchData(); }

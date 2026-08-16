@@ -2,10 +2,9 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { trustedReceiptReference } from '@/lib/safe-input';
+import { supportTicketCreateSchema } from '@/lib/communication-validation';
 
 const sb = () => getSupabase();
-
-const VALID_CATEGORIES = ['billing','payment','technical','account','data_request','other'] as const;
 
 /** GET /api/support - list current user's tickets */
 export async function GET(req: NextRequest) {
@@ -32,24 +31,17 @@ export async function POST(req: NextRequest) {
   try {
     const { requireApiAuth } = await import('@/lib/api-helpers');
     const auth = await requireApiAuth(req, { skipModuleGuard: true });
-    const body = await parseBody<{ subject?: string; message?: string; category?: string; attachment_url?: string }>(req);
-    const subject = (body.subject || '').trim();
-    const message = (body.message || '').trim();
-    const category = (body.category || 'other').trim();
-
-    if (!subject || subject.length < 3) return error('عنوان الرسالة مطلوب (3 أحرف على الأقل)');
-    if (!message || message.length < 10) return error('نص الرسالة مطلوب (10 أحرف على الأقل)');
-    if (subject.length > 200) return error('العنوان طويل جداً (حد أقصى 200 حرف)');
-    if (message.length > 5000) return error('نص الرسالة طويل جداً (حد أقصى 5000 حرف)');
-    if (!VALID_CATEGORIES.includes(category as any)) return error('فئة الرسالة غير صالحة');
+    const parsed = supportTicketCreateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات تذكرة الدعم غير صالحة');
+    const { subject, message, category } = parsed.data;
 
     // Attachments must have been uploaded into this tenant's private receipt
     // namespace. Arbitrary external URLs would expose administrators to
     // tracking/phishing links and bypass the company's storage accounting.
-    const attachment = body.attachment_url
-      ? trustedReceiptReference(body.attachment_url, auth.companyId)
+    const attachment = parsed.data.attachment_url
+      ? trustedReceiptReference(parsed.data.attachment_url, auth.companyId)
       : null;
-    if (body.attachment_url && !attachment) {
+    if (parsed.data.attachment_url && !attachment) {
       return error('يجب رفع المرفق عبر التخزين الآمن للشركة أولاً');
     }
 

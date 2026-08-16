@@ -1,268 +1,66 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, getPaginationParams, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import { approvalCreateSchema } from '@/lib/communication-validation';
 
-const sb = () => getSupabase();
+const APPROVAL_COLUMNS = `id,entity_type,entity_id,transaction_type,transaction_id,amount,description,message,status,
+  requester_id,approver_id,approved_by,approver_chat_id,approved_at,approval_comments,created_at,updated_at,
+  requester:users!requester_id(name),approver:users!approver_id(name)`;
+const statuses = ['pending', 'processing', 'approved', 'rejected', 'cancelled'];
+const entityTypes = ['journal_entry', 'purchase_invoice', 'payroll', 'cash_transaction', 'voucher_disbursement', 'voucher_receipt'];
 
-/**
- * GET /api/approvals
- * List pending/completed approvals for the current user's role
- */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'approvals', 'read');
-    const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
     const status = url.searchParams.get('status') || 'pending';
     const entityType = url.searchParams.get('entity_type');
-
-    let query = s.from('approval_requests')
-      .select('*, requester:users!requester_id(name), approver:users!approver_id(name)', { count: 'exact' })
-      .eq('company_id', auth.companyId);
-
-    if (status !== 'all') {
-      query = status === 'pending' ? query.in('status', ['pending', 'processing']) : query.eq('status', status);
-    }
-
-    if (entityType) {
-      query = query.eq('entity_type', entityType);
-    }
-
-    // If user is not admin, only show requests where they are the approver
-    if (auth.role !== 'admin') {
-      query = query.eq('approver_id', auth.userId);
-    }
-
+    if (status !== 'all' && !statuses.includes(status)) return error('حالة طلب الاعتماد غير صالحة');
+    if (entityType && !entityTypes.includes(entityType)) return error('نوع طلب الاعتماد غير صالح');
+    let query = getSupabase().from('approval_requests').select(APPROVAL_COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId);
+    if (status !== 'all') query = status === 'pending' ? query.in('status', ['pending', 'processing']) : query.eq('status', status);
+    if (entityType) query = query.eq('entity_type', entityType);
+    if (auth.role !== 'admin') query = query.eq('approver_id', auth.userId);
     const offset = (page - 1) * pageSize;
-    const { data, error: qErr, count } = await query
-      .order('created_at', { ascending: false })
-      .range(offset, offset + pageSize - 1);
-
-    if (qErr) throw qErr;
-
-    const requests = (data || []).map((r: any) => ({
-      ...r,
-      requester_name: r.requester?.name || 'Unknown',
-      approver_name: r.approver?.name || 'Unknown',
-      urgency: calculateUrgency(r.created_at, r.entity_type),
+    const { data, error: queryError, count } = await query.order('created_at', { ascending: false }).range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
+    const requests = (data || []).map((row: any) => ({
+      ...row, requester_name: row.requester?.name || 'Unknown', approver_name: row.approver?.name || 'Unknown',
+      requester: undefined, approver: undefined, urgency: calculateUrgency(row.created_at, row.entity_type || row.transaction_type),
     }));
-
-    return success({
-      requests,
-      total: count || 0,
-      page,
-      pageSize,
-      totalPages: Math.ceil((count || 0) / pageSize),
-    });
-  } catch (err) {
-    return handleApiError(err);
+    return success({ requests, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-/**
- * POST /api/approvals
- * Create a new approval request
- */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'approvals', 'create');
-    const s = sb();
-    const { entity_type, entity_id, amount, description } = await parseBody<{
-      entity_type?: string; entity_id?: string; amount?: number; description?: string;
-    }>(request);
-
-    if (!entity_type || !entity_id || !/^[0-9a-fA-F-]{8,}$/.test(entity_id) ||
-        (description !== undefined && (typeof description !== 'string' || description.length > 2000))) {
-      return error('بيانات طلب الاعتماد غير صالحة');
+    const parsed = approvalCreateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات طلب الاعتماد غير صالحة');
+    const { data, error: rpcError } = await getSupabase().rpc('create_approval_request_atomic', {
+      p_company_id: auth.companyId, p_entity_type: parsed.data.entity_type, p_entity_id: parsed.data.entity_id,
+      p_description: parsed.data.description || '', p_requester_id: auth.userId,
+    });
+    if (rpcError) {
+      const message = String(rpcError.message || 'تعذر إنشاء طلب الاعتماد');
+      if (/غير موجود/.test(message)) return error(message, 404);
+      if (/قائم/.test(message)) return error(message, 409);
+      throw rpcError;
     }
-
-    // Never create an approval capability for an arbitrary caller-supplied id.
-    // Resolve the entity inside this tenant and use its server-side amount.
-    const entity = await resolveApprovalEntity(s, auth.companyId, entity_type, entity_id);
-    if (!entity) return error('العنصر المطلوب اعتماده غير موجود أو لا ينتمي للشركة', 404);
-    const canonicalAmount = entity.amount;
-
-    // Determine the approver based on canonical amount and type.
-    const approverId = await determineApprover(s, auth, entity_type, canonicalAmount);
-    if (!approverId) {
-      return error('لم يتم تحديد معتمد لهذا النوع من الطلبات');
-    }
-
-    // Check if there's already a pending request for this entity
-    const { data: existing } = await s.from('approval_requests')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('entity_type', entity_type)
-      .eq('entity_id', entity_id)
-      .eq('status', 'pending')
-      .maybeSingle();
-
-    if (existing) {
-      return error('يوجد طلب اعتماد قائم لهذا العنصر بالفعل');
-    }
-
-    const requestId = generateId();
-    const { data: approvalReq, error: insertErr } = await s.from('approval_requests')
-      .insert({
-        id: requestId,
-        company_id: auth.companyId,
-        entity_type,
-        entity_id,
-        amount: canonicalAmount,
-        description: description?.trim() || null,
-        // Keep the legacy Telegram shape synchronized with the canonical one.
-        transaction_type: entity_type,
-        transaction_id: entity_id,
-        requester_id: auth.userId,
-        approver_id: approverId,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (insertErr?.code === '23505') return error('يوجد طلب اعتماد قائم لهذا العنصر بالفعل', 409);
-    if (insertErr) throw insertErr;
-
-    // Create notification for the approver
-    try {
-      await s.from('notifications').insert({
-        id: generateId(),
-        company_id: auth.companyId,
-        user_id: approverId,
-        type: 'approval_request',
-        title: 'طلب اعتماد جديد',
-        message: `طلب اعتماد ${getEntityTypeName(entity_type)} بمبلغ ${canonicalAmount ?? 'غير محدد'} ر.س`,
-        entity_type: 'approval_request',
-        entity_id: requestId,
-        created_at: new Date().toISOString(),
-      });
-    } catch (notifErr) {
-      console.warn('Failed to create notification:', notifErr);
-    }
-
-    return success(approvalReq, 201);
-  } catch (err) {
-    return handleApiError(err);
+    return success(data, 201);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-const APPROVAL_ENTITY_SOURCES: Record<string, { table: string; amount?: string }> = {
-  journal_entry: { table: 'journal_entries' },
-  voucher_disbursement: { table: 'voucher_disbursements', amount: 'amount' },
-  voucher_receipt: { table: 'voucher_receipts', amount: 'amount' },
-  purchase_invoice: { table: 'purchase_invoices', amount: 'total' },
-  payroll: { table: 'salary_sheets' },
-  cash_transaction: { table: 'cash_transactions', amount: 'amount' },
-};
-
-async function resolveApprovalEntity(
-  s: any,
-  companyId: string,
-  entityType: string,
-  entityId: string,
-): Promise<{ amount: number | null } | null> {
-  const source = APPROVAL_ENTITY_SOURCES[entityType];
-  if (!source) return null;
-  const columns = source.amount ? `id, ${source.amount}` : 'id';
-  const { data } = await s.from(source.table)
-    .select(columns)
-    .eq('id', entityId)
-    .eq('company_id', companyId)
-    .maybeSingle();
-  if (!data) return null;
-
-  if (entityType === 'journal_entry') {
-    const { data: lines } = await s.from('journal_lines')
-      .select('debit').eq('journal_entry_id', entityId).eq('company_id', companyId);
-    return { amount: (lines || []).reduce((sum: number, row: any) => sum + (Number(row.debit) || 0), 0) };
-  }
-  if (entityType === 'payroll') {
-    const { data: items } = await s.from('salary_items')
-      .select('net_pay').eq('sheet_id', entityId).eq('company_id', companyId);
-    return { amount: (items || []).reduce((sum: number, row: any) => sum + (Number(row.net_pay) || 0), 0) };
-  }
-  return { amount: Number((data as any)[source.amount!]) || 0 };
-}
-
-/** Determine the appropriate approver based on entity type and amount. */
-async function determineApprover(
-  s: any,
-  auth: { companyId: string; userId: string; role: string },
-  entityType: string,
-  amount?: number
-): Promise<string | null> {
-  // Define approval rules
-  const rules = {
-    // Journal entries over 100k need manager approval
-    journal_entry: { threshold: 100000, approver_role: 'manager' },
-    // Disbursements over 50k need admin approval
-    voucher_disbursement: { threshold: 50000, approver_role: 'admin' },
-    // Purchase invoices need manager approval
-    purchase_invoice: { threshold: 0, approver_role: 'manager' },
-    // Payroll needs admin approval
-    payroll: { threshold: 0, approver_role: 'admin' },
-    // Default: manager
-    default: { threshold: 0, approver_role: 'manager' },
-  };
-
-  const rule = rules[entityType as keyof typeof rules] || rules.default;
-  const targetRole = amount && amount > rule.threshold ? rule.approver_role : 'manager';
-
-  // Find a user with the target role in the same company
-  const { data: approver } = await s.from('users')
-    .select('id')
-    .eq('company_id', auth.companyId)
-    .eq('role', targetRole)
-    .eq('is_active', true)
-    .neq('id', auth.userId) // Can't approve your own request
-    .limit(1)
-    .maybeSingle();
-
-  // Fallback to admin if no manager found
-  if (!approver && targetRole !== 'admin') {
-    const { data: admin } = await s.from('users')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('role', 'admin')
-      .eq('is_active', true)
-      .neq('id', auth.userId)
-      .limit(1)
-      .maybeSingle();
-    return admin?.id || null;
-  }
-
-  return approver?.id || null;
-}
-
-/**
- * Calculate urgency based on age and type
- */
 function calculateUrgency(createdAt: string, entityType: string): 'low' | 'medium' | 'high' | 'critical' {
-  const ageHours = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60);
-
-  // Payroll is always high priority
+  const ageHours = (Date.now() - new Date(createdAt).getTime()) / 3_600_000;
   if (entityType === 'payroll') return 'high';
-
-  // Over 48 hours = critical
   if (ageHours > 48) return 'critical';
-  // Over 24 hours = high
   if (ageHours > 24) return 'high';
-  // Over 12 hours = medium
   if (ageHours > 12) return 'medium';
   return 'low';
-}
-
-function getEntityTypeName(type: string): string {
-  const names: Record<string, string> = {
-    journal_entry: 'قيد يومية',
-    voucher_disbursement: 'سند صرف',
-    voucher_receipt: 'سند قبض',
-    purchase_invoice: 'فاتورة شراء',
-    payroll: 'رواتب',
-    cash_transaction: 'سند صندوق',
-  };
-  return names[type] || type;
 }

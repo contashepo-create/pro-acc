@@ -1,235 +1,74 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import { pushQueueSchema, pushSubscriptionSchema } from '@/lib/communication-validation';
 
-const sb = () => getSupabase();
-
-/**
- * GET /api/push-notifications — Get subscriptions for current user
- */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
-    const s = sb();
-
-    const { data: subs, error: subsErr } = await s.from('push_subscriptions')
-      .select('id, endpoint, is_active, user_agent, created_at')
-      .eq('user_id', auth.userId)
-      .eq('company_id',auth.companyId);
-    if (subsErr) throw subsErr;
-
-    return success({ subscriptions: subs || [] });
-  } catch (err) {
-    return handleApiError(err);
+    const { data, error: queryError } = await getSupabase().from('push_subscriptions')
+      .select('id,endpoint,is_active,user_agent,created_at,updated_at').eq('user_id', auth.userId)
+      .eq('company_id', auth.companyId).order('created_at', { ascending: false });
+    if (queryError) throw queryError;
+    return success({ subscriptions: data || [] });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-/**
- * POST /api/push-notifications — Subscribe for push notifications
- */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
-    const s = sb();
-    const body = await request.json();
-
-    if (!body.subscription) {
-      return error('subscription مطلوب');
-    }
-
-    const { endpoint, keys } = body.subscription;
-    if (typeof endpoint !== 'string' || endpoint.length > 4096) return error('endpoint غير صالح');
-    try {
-      const endpointUrl = new URL(endpoint);
-      if (endpointUrl.protocol !== 'https:') return error('endpoint يجب أن يستخدم HTTPS');
-    } catch { return error('endpoint غير صالح'); }
-    if (typeof keys?.p256dh !== 'string' || !keys.p256dh || typeof keys?.auth !== 'string' || !keys.auth) {
-      return error('مفاتيح اشتراك الإشعارات مطلوبة');
-    }
-
-    // Check if already subscribed
-    const { data: existing } = await s.from('push_subscriptions')
-      .select('id')
-      .eq('user_id', auth.userId)
-      .eq('company_id',auth.companyId)
-      .eq('endpoint', endpoint)
-      .maybeSingle();
-
-    if (existing) {
-      return success({ message: 'مُسجّل مسبقاً', id: (existing as { id: string }).id });
-    }
-
-    const subId = generateId();
-    const { data, error: insertErr } = await s.from('push_subscriptions')
-      .insert({
-        id: subId,
-        user_id: auth.userId,
-        company_id: auth.companyId,
-        endpoint,
-        p256dh_key: keys?.p256dh || null,
-        auth_key: keys?.auth || null,
-        user_agent: request.headers.get('user-agent') || null,
-        is_active: true,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
+    const parsed = pushSubscriptionSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات اشتراك الإشعارات غير صالحة');
+    const { endpoint, keys } = parsed.data.subscription;
+    const { data, error: rpcError } = await getSupabase().rpc('upsert_push_subscription_atomic', {
+      p_company_id: auth.companyId, p_user_id: auth.userId, p_endpoint: endpoint,
+      p_p256dh: keys.p256dh, p_auth: keys.auth,
+      p_user_agent: request.headers.get('user-agent')?.slice(0, 500) || '',
+    });
+    if (rpcError) throw rpcError;
     return success(data, 201);
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-/**
- * PUT /api/push-notifications — Send push notification to users
- * Can send to specific user, role, or all users in company
- */
 export async function PUT(request: NextRequest) {
   try {
     const auth = await requireManagerOrAbove(request);
-    const s = sb();
-    const { title, message, url, target_user_id, target_role, tag, actions } = await parseBody<Record<string, any>>(request);
-
-    if (typeof title !== 'string' || !title.trim() || title.length > 200 || typeof message !== 'string' || !message.trim() || message.length > 2000) {
-      return error('العنوان والرسالة مطلوبان وبطول صالح');
-    }
-    if (url !== undefined && (typeof url !== 'string' || !url.startsWith('/') || url.startsWith('//') || url.length > 2000)) {
-      return error('رابط الإشعار يجب أن يكون مساراً داخلياً صالحاً');
-    }
-    if (actions !== undefined && (!Array.isArray(actions) || actions.length > 5)) return error('إجراءات الإشعار غير صالحة');
-
-    if (target_user_id) {
-      const { data: target } = await s.from('users').select('id')
-        .eq('id', target_user_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!target) return error('المستخدم المستهدف غير موجود', 404);
-    }
-    if (target_role && !['admin', 'manager', 'accountant', 'supervisor'].includes(target_role)) {
-      return error('دور المستهدف غير صالح');
-    }
-
-    // Get target subscriptions
-    let query = s.from('push_subscriptions')
-      .select('*')
-      .eq('company_id', auth.companyId)
-      .eq('is_active', true);
-
-    if (target_user_id) {
-      query = query.eq('user_id', target_user_id);
-    }
-
-    const { data: subscriptions, error: subErr } = await query;
-    if (subErr) throw subErr;
-
-    // Send push notifications using Web Push protocol
-    // Note: In production, use a proper Web Push library like 'web-push'
-    // This is a simplified version that stores the notification in DB
-    const notifications = [];
-    const subs = subscriptions || [];
-
-    for (const sub of subs) {
-      const subObj = sub as any;
-
-      // If target_role filter
-      if (target_role) {
-        const { data: user } = await s.from('users')
-          .select('role')
-          .eq('id', subObj.user_id)
-          .eq('company_id',auth.companyId)
-          .maybeSingle();
-        if (!user || (user as any).role !== target_role) continue;
-      }
-
-      const notifId = generateId();
-      try {
-        await s.from('push_notification_log').insert({
-          id: notifId,
-          company_id: auth.companyId,
-          subscription_id: subObj.id,
-          user_id: subObj.user_id,
-          title,
-          body: message,
-          url: url || '/dashboard',
-          tag: tag || null,
-          actions: actions ? JSON.stringify(actions) : null,
-          status: 'queued',
-          sent_at: new Date().toISOString(),
-        });
-        notifications.push({ id: notifId, userId: subObj.user_id, status: 'queued' });
-      } catch (logErr) {
-        notifications.push({ userId: subObj.user_id, status: 'failed', error: (logErr as Error).message });
-      }
-    }
-
-    // Also store in regular notifications table for in-app display
-    if (target_user_id) {
-      await s.from('notifications').insert({
-        id: generateId(),
-        company_id: auth.companyId,
-        user_id: target_user_id,
-        type: 'push',
-        title,
-        message,
-        entity_type: 'push_notification',
-        entity_id: notifications[0]?.id || null,
-        created_at: new Date().toISOString(),
-      });
-    } else if (!target_role) {
-      // Send to all active users
-      const { data: allUsers } = await s.from('users')
-        .select('id')
-        .eq('company_id', auth.companyId)
-        .eq('is_active', true);
-
-      for (const user of (allUsers || [])) {
-        const u = user as { id: string };
-        await s.from('notifications').insert({
-          id: generateId(),
-          company_id: auth.companyId,
-          user_id: u.id,
-          type: 'push',
-          title,
-          message,
-          entity_type: 'push_notification',
-          created_at: new Date().toISOString(),
-        }).then(() => {}, () => {});
-      }
-    }
-
-    return success({
-      sent: notifications.length,
-      notifications,
+    const parsed = pushQueueSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات الإشعار غير صالحة');
+    const { data, error: rpcError } = await getSupabase().rpc('queue_push_notifications_atomic', {
+      p_company_id: auth.companyId, p_user_id: auth.userId, p_payload: parsed.data,
     });
-  } catch (err) {
-    return handleApiError(err);
+    if (rpcError) {
+      const message = String(rpcError.message || 'تعذر جدولة الإشعارات');
+      if (/المستهدف/.test(message)) return error(message, 404);
+      if (/صلاحية/.test(message)) return error(message, 403);
+      throw rpcError;
+    }
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-/**
- * DELETE /api/push-notifications — Unsubscribe
- */
 export async function DELETE(request: NextRequest) {
   try {
     const auth = await requireApiAuth(request);
-    const s = sb();
-    const url = new URL(request.url);
-    const endpoint = url.searchParams.get('endpoint');
-
-    if (!endpoint) return error('endpoint مطلوب');
-    const { data: deleted, error: deleteErr } = await s.from('push_subscriptions')
-      .delete()
-      .eq('user_id', auth.userId)
-      .eq('company_id',auth.companyId)
-      .eq('endpoint', endpoint)
-      .select('id')
-      .maybeSingle();
-    if (deleteErr) throw deleteErr;
-    if (!deleted) return error('الاشتراك غير موجود',404);
-
-    return success({ unsubscribed: true });
-  } catch (err) {
-    return handleApiError(err);
+    const endpoint = new URL(request.url).searchParams.get('endpoint') || '';
+    if (!endpoint || endpoint.length > 4096) return error('endpoint غير صالح');
+    try { if (new URL(endpoint).protocol !== 'https:') return error('endpoint غير صالح'); } catch { return error('endpoint غير صالح'); }
+    const { data, error: rpcError } = await getSupabase().rpc('deactivate_push_subscription_atomic', {
+      p_company_id: auth.companyId, p_user_id: auth.userId, p_endpoint: endpoint,
+    });
+    if (rpcError) {
+      if (/غير موجود/.test(String(rpcError.message))) return error('الاشتراك غير موجود', 404);
+      throw rpcError;
+    }
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

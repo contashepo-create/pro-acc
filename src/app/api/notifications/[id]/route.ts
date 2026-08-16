@@ -1,38 +1,40 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireManagerOrAbove, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { communicationUuid, notificationReadSchema } from '@/lib/communication-validation';
 
-const sb = () => getSupabase();
+const COLUMNS = 'id,user_id,type,title,message,link,entity_type,entity_id,is_read,read_at,created_at';
 
-export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(request, 'notifications', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody(req);
-    const { data: result, error: updateError } = await s.from('notifications')
-      .update({ is_read: body.isRead ?? true })
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .eq('user_id', auth.userId)
-      .select('*').maybeSingle();
+    if (!communicationUuid.safeParse(id).success) return error('معرف الإشعار غير صالح');
+    const parsed = notificationReadSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error('بيانات تحديث الإشعار غير صالحة');
+    const isRead = parsed.data.isRead ?? true;
+    const { data, error: updateError } = await getSupabase().from('notifications')
+      .update({ is_read: isRead, read_at: isRead ? new Date().toISOString() : null })
+      .eq('id', id).eq('company_id', auth.companyId).eq('user_id', auth.userId).select(COLUMNS).maybeSingle();
     if (updateError) throw updateError;
-    if (!result) return error('Not found', 404);
-    return success(result);
-  } catch (err) {
-    return handleApiError(err);
+    if (!data) return error('الإشعار غير موجود', 404);
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireManagerOrAbove(req);
+    const auth = await requireModulePermission(request, 'notifications', 'delete');
     const { id } = await params;
-    const s = sb();
-    const { data: result } = await s.from('notifications').delete().eq('id', id).eq('company_id', auth.companyId).select('id');
-    if (!result || result.length === 0) return error('Not found', 404);
+    if (!communicationUuid.safeParse(id).success) return error('معرف الإشعار غير صالح');
+    const { data, error: deleteError } = await getSupabase().from('notifications').delete()
+      .eq('id', id).eq('company_id', auth.companyId).eq('user_id', auth.userId).select('id').maybeSingle();
+    if (deleteError) throw deleteError;
+    if (!data) return error('الإشعار غير موجود', 404);
     return success({ deleted: true });
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

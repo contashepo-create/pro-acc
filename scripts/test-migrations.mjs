@@ -216,9 +216,9 @@ async function smokeAdminEntitlements(ids) {
   ]));
   assert.equal((await db.query(`SELECT name FROM companies WHERE id=$1`,[ids.company])).rows[0].name,'Updated tenant');
 
-  const complaintId='92000000-0000-4000-8000-000000000001';
-  await db.query(`INSERT INTO complaints(id,company_id,user_id,type,subject,body)
-    VALUES($1,$2,$3,'complaint','Runtime complaint','Runtime body')`,[complaintId,ids.company,ids.user]);
+  const complaintId=(await db.query(`SELECT create_complaint_atomic($1,$2,'complaint','Runtime complaint','Runtime body') result`,[
+    ids.company,ids.user,
+  ])).rows[0].result.id;
   const complaint=(await db.query(`SELECT admin_update_complaint($1,$2,'replied','Reviewed',TRUE) result`,[
     adminId,complaintId,
   ])).rows[0].result;
@@ -1170,6 +1170,107 @@ async function smokeAtomicWriters(ids) {
   assert.equal((await db.query(`SELECT status FROM purchase_invoices WHERE id=$1`,[purchaseInvoice])).rows[0].status,'unpaid');
   assert.equal((await db.query(`SELECT approved_by FROM purchase_invoices WHERE id=$1`,[purchaseInvoice])).rows[0].approved_by,approver);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_id=$1 AND action='approve_approval'`,[approvalId])).rows[0].count),1);
+
+  // Communications are RPC-only, tenant-bound, replay-safe, and audited.
+  await assert.rejects(()=>db.query(`INSERT INTO complaints(company_id,user_id,type,subject,body) VALUES($1,$2,'complaint','Direct','Blocked')`,[c,u]));
+  const tenantComplaint=(await db.query(`SELECT create_complaint_atomic($1,$2,'complaint','Tenant complaint','Tenant body') result`,[c,u])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT update_company_complaint_atomic($1,$2,$3,'{"subject":"Cross"}'::jsonb)`,[c2,u2,tenantComplaint.id]));
+  const updatedComplaint=(await db.query(`SELECT update_company_complaint_atomic($1,$2,$3,'{"subject":"Updated tenant complaint"}'::jsonb) result`,[c,u,tenantComplaint.id])).rows[0].result;
+  assert.equal(updatedComplaint.subject,'Updated tenant complaint');
+  const archivedComplaint=(await db.query(`SELECT archive_company_complaint_atomic($1,$2,$3) result`,[c,u,tenantComplaint.id])).rows[0].result;
+  assert.equal(archivedComplaint.archived,true);
+  const publicComplaint=(await db.query(`SELECT create_complaint_atomic(NULL,NULL,'suggestion','Public suggestion','Public body') result`)).rows[0].result;
+  assert.ok(publicComplaint.id);
+
+  await assert.rejects(()=>db.query(`INSERT INTO messages(company_id,subject,body,direction) VALUES($1,'Direct','Blocked','company_to_admin')`,[c]));
+  const outgoing=(await db.query(`SELECT send_company_message_atomic($1,$2,'Runtime subject','Runtime body') result`,[c,u])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT archive_company_message_atomic($1,$2,$3)`,[c2,u2,outgoing.id]));
+  const archived=(await db.query(`SELECT archive_company_message_atomic($1,$2,$3) result`,[c,u,outgoing.id])).rows[0].result;
+  assert.equal(archived.archived,true);
+  const archivedReplay=(await db.query(`SELECT archive_company_message_atomic($1,$2,$3) result`,[c,u,outgoing.id])).rows[0].result;
+  assert.equal(archivedReplay.already_processed,true);
+  const adminMessage=(await db.query(`SELECT admin_send_company_message($1,$2,'Admin subject','Admin body') result`,[
+    '90000000-0000-4000-8000-000000000001',c,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT mark_company_message_read_atomic($1,$2,$3)`,[c2,u2,adminMessage.id]));
+  const readMessage=(await db.query(`SELECT mark_company_message_read_atomic($1,$2,$3) result`,[c,u,adminMessage.id])).rows[0].result;
+  assert.equal(readMessage.is_read,true);
+
+  const configPayload=(chat)=>JSON.stringify({chat_id:chat,is_enabled:true,notify_invoices:true,
+    notify_cash_transactions:true,notify_user_logins:true,approvals_enabled:true,approval_threshold:100});
+  await db.query(`SELECT save_telegram_config_atomic($1,$2,$3::jsonb)`,[c,u,configPayload('1')]);
+  await db.query(`SELECT save_telegram_config_atomic($1,$2,$3::jsonb)`,[c2,u2,configPayload('2')]);
+  await assert.rejects(()=>db.query(`UPDATE company_telegram_configs SET chat_id='99' WHERE company_id=$1`,[c]));
+  await assert.rejects(()=>db.query(`SELECT save_telegram_config_atomic($1,$2,$3::jsonb)`,[c2,u2,configPayload('1')]));
+
+  await assert.rejects(()=>db.query(`INSERT INTO telegram_test_runs(company_id,status,created_by) VALUES($1,'pending',$2)`,[c,u]));
+  const testRun=(await db.query(`SELECT create_telegram_test_run_atomic($1,$2) result`,[c,u])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT finish_telegram_test_run_atomic($1,'2','accept')`,[testRun.id]));
+  const finishedTest=(await db.query(`SELECT finish_telegram_test_run_atomic($1,'1','accept') result`,[testRun.id])).rows[0].result;
+  assert.equal(finishedTest.status,'accepted');
+  await assert.rejects(()=>db.query(`SELECT finish_telegram_test_run_atomic($1,'1','accept')`,[testRun.id]));
+  const testRace=await Promise.allSettled([
+    db.query(`SELECT create_telegram_test_run_atomic($1,$2) result`,[c,u]),
+    db.query(`SELECT create_telegram_test_run_atomic($1,$2) result`,[c,u]),
+  ]);
+  assert.equal(testRace.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(testRace.filter((result)=>result.status==='rejected').length,1);
+  const pendingTest=testRace.find((result)=>result.status==='fulfilled').value.rows[0].result;
+  await db.query(`SELECT expire_telegram_test_run_atomic($1,$2,$3)`,[c,pendingTest.id,u]);
+
+  const approvalJournal=(await db.query(`SELECT create_journal_entry($1,'2026-08-01','general','Telegram approval source',$2,$3::jsonb) result`,[
+    c,u,JSON.stringify([{accountId:a['5100'],debit:15,credit:0},{accountId:a['1000'],debit:0,credit:15}]),
+  ])).rows[0].result;
+  const telegramApproval=(await db.query(`SELECT create_approval_request_atomic($1,'journal_entry',$2,'Telegram runtime',$3) result`,[
+    c,approvalJournal.id,approver,
+  ])).rows[0].result;
+  await assert.rejects(()=>db.query(`SELECT respond_approval_by_telegram_atomic($1,'approve','2','')`,[telegramApproval.id]));
+  const telegramRace=await Promise.all([
+    db.query(`SELECT respond_approval_by_telegram_atomic($1,'approve','1','') result`,[telegramApproval.id]),
+    db.query(`SELECT respond_approval_by_telegram_atomic($1,'approve','1','') result`,[telegramApproval.id]),
+  ]);
+  assert.equal(telegramRace.filter((result)=>result.rows[0].result.replayed===true).length,1);
+  assert.equal((await db.query(`SELECT approver_chat_id FROM approval_requests WHERE id=$1`,[telegramApproval.id])).rows[0].approver_chat_id,'1');
+  assert.equal((await db.query(`SELECT status FROM journal_entries WHERE id=$1`,[approvalJournal.id])).rows[0].status,'posted');
+  const rejectedJournal=(await db.query(`SELECT create_journal_entry($1,'2026-08-02','general','Rejected approval source',$2,$3::jsonb) result`,[
+    c,u,JSON.stringify([{accountId:a['5100'],debit:12,credit:0},{accountId:a['1000'],debit:0,credit:12}]),
+  ])).rows[0].result;
+  const rejectedApproval=(await db.query(`SELECT create_approval_request_atomic($1,'journal_entry',$2,'Reject runtime',$3) result`,[
+    c,rejectedJournal.id,approver,
+  ])).rows[0].result;
+  const rejectedResult=(await db.query(`SELECT respond_approval_request_atomic($1,$2,'reject',$3,'rejected') result`,[
+    c,rejectedApproval.id,u,
+  ])).rows[0].result;
+  assert.equal(rejectedResult.status,'rejected');
+  const rejectedSource=(await db.query(`SELECT status,reversed_by FROM journal_entries WHERE id=$1`,[rejectedJournal.id])).rows[0];
+  assert.equal(rejectedSource.status,'rejected');
+  assert.ok(rejectedSource.reversed_by);
+  const rejectReplay=(await db.query(`SELECT respond_approval_request_atomic($1,$2,'reject',$3,'rejected') result`,[
+    c,rejectedApproval.id,u,
+  ])).rows[0].result;
+  assert.equal(rejectReplay.replayed,true);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE reversal_of=$1`,[rejectedJournal.id])).rows[0].count),1);
+  await assert.rejects(()=>db.query(`SELECT create_approval_request_atomic($1,'journal_entry',$2,'Cross tenant',$3)`,[c2,approvalJournal.id,u2]));
+
+  await assert.rejects(()=>db.query(`INSERT INTO push_subscriptions(company_id,user_id,endpoint) VALUES($1,$2,'https://push.invalid/direct')`,[c,u]));
+  const endpoint='https://push.example.test/runtime';
+  const pushSub=(await db.query(`SELECT upsert_push_subscription_atomic($1,$2,$3,'p256','auth','runtime') result`,[c,u,endpoint])).rows[0].result;
+  assert.ok(pushSub.id);
+  await assert.rejects(()=>db.query(`SELECT upsert_push_subscription_atomic($1,$2,$3,'p256','auth','runtime')`,[c2,u2,endpoint]));
+  await assert.rejects(()=>db.query(`SELECT queue_push_notifications_atomic($1,$2,$3::jsonb)`,[
+    c,u,JSON.stringify({title:'Cross',message:'Blocked',target_user_id:u2}),
+  ]));
+  const queued=(await db.query(`SELECT queue_push_notifications_atomic($1,$2,$3::jsonb) result`,[
+    c,u,JSON.stringify({title:'Runtime push',message:'Tenant bound',url:'/dashboard',target_user_id:u,
+      actions:[{action:'open',title:'Open'}]}),
+  ])).rows[0].result;
+  assert.equal(Number(queued.users),1);
+  assert.equal(Number(queued.queued),1);
+  await assert.rejects(()=>db.query(`INSERT INTO push_notification_log(company_id,subscription_id,user_id,title,body) VALUES($1,$2,$3,'Direct','Blocked')`,[c,pushSub.id,u]));
+  await assert.rejects(()=>db.query(`SELECT deactivate_push_subscription_atomic($1,$2,$3)`,[c2,u2,endpoint]));
+  const unsubscribed=(await db.query(`SELECT deactivate_push_subscription_atomic($1,$2,$3) result`,[c,u,endpoint])).rows[0].result;
+  assert.equal(unsubscribed.unsubscribed,true);
+
   const deactivatedUser=(await db.query(`SELECT deactivate_company_user_atomic($1,$2,$3) result`,[c,approver,u])).rows[0].result;
   assert.equal(deactivatedUser.is_active,false);
   assert.equal((await db.query(`SELECT is_active FROM users WHERE id=$1`,[approver])).rows[0].is_active,false);
@@ -1247,9 +1348,14 @@ async function smokeAtomicWriters(ids) {
   assert.equal((await db.query(`SELECT count(*)::int count FROM companies WHERE id=$1`,[expiredCompany])).rows[0].count,1);
 
   const codeHash=createHash('sha256').update('123456').digest('hex');
-  const session={step:'approved_and_code_sent',code_hash:codeHash,attempts:0,requester_id:u,expires_at:new Date(Date.now()+300000).toISOString()};
-  await db.query(`INSERT INTO company_telegram_configs(company_id,chat_id,is_enabled,reset_session_data)
-    VALUES($1,'1',true,$2::jsonb)`,[c,JSON.stringify(session)]);
+  await db.query(`SELECT save_telegram_config_atomic($1,$2,$3::jsonb)`,[
+    c,u,JSON.stringify({chat_id:'1',is_enabled:true,notify_invoices:true,notify_cash_transactions:true,
+      notify_user_logins:true,approvals_enabled:true,approval_threshold:100}),
+  ]);
+  await db.query(`SELECT start_telegram_reset_session_atomic($1,$2)`,[c,u]);
+  await assert.rejects(()=>db.query(`SELECT start_telegram_reset_session_atomic($1,$2)`,[c,u]));
+  await assert.rejects(()=>db.query(`SELECT approve_telegram_reset_session_atomic('2',$1,NOW()+INTERVAL '5 minutes')`,[codeHash]));
+  await db.query(`SELECT approve_telegram_reset_session_atomic('1',$1,NOW()+INTERVAL '5 minutes')`,[codeHash]);
   const retainedUsers=Number((await db.query('SELECT count(*) count FROM users WHERE company_id=$1',[c])).rows[0].count);
   const invalid=await db.query(`SELECT reset_company_business_data($1,$2,$3) result`,[c,u,'0'.repeat(64)]);
   assert.equal(invalid.rows[0].result.status,'invalid_code');

@@ -2,9 +2,9 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
+import { adminCompanyMessageSchema, communicationUuid } from '@/lib/communication-validation';
 
 const sb = () => getSupabase();
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,8 +18,9 @@ export async function GET(request: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(100);
 
+    queryBuilder = queryBuilder.is('deleted_at', null);
     if (companyId) {
-      if (!UUID.test(companyId)) return error('معرّف الشركة غير صالح', 400);
+      if (!communicationUuid.safeParse(companyId).success) return error('معرّف الشركة غير صالح', 400);
       queryBuilder = queryBuilder.eq('company_id', companyId);
     }
 
@@ -50,20 +51,14 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const admin = await requireAdmin(request);
-    const body = await parseBody<{ companyId: string; subject: string; body: string }>(request);
-
-    if (!body.companyId || typeof body.companyId !== 'string') return error('معرف الشركة مطلوب', 400);
-    if (!UUID.test(body.companyId)) return error('معرف الشركة غير صالح', 400);
-    if (!body.subject?.trim()) return error('عنوان الرسالة مطلوب', 400);
-    if (!body.body?.trim()) return error('نص الرسالة مطلوب', 400);
-    if (body.subject.length > 200) return error('العنوان طويل جداً', 400);
-    if (body.body.length > 5000) return error('نص الرسالة طويل جداً', 400);
+    const parsed = adminCompanyMessageSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات الرسالة غير صالحة', 400);
 
     const { data, error: insertErr } = await sb().rpc('admin_send_company_message', {
       p_admin_id: admin.adminId,
-      p_company_id: body.companyId,
-      p_subject: body.subject.trim(),
-      p_body: body.body.trim(),
+      p_company_id: parsed.data.companyId,
+      p_subject: parsed.data.subject,
+      p_body: parsed.data.body,
     });
     if (insertErr) {
       if (/invalid company message/i.test(String(insertErr.message || ''))) return error('الشركة غير موجودة أو بيانات الرسالة غير صالحة', 404);

@@ -51,10 +51,8 @@ export default function ClientStatementPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           subject: `خطأ في كشف حساب - ${data?.client?.name || ''}`,
-          message: `خطأ في القيد رقم ${reportEntry.entry_number} بتاريخ ${reportEntry.date}.\nالوصف: ${reportEntry.description}\nملاحظة المستخدم: ${reportNote}\nنوع العملية: ${reportEntry.type}\nمرجع: ${reportEntry.reference_id || '—'}`,
-          type: 'accounting_error',
-          reference_type: reportEntry.type,
-          reference_id: reportEntry.reference_id || reportEntry.entry_id,
+          body: `خطأ في القيد رقم ${reportEntry.entry_number} بتاريخ ${reportEntry.date}.\nالوصف: ${reportEntry.description}\nملاحظة المستخدم: ${reportNote}\nنوع العملية: ${reportEntry.type}\nمرجع: ${reportEntry.reference_id || '—'}`,
+          type: 'complaint',
         }),
       });
       const result = await response.json();

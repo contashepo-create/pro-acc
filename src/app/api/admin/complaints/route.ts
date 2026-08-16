@@ -2,11 +2,11 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
+import { adminComplaintPatchSchema } from '@/lib/communication-validation';
 
 const sb = () => getSupabase();
 
 const ALLOWED_STATUSES = new Set(['pending', 'read', 'replied', 'closed']);
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
     const s = sb();
     let queryBuilder = s.from('complaints')
       .select('id, type, subject, body, status, admin_reply, created_at, company_id, replied_at')
+      .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -52,18 +53,15 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const admin = await requireAdmin(request);
-    const body = await parseBody<{ id?: string; status?: string; adminReply?: string }>(request);
-    if (!body.id || !UUID.test(body.id)) return error('معرّف الشكوى غير صالح');
-    if (body.status !== undefined && !ALLOWED_STATUSES.has(body.status)) return error('حالة غير صالحة');
-    if (body.adminReply !== undefined && (typeof body.adminReply !== 'string' || body.adminReply.length > 5000)) return error('رد الإدارة طويل جداً');
-    if (body.status === undefined && body.adminReply === undefined) return error('لا توجد حقول قابلة للتحديث');
+    const parsed = adminComplaintPatchSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات تحديث الشكوى غير صالحة');
 
     const { data, error: updateError } = await sb().rpc('admin_update_complaint', {
       p_admin_id: admin.adminId,
-      p_complaint_id: body.id,
-      p_status: body.status ?? null,
-      p_reply: body.adminReply ?? null,
-      p_reply_set: body.adminReply !== undefined,
+      p_complaint_id: parsed.data.id,
+      p_status: parsed.data.status ?? null,
+      p_reply: parsed.data.adminReply ?? null,
+      p_reply_set: parsed.data.adminReply !== undefined,
     });
     if (updateError) throw updateError;
     if ((data as { not_found?: boolean } | null)?.not_found) return error('الشكوى غير موجودة', 404);
