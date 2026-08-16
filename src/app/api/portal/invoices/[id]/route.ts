@@ -16,14 +16,17 @@ export async function GET(
 
     const s = sb();
     const { data: contact, error: contactError } = await s.from('contacts')
-      .select('id')
+      .select('id, email, companies!inner(is_active)')
       .eq('id', auth.contactId)
       .eq('company_id', auth.companyId)
-      .eq('email', auth.email)
       .eq('is_active', true)
+      .is('deleted_at', null)
+      .eq('companies.is_active', true)
       .maybeSingle();
     if (contactError) throw contactError;
-    if (!contact) return error('رابط الدخول غير صالح أو انتهت صلاحيته', 401);
+    if (!contact || String(contact.email || '').toLowerCase() !== auth.email) {
+      return error('رابط الدخول غير صالح أو انتهت صلاحيته', 401);
+    }
 
     const { id } = await params;
     if (!UUID_RE.test(id)) return error('معرّف الفاتورة غير صالح');
@@ -47,6 +50,7 @@ export async function GET(
     const { data: company, error: companyError } = await s.from('companies')
       .select('name, tax_number, address, phone, logo_url')
       .eq('id', auth.companyId)
+      .eq('is_active', true)
       .maybeSingle();
     if (companyError) throw companyError;
     if (!company) throw new Error('Invoice company is missing');

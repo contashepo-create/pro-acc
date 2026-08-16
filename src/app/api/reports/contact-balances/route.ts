@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const number = (value: unknown) => Number(value) || 0;
 
@@ -13,7 +14,7 @@ export async function GET(request: NextRequest) {
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
     if (!['all', 'client', 'supplier'].includes(type)) return error('نوع الطرف غير صالح');
-    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
 
     const { data, error: queryError } = await getSupabase().rpc('get_contact_balances', {
       p_company_id: auth.companyId, p_type: type, p_from: from, p_to: to,
@@ -23,7 +24,9 @@ export async function GET(request: NextRequest) {
       const closing = number(row.closing);
       return {
         id: row.contact_id, name: row.name,
-        type: row.contact_type === 'client' ? 'عميل' : row.contact_type === 'supplier' ? 'مورد' : 'عميل ومورد',
+        type: row.contact_type === 'client' ? 'عميل'
+          : row.contact_type === 'supplier' ? 'مورد'
+            : row.contact_type === 'subcontractor' ? 'مقاول باطن' : 'عميل ومورد',
         phone: row.phone || '—', tax_number: row.tax_number || '—',
         opening_balance: number(row.opening), period_debit: number(row.period_debit),
         period_credit: number(row.period_credit), closing_balance: closing,

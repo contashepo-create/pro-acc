@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { error, handleApiError, parseBody, success } from '@/lib/api-helpers';
 import { sendEmail } from '@/lib/email';
-import { createPortalToken, portalTokenTtlSeconds } from '@/lib/portal-auth';
+import { createPortalToken } from '@/lib/portal-auth';
 import { getSupabase } from '@/lib/supabase-client';
 import { z } from 'zod';
 
@@ -47,8 +47,12 @@ export async function POST(request: NextRequest) {
     // Send a separate capability per contact rather than picking an arbitrary
     // tenant (the old maybeSingle behavior was both unreliable and unsafe).
     const { data: contacts, error: contactsError } = await sb().from('contacts')
-      .select('id, name, email, company_id')
+      .select('id, name, email, company_id, companies!inner(is_active)')
       .ilike('email', email)
+      .in('type', ['client', 'both'])
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .eq('companies.is_active', true)
       .limit(10);
     if (contactsError) throw contactsError;
 

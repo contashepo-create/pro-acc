@@ -398,6 +398,91 @@ async function smokeAtomicWriters(ids) {
   await assert.rejects(()=>db.query(`UPDATE invoices SET total=116 WHERE id=$1 AND company_id=$2`,[atomicSale.id,c]));
   await assert.rejects(()=>db.query(`UPDATE invoice_items SET total=99 WHERE invoice_id=$1 AND company_id=$2`,[atomicSale.id,c]));
   await assert.rejects(()=>db.query(`INSERT INTO invoice_items(company_id,invoice_id,description,quantity,unit_price,total) VALUES($1,$2,'late line',1,1,1)`,[c,atomicSale.id]));
+
+  const atomicContact=(await db.query(`SELECT create_contact_atomic($1,$2,$3::jsonb,100,'debit') result`,[
+    c,u,JSON.stringify({name:'Atomic ledger contact',type:'client',email:'ledger@example.test',credit_limit:500}),
+  ])).rows[0].result;
+  assert.ok(atomicContact.opening_journal_id);
+  assert.equal(Number((await db.query(`SELECT get_contact_balance($1,$2,NULL) balance`,[c,atomicContact.id])).rows[0].balance),100);
+  await db.query(`SELECT create_journal_entry($1,CURRENT_DATE,'general','Tagged counterparts',$2,$3::jsonb)`,[
+    c,u,JSON.stringify([
+      {accountId:a['1130'],debit:50,credit:0,contactId:atomicContact.id},
+      {accountId:a['4100'],debit:0,credit:50,contactId:atomicContact.id},
+    ]),
+  ]);
+  const draftContactEntry=(await db.query(`INSERT INTO journal_entries(company_id,number,date,type,description,status,created_by)
+    VALUES($1,999001,CURRENT_DATE,'general','Unposted contact draft','draft',$2) RETURNING id`,[c,u])).rows[0].id;
+  await db.query(`INSERT INTO journal_lines(company_id,journal_entry_id,account_id,debit,credit,contact_id) VALUES
+    ($1,$2,$3,999,0,$5),($1,$2,$4,0,999,$5)`,[c,draftContactEntry,a['1130'],a['4100'],atomicContact.id]);
+  assert.equal(Number((await db.query(`SELECT get_contact_balance($1,$2,NULL) balance`,[c,atomicContact.id])).rows[0].balance),150);
+  assert.equal(Number((await db.query(`SELECT balance FROM get_contact_balance_batch($1,ARRAY[$2]::UUID[])`,[c,atomicContact.id])).rows[0].balance),150);
+  await assert.rejects(()=>db.query(`SELECT update_contact_atomic($1,$2,'{"type":"supplier"}'::jsonb,$3)`,[c,atomicContact.id,u]));
+  const updatedContact=(await db.query(`SELECT update_contact_atomic($1,$2,'{"name":"Atomic ledger contact updated"}'::jsonb,$3) result`,[c,atomicContact.id,u])).rows[0].result;
+  assert.equal(updatedContact.name,'Atomic ledger contact updated');
+  const deactivatedContact=(await db.query(`SELECT deactivate_contact_atomic($1,$2,$3) result`,[c,atomicContact.id,u])).rows[0].result;
+  assert.equal(deactivatedContact.is_active,false);
+  assert.equal(Number((await db.query(`SELECT get_contact_balance($1,$2,NULL) balance`,[c,atomicContact.id])).rows[0].balance),150);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND entity_type='contact' AND entity_id=$2`,[c,atomicContact.id])).rows[0].count),3);
+  const contactSummary=(await db.query(`SELECT get_contact_statement_summary($1,$2,NULL,NULL) result`,[c,atomicContact.id])).rows[0].result;
+  assert.equal(Number(contactSummary.closing_balance),150);
+  assert.equal(Number(contactSummary.total_count),2);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM get_contact_statement_lines($1,$2,NULL,NULL,100,0)`,[c,atomicContact.id])).rows[0].count),2);
+
+  const agingContact=(await db.query(`SELECT create_contact_atomic($1,$2,$3::jsonb,0,'debit') result`,[
+    c,u,JSON.stringify({name:'Aging contact',type:'client'}),
+  ])).rows[0].result;
+  const agingInvoice=(await db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,CURRENT_DATE,CURRENT_DATE,$3::jsonb,0,FALSE,'',0,NULL,$4) result`,[
+    c,agingContact.id,JSON.stringify([{description:'Aging invoice',quantity:1,unitPrice:100,discount:0}]),u,
+  ])).rows[0].result;
+  const agingPendingReceipt=(await db.query(`SELECT create_voucher_receipt_atomic($1,CURRENT_DATE,'client',$2,50,$3,'Pending allocation',$4::jsonb,FALSE,TRUE,$5) result`,[
+    c,agingContact.id,b,JSON.stringify([{invoice_id:agingInvoice.id,amount:50}]),u,
+  ])).rows[0].result;
+  const pendingAging=(await db.query(`SELECT open_amount FROM get_aging_by_contact($1,'ar',CURRENT_DATE) WHERE contact_id=$2`,[c,agingContact.id])).rows[0];
+  assert.equal(Number(pendingAging.open_amount),100);
+  await db.query(`SELECT respond_voucher_receipt_approval($1,$2,'approve',$3,NULL,'approved')`,[c,agingPendingReceipt.approval_id,u]);
+  const approvedAging=(await db.query(`SELECT open_amount FROM get_aging_by_contact($1,'ar',CURRENT_DATE) WHERE contact_id=$2`,[c,agingContact.id])).rows[0];
+  assert.equal(Number(approvedAging.open_amount),50);
+  await db.query(`SELECT cancel_voucher_receipt_atomic($1,$2,$3)`,[c,agingPendingReceipt.id,u]);
+  const cancelledAging=(await db.query(`SELECT open_amount FROM get_aging_by_contact($1,'ar',CURRENT_DATE) WHERE contact_id=$2`,[c,agingContact.id])).rows[0];
+  assert.equal(Number(cancelledAging.open_amount),100);
+
+  const agingSupplier=(await db.query(`SELECT create_contact_atomic($1,$2,$3::jsonb,0,'credit') result`,[
+    c,u,JSON.stringify({name:'Aging supplier',type:'supplier'}),
+  ])).rows[0].result;
+  const agingPurchase=(await db.query(`SELECT create_purchase_invoice_atomic($1,$2,NULL,NULL,NULL,FALSE,CURRENT_DATE,$3::jsonb,0,'aging',$4) result`,[
+    c,agingSupplier.id,JSON.stringify([{description:'Aging purchase',quantity:1,unit_price:100}]),u,
+  ])).rows[0].result;
+  const pendingDisbursement=(await db.query(`SELECT create_voucher_disbursement_atomic($1,CURRENT_DATE,'supplier',$2,NULL,50,$3,'Pending supplier allocation',$4::jsonb,TRUE,$5) result`,[
+    c,agingSupplier.id,b,JSON.stringify([{invoice_id:agingPurchase.id,amount:50}]),u,
+  ])).rows[0].result;
+  assert.equal(Number((await db.query(`SELECT open_amount FROM get_aging_by_contact($1,'ap',CURRENT_DATE) WHERE contact_id=$2`,[c,agingSupplier.id])).rows[0].open_amount),100);
+  await db.query(`SELECT respond_voucher_disbursement_approval($1,$2,'approve',$3,NULL,'approved')`,[c,pendingDisbursement.approval_id,u]);
+  assert.equal(Number((await db.query(`SELECT open_amount FROM get_aging_by_contact($1,'ap',CURRENT_DATE) WHERE contact_id=$2`,[c,agingSupplier.id])).rows[0].open_amount),50);
+  await db.query(`SELECT cancel_voucher_disbursement_atomic($1,$2,$3)`,[c,pendingDisbursement.id,u]);
+  assert.equal(Number((await db.query(`SELECT open_amount FROM get_aging_by_contact($1,'ap',CURRENT_DATE) WHERE contact_id=$2`,[c,agingSupplier.id])).rows[0].open_amount),100);
+
+  const activeClientCount=Number((await db.query(`SELECT count(*) count FROM contacts WHERE company_id=$1 AND type IN('client','both') AND is_active=TRUE AND deleted_at IS NULL`,[c])).rows[0].count);
+  const activePlanId=(await db.query(`SELECT plan_id FROM subscriptions WHERE company_id=$1 ORDER BY created_at DESC LIMIT 1`,[c])).rows[0].plan_id;
+  await db.query(`UPDATE subscription_plans SET max_clients=$1 WHERE id=$2`,[activeClientCount+1,activePlanId]);
+  const contactLimitRace=await Promise.allSettled([1,2].map((index)=>db.query(
+    `SELECT create_contact_atomic($1,$2,$3::jsonb,0,'debit')`,
+    [c,u,JSON.stringify({name:`Plan race contact ${index}`,type:'client'})],
+  )));
+  assert.equal(contactLimitRace.filter((result)=>result.status==='fulfilled').length,1);
+  assert.equal(contactLimitRace.filter((result)=>result.status==='rejected').length,1);
+  await db.query(`UPDATE subscription_plans SET max_clients=NULL WHERE id=$1`,[activePlanId]);
+  await assert.rejects(()=>db.query(`SELECT create_contact_atomic($1,'99999999-0000-4000-8000-000000000099',$2::jsonb,0,'debit')`,[
+    c,JSON.stringify({name:'Foreign actor contact',type:'client'}),
+  ]));
+  const atomicSubcontractor=(await db.query(`SELECT create_contact_atomic($1,$2,$3::jsonb,0,'credit') result`,[
+    c,u,JSON.stringify({name:'Atomic subcontractor',type:'subcontractor'}),
+  ])).rows[0].result;
+  assert.equal((await db.query(`SELECT update_subcontractor_atomic($1,$2,'{"name":"Atomic subcontractor updated"}'::jsonb,$3) result`,[
+    c,atomicSubcontractor.id,u,
+  ])).rows[0].result.name,'Atomic subcontractor updated');
+  await assert.rejects(()=>db.query(`SELECT update_subcontractor_atomic($1,$2,'{"name":"Wrong subtype"}'::jsonb,$3)`,[c,agingContact.id,u]));
+  assert.equal((await db.query(`SELECT deactivate_subcontractor_atomic($1,$2,$3) result`,[c,atomicSubcontractor.id,u])).rows[0].result.is_active,false);
+
   const cancellableSale=(await db.query(`SELECT create_sales_invoice_atomic($1,$2,NULL,'2026-02-01','2026-03-01',$3::jsonb,0,FALSE,'',0,NULL,$4) result`,[
     c,contact,JSON.stringify([{description:'Cancel sale',quantity:1,unitPrice:25,discount:0}]),u,
   ])).rows[0].result;
@@ -613,6 +698,17 @@ async function smokeAtomicWriters(ids) {
   const u2=registration.rows[0].result.user.id;
   const contact2='67000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Other tenant client','client')`,[contact2,c2]);
+  await assert.rejects(()=>db.query(`SELECT update_contact_atomic($1,$2,$3::jsonb,$4)`,[
+    c,contact2,JSON.stringify({name:'Cross tenant overwrite'}),u,
+  ]));
+  await assert.rejects(()=>db.query(`SELECT deactivate_contact_atomic($1,$2,$3)`,[c,contact2,u]));
+  await assert.rejects(()=>db.query(`SELECT create_contact_atomic($1,$2,$3::jsonb,0,'debit')`,[
+    c,u2,JSON.stringify({name:'Wrong tenant actor',type:'client'}),
+  ]));
+  await assert.rejects(()=>db.query(`UPDATE contacts SET company_id=$1 WHERE id=$2`,[c,contact2]));
+  await assert.rejects(()=>db.query(`UPDATE contacts SET account_id=$1 WHERE id=$2`,[a['1130'],contact2]));
+  assert.equal(Number((await db.query(`SELECT get_contact_balance($1,$2,NULL) balance`,[c,contact2])).rows[0].balance),0);
+  assert.equal((await db.query(`SELECT name FROM contacts WHERE id=$1`,[contact2])).rows[0].name,'Other tenant client');
   const trialBefore=(await db.query(`SELECT end_date FROM subscriptions WHERE company_id=$1 ORDER BY created_at DESC LIMIT 1`,[c2])).rows[0].end_date;
   const trialRace=await Promise.all([
     db.query(`SELECT extend_company_trial_atomic($1,$2,7,'test') result`,[c2,'90000000-0000-4000-8000-000000000001']),

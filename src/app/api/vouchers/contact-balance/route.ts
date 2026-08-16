@@ -1,9 +1,10 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { getContactBalance } from '@/lib/contact-utils';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,8 +12,8 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const contactId = url.searchParams.get('contactId');
 
-    if (!contactId) {
-      return error('رقم الطرف مطلوب');
+    if (!contactId || !UUID_RE.test(contactId)) {
+      return error('معرّف الطرف غير صالح');
     }
 
     const s = sb();
@@ -23,9 +24,8 @@ export async function GET(request: NextRequest) {
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
-    if (contactError || !contact) {
-      return error('الطرف غير موجود');
-    }
+    if (contactError) throw contactError;
+    if (!contact) return error('الطرف غير موجود', 404);
 
     // الرصيد من السطور الموسومة بـ contact_id (مقيد بالشركة) — لا من account_id
     // ولا بتحميل كل قيود الشركة. سابقاً كان يعيد 0 دائماً لأن الأطراف بلا

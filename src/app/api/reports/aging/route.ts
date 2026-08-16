@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const number = (value: unknown) => Number(value) || 0;
 function bucketFor(days: number) {
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
     const type = url.searchParams.get('type') || 'ar';
     const asOf = url.searchParams.get('asOf') || url.searchParams.get('to') || new Date().toISOString().slice(0, 10);
     if (!['ar', 'ap'].includes(type)) return error('نوع التعمر يجب أن يكون ar أو ap');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf) || !Number.isFinite(Date.parse(asOf))) return error('تاريخ asOf غير صالح');
+    if (!isValidDate(asOf)) return error('تاريخ asOf غير صالح');
 
     const { data, error: queryError } = await getSupabase().rpc('get_aging_by_contact', {
       p_company_id: auth.companyId, p_type: type, p_as_of: asOf,

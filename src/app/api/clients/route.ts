@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getContactBalances, postContactOpeningBalance } from '@/lib/contact-utils';
-import { pickContactFields, writeContact } from '@/lib/contact-fields';
+import { getContactBalances } from '@/lib/contact-utils';
+import { contactCreateSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
-
-const VALID_CLIENT_TYPES = new Set(['client', 'both', 'supplier']);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CLIENT_COLUMNS = 'id, name, type, phone, email, address, tax_number, commercial_registration, credit_limit, contact_person, contact_person_phone, contact_person_email, city, region, country, postal_code, website, iban, bank_name, swift_code, payment_terms, notes, date_of_birth, gender, national_id, category, created_at';
 
 export async function GET(req: NextRequest) {
   try {
@@ -15,38 +15,20 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
     const contactId = url.searchParams.get('contactId');
+    if (contactId && !UUID_RE.test(contactId)) return error('معرّف العميل غير صالح');
 
-    let query = s.from('contacts')
-      .select('*, accounts(code, name)', { count: 'exact' })
-      .eq('company_id', auth.companyId)
-      .in('type', ['client', 'both']);
-
-    if (contactId) {
-      query = query.eq('id', contactId);
-    }
-
+    let query = s.from('contacts').select(CLIENT_COLUMNS, { count: 'exact' })
+      .eq('company_id', auth.companyId).in('type', ['client', 'both'])
+      .eq('is_active', true).is('deleted_at', null);
+    if (contactId) query = query.eq('id', contactId);
     const offset = (page - 1) * pageSize;
-    const { data, error: queryError, count } = await query
-      .order('name')
-      .range(offset, offset + pageSize - 1);
-
+    const { data, error: queryError, count } = await query.order('name').range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
 
-    const clients = (data || []).map((c: any) => ({
-      ...c,
-      account_code: c.accounts?.code || null,
-      account_name: c.accounts?.name || null,
-    }));
-
-    const balanceMap = await getContactBalances(
-      auth.companyId,
-      clients.map((c: any) => c.id),
-    );
-    clients.forEach((c: any) => {
-      c.balance = balanceMap[c.id] || 0;
-    });
-
-    return success({ clients, total: count || 0, page, pageSize });
+    const clients = (data || []) as Array<Record<string, unknown>>;
+    const balanceMap = await getContactBalances(auth.companyId, clients.map((client) => String(client.id)));
+    const result = clients.map((client) => ({ ...client, balance: balanceMap[String(client.id)] || 0 }));
+    return success({ clients: result, total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
   }
@@ -55,52 +37,23 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'clients', 'create');
-    const s = sb();
-    const data = await parseBody(req);
-
-    const picked = pickContactFields(data, { requireName: true });
-    if (picked.error || !picked.data) return error(picked.error || 'اسم العميل مطلوب');
-    const type = picked.data.type || 'client';
-    if (!VALID_CLIENT_TYPES.has(type)) {
-      return error('نوع العميل غير صالح');
-    }
-
-    try {
-      const { checkPlanLimit } = await import('@/lib/plan-limits');
-      const limitCheck = await checkPlanLimit(auth.companyId, 'clients');
-      if (!limitCheck.allowed) {
-        return error(limitCheck.message || 'تم الوصول للحد الأقصى من العملاء', 403);
-      }
-    } catch (e) {
-      console.warn('Plan limit check failed:', e);
-    }
-
-    const { data: result, error: insertError } = await writeContact(s, 'insert', {
-      ...picked.data,
-      type,
-      created_by: auth.userId,
-    }, { companyId: auth.companyId });
-
-    if (insertError || !result) throw insertError || new Error('فشل حفظ العميل');
-
-    const openingBalance = parseFloat(data.opening_balance) || 0;
-    const openingBalanceType = data.opening_balance_type === 'credit' ? 'credit' : 'debit';
-    if (openingBalance !== 0) {
-      const { error: obErr } = await postContactOpeningBalance(auth.companyId, {
-        contactId: result.id,
-        type,
-        amount: openingBalance,
-        balanceType: openingBalanceType,
-        name: picked.data.name,
-        userId: auth.userId,
-      });
-      if (obErr) {
-        await s.from('contacts').delete().eq('id', result.id).eq('company_id', auth.companyId);
-        throw obErr;
-      }
-    }
-
-    return success(result, 201);
+    const raw = await parseBody<Record<string, unknown>>(req);
+    const parsed = contactCreateSchema.safeParse({ ...raw, type: raw.type || 'client' });
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    if (!['client', 'both'].includes(parsed.data.type)) return error('قسم العملاء يقبل عميلاً أو عميلاً ومورداً فقط');
+    const { opening_balance = 0, opening_balance_type = 'debit', ...contact } = parsed.data;
+    const { data, error: createError } = await sb().rpc('create_contact_atomic', {
+      p_company_id: auth.companyId,
+      p_user_id: auth.userId,
+      p_data: contact,
+      p_opening_amount: opening_balance,
+      p_opening_type: opening_balance_type,
+    });
+    if (createError && /contact plan limit: clients/i.test(createError.message || '')) return error('تم الوصول للحد الأقصى من العملاء في باقتك الحالية', 403);
+    if (createError && /contact plan limit: suppliers/i.test(createError.message || '')) return error('تم الوصول للحد الأقصى من الموردين في باقتك الحالية', 403);
+    if (createError && /اسم الطرف مستخدم/i.test(createError.message || '')) return error('اسم العميل مستخدم مسبقاً', 409);
+    if (createError) throw createError;
+    return success(data, 201);
   } catch (err) {
     return handleApiError(err);
   }

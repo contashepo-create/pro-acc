@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatCurrency } from '@/lib/utils';
+import { Pagination } from '@/components/ui/Pagination';
 
 export default function SubcontractorsPage() {
   const [subcontractors, setSubcontractors] = useState<any[]>([]);
@@ -20,20 +20,29 @@ export default function SubcontractorsPage() {
   const [editingSubcontractor, setEditingSubcontractor] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
   const [form, setForm] = useState<any>({ name: '', contact_person: '', phone: '', email: '', tax_number: '', specialty: '', notes: '' });
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const res = await fetch('/api/subcontractors');
+      const res = await fetch(`/api/subcontractors?page=${page}&pageSize=${pageSize}`);
       const json = await res.json();
-      if (json.success) setSubcontractors(json.data?.subcontractors || []);
-      else setError(json.message || 'فشل');
+      if (json.success) {
+        setSubcontractors(json.data?.subcontractors || []);
+        setTotal(Number(json.data?.total) || 0);
+      } else setError(json.message || 'فشل');
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
-  };
+  }, [page, pageSize]);
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    // The effect intentionally refreshes server-backed rows when pagination changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+  }, [fetchData]);
 
   const handleSave = async () => {
     if (!form.name) { setSaveError('الاسم مطلوب'); return; }
@@ -54,7 +63,7 @@ export default function SubcontractorsPage() {
         setForm({ name: '', contact_person: '', phone: '', email: '', tax_number: '', specialty: '', notes: '' });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
   const handleEdit = async (subcontractor: any) => {
@@ -84,9 +93,10 @@ export default function SubcontractorsPage() {
       const res = await fetch(`/api/subcontractors/${subcontractor.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        fetchData();
+        if (subcontractors.length === 1 && page > 1) setPage((value) => value - 1);
+        else fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        alert(json.message || 'فشل التعطيل');
       }
     } catch (e) {
       alert('خطأ في الاتصال بالخادم');
@@ -108,6 +118,7 @@ export default function SubcontractorsPage() {
           item={row}
           onEdit={handleEdit}
           onDelete={handleDelete}
+          deleteMode="deactivate"
         />
       ),
     },
@@ -119,7 +130,21 @@ export default function SubcontractorsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="مقاولو الباطن" description="إدارة مقاولي الباطن" actions={<Button onClick={() => { setEditingSubcontractor(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة مقاول</Button>} />
-      {subcontractors.length === 0 ? <EmptyState title="لا يوجد مقاولون" actionLabel="إضافة مقاول" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={subcontractors} searchable searchKeys={['name', 'specialty']} />}
+      {subcontractors.length === 0 ? (
+        <EmptyState title="لا يوجد مقاولون" actionLabel="إضافة مقاول" onAction={() => setShowModal(true)} />
+      ) : (
+        <>
+          <DataTable columns={columns} data={subcontractors} searchable searchKeys={['name', 'specialty']} />
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, Math.ceil(total / pageSize))}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPage(1); setPageSize(size); }}
+          />
+        </>
+      )}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingSubcontractor(null); }} title={editingSubcontractor ? `تعديل: ${editingSubcontractor.name}` : 'إضافة مقاول باطن'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingSubcontractor(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
