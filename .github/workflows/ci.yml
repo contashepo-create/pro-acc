@@ -50,3 +50,11 @@ jobs:
         run: npm run test:integration
       - name: Regression suite
         run: npm run test:regression
+      # Applies all migrations from scratch on in-process PGlite.
+      - name: Migrations (PGlite)
+        run: npm run test:migrations
+      # Applies the same migrations from scratch on a REAL PostgreSQL server
+      # (genuine pgcrypto, real locking) and runs the multi-connection
+      # concurrency races that PGlite cannot exercise.
+      - name: Migrations + concurrency (real PostgreSQL)
+        run: npm run test:migrations:pg
