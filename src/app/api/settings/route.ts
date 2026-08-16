@@ -66,8 +66,12 @@ export async function PUT(request: NextRequest) {
       }));
 
       if (updates.length > 0) {
-        await s.from('settings')
+        // A swallowed failure here returned {updated:true} while nothing was
+        // saved, so the user believed a setting (including VAT-relevant
+        // preferences) had been applied when it had not.
+        const { error: settingsError } = await s.from('settings')
           .upsert(updates, { onConflict: 'company_id,key' });
+        if (settingsError) throw settingsError;
       }
     }
 
@@ -120,7 +124,15 @@ export async function PUT(request: NextRequest) {
 
       if (Object.keys(companyUpdate).length > 0) {
         companyUpdate.updated_at = new Date().toISOString();
-        await s.from('companies').update(companyUpdate).eq('id', auth.companyId).eq('company_id', auth.companyId);
+        // The tenant IS the row here: `companies` is keyed by id and has no
+        // company_id column, so the extra .eq('company_id', ...) filter made
+        // PostgREST reject the request (42703). Combined with the ignored
+        // error, changing the company VAT rate or tax number silently did
+        // nothing while the UI reported success.
+        const { error: companyError } = await s.from('companies')
+          .update(companyUpdate)
+          .eq('id', auth.companyId);
+        if (companyError) throw companyError;
       }
     }
 
