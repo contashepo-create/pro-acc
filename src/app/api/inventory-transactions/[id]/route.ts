@@ -1,106 +1,59 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
+import { z } from 'zod';
+import { success, error, notFound, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const updateSchema = z.object({ notes: z.string().trim().max(500).nullable() }).strict();
+const COLUMNS = 'id, item_id, warehouse_id, to_warehouse_id, type, quantity, unit_price, total_value, balance_before, balance_after, reference_type, reference_id, project_id, notes, date, created_by, created_at, inventory_items!item_id(name, code), warehouses!warehouse_id(name)';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'inventory_transactions', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: transaction } = await s.from('inventory_transactions')
-      .select('*, inventory_items(name, code), warehouses(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!transaction) return notFound();
-
-    return success(transaction);
+    if (!UUID_RE.test(id)) return error('معرّف الحركة غير صالح');
+    const { data, error: queryError } = await sb().from('inventory_transactions').select(COLUMNS)
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (queryError) throw queryError;
+    if (!data) return notFound();
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * PUT /api/inventory-transactions/[id]
- * الحركة المخزنية أثر مالي ومخزني — الكمية/السعر/النوع لا تُعدَّل أبداً
- * (تعديلها بلا إعادة ترحيل يفسد الدفتر مقابل الرصيد). يُسمح فقط بتصحيح
- * الملاحظات والتاريخ. لتصحيح كمية: سجّل حركة عكسية ثم حركة صحيحة.
- */
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'inventory_transactions', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody<Record<string, unknown>>(request);
-
-    const { data: existing } = await s.from('inventory_transactions')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    if (
-      body.quantity !== undefined || body.unit_price !== undefined ||
-      body.total_value !== undefined || body.type !== undefined || body.item_id !== undefined
-    ) {
-      return error('لا يمكن تعديل كمية/سعر/نوع حركة مسجلة — سجّل حركة عكسية ثم حركة صحيحة');
-    }
-
-    const updateData: any = {};
-    if (body.date !== undefined) updateData.date = body.date;
-    if (body.notes !== undefined) updateData.notes = body.notes;
-    if (Object.keys(updateData).length === 0) return error('لا يوجد ما يمكن تعديله');
-
-    const { data: updated, error: updateErr } = await s.from('inventory_transactions')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    return success(updated);
+    if (!UUID_RE.test(id)) return error('معرّف الحركة غير صالح');
+    const parsed = updateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error('لا يمكن تعديل أثر الحركة؛ يُسمح بالملاحظات فقط، وللقيم سجّل حركة عكسية');
+    const { data, error: updateError } = await sb().rpc('update_inventory_transaction_note_atomic', {
+      p_company_id: auth.companyId,
+      p_transaction_id: id,
+      p_notes: parsed.data.notes || '',
+      p_user_id: auth.userId,
+    });
+    if (updateError && String(updateError.message || '').includes('الحركة غير موجودة')) return notFound();
+    if (updateError) throw updateError;
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * DELETE /api/inventory-transactions/[id]
- * محظور: حذف حركة أثّرت على الرصيد والدفاتر بلا أثر عكسي هو الفساد بعينه.
- * البديل المحاسبي: حركة عكسية (issue↔return)، أو تسوية جرد.
- */
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireManagerOrAbove(request);
+    const auth = await requireModulePermission(request, 'inventory_transactions', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('inventory_transactions')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    return error('الحركات المخزنية لا تُحذف — سجّل حركة عكسية (مرتجع/صرف) أو تسوية جرد للتصحيح');
+    if (!UUID_RE.test(id)) return error('معرّف الحركة غير صالح');
+    const { data, error: queryError } = await sb().from('inventory_transactions').select('id')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (queryError) throw queryError;
+    if (!data) return notFound();
+    return error('الحركة المخزنية لا تُحذف أو تُعدّل مالياً؛ سجّل حركة عكسية موثقة للتصحيح', 409);
   } catch (err) {
     return handleApiError(err);
   }

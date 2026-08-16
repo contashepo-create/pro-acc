@@ -18,6 +18,7 @@ interface ActionButtonsProps {
   showPrint?: boolean;
   status?: string;
   showStatus?: boolean;
+  deleteMode?: 'delete' | 'deactivate';
 }
 
 function defaultPrint(item: any) {
@@ -45,6 +46,7 @@ export function ActionButtons({
   showPrint = true,
   status,
   showStatus = false,
+  deleteMode = 'delete',
 }: ActionButtonsProps) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
@@ -122,7 +124,7 @@ export function ActionButtons({
             variant="ghost"
             size="sm"
             onClick={() => setShowDeleteModal(true)}
-            title="حذف"
+            title={deleteMode === 'deactivate' ? 'تعطيل' : 'حذف'}
             className="text-danger hover:bg-danger/10"
           >
             <Trash2 size={16} />
@@ -139,20 +141,26 @@ export function ActionButtons({
       <Modal
         isOpen={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
-        title="تأكيد الحذف"
+        title={deleteMode === 'deactivate' ? 'تأكيد التعطيل' : 'تأكيد الحذف'}
         footer={
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => setShowDeleteModal(false)}>
               إلغاء
             </Button>
             <Button variant="danger" onClick={handleDelete} disabled={deleting}>
-              {deleting ? 'جاري الحذف...' : 'حذف'}
+              {deleting
+                ? (deleteMode === 'deactivate' ? 'جاري التعطيل...' : 'جاري الحذف...')
+                : (deleteMode === 'deactivate' ? 'تعطيل' : 'حذف')}
             </Button>
           </div>
         }
       >
-        <p>هل أنت متأكد من حذف هذا العنصر؟</p>
-        <p className="text-sm text-text-muted mt-2">هذا الإجراء لا يمكن التراجع عنه.</p>
+        <p>{deleteMode === 'deactivate' ? 'هل أنت متأكد من تعطيل هذا العنصر؟' : 'هل أنت متأكد من حذف هذا العنصر؟'}</p>
+        <p className="text-sm text-text-muted mt-2">
+          {deleteMode === 'deactivate'
+            ? 'سيبقى السجل محفوظاً للرجوع إليه في الحركات والتقارير التاريخية.'
+            : 'هذا الإجراء لا يمكن التراجع عنه.'}
+        </p>
       </Modal>
     </>
   );

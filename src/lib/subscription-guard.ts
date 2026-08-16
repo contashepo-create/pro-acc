@@ -282,6 +282,7 @@ export async function assertSubscriptionAccess(
         : access.status === 'missing'
           ? 'لا يوجد اشتراك فعال لهذه الشركة.'
           : 'انتهت صلاحية الاشتراك. يرجى التجديد أو إدخال كود تفعيل أو التواصل مع الدعم. يمكنك عرض بياناتك وتحميل نسخة منها.',
+      403,
     );
   }
 
@@ -301,6 +302,7 @@ export async function assertSubscriptionAccess(
     if (!allowed) {
       throw new AuthError(
         `الوحدة "${moduleId}" غير مُضمَّنة في باقتك الحالية (${access.planName || access.planCode || '—'}). قم بترقية الباقة للوصول إليها.`,
+        403,
       );
     }
   }

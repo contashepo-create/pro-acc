@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireAdmin, handleApiError, error, success, parseBody } from '@/lib/api-helpers';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { getBackupSecret } from '@/lib/backup-integrity';
 
 const sb = () => getSupabase();
@@ -40,7 +40,12 @@ export async function POST(request: NextRequest) {
     const jsonString = JSON.stringify(backupData, null, 2);
     const expectedFullHmac = createHmac('sha256', getBackupSecret()).update(jsonString).digest('hex');
     const expectedHash = expectedFullHmac.substring(0, 16);
-    
+    const suppliedHash = Buffer.from(String(fileHash), 'utf8');
+    const calculatedHash = Buffer.from(expectedHash, 'utf8');
+    if (suppliedHash.length !== calculatedHash.length || !timingSafeEqual(suppliedHash, calculatedHash)) {
+      return error('بصمة ملف النسخة الاحتياطية غير صالحة', 400);
+    }
+
     // Secure verification: search database logs for a record matching the CALCULATED full hmac signature of the actual uploaded content.
     // If the content was modified by even one character, the calculated HMAC will change, and it will not find any log entry.
     const { data: logByHmac } = await s.from('backup_logs')
@@ -81,36 +86,23 @@ export async function POST(request: NextRequest) {
       ip_address: request.headers.get('x-forwarded-for') || 'unknown',
     });
 
-    // Perform restore - only for this company's data, with transaction-like safety
-    // For safety, we only restore non-critical tables and prevent overwriting with empty
-    for (const table of restoreOrder) {
-      const rows = backupData.data[table];
-      if (!rows || !Array.isArray(rows) || rows.length === 0) continue;
-
-      // Delete existing and insert backup (for simplicity)
-      // In production, you might want to merge instead
-      // For safety, we only restore if user explicitly confirms
-      // Here we do upsert based on id
-      for (const row of rows) {
-        // Ensure company_id is correct
-        const safeRow = { ...row, company_id: auth.companyId };
-        // Remove fields that shouldn't be restored
-        delete safeRow.created_at;
-        delete safeRow.updated_at;
-        
-        const { error: restoreError } = await s.from(table).upsert(safeRow, { onConflict: 'id' });
-        if (restoreError) throw restoreError;
-      }
-    }
-
-    await s.from('security_audit_log').insert({
-      company_id: auth.companyId,
-      user_id: auth.userId,
-      action: 'backup_upload_success',
-      details: { file_hash: fileHash },
+    // One database transaction performs all supported-table writes. The RPC
+    // re-verifies the administrator, company, HMAC log, table allow-list and
+    // every row's tenant before touching data. Any failure rolls everything
+    // back, rather than leaving a partially restored company.
+    const { data: restoreResult, error: restoreError } = await s.rpc('restore_company_backup_atomic', {
+      p_company_id: auth.companyId,
+      p_user_id: auth.userId,
+      p_hmac_signature: expectedFullHmac,
+      p_data: backupData.data || {},
     });
+    if (restoreError) throw restoreError;
 
-    return success({ message: 'تم استعادة النسخة الاحتياطية بنجاح', restoredTables: Object.keys(backupData.data || {}) });
+    return success({
+      message: 'تم استعادة النسخة الاحتياطية بنجاح',
+      restoredTables: Object.keys(backupData.data || {}).filter((table) => restoreOrder.includes(table as any)),
+      result: restoreResult,
+    });
   } catch (err) {
     return handleApiError(err);
   }

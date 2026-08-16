@@ -78,7 +78,7 @@ export default function WarehousesPage() {
       if (json.success) {
         fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        alert(json.message || 'فشل التعطيل');
       }
     } catch (e) {
       alert('خطأ في الاتصال بالخادم');
@@ -97,6 +97,7 @@ export default function WarehousesPage() {
           item={row}
           onEdit={handleEdit}
           onDelete={handleDelete}
+          deleteMode="deactivate"
         />
       ),
     },

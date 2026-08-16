@@ -219,21 +219,24 @@ export const invoiceSchema = z.object({
 // matching the DB columns — unlike the sales invoice API which is camelCase.
 
 export const purchaseInvoiceItemSchema = z.object({
-  description: z.string().min(1, 'البيان مطلوب'),
-  quantity: z.number().positive('الكمية يجب أن تكون أكبر من صفر'),
-  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً'),
+  description: z.string().trim().min(1, 'البيان مطلوب').max(50, 'البيان يجب ألا يتجاوز 50 حرفاً'),
+  quantity: z.number().positive('الكمية يجب أن تكون أكبر من صفر')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'الكمية يجب ألا تتجاوز منزلتين'),
+  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'السعر يجب ألا يتجاوز منزلتين'),
   // UI hint only — the server always recomputes line totals.
   total: z.number().optional(),
-});
+}).strict();
 
 export const purchaseInvoiceSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'تاريخ الفاتورة غير صالح' }),
   supplier_id: z.string().uuid('رقم المورد غير صالح'),
   purchase_order_id: z.string().uuid('رقم أمر الشراء غير صالح').optional().nullable(),
-  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل'),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').max(200, 'عدد البنود يتجاوز الحد المسموح'),
   // Fraction (0.15 = 15%). Unbounded previously — negative/huge rates were accepted.
-  tax_rate: z.number().min(0, 'نسبة الضريبة لا يمكن أن تكون سالبة').max(1, 'نسبة الضريبة غير صالحة').optional().default(0),
-  notes: z.string().optional(),
+  tax_rate: z.number().min(0, 'نسبة الضريبة لا يمكن أن تكون سالبة').max(1, 'نسبة الضريبة غير صالحة')
+    .refine((value) => Math.abs(value * 10000 - Math.round(value * 10000)) < 1e-8, 'نسبة الضريبة غير صالحة').optional().default(0),
+  notes: z.string().max(2000).optional(),
   project_id: z.string().uuid().optional().nullable(),
   custody_id: z.string().uuid().optional().nullable(),
   link_to_project: z.boolean().optional(),
@@ -243,27 +246,28 @@ export const purchaseInvoiceUpdateSchema = z.object({
   status: z.enum(['unpaid', 'partial', 'paid', 'cancelled'] as const, {
     message: 'حالة الفاتورة غير صالحة',
   }).optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(2000).optional(),
 }).strict();
 
 export const purchaseOrderSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }),
   supplier_id: z.string().uuid('رقم المورد غير صالح'),
-  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل'),
-  notes: z.string().optional(),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').max(200, 'عدد البنود يتجاوز الحد المسموح'),
+  notes: z.string().max(2000).optional(),
 }).strict();
 
 export const purchaseOrderUpdateSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
   supplier_id: z.string().uuid('رقم المورد غير صالح').optional(),
-  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').optional(),
-  notes: z.string().optional(),
+  items: z.array(purchaseInvoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل').max(200, 'عدد البنود يتجاوز الحد المسموح').optional(),
+  notes: z.string().max(2000).optional(),
 }).strict();
 
 // Goods receipt against a PO: explicit per-item quantities must be POSITIVE —
 // a negative value previously reduced received_quantity AND deducted stock.
 export const purchaseReceiveSchema = z.object({
-  quantities: z.record(z.string(), z.number().positive('كمية الاستلام يجب أن تكون أكبر من صفر')).optional(),
+  quantities: z.record(z.string().uuid('معرّف بند الاستلام غير صالح'), z.number().positive('كمية الاستلام يجب أن تكون أكبر من صفر')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'كمية الاستلام يجب ألا تتجاوز منزلتين')).optional(),
   date: z.string().refine(isValidDateString, { message: 'تاريخ الاستلام غير صالح' }).optional(),
 }).strict();
 
@@ -392,8 +396,10 @@ export const inventoryMovementSchema = z.object({
   type: z.enum(['add', 'issue', 'adjust', 'adjustment', 'transfer', 'return'] as const, {
     message: 'نوع العملية غير مدعوم',
   }),
-  quantity: z.number().min(0, 'الكمية يجب أن لا تكون سالبة'),
-  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً').optional(),
+  quantity: z.number().min(0, 'الكمية يجب أن لا تكون سالبة')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'الكمية يجب ألا تتجاوز منزلتين'),
+  unit_price: z.number().min(0, 'السعر لا يمكن أن يكون سالباً')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'السعر يجب ألا يتجاوز منزلتين').optional(),
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
   notes: z.string().max(500).optional(),
   to_warehouse_id: z.string().uuid('مستودع الوجهة غير صالح').optional().nullable(),
@@ -433,46 +439,42 @@ export const contactTypeSchema = z.enum(['client', 'supplier', 'subcontractor', 
   message: 'نوع الطرف غير صالح',
 });
 
-export const contactCreateSchema = z.object({
-  name: z.string().min(1, 'الاسم مطلوب').max(200),
+const contactFieldsSchema = z.object({
+  name: z.string().trim().min(1, 'الاسم مطلوب').max(200),
   type: contactTypeSchema,
-  phone: z.string().max(50).optional().nullable(),
-  email: z.string().email('البريد الإلكتروني غير صالح').optional().nullable().or(z.literal('')),
-  address: z.string().max(500).optional().nullable(),
-  tax_number: z.string().max(100).optional().nullable(),
-  commercial_registration: z.string().max(100).optional().nullable(),
-  credit_limit: z.number().min(0, 'الحد الائتماني لا يمكن أن يكون سالباً').optional(),
-  opening_balance: z.number().min(0).optional(),
+  phone: z.string().trim().max(50).nullable().optional(),
+  email: z.string().trim().email('البريد الإلكتروني غير صالح').max(254).nullable().optional().or(z.literal('')),
+  address: z.string().trim().max(500).nullable().optional(),
+  tax_number: z.string().trim().max(100).nullable().optional(),
+  commercial_registration: z.string().trim().max(100).nullable().optional(),
+  credit_limit: z.number().min(0, 'الحد الائتماني لا يمكن أن يكون سالباً')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'الحد الائتماني يجب ألا يتجاوز منزلتين').nullable().optional(),
+  contact_person: z.string().trim().max(200).nullable().optional(),
+  contact_person_phone: z.string().trim().max(50).nullable().optional(),
+  contact_person_email: z.string().trim().email('بريد مسؤول الاتصال غير صالح').max(254).nullable().optional().or(z.literal('')),
+  city: z.string().trim().max(100).nullable().optional(),
+  region: z.string().trim().max(100).nullable().optional(),
+  country: z.string().trim().max(100).nullable().optional(),
+  postal_code: z.string().trim().max(20).nullable().optional(),
+  website: z.string().trim().max(300).nullable().optional(),
+  iban: z.string().trim().max(50).nullable().optional(),
+  bank_name: z.string().trim().max(200).nullable().optional(),
+  swift_code: z.string().trim().max(20).nullable().optional(),
+  payment_terms: z.string().trim().max(50).nullable().optional(),
+  notes: z.string().trim().max(2000).nullable().optional(),
+  date_of_birth: z.string().refine((value) => value === '' || isValidDateString(value), 'تاريخ الميلاد غير صالح').nullable().optional(),
+  gender: z.string().trim().max(20).nullable().optional(),
+  national_id: z.string().trim().max(50).nullable().optional(),
+  category: z.string().trim().max(100).nullable().optional(),
+});
+
+export const contactCreateSchema = contactFieldsSchema.extend({
+  opening_balance: z.number().min(0, 'الرصيد الافتتاحي لا يمكن أن يكون سالباً')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'الرصيد الافتتاحي يجب ألا يتجاوز منزلتين').optional(),
   opening_balance_type: z.enum(['debit', 'credit'] as const).optional(),
 }).strict();
 
-export const contactUpdateSchema = z.object({
-  name: z.string().min(1, 'الاسم مطلوب').max(200).optional(),
-  type: contactTypeSchema.optional(),
-  phone: z.string().max(50).nullable().optional(),
-  email: z.string().email('البريد الإلكتروني غير صالح').nullable().optional().or(z.literal('')),
-  address: z.string().max(500).nullable().optional(),
-  tax_number: z.string().max(100).nullable().optional(),
-  commercial_registration: z.string().max(100).nullable().optional(),
-  credit_limit: z.number().min(0).nullable().optional(),
-  contact_person: z.string().max(200).nullable().optional(),
-  contact_person_phone: z.string().max(50).nullable().optional(),
-  contact_person_email: z.string().max(254).nullable().optional(),
-  city: z.string().max(100).nullable().optional(),
-  region: z.string().max(100).nullable().optional(),
-  country: z.string().max(100).nullable().optional(),
-  postal_code: z.string().max(20).nullable().optional(),
-  website: z.string().max(300).nullable().optional(),
-  iban: z.string().max(50).nullable().optional(),
-  bank_name: z.string().max(200).nullable().optional(),
-  swift_code: z.string().max(20).nullable().optional(),
-  payment_terms: z.string().max(50).nullable().optional(),
-  notes: z.string().max(2000).nullable().optional(),
-  date_of_birth: z.string().nullable().optional(),
-  gender: z.string().max(20).nullable().optional(),
-  national_id: z.string().max(50).nullable().optional(),
-  category: z.string().max(100).nullable().optional(),
-});
+export const contactUpdateSchema = contactFieldsSchema.partial().strict();
 
 // --------------- Project ---------------
 
@@ -511,8 +513,10 @@ export const equipmentCostSchema = z.object({
   project_id: z.string().uuid('رقم المشروع غير صالح').nullable().optional(),
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
   cost_type: z.enum(['rental', 'fuel', 'maintenance', 'labour', 'depreciation', 'other']).default('other'),
-  amount: z.number().min(0, 'المبلغ لا يمكن أن يكون سالبًا'),
+  amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر').refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'المبلغ يجب ألا يتجاوز منزلتين عشريتين'),
   usage_hours: z.number().min(0).optional().default(0),
+  expense_account_id: z.string().uuid('حساب المصروف غير صالح').nullable().optional(),
+  payment_account_id: z.string().uuid('حساب السداد غير صالح').nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
 }).strict();
 

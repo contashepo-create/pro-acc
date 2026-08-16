@@ -23,10 +23,11 @@ export async function verifyAdminToken(request: NextRequest): Promise<AdminPaylo
     const s = sb();
     const { data } = await s
       .from('admin_users')
-      .select('id, is_active')
+      .select('id, is_active, token_version')
       .eq('id', payload.userId)
       .maybeSingle();
     if (!data || !(data as any).is_active) return null;
+    if (payload.ver !== (Number((data as any).token_version) || 0)) return null;
     return { userId: (data as any).id, role: 'superadmin' };
   } catch {
     return null;

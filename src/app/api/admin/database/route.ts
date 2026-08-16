@@ -1,7 +1,7 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError } from '@/lib/api-helpers';
+import { success } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
 
@@ -14,14 +14,15 @@ const KNOWN_TABLES = [
 
 export async function GET(request: NextRequest) {
   try {
-  const __admin = await requireAdmin(request);
+    await requireAdmin(request);
 
     const s = sb();
 
     // Query each known table for row count
     const tableInfos = await Promise.all(
       KNOWN_TABLES.map(async (tableName) => {
-        const { count } = await s.from(tableName).select('*', { count: 'exact', head: true });
+        const { count, error: countError } = await s.from(tableName).select('id', { count: 'exact', head: true });
+        if (countError) throw countError;
         return {
           name: tableName,
           row_count: count || 0,

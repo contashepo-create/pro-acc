@@ -1,56 +1,64 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { z } from 'zod';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
+const money = z.number().finite().refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8,
+  'المبلغ يجب ألا يتجاوز منزلتين');
+const nonnegativeMoney = z.number().finite().nonnegative('مبلغ بند المطابقة لا يكون سالباً')
+  .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'المبلغ يجب ألا يتجاوز منزلتين');
+const reconciliationSchema = z.object({
+  bankSafeId: z.string().uuid('معرّف البنك أو الخزينة غير صالح'),
+  date: z.string().refine(isValidDate, 'تاريخ المطابقة غير صالح'),
+  closingBalance: money,
+  items: z.array(z.object({
+    transactionType: z.string().trim().min(1, 'وصف بند المطابقة مطلوب').max(100),
+    amount: nonnegativeMoney,
+    date: z.string().refine(isValidDate, 'تاريخ بند المطابقة غير صالح').optional(),
+    isCleared: z.boolean().optional(),
+  }).strict()).max(1000, 'عدد بنود المطابقة يتجاوز الحد المسموح').optional().default([]),
+}).strict();
+const COLUMNS = 'id, bank_safe_id, date, closing_balance, system_balance, difference, status, created_by, completed_by, completed_at, created_at, banks_safes!bank_safe_id(name)';
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'banks', 'read');
-    const s = sb();
-    const { data, error: queryError } = await s.from('bank_reconciliation')
-      .select('*, banks_safes(name)').eq('company_id', auth.companyId).order('date', { ascending: false });
+    const { data, error: queryError } = await sb().from('bank_reconciliation')
+      .select(COLUMNS).eq('company_id', auth.companyId).order('date', { ascending: false }).range(0, 499);
     if (queryError) throw queryError;
-
-    const reconciliations = (data || []).map((r: any) => ({ ...r, bank_safe_name: r.banks_safes?.name || null }));
+    const reconciliations = (data || []).map((row: Record<string, unknown>) => ({
+      ...row,
+      bank_safe_name: (row.banks_safes as { name?: string } | null)?.name || null,
+      banks_safes: undefined,
+    }));
     return success(reconciliations);
-  } catch (err) { return handleApiError(err); }
+  } catch (err) {
+    return handleApiError(err);
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'banks', 'create');
-    const s = sb();
-    const { bankSafeId, date, closingBalance, items } = await parseBody(req);
-    if (!bankSafeId || !date || closingBalance === undefined)
-      return error('bankSafeId, date, closingBalance are required');
-    const normalizedClosingBalance = Number(closingBalance);
-    if (!Number.isFinite(normalizedClosingBalance) || Math.abs(normalizedClosingBalance * 100 - Math.round(normalizedClosingBalance * 100)) > 1e-8)
-      return error('الرصيد الختامي يجب أن يكون رقماً بمنزلتين عشريتين كحد أقصى');
-    if (items !== undefined && !Array.isArray(items)) return error('بنود المطابقة غير صالحة');
-    if (Array.isArray(items) && items.some((item) => !item || typeof item !== 'object' || !Number.isFinite(Number(item.amount)) || Number(item.amount) < 0)) {
-      return error('أحد بنود المطابقة غير صالح');
-    }
-
-    // TENANT CHECK: الخزينة/البنك المطابَق يجب أن ينتمي لهذه الشركة
-    const { data: bankSafe } = await s.from('banks_safes')
-      .select('id').eq('id', bankSafeId).eq('company_id', auth.companyId).maybeSingle();
-    if (!bankSafe) return error('البنك/الخزينة غير موجود', 404);
-
-    const { data: rec, error: recErr } = await s.from('bank_reconciliation')
-      .insert({ company_id: auth.companyId, bank_safe_id: bankSafeId, date, closing_balance: parseFloat(closingBalance) })
-      .select('*').single();
-    if (recErr) throw recErr;
-
-    if (items && items.length > 0) {
-      for (const item of items) {
-        await s.from('bank_reconciliation_items').insert({
-          company_id: auth.companyId, reconciliation_id: rec.id,
-          transaction_type: item.transactionType, amount: item.amount,
-          date: item.date ?? date, is_cleared: item.isCleared ?? false,
-        });
-      }
-    }
-    return success(rec);
-  } catch (err) { return handleApiError(err); }
+    const parsed = reconciliationSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const value = parsed.data;
+    const { data, error: createError } = await sb().rpc('create_bank_reconciliation', {
+      p_company_id: auth.companyId,
+      p_bank_safe_id: value.bankSafeId,
+      p_date: value.date,
+      p_closing_balance: value.closingBalance,
+      p_items: value.items,
+      p_user_id: auth.userId,
+    });
+    const message = String(createError?.message || '');
+    if (message.includes('غير موجود')) return error('البنك أو الخزينة غير موجود', 404);
+    if (message.includes('مطابقة لهذا البنك')) return error(message, 409);
+    if (createError) throw createError;
+    return success(data, 201);
+  } catch (err) {
+    return handleApiError(err);
+  }
 }

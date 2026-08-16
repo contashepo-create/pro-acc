@@ -15,11 +15,15 @@ export async function GET(req: NextRequest) {
     const mode = allowedModes.has(displayMode) ? displayMode : 'top_bar';
 
     const s = getSupabase();
+    const now = new Date();
+    const nowIso = now.toISOString();
     const { data, error } = await s
       .from('advertisements')
       .select('id, title, body, type, display_mode, priority, link_url, link_text, expires_at, starts_at, is_active')
       .eq('is_active', true)
       .eq('display_mode', mode)
+      .lte('starts_at', nowIso)
+      .or(`expires_at.is.null,expires_at.gte.${nowIso}`)
       .order('priority', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(20);
@@ -29,7 +33,8 @@ export async function GET(req: NextRequest) {
       throw error;
     }
 
-    const now = new Date();
+    // Keep a defensive application-level check in case a legacy database
+    // adapter ignores one of the PostgREST date predicates.
     const filtered = (data || []).filter((ad: any) => {
       if (ad.expires_at && new Date(ad.expires_at) < now) return false;
       if (ad.starts_at && new Date(ad.starts_at) > now) return false;

@@ -168,50 +168,18 @@ export async function DELETE(
       return error('لا يمكنك حذف حسابك الخاص');
     }
 
-    const { data: targetUser } = await s
-      .from('users')
-      .select('id, role')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!targetUser) return notFound();
-
-    const target = targetUser as { id: string; role: string };
-    if (target.role === 'admin') {
-      const { count: adminCount } = await s
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', auth.companyId)
-        .eq('role', 'admin')
-        .eq('is_active', true);
-
-      if ((adminCount || 0) <= 1) {
-        return error('لا يمكن حذف آخر مدير في الشركة. قم بترقية مستخدم آخر أولاً');
-      }
+    const { data: result, error: deactivateError } = await s.rpc('deactivate_company_user_atomic', {
+      p_company_id: auth.companyId,
+      p_target_user_id: id,
+      p_actor_user_id: auth.userId,
+    });
+    if (deactivateError) {
+      const message = String(deactivateError.message || 'تعذر تعطيل المستخدم');
+      if (/غير موجود/.test(message)) return notFound();
+      if (/آخر مدير|حسابك الخاص/.test(message)) return error(message, 409);
+      throw deactivateError;
     }
-
-    const { error: deleteError } = await s
-      .from('users')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', auth.companyId);
-
-    if (deleteError) throw deleteError;
-
-    // Audit log
-    try {
-      await s.from('audit_log').insert({
-        company_id: auth.companyId,
-        user_id: auth.userId,
-        action: 'delete_user',
-        entity_type: 'user',
-        entity_id: id,
-        old_values: target,
-      });
-    } catch {}
-
-    return success({ deleted: true });
+    return success(result);
   } catch (err) {
     return handleApiError(err);
   }

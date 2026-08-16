@@ -484,7 +484,7 @@ export default function InvoiceViewPage() {
               </label>
               <label className="flex items-center gap-2 cursor-pointer text-text-secondary hover:text-text-primary">
                 <input type="checkbox" className="rounded accent-accent" checked={settings.showQR} onChange={e => setSettings({ ...settings, showQR: e.target.checked })} />
-                <span>رمز الاستجابة السريع (ZATCA QR)</span>
+                <span>رمز ZATCA للمرحلة الأولى (TLV 1–5)</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer text-text-secondary hover:text-text-primary">
                 <input type="checkbox" className="rounded accent-accent" checked={settings.showNotes} onChange={e => setSettings({ ...settings, showNotes: e.target.checked })} />

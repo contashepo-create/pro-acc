@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 
@@ -9,86 +8,33 @@ export async function POST(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'subcontractors', 'create');
     const data = await parseBody(req);
-    const { contract_id, certificate_id, amount, date, bank_safe_id, notes } = data;
-
-    if (!auth.companyId || !contract_id || !amount || !date || !bank_safe_id) {
-      return error('company_id, contract_id, amount, date, bank_safe_id are required');
+    const { contract_id, certificate_id, amount: rawAmount, date, bank_safe_id, notes } = data;
+    const amount = Number(rawAmount);
+    if (!contract_id || typeof contract_id !== 'string' || !bank_safe_id || typeof bank_safe_id !== 'string'
+      || !date || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+      return error('العقد والتاريخ والخزينة مطلوبة');
     }
+    if (certificate_id !== undefined && certificate_id !== null && typeof certificate_id !== 'string') return error('معرّف الشهادة غير صالح');
+    if (!Number.isFinite(amount) || amount <= 0 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) return error('قيمة الدفعة غير صالحة');
+    if (notes !== undefined && (typeof notes !== 'string' || notes.length > 2000)) return error('الملاحظات غير صالحة');
 
-    const s = sb();
-
-    // عزل مستأجرين: العقد والخزينة يجب أن ينتميا لهذه الشركة (قبل أي كتابة)
-    const { data: contract } = await s.from('subcontractor_contracts')
-      .select('id').eq('id', contract_id).eq('company_id', auth.companyId).maybeSingle();
-    if (!contract) return error('العقد غير موجود', 404);
-
-    const { data: bankAccount } = await s.from('banks_safes')
-      .select('account_id')
-      .eq('id', bank_safe_id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (!bankAccount?.account_id) return error('الخزينة/البنك غير موجود أو بلا حساب محاسبي', 404);
-
-    if (certificate_id) {
-      const { data: cert } = await s.from('subcontractor_certificates')
-        .select('id').eq('id', certificate_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!cert) return error('الشهادة غير موجودة', 404);
-    }
-
-    // حل حساب الذمم قبل أي كتابة — القيد إلزامي متوازن
-    const { data: apAccount } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES)
-      .maybeSingle();
-    if (!apAccount) return error('حساب مقاولي الباطن (2150) غير موجود — راجع دليل الحسابات');
-
-    // Insert payment
-    const { data: payment, error: payErr } = await s.from('subcontractor_payments')
-      .insert({
-        company_id: auth.companyId,
-        contract_id,
-        certificate_id: certificate_id || null,
-        amount,
-        date,
-        bank_safe_id,
-        notes,
-        created_by: auth.userId,
-      })
-      .select('*')
-      .single();
-
-    if (payErr) throw payErr;
-
-    // القيد: مدين ذمم مقاولي الباطن / دائن الخزينة
-    const { createJournalEntry } = await import('@/lib/journal-utils');
-    const je = await createJournalEntry(auth.companyId, {
-      date,
-      type: 'general',
-      description: 'دفعة مقاول باطن',
-      lines: [
-        { account_id: apAccount.id, debit: Number(amount), credit: 0 },
-        { account_id: bankAccount.account_id, debit: 0, credit: Number(amount) },
-      ],
-      reference_type: 'subcontractor_payment',
-      reference_id: payment.id,
-      created_by: auth.userId,
+    const { data: payment, error: rpcError } = await sb().rpc('create_subcontractor_payment_atomic', {
+      p_company_id: auth.companyId,
+      p_contract_id: contract_id,
+      p_certificate_id: certificate_id || null,
+      p_amount: amount,
+      p_date: date,
+      p_bank_safe_id: bank_safe_id,
+      p_notes: notes?.trim() || null,
+      p_user_id: auth.userId,
     });
-
-    if (je.error || !je.journalId) {
-      await s.from('subcontractor_payments').delete().eq('id', payment.id).eq('company_id', auth.companyId);
-      throw je.error || new Error('فشل قيد دفعة المقاول');
+    if (rpcError) {
+      const message = String(rpcError.message || '');
+      if (message.includes('غير موجود') || message.includes('لا تخص العقد')) return error(message, 404);
+      if (message.includes('تتجاوز') || message.includes('غير كاف') || message.includes('ملغى')) return error(message, 409);
+      throw rpcError;
     }
-
-    const { data: linked, error: linkErr } = await s.from('subcontractor_payments')
-      .update({ journal_entry_id: je.journalId })
-      .eq('id', payment.id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-    if (linkErr) throw linkErr;
-
-    return success(linked, 201);
+    return success(payment, 201);
   } catch (err) {
     return handleApiError(err);
   }

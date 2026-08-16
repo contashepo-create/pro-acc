@@ -5,7 +5,7 @@ import { adminLoginSchema } from '@/lib/validation';
 import { sendTelegramCode } from '@/lib/telegram';
 import { setSession, updateSession } from '@/lib/admin-session';
 import { getSupabase } from '@/lib/supabase-client';
-import { randomInt, randomBytes } from 'crypto';
+import { randomInt, randomBytes, createHash } from 'crypto';
 import { auditLog } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
@@ -29,20 +29,15 @@ export async function POST(request: NextRequest) {
     step = 'normalize_email';
     const inputEmail = cleanEnv(email).toLowerCase();
 
-    // Rate-limit by IP and email to slow brute force against the admin panel.
-    // We reuse the app's rate-limit helper; if unavailable, allow-through with
-    // a warning (fail-open only when the rate limiter itself is broken).
-    try {
-      const { checkRateLimit } = await import('@/lib/rate-limit');
-      const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-        || request.headers.get('x-real-ip')
-        || 'unknown';
-      const rl = await checkRateLimit('admin:' + inputEmail, ip);
-      if (!rl.allowed) {
-        return error(`تم حظر المحاولات مؤقتاً. حاول بعد ${rl.remainingMinutes} دقائق`, 429);
-      }
-    } catch (e) {
-      console.warn('[ADMIN LOGIN] rate-limit unavailable:', e);
+    // Rate limiting is part of the admin authentication boundary and fails
+    // closed if its backing store cannot be reached.
+    const { checkRateLimit } = await import('@/lib/rate-limit');
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+      || request.headers.get('x-real-ip')
+      || 'unknown';
+    const rl = await checkRateLimit(inputEmail, ip);
+    if (!rl.allowed) {
+      return error(`تم حظر المحاولات مؤقتاً. حاول بعد ${rl.remainingMinutes} دقائق`, 429);
     }
 
     step = 'get_supabase';
@@ -68,7 +63,13 @@ export async function POST(request: NextRequest) {
       return error('حدث خطأ في الخادم', 500);
     }
 
-    if (queryErr || !admin) {
+    if (queryErr && queryErr.code !== 'PGRST116') throw queryErr;
+    if (!admin) {
+      const { error: attemptErr } = await s.from('login_attempts').insert({
+        email: inputEmail, ip_address: ip, success: false,
+        attempted_at: new Date().toISOString(),
+      });
+      if (attemptErr) throw attemptErr;
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
@@ -87,6 +88,11 @@ export async function POST(request: NextRequest) {
     }
 
     if (!valid) {
+      const { error: attemptErr } = await s.from('login_attempts').insert({
+        email: inputEmail, ip_address: ip, success: false,
+        attempted_at: new Date().toISOString(),
+      });
+      if (attemptErr) throw attemptErr;
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
@@ -101,10 +107,13 @@ export async function POST(request: NextRequest) {
     }
 
     step = 'set_session';
+    const sessionId = randomBytes(32).toString('hex');
+    const sessionPointer = `${a.id}.${sessionId}`;
     try {
       await setSession(a.id, {
+        sessionId,
         email: (a.email || '').toLowerCase(),
-        code,
+        codeHash: createHash('sha256').update(code).digest('hex'),
         step: 'code_sent',
         codeSent: false,
         otpExpiresAt: Date.now() + 5 * 60 * 1000,
@@ -142,7 +151,7 @@ export async function POST(request: NextRequest) {
     } else {
       step = 'update_session';
       try {
-        await updateSession(a.id, { codeSent: true });
+        await updateSession(sessionPointer, { codeSent: true });
       } catch (e) {
         console.warn(`[ADMIN LOGIN] updateSession failed:`, e);
         // Non-critical, don't fail
@@ -158,7 +167,7 @@ export async function POST(request: NextRequest) {
     // HttpOnly + SameSite=Lax (Strict would break the 2FA redirect flow).
     // Match the server-side session TTL (30 minutes) so the cookie doesn't
     // outlive the server's state.
-    setAuthCookie(response, 'admin_session', a.id, 1800); // 30 minutes
+    setAuthCookie(response, 'admin_session', sessionPointer, 1800); // 30 minutes
 
     // Audit successful step-1
     try {

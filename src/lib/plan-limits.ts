@@ -35,7 +35,7 @@ export interface PlanLimits {
 
 export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimits | null> {
   const s = sb();
-  const { data: sub } = await s
+  const { data: sub, error: subscriptionError } = await s
     .from('subscriptions')
     .select(
       'plan_id, plan_code, status, extra_users, extra_branches, extra_storage_gb, addons_json, ' +
@@ -47,7 +47,7 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-
+  if (subscriptionError) throw subscriptionError;
   if (!sub) return null;
   const subr = sub as Record<string, any>;
   const plan = subr.subscription_plans as Record<string, any> | null;
@@ -69,8 +69,12 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
   // Plans that include branches/warehouses (Pro+ have branches:true) allocate one
   // default branch+warehouse on company creation. Everything beyond that must be
   // paid via the extra_branches add-on.
-  const planIncludesBranches = !!(plan?.features_modules && (plan.features_modules as any).branches);
-  const baseBranches = planIncludesBranches ? 1 : 0;
+  const planIncludesBranches = !!(plan?.features_modules && (
+    (plan.features_modules as Record<string, unknown>).branches ||
+    (plan.features_modules as Record<string, unknown>).warehouses
+  ));
+  const configuredBranches = plan?.max_branches;
+  const baseBranches = configuredBranches == null ? (planIncludesBranches ? 1 : 0) : Number(configuredBranches);
   const maxBranches = baseBranches + extraBranches;
 
   const features = plan?.features_modules && typeof plan.features_modules === 'object'
@@ -161,49 +165,58 @@ async function countResource(resource: LimitResource, companyId: string): Promis
 
   switch (resource) {
     case 'users': {
-      const { count } = await s.from('users').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('users').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'clients': {
-      const { count } = await s.from('contacts').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('contacts').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId).eq('type', 'client');
+      if (error) throw error;
       return count || 0;
     }
     case 'suppliers': {
-      const { count } = await s.from('contacts').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('contacts').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId).eq('type', 'supplier');
+      if (error) throw error;
       return count || 0;
     }
     case 'employees': {
-      const { count } = await s.from('employees').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('employees').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'projects': {
-      const { count } = await s.from('projects').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('projects').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'invoices': {
-      const { count } = await s.from('invoices').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('invoices').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId).gte('date', monthStart);
+      if (error) throw error;
       return count || 0;
     }
     case 'quotations': {
       // quotations table is 'quotations'; same monthly window.
-      const { count } = await s.from('quotations').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('quotations').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId).gte('date', monthStart);
+      if (error) throw error;
       return count || 0;
     }
     case 'branches': {
-      const { count } = await s.from('branches').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('branches').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'warehouses': {
-      const { count } = await s.from('warehouses').select('*', { count: 'exact', head: true })
+      const { count, error } = await s.from('warehouses').select('*', { count: 'exact', head: true })
         .eq('company_id', companyId);
+      if (error) throw error;
       return count || 0;
     }
     case 'storage':
@@ -212,37 +225,47 @@ async function countResource(resource: LimitResource, companyId: string): Promis
   }
 }
 
-/**
- * Count used storage bytes under the receipts bucket for a company.
- * Centralized here so upload + limits share the same implementation.
- * Returns 0 on "not found" (no files yet) but throws on other storage errors
- * so callers can fail-closed.
- */
+/** Count tenant-owned uploads across every billable private bucket. */
 export async function countUsedStorageBytes(companyId: string): Promise<number> {
   const { getSupabase: gs } = await import('@/lib/supabase-client');
   const s = gs();
-  let total = 0;
-  let offset = 0;
-  const pageSize = 1000;
-  while (true) {
-    // @ts-ignore supabase-js storage types
-    const { data: files, error } = await s.storage.from('receipts').list(companyId, {
-      limit: pageSize,
-      offset,
-      sortBy: { column: 'name', order: 'asc' },
-    });
-    if (error) {
-      const msg = String(error.message || '').toLowerCase();
-      if (msg.includes('not found') || msg.includes('does not exist') || msg.includes('404')) return 0;
-      throw error;
+
+  const scan = async (bucket: string, directory: string, depth: number): Promise<number> => {
+    let total = 0;
+    let offset = 0;
+    const pageSize = 1000;
+    while (true) {
+      // @ts-ignore supabase-js storage types
+      const { data: files, error } = await s.storage.from(bucket).list(directory, {
+        limit: pageSize,
+        offset,
+        sortBy: { column: 'name', order: 'asc' },
+      });
+      if (error) {
+        const msg = String(error.message || '').toLowerCase();
+        if (msg.includes('not found') || msg.includes('does not exist') || msg.includes('404')) break;
+        throw error;
+      }
+      if (!files?.length) break;
+      for (const file of files as any[]) {
+        const size = Number(file.metadata?.size);
+        if (Number.isFinite(size) && size > 0) total += size;
+        // Contract documents are grouped as company/contract/file. Supabase
+        // returns the contract folders without file metadata, so recurse one
+        // bounded level rather than silently omitting those billable bytes.
+        else if (depth > 0 && typeof file.name === 'string' && !file.name.includes('..')) {
+          total += await scan(bucket, `${directory}/${file.name}`, depth - 1);
+        }
+      }
+      if (files.length < pageSize) break;
+      offset += pageSize;
+      if (offset > 50000) throw new Error('Storage listing exceeded the safe scan limit');
     }
-    if (!files || files.length === 0) break;
-    for (const f of files as any[]) total += Number(f.metadata?.size) || 0;
-    if (files.length < pageSize) break;
-    offset += pageSize;
-    if (offset > 50000) break;
-  }
-  return total;
+    return total;
+  };
+
+  return (await scan('receipts', companyId, 0))
+    + (await scan('contract-documents', companyId, 1));
 }
 
 /**

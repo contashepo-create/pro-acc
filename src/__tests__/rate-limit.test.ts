@@ -100,12 +100,9 @@ describe('Rate Limiting Logic', () => {
     expect(result.remainingMinutes).toBeGreaterThan(0);
   });
 
-  test('should be fail-open when database errors', async () => {
+  test('fails closed when the rate-limit database is unavailable', async () => {
     mockAttemptsError = new Error('Connection refused');
     mockAttemptsData = null;
-    
-    const result = await checkRateLimit('user@test.com', '10.0.0.1');
-    expect(result.allowed).toBe(true);
-    expect(result.remainingMinutes).toBe(0);
+    await expect(checkRateLimit('user@test.com', '10.0.0.1')).rejects.toThrow('Connection refused');
   });
 });

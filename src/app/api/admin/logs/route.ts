@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { getSupabase } from '@/lib/supabase-client';
 
@@ -14,7 +14,6 @@ function applySearch(query: any, search: string) {
 
 export async function GET(request: NextRequest) {
   try {
-      const __admin = await requireAdmin(request);
     await requireAdmin(request);
 
     const { page, pageSize } = (() => {
@@ -28,6 +27,11 @@ export async function GET(request: NextRequest) {
     const action = url.searchParams.get('action') || '';
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
+    if ((from && (!dateOnly.test(from) || Number.isNaN(Date.parse(from)))) ||
+        (to && (!dateOnly.test(to) || Number.isNaN(Date.parse(to))))) return error('نطاق التاريخ غير صالح');
+    if (from && to && from > to) return error('بداية النطاق بعد نهايته');
+    if (action.length > 100) return error('نوع العملية طويل جداً');
 
     const s = sb();
 
@@ -78,19 +82,13 @@ export async function DELETE(request: NextRequest) {
     const valid = await verifyMasterPassword(__admin.adminId, body.masterPassword);
     if (!valid) return error('كلمة السر الرئيسية غير صحيحة', 401);
 
-    const s = sb();
-    // Never delete the seed/system entries — safer to truncate by time (older than now).
-    // Use delete with `id` is not null to delete all rows (PostgREST requires a filter).
-    const { error: deleteErr } = await s.from('admin_audit_log').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-    if (deleteErr) throw deleteErr;
-
-    await auditLog(__admin.adminId, 'clear_logs', 'Audit logs cleared by admin');
-
-    return success({ message: 'تم مسح السجلات بنجاح' });
+    // Audit evidence is append-only. Destructive clearing would let an
+    // administrator erase the evidence of prior entitlement and tenant
+    // changes. Retention/archival must be an audited infrastructure policy,
+    // never an interactive API operation.
+    await auditLog(__admin.adminId, 'clear_logs_blocked', 'Blocked attempt to delete append-only admin audit evidence');
+    return error('سجلات التدقيق غير قابلة للحذف من واجهة التطبيق', 403);
   } catch (err) {
     return adminJsonError(err);
   }
 }
-
-// Use serverError for unexpected non-auth errors
-export { serverError };

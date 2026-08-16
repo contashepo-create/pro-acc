@@ -1,11 +1,11 @@
 /**
- * ZATCA Phase 2 — UBL 2.1 XML Invoice Builder
- * 
- * Generates a simplified UBL 2.1 XML invoice document
- * compliant with ZATCA E-Invoicing requirements.
- * 
- * Reference: UBL 2.1 specification + ZATCA implementation guidelines
- * https://docs.oasis-open.org/ubl/os-UBL-2.1/
+ * UBL 2.1 XML invoice builder for ZATCA-oriented exports.
+ *
+ * This module deliberately produces an unsigned UBL document only. It does not
+ * perform Phase 2 signing, invoice hash chaining, clearance or reporting.
+ * Callers must not describe its output as a cleared/compliant Phase 2 invoice.
+ *
+ * Reference: https://docs.oasis-open.org/ubl/os-UBL-2.1/
  */
 
 interface UBLInvoiceItem {
@@ -28,12 +28,15 @@ interface UBLInvoiceData {
   issueTime: string;
   /** Invoice type code: 388=Tax Invoice, 389=Debit Note, 381=Credit Note */
   invoiceTypeCode: string;
+  /** ZATCA subtype: 0100000=standard, 0200000=simplified. */
+  invoiceTypeName?: '0100000' | '0200000';
   /** Document currency code */
   currencyCode: string;
   /** Seller info */
   seller: {
     name: string;
     vatNumber: string;
+    registrationNumber?: string;
     address?: {
       street?: string;
       city?: string;
@@ -80,10 +83,47 @@ function escapeXml(str: string | null | undefined): string {
     .replace(/'/g, '&apos;');
 }
 
-/**
- * Generate a UBL 2.1 XML invoice document
- */
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const moneyMatches = (left: number, right: number) => Math.abs(left - right) <= 0.01;
+
+function assertFinancialConsistency(data: UBLInvoiceData) {
+  const monetaryValues = [
+    data.amounts.lineExtensionAmount,
+    data.amounts.taxExclusiveAmount,
+    data.amounts.taxInclusiveAmount,
+    data.amounts.taxAmount,
+    data.amounts.allowanceTotalAmount ?? 0,
+    data.amounts.chargeTotalAmount ?? 0,
+  ];
+  if (!data.items.length || monetaryValues.some((value) => !Number.isFinite(value) || value < 0)
+    || !Number.isFinite(data.vatRate) || data.vatRate < 0 || data.vatRate > 1) {
+    throw new Error('Invalid UBL financial values');
+  }
+  for (const item of data.items) {
+    if (![item.quantity, item.unitPrice, item.total, item.vatRate].every(Number.isFinite)
+      || item.quantity <= 0 || item.unitPrice < 0 || item.total < 0
+      || item.vatRate < 0 || item.vatRate > 1) {
+      throw new Error('Invalid UBL invoice line');
+    }
+  }
+
+  const lineTotal = roundMoney(data.items.reduce((sum, item) => sum + item.total, 0));
+  const expectedExclusive = roundMoney(
+    lineTotal - (data.amounts.allowanceTotalAmount ?? 0) + (data.amounts.chargeTotalAmount ?? 0)
+  );
+  const expectedTax = roundMoney(data.amounts.taxExclusiveAmount * data.vatRate);
+  const expectedInclusive = roundMoney(data.amounts.taxExclusiveAmount + data.amounts.taxAmount);
+  if (!moneyMatches(lineTotal, data.amounts.lineExtensionAmount)
+    || !moneyMatches(expectedExclusive, data.amounts.taxExclusiveAmount)
+    || !moneyMatches(expectedTax, data.amounts.taxAmount)
+    || !moneyMatches(expectedInclusive, data.amounts.taxInclusiveAmount)) {
+    throw new Error('Inconsistent UBL invoice totals');
+  }
+}
+
+/** Generate an unsigned, financially consistent UBL 2.1 XML invoice. */
 export function generateUBLInvoice(data: UBLInvoiceData): string {
+  assertFinancialConsistency(data);
   const {
     uuid, number, seller, buyer, items, amounts, vatRate, notes,
   } = data;
@@ -92,6 +132,7 @@ export function generateUBLInvoice(data: UBLInvoiceData): string {
   const issueDate = escapeXml(data.issueDate);
   const issueTime = escapeXml(data.issueTime);
   const invoiceTypeCode = escapeXml(data.invoiceTypeCode);
+  const invoiceTypeName = escapeXml(data.invoiceTypeName ?? '0200000');
   const currencyCode = escapeXml(data.currencyCode);
   const paymentMeansCode =
     data.paymentMeansCode != null ? escapeXml(data.paymentMeansCode) : undefined;
@@ -108,7 +149,7 @@ export function generateUBLInvoice(data: UBLInvoiceData): string {
   <cbc:UUID>${escapeXml(uuid)}</cbc:UUID>
   <cbc:IssueDate>${issueDate}</cbc:IssueDate>
   <cbc:IssueTime>${issueTime}</cbc:IssueTime>
-  <cbc:InvoiceTypeCode name="0200000">${invoiceTypeCode}</cbc:InvoiceTypeCode>
+  <cbc:InvoiceTypeCode name="${invoiceTypeName}">${invoiceTypeCode}</cbc:InvoiceTypeCode>
   <cbc:DocumentCurrencyCode>${currencyCode}</cbc:DocumentCurrencyCode>
   <cbc:TaxCurrencyCode>${currencyCode}</cbc:TaxCurrencyCode>`;
 
@@ -124,9 +165,7 @@ export function generateUBLInvoice(data: UBLInvoiceData): string {
   
   <cac:AccountingSupplierParty>
     <cac:Party>
-      <cac:PartyIdentification>
-        <cbc:ID schemeID="CRN">${escapeXml(seller.vatNumber)}</cbc:ID>
-      </cac:PartyIdentification>
+      ${seller.registrationNumber ? `<cac:PartyIdentification><cbc:ID schemeID="CRN">${escapeXml(seller.registrationNumber)}</cbc:ID></cac:PartyIdentification>` : ''}
       <cac:PostalAddress>
         ${seller.address?.street ? `<cbc:StreetName>${escapeXml(seller.address.street)}</cbc:StreetName>` : ''}
         ${seller.address?.city ? `<cbc:CityName>${escapeXml(seller.address.city)}</cbc:CityName>` : ''}
@@ -200,6 +239,7 @@ export function generateUBLInvoice(data: UBLInvoiceData): string {
     <cbc:TaxInclusiveAmount currencyID="${currencyCode}">${amounts.taxInclusiveAmount.toFixed(2)}</cbc:TaxInclusiveAmount>
     ${amounts.allowanceTotalAmount !== undefined ? `<cbc:AllowanceTotalAmount currencyID="${currencyCode}">${amounts.allowanceTotalAmount.toFixed(2)}</cbc:AllowanceTotalAmount>` : ''}
     ${amounts.chargeTotalAmount !== undefined ? `<cbc:ChargeTotalAmount currencyID="${currencyCode}">${amounts.chargeTotalAmount.toFixed(2)}</cbc:ChargeTotalAmount>` : ''}
+    <cbc:PayableAmount currencyID="${currencyCode}">${amounts.taxInclusiveAmount.toFixed(2)}</cbc:PayableAmount>
   </cac:LegalMonetaryTotal>`;
 
   // Invoice lines
@@ -212,7 +252,7 @@ export function generateUBLInvoice(data: UBLInvoiceData): string {
     <cbc:InvoicedQuantity unitCode="PCE">${item.quantity}</cbc:InvoicedQuantity>
     <cbc:LineExtensionAmount currencyID="${currencyCode}">${item.total.toFixed(2)}</cbc:LineExtensionAmount>
     <cac:TaxTotal>
-      <cbc:TaxAmount currencyID="${currencyCode}">${(item.total * item.vatRate / (1 + item.vatRate)).toFixed(2)}</cbc:TaxAmount>
+      <cbc:TaxAmount currencyID="${currencyCode}">${roundMoney(item.total * item.vatRate).toFixed(2)}</cbc:TaxAmount>
       <cbc:RoundingAmount currencyID="${currencyCode}">${item.total.toFixed(2)}</cbc:RoundingAmount>
     </cac:TaxTotal>
     <cac:Item>
@@ -235,10 +275,7 @@ export function generateUBLInvoice(data: UBLInvoiceData): string {
   return xml;
 }
 
-/**
- * Generate XML hash for cryptographic stamp (placeholder for Phase 2 standard invoices)
- * In production, this should use the actual invoice hash + private key signing
- */
+/** Raw SHA-256 digest helper. This is not a ZATCA signature, stamp or hash chain. */
 export function generateInvoiceHash(xmlContent: string): string {
   const crypto = require('crypto');
   return crypto.createHash('sha256').update(xmlContent).digest('base64');

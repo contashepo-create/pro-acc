@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { ACCOUNT_CODES } from '@/lib/constants';
 
 const sb = () => getSupabase();
 
@@ -14,7 +13,7 @@ export async function GET(req: NextRequest) {
     const s = sb();
 
     let query = s.from('subcontractor_certificates')
-      .select('*, subcontractor_contracts!contract_id(contract_number), contacts!subcontractor_contracts(subcontractor_id)!inner(name)', { count: 'exact' })
+      .select('*, subcontractor_contracts!contract_id(contract_number, contacts!contact_id(name))', { count: 'exact' })
       .eq('company_id', auth.companyId);
 
     if (contractId) {
@@ -31,6 +30,8 @@ export async function GET(req: NextRequest) {
     return success({
       certificates: (certs || []).map((c: any) => ({
         ...c,
+        certificate_number: c.number,
+        gross_amount: c.amount,
         contract_number: c.subcontractor_contracts?.contract_number || null,
         subcontractor_name: c.subcontractor_contracts?.contacts?.name || null,
       })),
@@ -48,103 +49,34 @@ export async function POST(req: NextRequest) {
     const auth = await requireModulePermission(req, 'subcontractors', 'create');
     const data = await parseBody(req);
     const { contract_id, date, certificate_number, description, gross_amount, retention_rate } = data;
-
-    if (!auth.companyId || !contract_id || !date || !certificate_number || !gross_amount) {
-      return error('company_id, contract_id, date, certificate_number, gross_amount are required');
+    const number = Number(certificate_number);
+    const amount = Number(gross_amount);
+    const rate = retention_rate === undefined ? 0 : Number(retention_rate);
+    if (!contract_id || typeof contract_id !== 'string' || !date || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+      return error('العقد والتاريخ مطلوبان');
     }
+    if (!Number.isSafeInteger(number) || number <= 0) return error('رقم الشهادة غير صالح');
+    if (!Number.isFinite(amount) || amount <= 0 || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) return error('قيمة الشهادة غير صالحة');
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1 || Math.abs(rate * 100 - Math.round(rate * 100)) > 1e-8) return error('نسبة الحجز غير صالحة');
+    if (description !== undefined && (typeof description !== 'string' || description.length > 2000)) return error('الوصف غير صالح');
 
-    const s = sb();
-
-    // عزل مستأجرين: العقد يجب أن ينتمي لهذه الشركة
-    const { data: contract } = await s.from('subcontractor_contracts')
-      .select('*')
-      .eq('id', contract_id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!contract) return error('العقد غير موجود', 404);
-
-    const rate = retention_rate ?? (contract as Record<string, any>).retention_rate ?? 0;
-    const retentionAmount = gross_amount * rate;
-    const netAmount = gross_amount - retentionAmount;
-
-    // حل الحسابات قبل أي كتابة — القيد إلزامي متوازن
-    const { data: costAccount } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.DIRECT_COSTS)
-      .maybeSingle();
-    const { data: apAccount } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.SUBCONTRACTOR_PAYABLES)
-      .maybeSingle();
-    if (!costAccount || !apAccount) {
-      return error('حسابات التكلفة المباشرة (5100) أو مقاولي الباطن (2150) غير موجودة — راجع دليل الحسابات');
-    }
-    let retentionAccountId: string | null = null;
-    if (retentionAmount > 0) {
-      const { data: retentionAccount } = await s.from('accounts')
-        .select('id')
-        .eq('company_id', auth.companyId)
-        .eq('code', ACCOUNT_CODES.RETENTIONS)
-        .maybeSingle();
-      if (!retentionAccount) return error('حساب محجوزات الضمان (2160) غير موجود');
-      retentionAccountId = retentionAccount.id;
-    }
-
-    const { data: cert, error: certErr } = await s.from('subcontractor_certificates')
-      .insert({
-        company_id: auth.companyId,
-        contract_id,
-        date,
-        certificate_number,
-        description: description || null,
-        gross_amount,
-        retention_rate: rate,
-        retention_amount: retentionAmount,
-        net_amount: netAmount,
-        status: 'approved',
-      })
-      .select('*')
-      .single();
-
-    if (certErr) throw certErr;
-
-    // القيد: مدين التكلفة / دائن ذمم المقاول + محجوز الضمان (متوازن)
-    const lines: Array<{ account_id: string; debit: number; credit: number }> = [
-      { account_id: costAccount.id, debit: Number(gross_amount), credit: 0 },
-      { account_id: apAccount.id, debit: 0, credit: Number(netAmount) },
-    ];
-    if (retentionAmount > 0 && retentionAccountId) {
-      lines.push({ account_id: retentionAccountId, debit: 0, credit: Number(retentionAmount) });
-    }
-
-    const { createJournalEntry } = await import('@/lib/journal-utils');
-    const je = await createJournalEntry(auth.companyId, {
-      date,
-      type: 'general',
-      description: `شهادة مقاول باطن: ${certificate_number}`,
-      lines,
-      reference_type: 'subcon_certificate',
-      reference_id: cert.id,
-      created_by: auth.userId,
+    const { data: certificate, error: rpcError } = await sb().rpc('create_subcontractor_certificate_atomic', {
+      p_company_id: auth.companyId,
+      p_contract_id: contract_id,
+      p_date: date,
+      p_certificate_number: number,
+      p_description: description?.trim() || null,
+      p_gross_amount: amount,
+      p_retention_rate: rate,
+      p_user_id: auth.userId,
     });
-
-    if (je.error || !je.journalId) {
-      await s.from('subcontractor_certificates').delete().eq('id', cert.id).eq('company_id', auth.companyId);
-      throw je.error || new Error('فشل قيد الشهادة');
+    if (rpcError) {
+      const message = String(rpcError.message || '');
+      if (message.includes('العقد غير موجود')) return error(message, 404);
+      if (message.includes('يتجاوز') || message.includes('غير نشط')) return error(message, 409);
+      throw rpcError;
     }
-
-    const { data: linked, error: linkErr } = await s.from('subcontractor_certificates')
-      .update({ journal_entry_id: je.journalId })
-      .eq('id', cert.id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-    if (linkErr) throw linkErr;
-
-    return success(linked, 201);
+    return success(certificate, 201);
   } catch (err) {
     return handleApiError(err);
   }

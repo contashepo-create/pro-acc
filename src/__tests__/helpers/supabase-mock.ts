@@ -20,7 +20,9 @@ interface RecordedCall {
 type TerminalOp = 'single' | 'maybeSingle' | 'insert' | 'update' | 'upsert' | 'delete' | 'select';
 
 const results = new Map<string, any[]>();
+const rpcResults = new Map<string, any[]>();
 let calls: RecordedCall[] = [];
+let rpcCalls: Array<{ name: string; params: any }> = [];
 
 function terminalOp(ops: { op: string; args: any[] }[]): TerminalOp {
   const terminals = ['single', 'maybeSingle', 'insert', 'update', 'upsert', 'delete'];
@@ -36,6 +38,18 @@ function terminalOp(ops: { op: string; args: any[] }[]): TerminalOp {
 }
 
 export const mockClient = {
+  async rpc(name: string, params: any) {
+    rpcCalls.push({ name, params });
+    const queue = rpcResults.get(name);
+    if (queue && queue.length > 0) {
+      const value = queue.shift();
+      return value && typeof value === 'object' && ('data' in value || 'error' in value)
+        ? { data: value.data ?? null, error: value.error ?? null }
+        : { data: value, error: null };
+    }
+    return { data: null, error: { message: `missing mock RPC result for ${name}` } };
+  },
+
   from(table: string) {
     const ops: { op: string; args: any[] }[] = [];
     const builder = new Proxy(
@@ -114,7 +128,9 @@ export const mockClient = {
 
 export function resetMock() {
   calls = [];
+  rpcCalls = [];
   results.clear();
+  rpcResults.clear();
 }
 
 /** Configure a single response for a table + terminal op. */
@@ -125,6 +141,18 @@ export function setResult(table: string, op: TerminalOp, value: any) {
 /** Configure a queue of responses consumed in order across successive calls. */
 export function setResults(table: string, op: TerminalOp, queue: any[]) {
   results.set(`${table}:${op}`, [...queue]);
+}
+
+export function setRpcResult(name: string, value: any) {
+  rpcResults.set(name, [value]);
+}
+
+export function setRpcResults(name: string, queue: any[]) {
+  rpcResults.set(name, [...queue]);
+}
+
+export function getRpcCalls(): Array<{ name: string; params: any }> {
+  return rpcCalls;
 }
 
 export function getCalls(): RecordedCall[] {

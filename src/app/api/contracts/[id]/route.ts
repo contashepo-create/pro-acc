@@ -1,41 +1,33 @@
+import { randomUUID } from 'crypto';
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import { hasAllowedMagicBytes } from '@/lib/safe-input';
+import { contractDocumentSchema, contractUpdateSchema, relationshipUuid } from '@/lib/relationship-validation';
 
 const sb = () => getSupabase();
 
-/**
- * GET /api/contracts/[id] — Get contract details + attached documents
- */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'contracts', 'read');
     const { id } = await params;
+    if (!relationshipUuid.safeParse(id).success) return error('معرف العقد غير صالح');
     const s = sb();
-
-    const { data: contract } = await s.from('contracts')
-      .select('*, projects(name), contacts(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
+    const { data: contract, error: contractError } = await s.from('contracts').select('*, projects(name), contacts(name)')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (contractError) throw contractError;
     if (!contract) return notFound();
-
-    // Get attached documents
-    const { data: documents } = await s.from('contract_documents')
-      .select('*')
-      .eq('contract_id', id)
-      .order('uploaded_at', { ascending: false });
-
-    const c = contract as Record<string, unknown>;
+    const { data: documents, error: documentsError } = await s.from('contract_documents')
+      .select('id, filename, content_type, file_size, description, uploaded_by, uploaded_at')
+      .eq('contract_id', id).eq('company_id', auth.companyId).order('uploaded_at', { ascending: false });
+    if (documentsError) throw documentsError;
+    const row = contract as Record<string, unknown>;
+    const project = row.projects as { name?: string } | null;
+    const contact = row.contacts as { name?: string } | null;
     return success({
-      ...c,
-      project_name: (c.projects as { name?: string } | null)?.name || null,
-      contact_name: (c.contacts as { name?: string } | null)?.name || null,
+      ...row,
+      project_name: project?.name || null,
+      contact_name: contact?.name || null,
       documents: documents || [],
     });
   } catch (err) {
@@ -43,129 +35,114 @@ export async function GET(
   }
 }
 
-/**
- * PUT /api/contracts/[id] — Update contract details
- */
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'contracts', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody<Record<string, unknown>>(request);
-
-    const updateData: Record<string, unknown> = {};
-    const allowedFields = ['title', 'type', 'project_id', 'contact_id', 'start_date', 'end_date', 'value', 'description', 'status'];
-    for (const field of allowedFields) {
-      if (body[field] !== undefined) updateData[field] = body[field];
+    if (!relationshipUuid.safeParse(id).success) return error('معرف العقد غير صالح');
+    const parsed = contractUpdateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { data, error: updateError } = await sb().rpc('update_contract_atomic', {
+      p_company_id: auth.companyId,
+      p_contract_id: id,
+      p_patch: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (updateError) {
+      const message = String(updateError.message || '');
+      if (message.includes('غير موجود')) return notFound();
+      if (message.includes('لا يمكن') || message.includes('انتقال حالة')) return error(message, 409);
+      if (message.includes('غير صالحة')) return error(message);
+      throw updateError;
     }
-
-    if (Object.keys(updateData).length === 0) return error('لا توجد بيانات للتحديث');
-
-    const { data: updated, error: updateErr } = await s.from('contracts')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    return success(updated);
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * DELETE /api/contracts/[id] — Delete contract
- */
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'contracts', 'delete');
     const { id } = await params;
+    if (!relationshipUuid.safeParse(id).success) return error('معرف العقد غير صالح');
     const s = sb();
+    const { data, error: deleteError } = await s.rpc('delete_draft_contract_atomic', {
+      p_company_id: auth.companyId,
+      p_contract_id: id,
+      p_user_id: auth.userId,
+    });
+    if (deleteError) {
+      const message = String(deleteError.message || '');
+      if (message.includes('غير موجود')) return notFound();
+      if (message.includes('لا يمكن حذف')) return error(message, 409);
+      throw deleteError;
+    }
 
-    // Delete attached documents first
-    await s.from('contract_documents').delete().eq('contract_id', id);
-
-    const { error: deleteErr } = await s.from('contracts')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', auth.companyId);
-
-    if (deleteErr) throw deleteErr;
-
-    return success({ deleted: true });
+    const paths = Array.isArray((data as { storage_paths?: unknown })?.storage_paths)
+      ? (data as { storage_paths: unknown[] }).storage_paths.filter((path): path is string =>
+          typeof path === 'string' && path.startsWith(`${auth.companyId}/${id}/`) && !path.includes('..'))
+      : [];
+    if (paths.length) {
+      const { error: storageError } = await s.storage.from('contract-documents').remove(paths);
+      if (storageError) console.error('Orphan contract document cleanup failed:', storageError);
+    }
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * POST /api/contracts/[id]/documents — Upload a document for a contract
- * Accepts base64-encoded file data
- */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+/** POST /api/contracts/[id] — upload private storage object, then atomically record tenant metadata. */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'contracts', 'create');
     const { id } = await params;
+    if (!relationshipUuid.safeParse(id).success) return error('معرف العقد غير صالح');
+    const parsed = contractDocumentSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const body = parsed.data;
+    const raw = body.file_data.includes(',') ? body.file_data.slice(body.file_data.indexOf(',') + 1) : body.file_data;
+    if (!/^[A-Za-z0-9+/=\r\n]+$/.test(raw)) return error('ترميز الملف غير صالح');
+    const buffer = Buffer.from(raw, 'base64');
+    if (buffer.length === 0 || buffer.length > 10 * 1024 * 1024) return error('حجم الملف يجب ألا يتجاوز 10 ميجابايت');
+    if (!hasAllowedMagicBytes(buffer, body.content_type)) return error('محتوى الملف لا يطابق نوعه');
+
+    try {
+      const { getCompanyPlanLimits, countUsedStorageBytes } = await import('@/lib/plan-limits');
+      const limits = await getCompanyPlanLimits(auth.companyId);
+      const capBytes = Number(limits?.max_storage_mb || 0) * 1024 * 1024;
+      if (capBytes <= 0) return error('باقتك الحالية لا تتضمن مساحة تخزين للملفات', 403);
+      const usedBytes = await countUsedStorageBytes(auth.companyId);
+      if (usedBytes + buffer.length > capBytes) return error('لا تتوفر مساحة تخزين كافية لهذا المستند', 403);
+    } catch (storageCheckError) {
+      console.error('Contract storage quota check failed:', storageCheckError);
+      return error('تعذر التحقق من مساحة التخزين. حاول لاحقاً.', 503);
+    }
+
+    const extension = body.content_type === 'application/pdf' ? 'pdf' : body.content_type === 'image/png' ? 'png' : 'jpg';
+    const objectPath = `${auth.companyId}/${id}/${randomUUID()}.${extension}`;
     const s = sb();
-    const body = await parseBody<{
-      filename: string;
-      content_type: string;
-      file_data: string; // base64 encoded
-      description?: string;
-    }>(request);
+    const { error: uploadError } = await s.storage.from('contract-documents')
+      .upload(objectPath, buffer, { contentType: body.content_type, upsert: false });
+    if (uploadError) throw uploadError;
 
-    if (!body.filename || !body.file_data) {
-      return error('اسم الملف ومحتواه مطلوبان');
+    const { data, error: metadataError } = await s.rpc('create_contract_document_atomic', {
+      p_company_id: auth.companyId,
+      p_contract_id: id,
+      p_filename: body.filename,
+      p_content_type: body.content_type,
+      p_storage_reference: `storage:contract-documents/${objectPath}`,
+      p_file_size: buffer.length,
+      p_description: body.description || null,
+      p_user_id: auth.userId,
+    });
+    if (metadataError) {
+      await s.storage.from('contract-documents').remove([objectPath]);
+      if (String(metadataError.message || '').includes('غير صالحة')) return error('العقد غير موجود أو بيانات المستند غير صالحة', 404);
+      throw metadataError;
     }
-
-    // Verify contract exists
-    const { data: contract } = await s.from('contracts')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!contract) return notFound();
-
-    // Check file size (max 10MB base64 = ~7.5MB actual)
-    const sizeBytes = Math.ceil((body.file_data.length * 3) / 4);
-    if (sizeBytes > 10 * 1024 * 1024) {
-      return error('حجم الملف يتجاوز 10 ميجابايت');
-    }
-
-    // Store document metadata (file data stored as base64 in DB for simplicity)
-    // In production, use Supabase Storage or S3 for large files
-    const docId = generateId();
-    const { data: doc, error: docErr } = await s.from('contract_documents')
-      .insert({
-        id: docId,
-        contract_id: id,
-        company_id: auth.companyId,
-        filename: body.filename,
-        content_type: body.content_type || 'application/octet-stream',
-        file_data: body.file_data,
-        file_size: sizeBytes,
-        description: body.description || null,
-        uploaded_by: auth.userId,
-      })
-      .select('id, filename, content_type, file_size, description, uploaded_at')
-      .single();
-
-    if (docErr) throw docErr;
-
-    return success(doc, 201);
+    return success(data, 201);
   } catch (err) {
     return handleApiError(err);
   }

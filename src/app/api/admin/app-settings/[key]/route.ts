@@ -2,12 +2,10 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, requireAdminAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-const sb = () => getSupabase();
+const SAFE_KEY = /^[a-z][a-z0-9_]{1,63}$/;
+const SAFE_CATEGORY = /^[a-z][a-z0-9_-]{0,49}$/;
 
-/**
- * PUT /api/admin/app-settings/[key]
- * Update a single field's metadata (label, icon, type, etc.)
- */
+/** Update the value or existing metadata of one setting. */
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ key: string }> }
@@ -15,62 +13,50 @@ export async function PUT(
   try {
     const auth = await requireAdminAuth(request);
     const { key } = await params;
-    const s = sb();
-    const body = await parseBody(request);
+    if (!SAFE_KEY.test(key)) return error('مفتاح الإعداد غير صالح');
+    const body = await parseBody<Record<string, unknown>>(request);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return error('بيانات الإعداد غير صالحة');
 
-    const updateData: any = { updated_at: new Date().toISOString(), updated_by: auth.userId };
-    if (body.label !== undefined) updateData.label = body.label;
-    if (body.value !== undefined) updateData.value = String(body.value);
-    if (body.icon !== undefined) updateData.icon = body.icon;
-    if (body.field_type !== undefined) updateData.field_type = body.field_type;
-    if (body.category !== undefined) updateData.category = body.category;
-    if (body.sort_order !== undefined) updateData.sort_order = body.sort_order;
+    const allowed = new Set(['value', 'category', 'description']);
+    if (Object.keys(body).some((field) => !allowed.has(field))) return error('توجد حقول غير قابلة للتعديل');
+    if (!Object.keys(body).length) return error('لا توجد حقول قابلة للتعديل');
+    if (body.value !== undefined && (typeof body.value !== 'string' || body.value.length > 5000)) return error('قيمة الإعداد غير صالحة');
+    if (body.category !== undefined && (typeof body.category !== 'string' || !SAFE_CATEGORY.test(body.category))) return error('تصنيف الإعداد غير صالح');
+    if (body.description !== undefined && (typeof body.description !== 'string' || body.description.length > 500)) return error('وصف الإعداد طويل جداً');
 
-    const { data: updated, error: updateErr } = await s.from('app_settings')
-      .update(updateData)
-      .eq('key', key)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-    if (!updated) return notFound();
-
-    return success(updated);
+    const patch: Record<string, string> = {};
+    if (body.value !== undefined) patch.value = body.value as string;
+    if (body.category !== undefined) patch.category = body.category as string;
+    if (body.description !== undefined) patch.description = body.description as string;
+    const { data, error: updateError } = await getSupabase().rpc('admin_update_app_setting', {
+      p_admin_id: auth.userId,
+      p_key: key,
+      p_patch: patch,
+    });
+    if (updateError) throw updateError;
+    if ((data as any)?.not_found) return notFound();
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * DELETE /api/admin/app-settings/[key]
- * Delete a custom field (only custom fields can be deleted)
- */
+/** Delete custom keys only; built-in configuration is protected in PostgreSQL. */
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ key: string }> }
 ) {
   try {
-    await requireAdminAuth(request);
+    const auth = await requireAdminAuth(request);
     const { key } = await params;
-    const s = sb();
-
-    const { data: field } = await s.from('app_settings')
-      .select('is_custom')
-      .eq('key', key)
-      .maybeSingle();
-
-    if (!field) return notFound();
-
-    if (!(field as any).is_custom) {
-      return error('لا يمكن حذف الحقول الافتراضية، يمكن تعديلها فقط', 400);
-    }
-
-    const { error: delErr } = await s.from('app_settings')
-      .delete()
-      .eq('key', key);
-
-    if (delErr) throw delErr;
-
+    if (!SAFE_KEY.test(key)) return error('مفتاح الإعداد غير صالح');
+    const { data, error: deleteError } = await getSupabase().rpc('admin_delete_app_setting', {
+      p_admin_id: auth.userId,
+      p_key: key,
+    });
+    if (deleteError) throw deleteError;
+    if ((data as any)?.not_found) return notFound();
+    if ((data as any)?.protected) return error('لا يمكن حذف الحقول الافتراضية، يمكن تعديلها فقط');
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);

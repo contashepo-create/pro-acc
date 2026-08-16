@@ -1,146 +1,54 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getNextJournalNumber } from '@/lib/numbering';
-import { ACCOUNT_CODES } from '@/lib/constants';
-import { createAutoAccount } from '@/lib/auto-account';
-import { insertJournalLines } from '@/lib/journal-utils';
+import { fixedAssetCreateSchema } from '@/lib/hr-validation';
 
-const sb = () => getSupabase();
+export const FIXED_ASSET_COLUMNS = `id,name,code,category,purchase_date,purchase_cost,useful_life_years,
+  depreciation_rate,depreciation_method,accumulated_depreciation,net_book_value,status,location,notes,
+  journal_entry_id,asset_account_id,depreciation_account_id,approved_at,created_at`;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'fixed_assets', 'read');
-    const s = sb();
-    const url = new URL(req.url);
-    const { page, pageSize } = getPaginationParams(url);
-
+    const { page, pageSize } = getPaginationParams(new URL(req.url));
     const offset = (page - 1) * pageSize;
-    const { data, error: queryError, count } = await s.from('fixed_assets')
-      .select('*', { count: 'exact' })
-      .eq('company_id', auth.companyId)
-      .order('purchase_date', { ascending: false })
-      .range(offset, offset + pageSize - 1);
-
+    const { data, error: queryError, count } = await getSupabase().from('fixed_assets')
+      .select(FIXED_ASSET_COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId)
+      .order('purchase_date', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-
-    const assets = (data || []).map((f: any) => ({ 
-      ...f, 
-      net_book_value: (f.purchase_cost || 0) - (f.accumulated_depreciation || 0) 
+    const assets = (data || []).map((asset: any) => ({
+      ...asset,
+      net_book_value: Number(asset.purchase_cost || 0) - Number(asset.accumulated_depreciation || 0),
     }));
-
     return success({ assets, total: count || 0, page, pageSize });
-  } catch (err) { 
-    return handleApiError(err); 
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'fixed_assets', 'create');
-    const s = sb();
-    const data = await parseBody(req);
-    const { name, code, category, purchase_date, purchase_cost, useful_life_years, depreciation_method, location, notes } = data;
-
-    if (!name || !code || !category || !purchase_date || !purchase_cost || !useful_life_years)
-      return error('name, code, category, purchase_date, purchase_cost, useful_life_years are required');
-
-    // إنشاء حساب الأصل تلقائياً
-    const assetCode = `1230-${code}`;
-    const assetAccount = await createAutoAccount({
-      companyId: auth.companyId,
-      code: assetCode,
-      name: name,
-      type: 'asset',
-      parentCode: '1230', // الآلات والمعدات
+    const parsed = fixedAssetCreateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات الأصل غير صالحة');
+    const input = parsed.data;
+    const { data, error: rpcError } = await getSupabase().rpc('create_fixed_asset', {
+      p_company_id: auth.companyId,
+      p_name: input.name,
+      p_code: input.code.toUpperCase(),
+      p_category: input.category,
+      p_purchase_date: input.purchase_date,
+      p_purchase_cost: input.purchase_cost,
+      p_useful_life_years: input.useful_life_years,
+      p_depreciation_method: input.depreciation_method || 'straight_line',
+      p_location: input.location || '',
+      p_notes: input.notes || '',
+      p_bank_safe_id: input.bank_safe_id,
+      p_created_by: auth.userId,
     });
-
-    // إنشاء حساب الإهلاك تلقائياً
-    const deprCode = `1290-${code}`;
-    const deprAccount = await createAutoAccount({
-      companyId: auth.companyId,
-      code: deprCode,
-      name: `مجمع إهلاك ${name}`,
-      type: 'asset',
-      parentCode: '1290', // مجمع إهلاك الأصول الثابتة
-    });
-
-    const rate = depreciation_method === 'declining_balance' ? (2 / useful_life_years) : (1 / useful_life_years);
-
-    // حفظ الأصل مع ربطه بالحسابات
-    const { data: asset, error: assetErr } = await s.from('fixed_assets')
-      .insert({ 
-        company_id: auth.companyId, 
-        name, 
-        code, 
-        category, 
-        purchase_date, 
-        purchase_cost, 
-        useful_life_years, 
-        depreciation_rate: rate, 
-        depreciation_method: depreciation_method || 'straight_line', 
-        accumulated_depreciation: 0, 
-        status: 'active', 
-        location: location || null, 
-        notes: notes || null,
-        asset_account_id: assetAccount?.id || null,
-        depreciation_account_id: deprAccount?.id || null,
-      })
-      .select('*')
-      .single();
-
-    if (assetErr) throw assetErr;
-
-    // إنشاء قيد الشراء — إلزامي متوازن (لا أصل بلا قيد)
-    const { data: bankAcc } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('code', ACCOUNT_CODES.BANKS)
-      .maybeSingle();
-
-    if (!assetAccount?.id || !bankAcc?.id) {
-      // تراجع: لا أصل يتيم بدون قيد شراء
-      await s.from('fixed_assets').delete().eq('id', asset.id).eq('company_id', auth.companyId);
-      return error('تعذر إنشاء قيد شراء الأصل (حساب الأصل/البنك غير موجود) — راجع دليل الحسابات');
-    }
-
-    const jeNum = await getNextJournalNumber(auth.companyId, purchase_date || new Date().toISOString());
-    const { data: je } = await s.from('journal_entries')
-      .insert({ 
-        company_id: auth.companyId, 
-        number: jeNum, 
-        date: purchase_date, 
-        type: 'general', 
-        description: `شراء أصل ثابت: ${name}`,
-        reference_type: 'fixed_asset',
-        reference_id: asset.id,
-        created_by: auth.userId 
-      })
-      .select('id')
-      .single();
-
-    const { error: jlErr } = await insertJournalLines(auth.companyId, [
-      {
-        journal_entry_id: je.id,
-        account_id: assetAccount.id,
-        debit: purchase_cost,
-        credit: 0,
-      },
-      {
-        journal_entry_id: je.id,
-        account_id: bankAcc.id,
-        debit: 0,
-        credit: purchase_cost,
-      },
-    ]);
-    if (jlErr) {
-      await s.from('journal_entries').delete().eq('id', je.id).eq('company_id', auth.companyId);
-      await s.from('fixed_assets').delete().eq('id', asset.id).eq('company_id', auth.companyId);
-      throw jlErr;
-    }
-
-    return success(asset, 201);
-  } catch (err) { 
-    return handleApiError(err); 
+    if (rpcError) throw rpcError;
+    return success(data, 201);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

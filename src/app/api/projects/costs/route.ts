@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { deliveryUuid } from '@/lib/project-delivery-validation';
 
 const sb = () => getSupabase();
 
@@ -21,17 +22,20 @@ export async function GET(request: NextRequest) {
     const projectId = url.searchParams.get('projectId');
 
     if (!projectId) return error('رقم المشروع مطلوب');
+    if (!deliveryUuid.safeParse(projectId).success) return error('معرف المشروع غير صالح');
 
     // TENANT: المشروع يجب أن ينتمي للشركة
-    const { data: project } = await s.from('projects')
+    const { data: project, error: projectError } = await s.from('projects')
       .select('id').eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+    if (projectError) throw projectError;
     if (!project) return error('المشروع غير موجود', 404);
 
     // مصدر واحد: سطور القيد الموسومة بـ project_id (مقيدة بالشركة)
-    const { data: lines } = await s.from('journal_lines')
+    const { data: lines, error: linesError } = await s.from('journal_lines')
       .select('debit, credit, accounts(code, name, type)')
       .eq('project_id', projectId)
       .eq('company_id', auth.companyId);
+    if (linesError) throw linesError;
 
     const accountMap: Record<string, { code: string; name: string; type: string; total_debit: number; total_credit: number }> = {};
     let totalRevenue = 0;

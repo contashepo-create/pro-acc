@@ -1,6 +1,6 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 
@@ -25,8 +25,11 @@ export async function GET(req: NextRequest) {
     await requireAdmin(req);
     const s = sb();
     const used = req.nextUrl.searchParams.get('used');
+    if (used && used !== 'true' && used !== 'false') return error('حالة كود التفعيل غير صالحة');
 
-    let queryBuilder = s.from('activation_codes').select('*');
+    let queryBuilder = s.from('activation_codes').select(
+      'id, code, plan_code, duration_months, company_id, target_company_id, is_used, used_by, used_at, expires_at, created_by, created_at, addon_type, addon_quantity, plan_duration_months, notes, one_time'
+    );
     if (used === 'true') queryBuilder = queryBuilder.eq('is_used', true);
     else if (used === 'false') queryBuilder = queryBuilder.eq('is_used', false);
     queryBuilder = queryBuilder.order('created_at', { ascending: false });
@@ -37,13 +40,16 @@ export async function GET(req: NextRequest) {
     const companyIds = (codes || []).map((c: any) => c.target_company_id || c.used_by).filter(Boolean);
     const companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
-      const { data: companies } = await s.from('companies').select('id, name').in('id', [...new Set(companyIds)]);
+      const { data: companies, error: companiesError } = await s.from('companies').select('id, name').in('id', [...new Set(companyIds)]);
+      if (companiesError) throw companiesError;
       (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
     }
 
     const result = (codes || []).map((c: any) => ({
       id: c.id,
-      code: c.code,
+      // Never return a redeemable secret from a list endpoint. The plaintext
+      // is shown exactly once in the POST response.
+      code: c.code ? `••••-${String(c.code).slice(-8)}` : '••••-••••',
       plan_code: c.plan_code,
       duration_months: c.duration_months || c.plan_duration_months,
       addon_type: c.addon_type,
@@ -67,7 +73,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requireAdmin(req);
+    const admin = await requireAdmin(req);
     const body = await parseBody<{
       planCode?: string;
       durationMonths?: number;
@@ -83,44 +89,46 @@ export async function POST(req: NextRequest) {
     if (!isAddon && (!body.planCode || !body.durationMonths)) {
       return error('planCode و durationMonths مطلوبان (أو addonType لإضافة)');
     }
-    if (isAddon && (body.addonQuantity || 0) < 1) {
+    if (isAddon && (!Number.isInteger(Number(body.addonQuantity)) || Number(body.addonQuantity) < 1 || Number(body.addonQuantity) > 10000)) {
       return error('كمية الإضافة غير صالحة');
     }
-
-    // Lock plan exists
-    const s = sb();
-    if (!isAddon) {
-      const { data: plan } = await s.from('subscription_plans')
-        .select('id, code, is_active').eq('code', body.planCode!).eq('is_active', true).maybeSingle();
-      if (!plan) return error('الباقة غير موجودة أو معطلة', 404);
+    if (!isAddon && (!Number.isInteger(Number(body.durationMonths)) || Number(body.durationMonths) < 1 || Number(body.durationMonths) > 120)) {
+      return error('مدة التفعيل يجب أن تكون بين شهر و120 شهراً');
     }
+    if (body.planCode && !/^[a-z0-9_-]{2,32}$/i.test(body.planCode)) return error('كود الباقة غير صالح');
+    if (body.companyId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.companyId)) {
+      return error('معرّف الشركة غير صالح');
+    }
+    if (body.expiresAt && (!/^\d{4}-\d{2}-\d{2}$/.test(body.expiresAt) || new Date(`${body.expiresAt}T23:59:59Z`).getTime() <= Date.now())) {
+      return error('تاريخ انتهاء الكود غير صالح');
+    }
+    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 1000)) return error('الملاحظات غير صالحة');
+    const n = body.count === undefined ? 1 : Number(body.count);
+    if (!Number.isSafeInteger(n) || n < 1 || n > 50) return error('عدد الأكواد يجب أن يكون بين 1 و50');
+    const codes = Array.from({ length: n }, () => genCode());
+    const hashes = codes.map((code) =>
+      createHash('sha256').update(code.toUpperCase()).digest('hex')
+    );
 
-    const n = Math.max(1, Math.min(50, Number(body.count) || 1));
-    const codes: string[] = [];
-
-    for (let i = 0; i < n; i++) {
-      // Generate, retrying on collision (unique index will catch duplicates).
-      let code: string = '';
-      for (let attempt = 0; attempt < 8; attempt++) {
-        code = genCode();
-        const { error: insErr } = await s.from('activation_codes').insert({
-          code,
-          plan_code: isAddon ? null : body.planCode!,
-          duration_months: isAddon ? 1 : Number(body.durationMonths),
-          plan_duration_months: isAddon ? null : Number(body.durationMonths),
-          target_company_id: body.companyId || null,
-          expires_at: body.expiresAt || null,
-          addon_type: isAddon ? body.addonType! : null,
-          addon_quantity: isAddon ? Number(body.addonQuantity) : null,
-          notes: body.notes || null,
-          is_used: false,
-          one_time: true,
-        });
-        if (!insErr) break;
-        if (insErr.code === '23505') continue; // unique collision → retry with new code
-        throw insErr;
-      }
-      if (code) codes.push(code);
+    // Target validation, all code inserts, and the admin audit record commit as
+    // one transaction. No partially-created batch can survive an RPC failure.
+    const { error: createError } = await sb().rpc('create_activation_code_batch_atomic', {
+      p_admin_id: admin.adminId,
+      p_plan_code: isAddon ? null : body.planCode!,
+      p_duration_months: isAddon ? null : Number(body.durationMonths),
+      p_company_id: body.companyId || null,
+      p_expires_at: body.expiresAt || null,
+      p_addon_type: isAddon ? body.addonType! : null,
+      p_addon_quantity: isAddon ? Number(body.addonQuantity) : null,
+      p_notes: typeof body.notes === 'string' ? body.notes : null,
+      p_hashes: hashes,
+    });
+    if (createError) {
+      const message = String(createError.message || '');
+      if (/company not found/i.test(message)) return error('الشركة المستهدفة غير موجودة', 404);
+      if (/plan is unavailable/i.test(message)) return error('الباقة غير موجودة أو معطلة', 404);
+      if (createError.code === '23505') return error('حدث تعارض نادر أثناء إنشاء الأكواد، حاول مجدداً', 409);
+      throw createError;
     }
 
     return success({ codes, count: codes.length }, 201);

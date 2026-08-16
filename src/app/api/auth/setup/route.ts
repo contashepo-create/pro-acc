@@ -3,17 +3,10 @@ import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api
 import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword, createToken } from '@/lib/auth';
 import { isCommonPassword } from '@/lib/validation';
+import { DEFAULT_CHART_OF_ACCOUNTS } from '@/lib/default-accounts';
 import { timingSafeEqual } from 'crypto';
 
 const sb = () => getSupabase();
-
-
-const DEFAULT_SETTINGS = [
-  { key: 'currency', value: 'SAR' },
-  { key: 'language', value: 'ar' },
-  { key: 'date_format', value: 'YYYY-MM-DD' },
-  { key: 'vat_rate', value: '0.15' },
-];
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,107 +15,61 @@ export async function POST(request: NextRequest) {
       user: { name: string; email: string; password: string };
       setup_token?: string;
     }>(request);
-
-    if (!companyData?.name) {
-      return error('اسم الشركة مطلوب');
-    }
-
-    if (!userData?.name || !userData?.email || !userData?.password) {
+    if (!companyData?.name?.trim()) return error('اسم الشركة مطلوب');
+    if (!userData?.name?.trim() || !userData?.email?.trim() || !userData?.password) {
       return error('بيانات المستخدم غير مكتملة (الاسم، البريد الإلكتروني، كلمة المرور)');
     }
-
     if (userData.password.length < 8 || userData.password.length > 128 || isCommonPassword(userData.password)) {
       return error('كلمة المرور يجب أن تكون 8 أحرف على الأقل وغير شائعة');
     }
 
-    const s = sb();
-    const { count } = await s.from('companies').select('*', { count: 'exact', head: true });
-
-    if ((count || 0) > 0) {
-      return error('تم إعداد النظام مسبقاً. لا يمكن إعادة الإعداد', 409);
-    }
-
-    const setupToken = setup_token || request.nextUrl.searchParams.get('setup_token');
-    // Initial bootstrap is an administrator creation endpoint. It must never
-    // be anonymously reachable on a production deployment, even when the DB
-    // is currently empty.
-    const expectedSetupToken = (process.env.SETUP_TOKEN || '').trim();
-    if (process.env.NODE_ENV === 'production' && expectedSetupToken.length < 32) {
+    // Verify the bootstrap capability before disclosing database state.
+    const suppliedToken = setup_token || request.nextUrl.searchParams.get('setup_token') || '';
+    const expectedToken = (process.env.SETUP_TOKEN || '').trim();
+    if (process.env.NODE_ENV === 'production' && expectedToken.length < 32) {
       return error('الإعداد الأولي غير مهيأ بأمان', 503);
     }
-    if (expectedSetupToken) {
-      const provided = Buffer.from(setupToken || '');
-      const expected = Buffer.from(expectedSetupToken);
-      if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+    if (expectedToken) {
+      const supplied = Buffer.from(suppliedToken);
+      const expected = Buffer.from(expectedToken);
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
         return error('رمز الإعداد غير صحيح', 403);
       }
     }
 
-    // Create company
-    const { data: company, error: companyErr } = await s.from('companies')
-      .insert({
-        name: companyData.name,
-        commercial_registration: companyData.commercialRegistration || null,
-        tax_number: companyData.taxNumber || null,
-        is_active: true,
-      })
-      .select('id')
-      .single();
-
-    if (companyErr) throw companyErr;
-    const companyId = company.id;
-
-    // Create admin user
     const passwordHash = await hashPassword(userData.password);
-    const { data: user, error: userErr } = await s.from('users')
-      .insert({
-        company_id: companyId,
-        name: userData.name,
-        email: userData.email.toLowerCase(),
-        password_hash: passwordHash,
-        role: 'admin',
-        is_active: true,
-      })
-      .select('id, name, email, role')
-      .single();
-
-    if (userErr) {
-      // Cleanup company on user creation failure
-      await s.from('companies').delete().eq('id', companyId);
-      throw userErr;
+    const accounts = DEFAULT_CHART_OF_ACCOUNTS.map((account) => ({
+      code: account.code, name: account.name, name_en: account.nameEn, type: account.type,
+      parent_code: account.parentCode || null, is_header: account.isHeader === true,
+    }));
+    // The RPC serializes the global "first company" check and creates the
+    // company, admin, chart, safe, settings and trial in one transaction.
+    const { data, error: setupErr } = await sb().rpc('setup_initial_company', {
+      p_company_name: companyData.name.trim(),
+      p_commercial_registration: companyData.commercialRegistration || '',
+      p_tax_number: companyData.taxNumber || '',
+      p_email: userData.email.trim().toLowerCase(),
+      p_user_name: userData.name.trim(),
+      p_password_hash: passwordHash,
+      p_accounts: accounts,
+    });
+    if (setupErr) {
+      if (String(setupErr.message || '').includes('تم إعداد النظام مسبقاً')) {
+        return error('تم إعداد النظام مسبقاً. لا يمكن إعادة الإعداد', 409);
+      }
+      throw setupErr;
     }
 
-    // Create default chart of accounts — single source of truth shared with
-    // /api/auth/register (previously this route used a different inline chart,
-    // so companies seeded via setup ended up with divergent accounts/codes).
-    try {
-      const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
-      await createDefaultChartOfAccounts(s, companyId);
-    } catch (e) {
-      console.warn('Failed to create default chart of accounts:', e);
-    }
-
-    // Create default settings
-    for (const setting of DEFAULT_SETTINGS) {
-      await s.from('settings').insert({
-        company_id: companyId,
-        key: setting.key,
-        value: setting.value,
-      });
-    }
-
-    const token = createToken(user.id, 'admin');
-
+    const created = data as { company: { id: string; name: string }; user: { id: string; name: string; email: string; role: string } };
+    const token = createToken(created.user.id, created.user.role);
     const response = success({
       message: 'تم إعداد النظام بنجاح',
-      companyId,
-      user,
+      companyId: created.company.id,
+      user: created.user,
       token,
-      setupProtected: !!expectedSetupToken,
+      setupProtected: !!expectedToken,
     }, 201);
-
     setAuthCookie(response, 'token', token, 86400 * 7);
-
     return response;
   } catch (err) {
     return serverError(err);

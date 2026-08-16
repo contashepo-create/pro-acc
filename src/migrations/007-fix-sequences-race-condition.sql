@@ -1,5 +1,14 @@
 -- FIX: Race condition in invoice / journal numbering
 -- Use atomic upsert function to avoid duplicate numbers under concurrent requests
+-- Clean installations reach this migration before the later compatibility files
+-- that also create invoice_sequences.
+CREATE TABLE IF NOT EXISTS invoice_sequences (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  year INTEGER NOT NULL,
+  last_number INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(company_id, year)
+);
 
 -- Function for invoice numbers
 CREATE OR REPLACE FUNCTION next_invoice_number(p_company_id UUID, p_year INT)

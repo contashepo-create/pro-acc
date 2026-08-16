@@ -1,189 +1,72 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
-import type { } from '@/lib/api-helpers';
+import { z } from 'zod';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
-import { postReversalEntry } from '@/lib/voucher-utils';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const updateSchema = z.object({ reason: z.string().trim().min(1, 'البيان غير صالح').max(1000) }).strict();
+const COLUMNS = `id, date, type, amount, account_id, bank_safe_id, contact_id, project_id, category_id,
+  reason, journal_entry_id, created_by, tax_rate, tax_amount, status, created_at,
+  banks_safes!bank_safe_id(name), accounts!account_id(name), contacts!contact_id(name), journal_entries!journal_entry_id(number)`;
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'cash', 'read');
     const { id } = await params;
-    const s = sb();
-
-    let { data, error: queryError } = await s.from('cash_transactions')
-      .select('*, banks_safes(name), accounts(name), contacts(name), journal_entries(number)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (queryError) {
-      const fallback = await s.from('cash_transactions')
-        .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-      data = fallback.data;
-      queryError = fallback.error;
-    }
-
-    if (queryError) {
-      const fallback = await s.from('cash_transactions')
-        .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-      data = fallback.data;
-      queryError = fallback.error;
-    }
-
-    if (queryError || !data) {
-      return notFound();
-    }
-
-    const ct = data as Record<string, any>;
+    if (!UUID_RE.test(id)) return error('معرّف الحركة غير صالح');
+    const { data, error: queryError } = await sb().from('cash_transactions').select(COLUMNS)
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (queryError) throw queryError;
+    if (!data) return notFound();
+    const row = data as Record<string, unknown>;
     return success({
-      ...ct,
-      bank_safe_name: ct.banks_safes?.name || null,
-      account_name: ct.accounts?.name || null,
-      contact_name: ct.contacts?.name || null,
-      journal_entry_number: ct.journal_entries?.number || null,
+      ...row,
+      bank_safe_name: (row.banks_safes as { name?: string } | null)?.name || null,
+      account_name: (row.accounts as { name?: string } | null)?.name || null,
+      contact_name: (row.contacts as { name?: string } | null)?.name || null,
+      journal_entry_number: (row.journal_entries as { number?: number } | null)?.number || null,
+      banks_safes: undefined, accounts: undefined, contacts: undefined, journal_entries: undefined,
     });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'cash', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await request.json();
-
-    const { data: txRes } = await s.from('cash_transactions')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!txRes) {
-      return notFound();
-    }
-
-    const existing = txRes as Record<string, any>;
-
-    // حركة مُرحَّلة (لها قيد) لا تُعدَّل حقولها المالية — وإلا يفترق القيد عن الحركة
-    if (existing.journal_entry_id) {
-      const financialKeys = ['type', 'amount', 'account_id', 'bank_safe_id', 'tax_rate', 'tax_amount'];
-      if (financialKeys.some((k) => body[k] !== undefined)) {
-        return error('لا يمكن تعديل مبلغ/نوع/حسابات حركة مُرحَّلة — اعكسها وسجّل حركة جديدة');
-      }
-    }
-
-    const updateData: Record<string, any> = {};
-    if (body.date !== undefined) updateData.date = body.date;
-    if (body.type !== undefined) updateData.type = body.type;
-    if (body.amount !== undefined) updateData.amount = body.amount;
-    if (body.account_id !== undefined) updateData.account_id = body.account_id;
-    if (body.bank_safe_id !== undefined) updateData.bank_safe_id = body.bank_safe_id;
-    if (body.contact_id !== undefined) updateData.contact_id = body.contact_id;
-    if (body.project_id !== undefined) updateData.project_id = body.project_id;
-    if (body.category_id !== undefined) updateData.category_id = body.category_id;
-    if (body.reason !== undefined) updateData.reason = body.reason;
-
-    if (Object.keys(updateData).length > 0) {
-      const { error: updateError } = await s.from('cash_transactions')
-        .update(updateData)
-        .eq('id', id)
-        .eq('company_id', auth.companyId);
-      if (updateError) throw updateError;
-    }
-
-    const auditId = generateId();
-    await s.from('audit_log').insert({
-      id: auditId,
-      company_id: auth.companyId,
-      user_id: auth.userId,
-      action: 'update',
-      entity_type: 'cash_transaction',
-      entity_id: id,
-      old_values: existing,
-      new_values: body,
+    if (!UUID_RE.test(id)) return error('معرّف الحركة غير صالح');
+    const parsed = updateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error('الحركة المرحلة لا تقبل إلا تعديل البيان؛ اعكسها وسجل حركة جديدة لتغيير القيم المحاسبية');
+    const { data, error: updateError } = await sb().rpc('update_cash_transaction_note', {
+      p_company_id: auth.companyId, p_transaction_id: id,
+      p_reason: parsed.data.reason, p_user_id: auth.userId,
     });
-
-    const { data: updated, error: fetchError } = await s.from('cash_transactions')
-      .select('*, journal_entries(number)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .single();
-
-    if (fetchError) throw fetchError;
-
-    const result = updated as Record<string, any>;
-    return success({
-      ...result,
-      journal_entry_number: result.journal_entries?.number || null,
-    });
+    const message = String(updateError?.message || '');
+    if (message.includes('غير موجودة')) return notFound();
+    if (message.includes('ملغاة')) return error(message, 409);
+    if (updateError) throw updateError;
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireManagerOrAbove(request);
     const { id } = await params;
-    const s = sb();
-
-    const { data: txRes } = await s.from('cash_transactions')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!txRes) {
-      return notFound();
-    }
-
-    const tx = txRes as Record<string, any>;
-
-    if (tx.status === 'cancelled') return error('الحركة ملغاة مسبقاً');
-
-    // Financial history is immutable: reverse the original posting instead of
-    // deleting journal lines/headers and destroying the audit trail.
-    if (tx.journal_entry_id) {
-      const { error: reversalError } = await postReversalEntry(auth.companyId, {
-        journalEntryId: tx.journal_entry_id,
-        referenceType: 'cash_transaction_reversal',
-        referenceId: id,
-        description: `عكس حركة نقدية: ${tx.reason || id}`,
-        userId: auth.userId,
-      });
-      if (reversalError) throw reversalError;
-    }
-
-    const auditId = generateId();
-    await s.from('audit_log').insert({
-      id: auditId,
-      company_id: auth.companyId,
-      user_id: auth.userId,
-      action: 'delete',
-      entity_type: 'cash_transaction',
-      entity_id: id,
-      old_values: tx,
+    if (!UUID_RE.test(id)) return error('معرّف الحركة غير صالح');
+    const { data, error: cancelError } = await sb().rpc('cancel_cash_transaction', {
+      p_company_id: auth.companyId, p_transaction_id: id, p_user_id: auth.userId,
     });
-
-    const { error: cancelError } = await s.from('cash_transactions')
-      .update({ status: 'cancelled' })
-      .eq('id', id).eq('company_id', auth.companyId);
+    const message = String(cancelError?.message || '');
+    if (message.includes('غير موجودة')) return notFound();
+    if (message.includes('مسبقاً')) return error(message, 409);
     if (cancelError) throw cancelError;
-
-    return success({ cancelled: true });
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }

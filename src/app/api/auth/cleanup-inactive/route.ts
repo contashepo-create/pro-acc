@@ -6,85 +6,22 @@ const sb = () => getSupabase();
 
 // GET /api/auth/cleanup-inactive — called by Vercel Cron daily at 3am
 // POST /api/auth/cleanup-inactive — called manually with x-cron-secret header
-// Deletes free/trial accounts inactive for 15+ days
+// Deactivates expired trial accounts inactive for 15+ days; never hard-deletes ledgers
 
 async function doCleanup() {
-  const s = sb();
-  const fifteenDaysAgo = new Date(Date.now() - 15 * 86400000).toISOString();
-
-  // Get subscriptions matching criteria — clean up trial/expired/cancelled
-  // accounts (any plan_code as long as status is trial/expired/cancelled).
-  // Active paid Start/Pro/Enterprise subscribers are preserved.
-  const { data: subs } = await s.from('subscriptions')
-    .select('company_id')
-    .in('status', ['trial', 'expired', 'cancelled']);
-
-  const subCompanyIds = [...new Set((subs || []).map((s: any) => s.company_id))];
-
-  if (subCompanyIds.length === 0) {
-    return success({
-      message: 'تم تنظيف الحسابات غير النشطة',
-      deletedCompanies: 0,
-      deletedUsers: 0,
-    });
-  }
-
-  // Get inactive users for those companies
-  const { data: users } = await s.from('users')
-    .select('company_id, last_activity, last_login')
-    .in('company_id', subCompanyIds)
-    .not('last_login', 'is', null);
-
-  // Filter inactive users
-  const inactiveCompanyIds = [...new Set(
-    (users || [])
-      .filter((u: any) => !u.last_activity || new Date(u.last_activity) < new Date(fifteenDaysAgo))
-      .map((u: any) => u.company_id)
-  )];
-
-  let deletedCompanies = 0;
-  let deletedUsers = 0;
-
-  const tablesToClean = [
-    'journal_lines',
-    'journal_entries',
-    'invoices',
-    'clients',
-    'contacts',
-    'accounts',
-    'transactions',
-    'subscriptions',
-    'login_attempts',
-    'settings',
-    'notifications',
-  ];
-
-  for (const companyId of inactiveCompanyIds) {
-    // Delete from all related tables (best-effort)
-    for (const table of tablesToClean) {
-      await s.from(table).delete().eq('company_id', companyId).then(
-        () => {},
-        () => {}
-      );
-    }
-
-    // Delete users and count
-    const { data: deletedUserRows } = await s.from('users')
-      .delete()
-      .eq('company_id', companyId)
-      .select('id');
-
-    deletedUsers += (deletedUserRows || []).length;
-
-    // Delete company
-    await s.from('companies').delete().eq('id', companyId);
-    deletedCompanies++;
-  }
-
+  // Financial and tax records are retained. Eligible expired tenants are
+  // deactivated atomically instead of being partially hard-deleted table by
+  // table. Reactivation remains possible after an administrative review.
+  const cutoff = new Date(Date.now() - 15 * 86400000).toISOString();
+  const { data, error: cleanupError } = await sb().rpc('deactivate_inactive_expired_companies', {
+    p_cutoff: cutoff,
+  });
+  if (cleanupError) throw cleanupError;
+  const result = data as Record<string, number> | null;
   return success({
-    message: 'تم تنظيف الحسابات غير النشطة',
-    deletedCompanies,
-    deletedUsers,
+    message: 'تم تعطيل الحسابات المنتهية وغير النشطة مع الاحتفاظ بسجلاتها المالية',
+    deactivatedCompanies: Number(result?.deactivated_companies || 0),
+    deactivatedUsers: Number(result?.deactivated_users || 0),
   });
 }
 

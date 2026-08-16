@@ -1,13 +1,13 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, getPaginationParams, handleApiError } from '@/lib/api-helpers';
+import { success, getPaginationParams } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-  const __admin = await requireAdmin(request);
+    await requireAdmin(request);
 
     const { page, pageSize } = getPaginationParams(request.url);
     const s = sb();
@@ -30,9 +30,10 @@ export async function GET(request: NextRequest) {
     // Get user counts per company
     const userCountMap: Record<string, number> = {};
     if (companyIds.length > 0) {
-      const { data: users } = await s.from('users')
+      const { data: users, error: usersError } = await s.from('users')
         .select('company_id')
         .in('company_id', companyIds);
+      if (usersError) throw usersError;
       (users || []).forEach((u: any) => {
         userCountMap[u.company_id] = (userCountMap[u.company_id] || 0) + 1;
       });
@@ -41,10 +42,11 @@ export async function GET(request: NextRequest) {
     // Get subscription info per company
     const subMap: Record<string, any> = {};
     if (companyIds.length > 0) {
-      const { data: subs } = await s.from('subscriptions')
+      const { data: subs, error: subscriptionsError } = await s.from('subscriptions')
         .select('id, company_id, subscriber_number, plan_id, plan_code, status, start_date, end_date, trial_end_date, auto_renew, subscription_plans(name, max_users, max_projects)')
         .in('company_id', companyIds)
         .order('created_at', { ascending: false });
+      if (subscriptionsError) throw subscriptionsError;
       (subs || []).forEach((sub: any) => {
         if (!subMap[sub.company_id]) {
           const sp = sub.subscription_plans;

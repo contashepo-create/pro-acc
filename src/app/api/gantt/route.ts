@@ -1,200 +1,124 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import { ganttCreateSchema, ganttUpdateSchema, relationshipUuid } from '@/lib/relationship-validation';
 
 const sb = () => getSupabase();
 
-/**
- * GET /api/gantt?project_id=... — Get tasks for Gantt chart
- */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'gantt', 'read');
+    const projectId = new URL(request.url).searchParams.get('project_id');
+    if (!projectId || !relationshipUuid.safeParse(projectId).success) return error('معرف المشروع غير صالح');
     const s = sb();
-    const url = new URL(request.url);
-    const projectId = url.searchParams.get('project_id');
+    const { data: project, error: projectError } = await s.from('projects').select('id')
+      .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+    if (projectError) throw projectError;
+    if (!project) return notFound();
+    const { data: tasks, error: tasksError } = await s.from('project_tasks').select('*')
+      .eq('project_id', projectId).eq('company_id', auth.companyId).order('start_date', { ascending: true });
+    if (tasksError) throw tasksError;
 
-    if (!projectId) return error('project_id مطلوب');
-
-    // Get project tasks
-    const { data: tasks } = await s.from('project_tasks')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('company_id', auth.companyId)
-      .order('start_date', { ascending: true });
-
-    // Calculate dependencies and critical path
-    const taskMap: Record<string, any> = {};
-    for (const task of (tasks || [])) {
-      const t = task as any;
-      taskMap[t.id] = {
-        ...t,
-        duration_days: t.start_date && t.end_date
-          ? Math.ceil((new Date(t.end_date).getTime() - new Date(t.start_date).getTime()) / 86400000) + 1
-          : 0,
-        progress_percent: parseFloat(t.progress || 0),
+    const taskMap: Record<string, Record<string, unknown>> = {};
+    for (const task of tasks || []) {
+      const row = task as Record<string, unknown>;
+      taskMap[String(row.id)] = {
+        ...row,
+        duration_days: Math.ceil((new Date(String(row.end_date)).getTime() - new Date(String(row.start_date)).getTime()) / 86400000) + 1,
+        progress_percent: Number(row.progress) || 0,
         isCritical: false,
       };
     }
-
-    // Calculate early/late start for critical path
     const allTasks = Object.values(taskMap);
-    const projectStart = allTasks.length > 0
-      ? allTasks.reduce((min: Date, t: any) => {
-          const d = new Date(t.start_date);
-          return d < min ? d : min;
-        }, new Date(allTasks[0].start_date))
-      : new Date();
-
-    const projectEnd = allTasks.length > 0
-      ? allTasks.reduce((max: Date, t: any) => {
-          const d = new Date(t.end_date);
-          return d > max ? d : max;
-        }, new Date(allTasks[0].end_date))
-      : new Date();
-
-    const totalProjectDays = Math.ceil((projectEnd.getTime() - projectStart.getTime()) / 86400000) + 1;
-
-    // Find critical tasks (longest path / no slack)
+    const starts = allTasks.map((task) => new Date(String(task.start_date)).getTime());
+    const ends = allTasks.map((task) => new Date(String(task.end_date)).getTime());
+    const projectStartTime = starts.length ? Math.min(...starts) : Date.now();
+    const projectEndTime = ends.length ? Math.max(...ends) : projectStartTime;
+    const totalProjectDays = Math.ceil((projectEndTime - projectStartTime) / 86400000) + 1;
     for (const task of allTasks) {
-      // Simple heuristic: tasks with 0 progress on the longest path are critical
-      const t = task as any;
-      if (t.duration_days >= totalProjectDays * 0.3 || t.progress_percent === 0) {
-        taskMap[t.id].isCritical = true;
-      }
+      if (Number(task.duration_days) >= totalProjectDays * 0.3 || Number(task.progress_percent) === 0) taskMap[String(task.id)].isCritical = true;
     }
-
-    // Summary
+    const now = Date.now();
     const summary = {
       totalTasks: allTasks.length,
-      completed: allTasks.filter((t: any) => t.progress_percent >= 100).length,
-      inProgress: allTasks.filter((t: any) => t.progress_percent > 0 && t.progress_percent < 100).length,
-      notStarted: allTasks.filter((t: any) => t.progress_percent === 0).length,
-      overdue: allTasks.filter((t: any) => t.progress_percent < 100 && new Date(t.end_date) < new Date()).length,
-      projectStart: projectStart.toISOString().split('T')[0],
-      projectEnd: projectEnd.toISOString().split('T')[0],
+      completed: allTasks.filter((task) => Number(task.progress_percent) >= 100).length,
+      inProgress: allTasks.filter((task) => Number(task.progress_percent) > 0 && Number(task.progress_percent) < 100).length,
+      notStarted: allTasks.filter((task) => Number(task.progress_percent) === 0).length,
+      overdue: allTasks.filter((task) => Number(task.progress_percent) < 100 && new Date(String(task.end_date)).getTime() < now).length,
+      projectStart: new Date(projectStartTime).toISOString().split('T')[0],
+      projectEnd: new Date(projectEndTime).toISOString().split('T')[0],
       totalDays: totalProjectDays,
     };
-
-    return success({
-      tasks: Object.values(taskMap),
-      summary,
-      project: {
-        id: projectId,
-        start: summary.projectStart,
-        end: summary.projectEnd,
-        duration: totalProjectDays,
-      },
-    });
+    return success({ tasks: allTasks, summary, project: { id: projectId, start: summary.projectStart, end: summary.projectEnd, duration: totalProjectDays } });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * POST /api/gantt — Create a task
- */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'gantt', 'create');
-    const s = sb();
-    const body = await request.json();
-
-    if (!body.project_id || !body.name || !body.start_date || !body.end_date) {
-      return error('المشروع والاسم وتاريخ البداية والنهاية مطلوبة');
+    const parsed = ganttCreateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { data, error: createError } = await sb().rpc('create_project_task_atomic', {
+      p_company_id: auth.companyId,
+      p_payload: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (createError) {
+      const message = String(createError.message || '');
+      if (message.includes('غير صالحة')) return error(message);
+      throw createError;
     }
-
-    const taskId = generateId();
-    const { data, error: insertErr } = await s.from('project_tasks')
-      .insert({
-        id: taskId,
-        company_id: auth.companyId,
-        project_id: body.project_id,
-        name: body.name,
-        description: body.description || null,
-        start_date: body.start_date,
-        end_date: body.end_date,
-        progress: body.progress || 0,
-        status: body.status || 'not_started', // not_started, in_progress, completed, blocked
-        priority: body.priority || 'medium', // low, medium, high, critical
-        parent_task_id: body.parent_task_id || null, // For sub-tasks
-        assigned_to: body.assigned_to || null,
-        estimated_hours: body.estimated_hours || null,
-        actual_hours: body.actual_hours || null,
-        created_by: auth.userId,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
     return success(data, 201);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * PUT /api/gantt — Update task (progress, dates, etc.)
- */
 export async function PUT(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'gantt', 'update');
-    const s = sb();
-    const url = new URL(request.url);
-    const taskId = url.searchParams.get('task_id');
-
-    if (!taskId) return error('task_id مطلوب');
-
-    const body = await request.json();
-    const allowedFields = ['name', 'description', 'start_date', 'end_date', 'progress',
-      'status', 'priority', 'parent_task_id', 'assigned_to', 'estimated_hours', 'actual_hours'];
-
-    const updateData: Record<string, any> = {};
-    for (const field of allowedFields) {
-      if (body[field] !== undefined) updateData[field] = body[field];
+    const taskId = new URL(request.url).searchParams.get('task_id');
+    if (!taskId || !relationshipUuid.safeParse(taskId).success) return error('معرف المهمة غير صالح');
+    const parsed = ganttUpdateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { data, error: updateError } = await sb().rpc('update_project_task_atomic', {
+      p_company_id: auth.companyId,
+      p_task_id: taskId,
+      p_patch: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (updateError) {
+      const message = String(updateError.message || '');
+      if (message.includes('غير موجودة')) return notFound();
+      if (message.includes('دورة')) return error(message, 409);
+      if (message.includes('غير صالحة')) return error(message);
+      throw updateError;
     }
-
-    // Auto-update status based on progress
-    if (body.progress !== undefined) {
-      if (body.progress >= 100) updateData.status = 'completed';
-      else if (body.progress > 0) updateData.status = 'in_progress';
-    }
-
-    updateData.updated_at = new Date().toISOString();
-
-    const { data, error: updateErr } = await s.from('project_tasks')
-      .update(updateData)
-      .eq('id', taskId)
-      .eq('company_id', auth.companyId)
-      .select()
-      .single();
-
-    if (updateErr) throw updateErr;
     return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * DELETE /api/gantt — Delete a task
- */
 export async function DELETE(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'gantt', 'delete');
-    const s = sb();
-    const url = new URL(request.url);
-    const taskId = url.searchParams.get('task_id');
-
-    if (!taskId) return error('task_id مطلوب');
-
-    // Delete sub-tasks first
-    await s.from('project_tasks').delete().eq('parent_task_id', taskId);
-    await s.from('project_tasks').delete().eq('id', taskId).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
+    const taskId = new URL(request.url).searchParams.get('task_id');
+    if (!taskId || !relationshipUuid.safeParse(taskId).success) return error('معرف المهمة غير صالح');
+    const { data, error: deleteError } = await sb().rpc('delete_unstarted_project_task_atomic', {
+      p_company_id: auth.companyId,
+      p_task_id: taskId,
+      p_user_id: auth.userId,
+    });
+    if (deleteError) {
+      const message = String(deleteError.message || 'تعذر حذف المهمة');
+      if (message.includes('غير موجودة')) return notFound();
+      if (message.includes('بدأ تنفيذها')) return error(message, 409);
+      throw deleteError;
+    }
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }

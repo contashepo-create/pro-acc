@@ -62,7 +62,10 @@ export default function ProgressBillingPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(editingClaim ? {
+          notes: form.notes,
+          is_final: form.is_final,
+        } : form),
       });
       const json = await res.json();
       if (json.success) {
@@ -157,13 +160,13 @@ export default function ProgressBillingPage() {
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingClaim(null); }} title={editingClaim ? 'تعديل فاتورة مرحلية' : 'إضافة فاتورة مرحلية'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingClaim(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select label="المشروع" value={form.project_id} onChange={(v) => setForm({...form, project_id: v})} options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} className="col-span-2" />
-            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
-            <Input label="المبلغ الإجمالي" type="number" value={form.gross_amount} onChange={(e) => setForm({...form, gross_amount: parseFloat(e.target.value) || 0})} />
-            <Input label="نسبة الاحتجاز (%)" type="number" value={form.retention_percentage} onChange={(e) => setForm({...form, retention_percentage: parseFloat(e.target.value) || 10})} />
+            <Select label="المشروع" value={form.project_id} disabled={!!editingClaim} onChange={(v) => setForm({...form, project_id: v})} options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} className="col-span-2" />
+            <Input label="التاريخ" type="date" value={form.date} disabled={!!editingClaim} onChange={(e) => setForm({...form, date: e.target.value})} />
+            <Input label="المبلغ الإجمالي" type="number" value={form.gross_amount} disabled={!!editingClaim} onChange={(e) => setForm({...form, gross_amount: parseFloat(e.target.value) || 0})} />
+            <Input label="نسبة الاحتجاز (%)" type="number" value={form.retention_percentage} disabled={!!editingClaim} onChange={(e) => setForm({...form, retention_percentage: parseFloat(e.target.value) || 10})} />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات الفاتورة المرحلية" />
-          <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
+          <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={form.tax_enabled} disabled={!!editingClaim} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
           <Checkbox label="دفعة نهائية" checked={form.is_final} onChange={(checked: boolean) => setForm({...form, is_final: checked})} />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

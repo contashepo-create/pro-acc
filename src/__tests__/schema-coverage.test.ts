@@ -227,7 +227,13 @@ describe('End-to-end API → Database Schema Coverage', () => {
       const fromWindow = ts.slice(Math.max(0, mut.index - 3000), mut.index);
       const fromMatches = [...fromWindow.matchAll(fromRe)];
       if (fromMatches.length === 0) continue;
-      const tableName = fromMatches[fromMatches.length - 1][1].toLowerCase();
+      const nearestFrom = fromMatches[fromMatches.length - 1];
+      // Only treat this as a PostgREST mutation when it is part of the same
+      // expression chain. This excludes unrelated methods such as
+      // createHash(...).update(...) that happen to follow a database query.
+      const chainPrefix = fromWindow.slice((nearestFrom.index ?? 0) + nearestFrom[0].length);
+      if (chainPrefix.includes(';')) continue;
+      const tableName = nearestFrom[1].toLowerCase();
 
       if (!tables[tableName]) {
         violations.push({ file: rel, line: lineOf(ts, mut.index), table: tableName, op, missing: ['<TABLE_NOT_FOUND>'] });

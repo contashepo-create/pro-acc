@@ -1,138 +1,74 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { inventoryItemUpdateSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ITEM_COLUMNS = 'id, code, name, unit, quantity, unit_price, warehouse_id, category, is_active, updated_at, warehouses!warehouse_id(name)';
 
-/**
- * GET /api/inventory/[id] — صنف واحد مع اسم مستودعه
- */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'inventory', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: item } = await s.from('inventory_items')
-      .select('*, warehouses(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
+    if (!UUID_RE.test(id)) return error('معرّف الصنف غير صالح');
+    const { data: item, error: queryError } = await sb().from('inventory_items').select(ITEM_COLUMNS)
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (queryError) throw queryError;
     if (!item) return notFound();
-
-    return success({
-      ...(item as Record<string, any>),
-      warehouse_name: (item as Record<string, any>).warehouses?.name || null,
-    });
+    const row = item as Record<string, unknown>;
+    return success({ ...row, warehouse_name: (row.warehouses as { name?: string } | null)?.name || null, warehouses: undefined });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * PUT /api/inventory/[id]
- * بيانات وصفية فقط (اسم/وحدة/فئة/تفعيل/مستودع). الكمية والسعر ممنوعان هنا —
- * الرصيد يتحرك بالحركات المخزنية فقط حتى لا يفترق الدفتر عن الواقع.
- */
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'inventory', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await request.json();
-
-    // الواجهة ترسل النموذج كاملاً (quantity/unit_price...) — نرفض بوضوح بدل التجاهل الصامت
-    if (body.quantity !== undefined || body.unit_price !== undefined) {
-      return error('لا يمكن تعديل الكمية أو السعر مباشرة — استخدم الحركات المخزنية (إضافة/صرف/تسوية)');
+    if (!UUID_RE.test(id)) return error('معرّف الصنف غير صالح');
+    const body = await parseBody<Record<string, unknown>>(request);
+    if (body.quantity !== undefined || body.unit_price !== undefined || body.code !== undefined) {
+      return error('لا يمكن تعديل الكود أو الكمية أو السعر مباشرة؛ استخدم حركة مخزنية');
     }
-
     const parsed = inventoryItemUpdateSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
-
-    const { data: existing } = await s.from('inventory_items')
-      .select('id, quantity, warehouse_id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (!existing) return notFound();
-
-    // إعادة توزيع المستودع لصنف عليه رصيد تنقل المخزون دون حركة موثقة — ممنوع
-    if (parsed.data.warehouse_id && parsed.data.warehouse_id !== (existing as any).warehouse_id) {
-      const qty = parseFloat((existing as any).quantity) || 0;
-      if (qty !== 0) {
-        return error('لا يمكن نقل مستودع صنف عليه رصيد — استخدم حركة التحويل');
-      }
-      const { data: targetWarehouse } = await s.from('warehouses')
-        .select('id').eq('id', parsed.data.warehouse_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!targetWarehouse) return error('المستودع غير موجود', 404);
-    }
-
-    const updateData: any = { updated_at: new Date().toISOString() };
-    if (parsed.data.name !== undefined) updateData.name = parsed.data.name;
-    if (parsed.data.unit !== undefined) updateData.unit = parsed.data.unit;
-    if (parsed.data.category !== undefined) updateData.category = parsed.data.category;
-    if (parsed.data.is_active !== undefined) updateData.is_active = parsed.data.is_active;
-    if (parsed.data.warehouse_id !== undefined) updateData.warehouse_id = parsed.data.warehouse_id;
-
-    const { data: updated, error: updateErr } = await s.from('inventory_items')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-    return success(updated);
+    if (!Object.keys(parsed.data).length) return error('لا توجد بيانات للتحديث');
+    const { data, error: updateError } = await sb().rpc('update_inventory_item_atomic', {
+      p_company_id: auth.companyId,
+      p_item_id: id,
+      p_patch: parsed.data,
+      p_user_id: auth.userId,
+    });
+    const message = String(updateError?.message || '');
+    if (message.includes('الصنف غير موجود')) return notFound();
+    if (message.includes('المستودع غير موجود')) return error('المستودع غير موجود', 404);
+    if (message.includes('لا يمكن')) return error(message, 409);
+    if (message.includes('كود الصنف موجود')) return error('يوجد الصنف نفسه في المستودع المستهدف', 409);
+    if (updateError) throw updateError;
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * DELETE /api/inventory/[id]
- * مسودات فقط: صنف عليه رصيد أو حركات سابقة لا يُحذف (يُعطَّل بدلاً من ذلك)
- */
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireManagerOrAbove(request);
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('inventory_items')
-      .select('id, quantity')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-    if (!existing) return notFound();
-
-    if ((parseFloat((existing as any).quantity) || 0) !== 0) {
-      return error('لا يمكن حذف صنف عليه رصيد — أعد الرصيد للصفر بتسوية جرد أولاً');
-    }
-
-    const { data: txns } = await s.from('inventory_transactions')
-      .select('id').eq('item_id', id).limit(1);
-    if (txns && txns.length > 0) {
-      return error('لا يمكن حذف صنف له حركات سابقة — عطّله بدلاً من حذفه');
-    }
-
-    const { error: delErr } = await s.from('inventory_items')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', auth.companyId);
-    if (delErr) throw delErr;
-
-    return success({ deleted: true });
+    if (!UUID_RE.test(id)) return error('معرّف الصنف غير صالح');
+    const { data, error: deactivateError } = await sb().rpc('update_inventory_item_atomic', {
+      p_company_id: auth.companyId,
+      p_item_id: id,
+      p_patch: { is_active: false },
+      p_user_id: auth.userId,
+    });
+    const message = String(deactivateError?.message || '');
+    if (message.includes('الصنف غير موجود')) return notFound();
+    if (message.includes('لا يمكن تعطيل')) return error(message, 409);
+    if (deactivateError) throw deactivateError;
+    return success({ ...((data || {}) as Record<string, unknown>), deactivated: true });
   } catch (err) {
     return handleApiError(err);
   }

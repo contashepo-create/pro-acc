@@ -1,275 +1,158 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHash, randomInt, timingSafeEqual } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
-import { randomInt, randomBytes, timingSafeEqual } from 'crypto';
 
-const sb = () => getSupabase();
+const ok = () => NextResponse.json({ success: true }, { status: 200 });
 
-/**
- * POST /api/telegram/webhook
- * واجهة استقبال نداءات تليجرام التفاعلية الرسمية (Telegram Webhook API Receiver)
- * محمية تماماً بترميز التحقق السري (X-Telegram-Bot-Api-Secret-Token) لمنع الاختراق أو الحقن أو المحاكاة الخارجية
- * يدعم معالجة الرسائل، الموافقات المحاسبية، جلسات فحص الاتصال، والتحقق الثنائي لتصفير البيانات (2FA Reset)
- */
+function hasValidSecret(request: NextRequest) {
+  const expected = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+  const supplied = request.headers.get('x-telegram-bot-api-secret-token') || '';
+  return !!expected && supplied.length === expected.length
+    && timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+}
+
 export async function POST(request: NextRequest) {
+  if (!hasValidSecret(request)) return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
+  const token = process.env.TELEGRAM_BOT_TOKEN || '';
   try {
-    const s = sb();
-    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
-      ? process.env.TELEGRAM_BOT_TOKEN
-      : '';
-
-    // SECURITY CHECK: التحقق الصارم من أن الطلب مرسل فعلياً من خوادم تيليجرام الرسمية وليس من مخترق أو محاكي خارجي
-    const secretToken = request.headers.get('x-telegram-bot-api-secret-token');
-    const expectedSecretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
-
-    const supplied = secretToken || '';
-    if (!expectedSecretToken || supplied.length !== expectedSecretToken.length ||
-        !timingSafeEqual(Buffer.from(supplied), Buffer.from(expectedSecretToken))) {
-      console.warn('[Telegram Webhook Bypass Attack Blocked]: Missing or invalid secret token header.');
-      return NextResponse.json({ success: false, message: 'Forbidden' }, { status: 403 });
-    }
-
-    const body = await request.json();
-    console.log('[Telegram Webhook Payload Received]:', JSON.stringify(body, null, 2));
-
-    // 1. التعامل مع الرسائل العادية (مثل كتابة /start)
-    if (body.message) {
-      const chatId = body.message.chat?.id;
-      const text = (body.message.text || '').trim();
-
-      if (chatId && (text.startsWith('/start') || text.toLowerCase() === 'start')) {
-        const welcomeMessage = `🤖 <b>مرحباً بك في بوت برو أكاونت الموحد للأنظمة المحاسبية!</b>
-
-🔐 معرّف الدردشة الرقمي الخاص بك (Chat ID) هو:
-<code>${chatId}</code>
-
-👉 قم بنسخ هذا الرقم (بالضغط المطول عليه للنسخ السريع) وضعه في خانة <b>Chat ID</b> في صفحة إعدادات تيليجرام بالموقع لتفعيل الربط والاعتمادات اللحظية عبر الجوال!`;
-
-        const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: welcomeMessage,
-            parse_mode: 'HTML',
-          })
+    const update = await request.json();
+    if (update.message) {
+      const chatId = String(update.message.chat?.id || '');
+      const text = String(update.message.text || '').trim().toLowerCase();
+      if (chatId && (text === '/start' || text === 'start') && token) {
+        await telegramCall(token, 'sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `🤖 <b>مرحباً بك في بوت برو أكاونت</b>\n\nمعرّف الدردشة الخاص بك:\n<code>${chatId}</code>`,
         });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          console.error('[Telegram Webhook] Failed to send welcome message:', response.status, errText);
-        }
       }
-      
-      return NextResponse.json({ success: true, message: 'Message update processed' }, { status: 200 });
+      return ok();
     }
+    const query = update.callback_query;
+    if (!query) return ok();
+    const callbackId = String(query.id || '');
+    const callbackData = String(query.data || '');
+    const chatId = String(query.message?.chat?.id || '');
+    const messageId = query.message?.message_id;
+    if (!callbackId || !chatId || callbackData.length > 128) return ok();
+    const supabase = getSupabase();
 
-    // 2. التحقق من وجود نقرة تفاعلية (Callback Query) على الأزرار
-    if (!body.callback_query) {
-      return NextResponse.json({ success: true, message: 'Not a callback query' }, { status: 200 });
-    }
-
-    const callbackQuery = body.callback_query;
-    const callbackData = callbackQuery.data || '';
-    const callbackQueryId = callbackQuery.id;
-    const chatId = callbackQuery.message?.chat?.id;
-    const messageId = callbackQuery.message?.message_id;
-
-    // معالجة فحص الاتصال اللحظي التفاعلي (Test Run)
     if (callbackData.startsWith('test:')) {
-      const parts = callbackData.split(':');
-      if (parts.length === 3) {
-        const action = parts[1]; // accept أو reject
-        const testRunId = parts[2]; // UUID
-        const statusValue = action === 'accept' ? 'accepted' : 'rejected';
-
-        // تحديث قاعدة البيانات
-        const { error: updateErr } = await s.from('telegram_test_runs')
-          .update({
-            status: statusValue,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', testRunId);
-
-        if (updateErr) {
-          console.error('Failed to update telegram test run status:', updateErr);
-          await answerCallback(callbackQueryId, 'حدث خطأ في الخادم أثناء تحديث حالة الفحص', true);
-          return NextResponse.json({ success: true }, { status: 200 });
-        }
-
-        const feedbackMsg = action === 'accept' ? 'تم القبول بنجاح! ✅' : 'تم الرفض بنجاح! ❌';
-        await answerCallback(callbackQueryId, feedbackMsg);
-
-        if (botToken) {
-          const finalStatusText = action === 'accept' 
-            ? '🟢 <b>تم تأكيد فحص الربط التفاعلي بنجاح!</b>\n\nالحالة المعتمدة: <b>مقبول وموافق عليه ✅</b>'
-            : '🔴 <b>تم تأكيد فحص الربط التفاعلي بنجاح!</b>\n\nالحالة المعتمدة: <b>تم الرفض والمرفوض ❌</b>';
-
-          await editTelegramMessage(botToken, chatId, messageId, finalStatusText);
-        }
+      const [kind, action, testId, ...extra] = callbackData.split(':');
+      if (kind !== 'test' || extra.length || !['accept', 'reject'].includes(action)) {
+        await answerCallback(token, callbackId, 'طلب فحص غير صالح', true); return ok();
       }
-    } 
-    // معالجة الاعتمادات والموافقات المالية الحقيقية (Real-time Approvals)
-    else if (callbackData.startsWith('approve_')) {
-      const parts = callbackData.split('_');
-      if (parts.length >= 4) {
-        const action = parts[1] as 'approve' | 'reject'; // approve أو reject
-        const requesterId = parts[parts.length - 1]; // معرف منشئ القيد
-        const transactionId = parts[parts.length - 2]; // UUID المعاملة
-        const transactionType = parts.slice(2, parts.length - 2).join('_'); // نوع المعاملة
-
-        if (!['approve', 'reject'].includes(action)) {
-          await answerCallback(callbackQueryId, 'إجراء غير صالح', true);
-          return NextResponse.json({ success: true }, { status: 200 });
-        }
-
-        // استدعاء دالة معالجة الاعتماد المالية الرسمية من النظام
-        const { handleApprovalResponse } = await import('@/lib/notifications');
-        const result = await handleApprovalResponse(
-          action,
-          transactionType,
-          transactionId,
-          requesterId,
-          chatId?.toString() || ''
-        );
-
-        // إرسال إشعار تجميد الأزرار لتليجرام لإيقاف مؤشر الانتظار (Stop Spinner)
-        await answerCallback(callbackQueryId, result.message);
-
-        // تحديث رسالة تليجرام لعرض الحالة النهائية المعتمدة
-        if (botToken) {
-          const finalStatusText = action === 'approve'
-            ? `🟢 <b>تم اعتماد المعاملة بنجاح!</b>\n\nالرد المالي: <b>موافق ومعتمد ✅</b>\nبواسطة مدير الشات رقم: <code>${chatId}</code>`
-            : `🔴 <b>تم رفض اعتماد المعاملة!</b>\n\nالرد المالي: <b>مرفوض وملغى ❌</b>\nبواسطة مدير الشات رقم: <code>${chatId}</code>`;
-
-          await editTelegramMessage(botToken, chatId, messageId, finalStatusText);
-        }
+      const { data, error: rpcError } = await supabase.rpc('finish_telegram_test_run_atomic', {
+        p_test_run_id: testId, p_chat_id: chatId, p_action: action,
+      });
+      if (rpcError) {
+        await answerCallback(token, callbackId, 'انتهى الفحص أو تمت معالجته', true); return ok();
       }
+      await answerCallback(token, callbackId, action === 'accept' ? 'تم قبول الفحص ✅' : 'تم رفض الفحص ❌');
+      await editMessage(token, chatId, messageId, action === 'accept'
+        ? '🟢 <b>تم تأكيد الربط بنجاح ✅</b>' : '🔴 <b>تم رفض فحص الربط ❌</b>');
+      void data;
+      return ok();
     }
-    // معالجة جلسة تصفير البيانات المصحوبة بطلب 2FA الآمنة جداً للشركات
-    else if (callbackData.startsWith('reset:')) {
-      const parts = callbackData.split(':');
-      if (parts.length === 3) {
-        const action = parts[1]; // approve أو reject
-        const companyId = parts[2]; // UUID
 
-        if (action === 'approve') {
-          // التحقق من الهوية: هل المعرف يطابق شات الشركة المسجل للرقابة؟
-          const { data: config } = await s.from('company_telegram_configs')
-            .select('chat_id')
-            .eq('company_id', companyId)
-            .maybeSingle();
-
-          if (!config || config.chat_id !== String(chatId)) {
-            await answerCallback(callbackQueryId, '❌ غير مصرح لك باعتماد هذا الإجراء الحرج', true);
-            return NextResponse.json({ success: true }, { status: 200 });
-          }
-
-          // توليد كود سداسي عشوائي آمن (2FA Code) باستخدام CSPRNG
-          let code: string;
-          try {
-            code = String(randomInt(0, 1000000)).padStart(6, '0');
-          } catch {
-            // Keep the fallback cryptographically secure too; Math.random is
-            // predictable and must never generate a destructive-operation OTP.
-            code = String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, '0');
-          }
-          const updatedSession = {
-            step: 'approved_and_code_sent',
-            code,
-            expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-            approved_by_chat_id: String(chatId)
-          };
-
-          // حفظ الرمز في السوبابيز لجلسة الأمان
-          await s.from('company_telegram_configs')
-            .update({ reset_session_data: updatedSession })
-            .eq('company_id', companyId);
-
-          // إرسال كود الـ 2FA السري لمدير النظام على تليجرام
-          const codeMessage = `🔐 <b>رمز المصادقة الثنائية (2FA) لتصفير البيانات:</b>
-
-رمز التأكيد الخاص بشركتك هو:
-<code>${code}</code>
-
-⏳ صلاحية الرمز: <b>5 دقائق فقط</b>. قم بإدخاله في الموقع فوراً لإتمام تصفير البيانات والبدء من جديد.`;
-
-          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: chatId,
-              text: codeMessage,
-              parse_mode: 'HTML'
-            })
+    if (callbackData.startsWith('reset:')) {
+      const [, action] = callbackData.split(':'); // Ignore legacy company/requester segments.
+      if (!['approve', 'reject'].includes(action)) {
+        await answerCallback(token, callbackId, 'طلب غير صالح', true); return ok();
+      }
+      if (action === 'reject') {
+        const { error: rpcError } = await supabase.rpc('reject_telegram_reset_session_atomic', { p_chat_id: chatId });
+        if (rpcError) {
+          await answerCallback(token, callbackId, 'انتهى الطلب أو تمت معالجته', true); return ok();
+        }
+        await answerCallback(token, callbackId, 'تم رفض وإلغاء الطلب ❌');
+        await editMessage(token, chatId, messageId, '🔴 <b>تم رفض وإلغاء طلب تصفير البيانات.</b>');
+        return ok();
+      }
+      const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+      const codeHash = createHash('sha256').update(code).digest('hex');
+      const { data: session, error: rpcError } = await supabase.rpc('approve_telegram_reset_session_atomic', {
+        p_chat_id: chatId, p_code_hash: codeHash, p_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+      });
+      if (rpcError) {
+        await answerCallback(token, callbackId, 'انتهى الطلب أو تمت معالجته', true); return ok();
+      }
+      try {
+        await telegramCall(token, 'sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `🔐 <b>رمز تأكيد تصفير البيانات</b>\n\n<code>${code}</code>\n\nصالح لمدة خمس دقائق فقط.`,
+        });
+      } catch {
+        const details = session as { company_id?: string; requester_id?: string } | null;
+        if (details?.company_id && details.requester_id) {
+          await supabase.rpc('cancel_telegram_reset_session_atomic', {
+            p_company_id: details.company_id, p_requester_id: details.requester_id, p_reason: 'otp_delivery_failed',
           });
-
-          await answerCallback(callbackQueryId, 'تم توليد وإرسال كود الـ 2FA بنجاح! 🔐');
-
-          const finalMsg = `🟢 <b>تم الموافقة الأمنية من تليجرام بنجاح!</b>\n\nتم توليد رمز المصادقة الثنائية (2FA) وإرساله للمدير بنجاح لتصفير الدفاتر ماليًا.`;
-          await editTelegramMessage(botToken, chatId, messageId, finalMsg);
-
-        } else if (action === 'reject') {
-          // رفض وإجهاض العملية بالكامل وحماية الجداول
-          await s.from('company_telegram_configs')
-            .update({ reset_session_data: null })
-            .eq('company_id', companyId);
-
-          await answerCallback(callbackQueryId, 'تم رفض وإلغاء الطلب بالكامل ❌');
-
-          const finalMsg = `🔴 <b>تم رفض وإلغاء طلب تصفير البيانات بالكامل!</b>\n\nتم حماية المنصة وإجهاض العملية بنجاح.`;
-          await editTelegramMessage(botToken, chatId, messageId, finalMsg);
         }
+        await answerCallback(token, callbackId, 'تعذر إرسال الرمز؛ أُلغي الطلب بأمان', true); return ok();
       }
+      await answerCallback(token, callbackId, 'تم إصدار رمز التأكيد 🔐');
+      await editMessage(token, chatId, messageId, '🟢 <b>تمت الموافقة وأُرسل رمز التأكيد للمدير.</b>');
+      return ok();
     }
 
-    return NextResponse.json({ success: true }, { status: 200 });
+    let approvalAction = '';
+    let approvalId = '';
+    let legacyType = '';
+    let legacyEntityId = '';
+    if (callbackData.startsWith('approval:')) {
+      const [kind, action, id, ...extra] = callbackData.split(':');
+      if (kind === 'approval' && !extra.length) { approvalAction = action; approvalId = id; }
+    } else if (callbackData.startsWith('approve_')) {
+      const parts = callbackData.split('_');
+      if (parts.length >= 5) {
+        approvalAction = parts[1];
+        legacyEntityId = parts[parts.length - 2];
+        legacyType = parts.slice(2, parts.length - 2).join('_');
+      }
+    }
+    if (approvalAction || approvalId || legacyEntityId) {
+      if (!['approve', 'reject'].includes(approvalAction)) {
+        await answerCallback(token, callbackId, 'إجراء اعتماد غير صالح', true); return ok();
+      }
+      const result = approvalId
+        ? await supabase.rpc('respond_approval_by_telegram_atomic', {
+            p_approval_id: approvalId, p_action: approvalAction, p_chat_id: chatId, p_comments: '',
+          })
+        : await supabase.rpc('respond_legacy_approval_by_telegram_atomic', {
+            p_action: approvalAction, p_transaction_type: legacyType,
+            p_transaction_id: legacyEntityId, p_chat_id: chatId,
+          });
+      if (result.error) {
+        await answerCallback(token, callbackId, 'انتهى الطلب أو لا تملك صلاحية معالجته', true); return ok();
+      }
+      await answerCallback(token, callbackId, approvalAction === 'approve' ? 'تم اعتماد الطلب ✅' : 'تم رفض الطلب ❌');
+      await editMessage(token, chatId, messageId, approvalAction === 'approve'
+        ? '🟢 <b>تم اعتماد المعاملة بنجاح ✅</b>' : '🔴 <b>تم رفض المعاملة ❌</b>');
+      return ok();
+    }
 
-  } catch (err) {
-    console.error('[Telegram Webhook Error]:', err);
-    return NextResponse.json({ success: false, error: 'Internal logic error' }, { status: 200 });
+    await answerCallback(token, callbackId, 'طلب غير معروف', true);
+    return ok();
+  } catch (cause) {
+    console.error('[Telegram Webhook Error]', cause instanceof Error ? cause.message : 'unknown');
+    return ok(); // Acknowledge malformed/replayed updates so Telegram does not retry indefinitely.
   }
 }
 
-/**
- * إبلاغ خوادم تليجرام بإلغاء مؤشر التحميل على العميل
- */
-async function answerCallback(callbackQueryId: string, text: string, showAlert = false) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
-    ? process.env.TELEGRAM_BOT_TOKEN
-    : '';
-  if (!botToken) return;
-
-  try {
-    await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        callback_query_id: callbackQueryId,
-        text: text,
-        show_alert: showAlert
-      })
-    });
-  } catch (e) {
-    console.error('Failed to answer Telegram callback query:', e);
-  }
+async function telegramCall(token: string, method: string, payload: Record<string, unknown>) {
+  if (!token) throw new Error('Telegram bot token is not configured');
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(10_000),
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Telegram ${method} failed with ${response.status}`);
 }
 
-/**
- * تعديل رسالة تليجرام القائمة لإبراز النتيجة المحدثة
- */
-async function editTelegramMessage(botToken: string, chatId: any, messageId: any, newText: string) {
-  try {
-    await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: newText,
-        parse_mode: 'HTML'
-      })
-    });
-  } catch (e) {
-    console.error('Failed to edit Telegram message:', e);
-  }
+async function answerCallback(token: string, id: string, text: string, showAlert = false) {
+  try { await telegramCall(token, 'answerCallbackQuery', { callback_query_id: id, text, show_alert: showAlert }); } catch {}
+}
+
+async function editMessage(token: string, chatId: string, messageId: unknown, text: string) {
+  if (!messageId) return;
+  try { await telegramCall(token, 'editMessageText', { chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML' }); } catch {}
 }

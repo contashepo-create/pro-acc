@@ -1,13 +1,11 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import { crmCreateSchema, crmStage, crmType } from '@/lib/relationship-validation';
 
 const sb = () => getSupabase();
 
-/**
- * GET /api/crm — List leads/opportunities with pipeline stages
- */
+/** GET /api/crm — tenant-scoped leads and opportunities. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'crm', 'read');
@@ -15,44 +13,44 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
     const stage = url.searchParams.get('stage');
-    const type = url.searchParams.get('type'); // lead, opportunity, customer
+    const type = url.searchParams.get('type');
+    if (stage && !crmStage.safeParse(stage).success) return error('مرحلة المسار غير صالحة');
+    if (type && !crmType.safeParse(type).success) return error('نوع العميل المحتمل غير صالح');
 
     let query = s.from('crm_contacts')
       .select('*, crm_followups(id, type, scheduled_at, notes)', { count: 'exact' })
       .eq('company_id', auth.companyId);
-
     if (stage) query = query.eq('pipeline_stage', stage);
     if (type) query = query.eq('type', type);
 
     const offset = (page - 1) * pageSize;
-    const { data, error: qErr, count } = await query
-      .order('created_at', { ascending: false })
+    const { data, error: queryError, count } = await query.order('created_at', { ascending: false })
       .range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
 
-    if (qErr) throw qErr;
+    const contacts = (data || []).map((contact: Record<string, unknown>) => {
+      const followups = Array.isArray(contact.crm_followups)
+        ? contact.crm_followups as Array<Record<string, unknown>> : [];
+      return {
+        ...contact,
+        followups_count: followups.length,
+        nextFollowup: followups
+          .filter((followup) => new Date(String(followup.scheduled_at)) >= new Date())
+          .sort((a, b) => new Date(String(a.scheduled_at)).getTime() - new Date(String(b.scheduled_at)).getTime())[0] || null,
+      };
+    });
 
-    const contacts = (data || []).map((c: any) => ({
-      ...c,
-      followups_count: c.crm_followups?.length || 0,
-      nextFollowup: (c.crm_followups || [])
-        .filter((f: any) => new Date(f.scheduled_at) >= new Date())
-        .sort((a: any, b: any) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())[0] || null,
+    // Counts must describe the complete tenant pipeline, not only this page.
+    const stages = crmStage.options;
+    const stageCounts = await Promise.all(stages.map(async (pipelineStage) => {
+      const { count: stageCount, error: countError } = await s.from('crm_contacts').select('id', { count: 'exact', head: true })
+        .eq('company_id', auth.companyId).eq('pipeline_stage', pipelineStage);
+      if (countError) throw countError;
+      return [pipelineStage, stageCount || 0] as const;
     }));
-
-    // Pipeline summary
-    const pipeline = {
-      new: contacts.filter((c: any) => c.pipeline_stage === 'new').length,
-      contacted: contacts.filter((c: any) => c.pipeline_stage === 'contacted').length,
-      qualified: contacts.filter((c: any) => c.pipeline_stage === 'qualified').length,
-      proposal: contacts.filter((c: any) => c.pipeline_stage === 'proposal').length,
-      negotiation: contacts.filter((c: any) => c.pipeline_stage === 'negotiation').length,
-      won: contacts.filter((c: any) => c.pipeline_stage === 'won').length,
-      lost: contacts.filter((c: any) => c.pipeline_stage === 'lost').length,
-    };
-
-    const conversionRate = contacts.length > 0
-      ? ((pipeline.won / (contacts.length - pipeline.new)) * 100).toFixed(1)
-      : '0';
+    const pipeline = Object.fromEntries(stageCounts) as Record<(typeof stages)[number], number>;
+    const decided = pipeline.won + pipeline.lost;
+    const conversionRate = decided > 0 ? ((pipeline.won / decided) * 100).toFixed(1) : '0.0';
 
     return success({ contacts, total: count || 0, page, pageSize, pipeline, conversionRate });
   } catch (err) {
@@ -60,46 +58,22 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/**
- * POST /api/crm — Create a new lead/contact
- */
+/** POST /api/crm — create only through the tenant-bound lifecycle RPC. */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'crm', 'create');
-    const s = sb();
-    const body = await request.json();
-
-    if (!body.name || !body.type) {
-      return error('الاسم والنوع مطلوبان');
+    const parsed = crmCreateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { data, error: createError } = await sb().rpc('create_crm_contact_atomic', {
+      p_company_id: auth.companyId,
+      p_payload: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (createError) {
+      const message = String(createError.message || '');
+      if (message.includes('غير صالحة')) return error(message);
+      throw createError;
     }
-
-    const validTypes = ['lead', 'opportunity', 'customer'];
-    if (!validTypes.includes(body.type)) {
-      return error(`النوع غير صالح. الخيارات: ${validTypes.join('، ')}`);
-    }
-
-    const contactId = generateId();
-    const { data, error: insertErr } = await s.from('crm_contacts')
-      .insert({
-        id: contactId,
-        company_id: auth.companyId,
-        name: body.name,
-        type: body.type,
-        email: body.email || null,
-        phone: body.phone || null,
-        company_name: body.company_name || null,
-        source: body.source || 'other', // website, referral, cold_call, tender, social, other
-        pipeline_stage: body.pipeline_stage || 'new',
-        estimated_value: body.estimated_value || null,
-        description: body.description || null,
-        assigned_to: body.assigned_to || auth.userId,
-        created_by: auth.userId,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
     return success(data, 201);
   } catch (err) {
     return handleApiError(err);

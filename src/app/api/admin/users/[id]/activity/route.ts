@@ -1,9 +1,10 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError } from '@/lib/api-helpers';
+import { success, error } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(
   request: NextRequest,
@@ -12,7 +13,7 @@ export async function GET(
   try {
     const { id } = await paramsPromise;
     await requireAdmin(request);
-    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف المستخدم غير صالح', 400);
+    if (!UUID.test(id)) return error('معرّف المستخدم غير صالح', 400);
 
     const s = sb();
     const { data, error: err } = await s.from('admin_audit_log')

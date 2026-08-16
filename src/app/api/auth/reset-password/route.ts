@@ -5,65 +5,26 @@ import { hashPassword } from '@/lib/auth';
 import { resetPasswordSchema } from '@/lib/validation';
 import { createHash } from 'crypto';
 
-const sb = () => getSupabase();
-
 export async function POST(request: NextRequest) {
   try {
-    const body = await parseBody<{ token: string; password: string }>(request);
-    const parsed = resetPasswordSchema.safeParse(body);
+    const parsed = resetPasswordSchema.safeParse(await parseBody<{ token: string; password: string }>(request));
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { token, password } = parsed.data;
-    const s = sb();
-
-    // Hash incoming token to match stored hash
-    const hashedToken = createHash('sha256').update(token).digest('hex');
-
-    // Only hashed tokens are accepted. Accepting a legacy plaintext lookup
-    // would make a database disclosure immediately usable for account takeover.
-    const { data: tokenData, error: tokenError } = await s.from('password_reset_tokens')
-      .select('id, user_id, expires_at, used')
-      .eq('token', hashedToken)
-      .maybeSingle();
-    if (tokenError || !tokenData) return error('الرمز غير صالح', 400);
-
-    if (tokenData.used) return error('تم استخدام هذا الرمز مسبقاً', 400);
-
-    if (new Date(tokenData.expires_at) < new Date()) {
-      return error('انتهت صلاحية الرمز. يرجى طلب رابط جديد', 400);
+    const tokenHash = createHash('sha256').update(parsed.data.token).digest('hex');
+    const passwordHash = await hashPassword(parsed.data.password);
+    // Token lock/consumption, password update, session-version bump and all-link
+    // revocation commit together. Two concurrent requests cannot both win.
+    const { error: resetErr } = await getSupabase().rpc('consume_password_reset_token', {
+      p_token_hash: tokenHash,
+      p_password_hash: passwordHash,
+    });
+    if (resetErr) {
+      const message = String(resetErr.message || '');
+      if (resetErr.code === 'P0001' || message.includes('الرمز') || message.includes('المستخدم')) {
+        return error(message.includes('انتهت') ? 'انتهت صلاحية الرمز. يرجى طلب رابط جديد' : 'الرمز غير صالح أو مستخدم', 400);
+      }
+      throw resetErr;
     }
-
-    const passwordHash = await hashPassword(password);
-
-    // SECURITY: Bump token_version so every previously-issued JWT for this
-    // user (old sessions on any device) becomes invalid immediately.
-    const { data: cur } = await s.from('users')
-      .select('token_version')
-      .eq('id', tokenData.user_id)
-      .maybeSingle();
-    const nextVersion = (Number((cur as Record<string, any>)?.token_version) || 0) + 1;
-
-    await s.from('users')
-      .update({
-        password_hash: passwordHash,
-        token_version: nextVersion,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', tokenData.user_id);
-
-    // Keep the state transition conditional; this prevents a stale/replayed
-    // caller from marking an already-consumed token as a new success path.
-    await s.from('password_reset_tokens')
-      .update({ used: true })
-      .eq('id', tokenData.id)
-      .eq('used', false);
-    // Revoke every outstanding reset link for this user after a successful
-    // change, so an older email cannot overwrite the new password later.
-    await s.from('password_reset_tokens')
-      .update({ used: true })
-      .eq('user_id', tokenData.user_id)
-      .eq('used', false);
-
     return success({ message: 'تم تغيير كلمة المرور بنجاح' });
   } catch (err) {
     return serverError(err);

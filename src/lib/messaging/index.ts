@@ -221,10 +221,53 @@ export async function sendMessage(req: SendMessageRequest): Promise<{
   }
 }
 
-/**
- * Send invoice reminder to all overdue invoices
- */
-export async function sendOverdueReminders(companyId: string): Promise<{
+/** Reserve, send and finalize one tenant invoice reminder. */
+export async function sendInvoiceReminder(companyId: string, userId: string, invoiceId: string): Promise<{
+  sent: boolean;
+  channel: Channel;
+  url?: string;
+  error?: string;
+  customerName: string;
+}> {
+  const { getSupabase } = await import('@/lib/supabase-client');
+  const s = getSupabase();
+  const { data: reservation, error: reservationError } = await s.rpc('begin_invoice_reminder_attempt_atomic', {
+    p_company_id: companyId,
+    p_invoice_id: invoiceId,
+    p_user_id: userId,
+  });
+  if (reservationError) throw reservationError;
+  const row = reservation as Record<string, unknown>;
+  const channel = String(row.channel) as Channel;
+  const recipient = channel === 'whatsapp' ? String(row.phone || '') : String(row.email || '');
+  const dueDate = String(row.due_date || '');
+  const result = await sendMessage({
+    channel,
+    to: recipient,
+    template: 'invoice_overdue_ar',
+    variables: {
+      customer_name: String(row.customer_name || 'العميل'),
+      invoice_number: String(row.invoice_number || ''),
+      amount: Number(row.amount || 0).toFixed(2),
+      due_date: new Date(dueDate).toLocaleDateString('ar-SA'),
+      days_overdue: String(Math.max(0, Math.floor((Date.now() - new Date(dueDate).getTime()) / 86400000))),
+      company_name: String(row.company_name || 'شركتنا'),
+    },
+  });
+  const { error: finalizationError } = await s.rpc('finish_invoice_reminder_attempt_atomic', {
+    p_company_id: companyId,
+    p_reminder_id: String(row.reminder_id),
+    p_user_id: userId,
+    p_sent: result.sent,
+    p_message_url: result.url || null,
+    p_error: result.error || null,
+  });
+  if (finalizationError) throw finalizationError;
+  return { ...result, customerName: String(row.customer_name || 'العميل') };
+}
+
+/** Send each overdue invoice through a serialized, auditable reservation. */
+export async function sendOverdueReminders(companyId: string, userId: string): Promise<{
   sent: number;
   failed: number;
   results: Array<{ invoiceId: string; customerName: string; sent: boolean; error?: string }>;
@@ -232,66 +275,29 @@ export async function sendOverdueReminders(companyId: string): Promise<{
   const { getSupabase } = await import('@/lib/supabase-client');
   const s = getSupabase();
   const today = new Date().toISOString().split('T')[0];
-
-  // Get overdue invoices
-  const { data: overdue } = await s.from('invoices')
-    .select('id, number, total, due_date, contact_id, contacts(name, phone, email)')
-    .eq('company_id', companyId)
-    .eq('status', 'unpaid')
-    .lt('due_date', today);
-
-  // Get company name
-  const { data: company } = await s.from('companies')
-    .select('name')
-    .eq('id', companyId)
-    .maybeSingle();
-  const companyName = (company as { name?: string } | null)?.name || 'شركتنا';
+  const { data: overdue, error: queryError } = await s.from('invoices')
+    .select('id, contacts(name)')
+    .eq('company_id', companyId).eq('status', 'unpaid').lt('due_date', today);
+  if (queryError) throw queryError;
 
   const results: Array<{ invoiceId: string; customerName: string; sent: boolean; error?: string }> = [];
-  let sent = 0;
-  let failed = 0;
-
-  for (const inv of (overdue || [])) {
-    const i = inv as unknown as {
-      id: string; number: number; total: number; due_date: string;
-      contacts: { name: string; phone?: string; email?: string } | null;
-    };
-    if (!i.contacts) continue;
-
-    const daysOverdue = Math.floor(
-      (new Date(today).getTime() - new Date(i.due_date).getTime()) / 86400000
-    );
-
-    const variables = {
-      customer_name: i.contacts.name,
-      invoice_number: String(i.number),
-      amount: parseFloat(String(i.total)).toFixed(2),
-      due_date: new Date(i.due_date).toLocaleDateString('ar-SA'),
-      days_overdue: String(daysOverdue),
-      company_name: companyName,
-    };
-
-    // Try WhatsApp first, then email
-    if (i.contacts.phone) {
-      const waResult = await sendMessage({
-        channel: 'whatsapp',
-        to: i.contacts.phone,
-        template: 'invoice_overdue_ar',
-        variables,
+  for (const invoice of overdue || []) {
+    const row = invoice as unknown as { id: string; contacts?: { name?: string } | null };
+    try {
+      const result = await sendInvoiceReminder(companyId, userId, row.id);
+      results.push({ invoiceId: row.id, customerName: result.customerName, sent: result.sent, error: result.error });
+    } catch (sendError) {
+      results.push({
+        invoiceId: row.id,
+        customerName: row.contacts?.name || 'العميل',
+        sent: false,
+        error: sendError instanceof Error ? sendError.message : 'تعذر إرسال التذكير',
       });
-      results.push({ invoiceId: i.id, customerName: i.contacts.name, sent: waResult.sent, error: waResult.error });
-      waResult.sent ? sent++ : failed++;
-    } else if (i.contacts.email) {
-      const emailResult = await sendMessage({
-        channel: 'email',
-        to: i.contacts.email,
-        template: 'invoice_overdue_ar',
-        variables,
-      });
-      results.push({ invoiceId: i.id, customerName: i.contacts.name, sent: emailResult.sent, error: emailResult.error });
-      emailResult.sent ? sent++ : failed++;
     }
   }
-
-  return { sent, failed, results };
+  return {
+    sent: results.filter((result) => result.sent).length,
+    failed: results.filter((result) => !result.sent).length,
+    results,
+  };
 }

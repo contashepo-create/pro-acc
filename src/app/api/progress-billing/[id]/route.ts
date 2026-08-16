@@ -1,106 +1,70 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { deliveryUuid, progressBillingUpdateSchema } from '@/lib/project-delivery-validation';
 
-const sb = () => getSupabase();
+async function findClaim(companyId: string, id: string) {
+  const { data, error: queryError } = await getSupabase().from('progress_billing')
+    .select('id,project_id,claim_number,date,description,gross_amount,retention_rate,retention_amount,net_amount,tax_rate,tax_amount,total_amount,status,is_final,created_at,updated_at,projects(name)')
+    .eq('id', id).eq('company_id', companyId).maybeSingle();
+  if (queryError) throw queryError;
+  return data;
+}
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'progress_billing', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: claim, error: queryErr } = await s.from('progress_billing')
-      .select('*, projects(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (queryErr) throw queryErr;
-    if (!claim) return notFound();
-
-    const result = claim as Record<string, any>;
-    result.project_name = result.projects?.name || null;
-
-    return success(result);
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المستخلص غير صالح');
+    const claim = await findClaim(auth.companyId, id);
+    return claim ? success(claim) : error('المستخلص غير موجود', 404);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'progress_billing', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody(req);
-
-    const { data: existing } = await s.from('progress_billing')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const updateData: any = {};
-    if (body.date !== undefined) updateData.date = body.date;
-    if (body.claim_number !== undefined) updateData.claim_number = body.claim_number;
-    if (body.description !== undefined) updateData.description = body.description;
-    if (body.gross_amount !== undefined) updateData.gross_amount = body.gross_amount;
-    if (body.retention_rate !== undefined) updateData.retention_rate = body.retention_rate;
-    if (body.retention_percentage !== undefined) updateData.retention_rate = body.retention_percentage / 100;
-    if (body.status !== undefined) updateData.status = body.status;
-    if (body.is_final !== undefined) updateData.is_final = body.is_final;
-    if (body.notes !== undefined) updateData.description = body.notes;
-
-    const { data: updated, error: updateErr } = await s.from('progress_billing')
-      .update(updateData)
-      .eq('id', id).eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    return success(updated);
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المستخلص غير صالح');
+    const parsed = progressBillingUpdateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات التعديل غير صالحة');
+    const claim = await findClaim(auth.companyId, id);
+    if (!claim) return error('المستخلص غير موجود', 404);
+    if (parsed.data.status === 'cancelled') {
+      const { data, error: rpcError } = await getSupabase().rpc('cancel_progress_billing_atomic', {
+        p_company_id: auth.companyId, p_claim_id: id, p_user_id: auth.userId,
+      });
+      if (rpcError) throw rpcError;
+      return success(data);
+    }
+    const { data, error: rpcError } = await getSupabase().rpc('update_progress_billing_metadata', {
+      p_company_id: auth.companyId, p_claim_id: id,
+      p_claim_number: parsed.data.claim_number ?? claim.claim_number,
+      p_description: parsed.data.description ?? parsed.data.notes ?? claim.description ?? '',
+      p_is_final: parsed.data.is_final ?? claim.is_final,
+      p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'progress_billing', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('progress_billing')
-      .select('id, journal_entry_id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const claim = existing as any;
-    if (claim.journal_entry_id) {
-      const { deleteJournalEntry } = await import('@/lib/journal-utils');
-      await deleteJournalEntry(auth.companyId, claim.journal_entry_id);
-    }
-
-    await s.from('progress_billing').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المستخلص غير صالح');
+    if (!await findClaim(auth.companyId, id)) return error('المستخلص غير موجود', 404);
+    const { data, error: rpcError } = await getSupabase().rpc('cancel_progress_billing_atomic', {
+      p_company_id: auth.companyId, p_claim_id: id, p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

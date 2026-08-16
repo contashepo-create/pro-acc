@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { journalEntrySchema } from '@/lib/validation';
 
@@ -26,10 +26,21 @@ export async function GET(request: NextRequest) {
     const dateTo = url.searchParams.get('date_to') || url.searchParams.get('to');
     const type = url.searchParams.get('type');
     const accountId = url.searchParams.get('account_id');
+    if ((dateFrom && !/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) || (dateTo && !/^\d{4}-\d{2}-\d{2}$/.test(dateTo)) || (dateFrom && dateTo && dateFrom > dateTo)) return error('فترة القيود غير صالحة');
+    if (type && !['general', 'opening_balance', 'accrual'].includes(type)) return error('نوع القيد غير صالح');
 
+    if (accountId) {
+      const { data: account } = await s.from('accounts').select('id')
+        .eq('id', accountId).eq('company_id', auth.companyId).maybeSingle();
+      if (!account) return error('الحساب غير موجود', 404);
+    }
+    const entrySelect = accountId
+      ? 'id, number, date, type, description, created_by, created_at, journal_lines!inner(account_id)'
+      : 'id, number, date, type, description, created_by, created_at';
     let query = s.from('journal_entries')
-      .select('id, number, date, type, description, created_by, created_at', { count: 'exact' })
+      .select(entrySelect, { count: 'exact' })
       .eq('company_id', auth.companyId);
+    if (accountId) query = query.eq('journal_lines.account_id', accountId);
 
     if (dateFrom) query = query.gte('date', dateFrom);
     if (dateTo) query = query.lte('date', dateTo);
@@ -43,27 +54,15 @@ export async function GET(request: NextRequest) {
 
     if (queryError) throw queryError;
 
-    // FIXED: N+1 query - batch fetch all lines at once
-    let enriched = entries || [];
-    if (accountId) {
-      const { data: acc } = await s.from('accounts').select('id').eq('id', accountId).eq('company_id', auth.companyId).maybeSingle();
-      if (acc) {
-        const { data: filteredLines } = await s.from('journal_lines')
-          .select('journal_entry_id').eq('account_id', acc.id);
-        const jeIds = new Set((filteredLines || []).map((l) => (l as LineIdRow).journal_entry_id));
-        enriched = (entries || []).filter((e) => jeIds.has((e as JournalEntry).id));
-      } else {
-        enriched = [];
-      }
-    }
-
-    // Batch fetch all lines for all entries
-    const enrichedIds = enriched.map((e) => (e as JournalEntry).id);
+    const enriched = entries || [];
+    const enrichedIds = enriched.map((entry: any) => entry.id);
     const linesMap: Record<string, { count: number; total_debit: number; total_credit: number }> = {};
     if (enrichedIds.length > 0) {
-      const { data: allLines } = await s.from('journal_lines')
+      const { data: allLines, error: linesError } = await s.from('journal_lines')
         .select('journal_entry_id, debit, credit')
-        .in('journal_entry_id', enrichedIds);
+        .in('journal_entry_id', enrichedIds)
+        .eq('company_id', auth.companyId);
+      if (linesError) throw linesError;
       
       for (const line of allLines || []) {
         const jeId = (line as JournalLine).journal_entry_id;
@@ -98,178 +97,67 @@ export async function POST(request: NextRequest) {
     const body = await parseBody(request);
     const parsed = journalEntrySchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { date, type, description, lines } = parsed.data;
 
-    const { date, type, description, reference, lines } = parsed.data;
-
-    // التوليد التلقائي لدليل الحسابات الافتراضي عند أول قيد إذا كانت الشركة بلا حسابات
-    const { data: existingAccs } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .limit(1);
-
-    if (!existingAccs || existingAccs.length === 0) {
+    const { data: existingAccounts, error: accountProbeError } = await s.from('accounts')
+      .select('id').eq('company_id', auth.companyId).limit(1);
+    if (accountProbeError) throw accountProbeError;
+    if (!existingAccounts?.length) {
       const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
       await createDefaultChartOfAccounts(s, auth.companyId);
     }
 
-    // SECURITY FIX: Try atomic RPC function first (validates balance BEFORE inserting)
-    // This eliminates the need for manual rollback and prevents the race condition window
-    // where an unbalanced entry could be read by another query.
-    try {
-      // Resolve account IDs for all lines first
-      const resolvedLines: Array<{accountId: string; accountCode: string; debit: number; credit: number; description: string | null; contactId: null; projectId: null}> = [];
-      const { isHeaderAccount, HEADER_ACCOUNT_CODES } = await import('@/lib/account-resolve');
-      const { findAccountByCode } = await import('@/lib/account-code');
-      for (const line of lines) {
-        const account = await findAccountByCode(s, auth.companyId, line.accountCode);
-        if (!account) throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
-        if (isHeaderAccount(account) || HEADER_ACCOUNT_CODES.has(account.code)) {
-          throw new Error(`الحساب ${account.code} حساب رئيسي ولا يُرحَّل عليه — اختر حساباً فرعياً`);
-        }
-        resolvedLines.push({
-          accountId: account.id,
-          accountCode: account.code,
-          debit: line.debit,
-          credit: line.credit,
-          description: line.description || null,
-          contactId: null,
-          projectId: null,
-        });
-      }
-
-      const { data: rpcResult, error: rpcError } = await s.rpc('create_journal_entry', {
-        p_company_id: auth.companyId,
-        p_date: date,
-        p_type: type,
-        p_description: description || null,
-        p_created_by: auth.userId,
-        p_lines: resolvedLines,
-      });
-
-      if (rpcError) throw rpcError;
-
-      const result = rpcResult as RpcResult;
-      const entryId = result.id;
-
-      // Fetch the created entry and lines for response
-      const { data: entryRes } = await s.from('journal_entries')
-        .select('id, number, date, type, description, created_at')
-        .eq('id', entryId).single();
-
-      const { data: linesRes } = await s.from('journal_lines')
-        .select('id, account_code, accounts(name, type), debit, credit, description')
-        .eq('journal_entry_id', entryId).order('id');
-
-      const formattedLines = (linesRes || []).map((l: Record<string, any>) => ({
-        id: l.id, account_code: l.account_code,
-        account_name: (l.accounts)?.name || null,
-        account_type: (l.accounts)?.type || null,
-        debit: l.debit, credit: l.credit, description: l.description,
-      }));
-
-      return success({
-        ...entryRes,
-        totalDebit: result.total_debit,
-        totalCredit: result.total_credit,
-        lines: formattedLines,
-      }, 201);
-    } catch (rpcAttempt) {
-      // If the RPC function doesn't exist yet (migration not applied), fall through to legacy logic
-      const rpcErr = rpcAttempt as { message?: string; code?: string };
-      if (rpcErr.message?.includes('غير موجود')) throw rpcAttempt;
-      if (rpcErr.message?.includes('الموازنة') || rpcErr.code === 'P0001') {
-        return error(rpcErr.message || 'خطأ في الموازنة');
-      }
-      const uniqueJe = rpcErr.code === '23505' || /duplicate key|unique constraint/i.test(rpcErr.message || '');
-      // RPC function not found OR the live function still omits journal_lines.company_id
-      // (23502 not-null) — fall through to the legacy path that writes company_id.
-      const rpcMsg = rpcErr.message || '';
-      const missingFn = rpcMsg.includes('function') || rpcMsg.includes('does not exist') || rpcMsg.includes('Could not find');
-      const missingCompanyId = rpcErr.code === '23502' || /null value in column ["']?company_id["']?/i.test(rpcMsg) || /violates not-null constraint/i.test(rpcMsg);
-      if (!missingFn && !missingCompanyId && !uniqueJe) {
-        throw rpcAttempt;
-      }
-    }
-
-    // LEGACY FALLBACK: Used only when create_journal_entry RPC function doesn't exist yet
-    // This has the known issue of manual rollback - will be removed after migration 012 is applied
-    // SECURITY NOTE: Pre-validate balance BEFORE inserting to avoid manual rollback window
-    let preCheckDebit = 0;
-    let preCheckCredit = 0;
+    const { isHeaderAccount } = await import('@/lib/account-resolve');
+    const { findAccountByCode } = await import('@/lib/account-code');
+    const resolvedLines: Array<{
+      accountId: string; debit: number; credit: number; description: string | null; contactId: null; projectId: null;
+    }> = [];
     for (const line of lines) {
-      preCheckDebit += line.debit;
-      preCheckCredit += line.credit;
-    }
-    if (Math.abs(preCheckDebit - preCheckCredit) > 0.01) {
-      return error(`خطأ في الموازنة: مجموع الديون (${preCheckDebit}) لا يساوي مجموع الدائنين (${preCheckCredit})`);
-    }
-
-    const { insertJournalHeader } = await import('@/lib/journal-utils');
-    const { data: header, error: entryErr } = await insertJournalHeader(auth.companyId, {
-      date, type, description: description || null, created_by: auth.userId,
-    });
-    const entryRes = header
-      ? (await s.from('journal_entries').select('id, number, date, type, description, created_at').eq('id', header.id).single()).data
-      : null;
-
-    if (entryErr || !entryRes) throw entryErr || new Error('فشل إنشاء رأس القيد');
-
-    const entryId = entryRes.id;
-    let totalDebit = 0;
-    let totalCredit = 0;
-    for (const line of lines) {
-      const { findAccountByCode } = await import('@/lib/account-code');
       const account = await findAccountByCode(s, auth.companyId, line.accountCode);
-      if (!account) {
-        await s.from('journal_entries').delete().eq('id', entryId).eq('company_id', auth.companyId);
-        throw new Error(`الحساب برمز ${line.accountCode} غير موجود`);
-      }
-      const { error: lineErr } = await s.from('journal_lines').insert({
-        journal_entry_id: entryId, account_id: account.id, account_code: account.code,
-        account_name: account.name || null,
-        company_id: auth.companyId,
-        debit: line.debit, credit: line.credit, description: line.description || null,
+      if (!account) return error(`الحساب برمز ${line.accountCode} غير موجود`);
+      if (isHeaderAccount(account)) return error(`الحساب ${account.code} حساب رئيسي ولا يُرحّل عليه`);
+      resolvedLines.push({
+        accountId: account.id, debit: line.debit, credit: line.credit,
+        description: line.description || null, contactId: null, projectId: null,
       });
-      if (lineErr) {
-        // Rollback on line insert failure
-        await s.from('journal_entries').delete().eq('id', entryId).eq('company_id', auth.companyId);
-        throw lineErr;
+    }
+    const { data: rpcResult, error: rpcError } = await s.rpc('create_journal_entry', {
+      p_company_id: auth.companyId, p_date: date, p_type: type,
+      p_description: description || null, p_created_by: auth.userId, p_lines: resolvedLines,
+    });
+    if (rpcError) {
+      if (rpcError.code === 'P0001' || /القيد|الحساب|الموازنة|السنة المالية|closed fiscal/i.test(rpcError.message || '')) {
+        return error(rpcError.message || 'تعذر ترحيل القيد', 409);
       }
-      totalDebit += line.debit;
-      totalCredit += line.credit;
+      throw rpcError;
     }
-
-    // SECURITY: Verify balance AFTER inserting all lines (defense in depth)
-    if (Math.abs(totalDebit - totalCredit) > 0.01) {
-      await s.from('journal_lines').delete().eq('journal_entry_id', entryId);
-      await s.from('journal_entries').delete().eq('id', entryId).eq('company_id', auth.companyId);
-      return error(`خطأ في الموازنة: مجموع الديون (${totalDebit}) لا يساوي مجموع الدائنين (${totalCredit})`);
-    }
-
-    const { data: linesRes } = await s.from('journal_lines')
+    const result = rpcResult as RpcResult;
+    const { data: entry, error: entryError } = await s.from('journal_entries')
+      .select('id, number, date, type, description, created_at')
+      .eq('id', result.id).eq('company_id', auth.companyId).maybeSingle();
+    if (entryError || !entry) throw entryError || new Error('تعذر قراءة القيد المرحّل');
+    const { data: createdLines, error: linesError } = await s.from('journal_lines')
       .select('id, account_code, accounts(name, type), debit, credit, description')
-      .eq('journal_entry_id', entryId).order('id');
-
-    const formattedLines = (linesRes || []).map((l: Record<string, any>) => ({
-      id: l.id, account_code: l.account_code, account_name: (l.accounts)?.name || null,
-      account_type: (l.accounts)?.type || null, debit: l.debit, credit: l.credit, description: l.description,
+      .eq('journal_entry_id', result.id).eq('company_id', auth.companyId).order('id');
+    if (linesError) throw linesError;
+    const formattedLines = (createdLines || []).map((line: Record<string, any>) => ({
+      id: line.id, account_code: line.account_code, account_name: line.accounts?.name || null,
+      account_type: line.accounts?.type || null, debit: line.debit, credit: line.credit, description: line.description,
     }));
-
-    // Financial audit trail — record the created journal entry.
     try {
       const { logAudit } = await import('@/lib/audit');
       await logAudit({
-        company_id: auth.companyId, user_id: auth.userId,
-        entity_type: 'journal_entry', entity_id: entryId, action: 'create',
-        after: { id: entryId, date: entryRes.date, description: entryRes.description, totalDebit, totalCredit },
-        summary: `إنشاء قيد يومي (مدين ${totalDebit} / دائن ${totalCredit})`,
+        company_id: auth.companyId, user_id: auth.userId, entity_type: 'journal_entry',
+        entity_id: result.id, action: 'create', after: { id: result.id, date, type, totalDebit: result.total_debit, totalCredit: result.total_credit },
+        summary: `إنشاء قيد يومي (مدين ${result.total_debit} / دائن ${result.total_credit})`,
       });
-    } catch {}
-
-    return success({ ...entryRes, totalDebit, totalCredit, lines: formattedLines }, 201);
+    } catch (auditError) {
+      console.error('Journal audit write failed after posting:', auditError);
+    }
+    return success({
+      ...entry, totalDebit: result.total_debit, totalCredit: result.total_credit, lines: formattedLines,
+    }, 201);
   } catch (err) {
-    const errorObj = err as { message?: string };
-    if (errorObj.message?.includes('غير موجود') || errorObj.message?.includes('الموازنة')) return error(errorObj.message || 'خطأ');
     return handleApiError(err);
   }
 }

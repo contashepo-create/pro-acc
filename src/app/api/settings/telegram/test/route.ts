@@ -1,124 +1,72 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireAdmin } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { checkModuleAccess } from '@/lib/usage-limits';
+import { communicationUuid } from '@/lib/communication-validation';
 
-const sb = () => getSupabase();
-
-/**
- * GET /api/settings/telegram/test
- * الاستعلام عن حالة فحص الربط التفاعلي للـ Test Run
- */
 export async function GET(request: NextRequest) {
   try {
-    const auth = await requireApiAuth(request);
-    const { searchParams } = new URL(request.url);
-    const testRunId = searchParams.get('test_run_id');
-
-    if (!testRunId) {
-      return error('test_run_id مطلوب');
-    }
-
-    const s = sb();
-    const { data: testRun, error: queryErr } = await s.from('telegram_test_runs')
-      .select('*')
-      .eq('id', testRunId)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (queryErr) throw queryErr;
-    if (!testRun) return error('لم يتم العثور على فحص الربط المطلوب', 404);
-
-    return success({
-      testRunId: testRun.id,
-      status: testRun.status, // pending, accepted, rejected, expired
-      updatedAt: testRun.updated_at
-    });
-
-  } catch (err) {
-    return handleApiError(err);
+    const auth = await requireAdmin(request);
+    const testRunId = new URL(request.url).searchParams.get('test_run_id') || '';
+    if (!communicationUuid.safeParse(testRunId).success) return error('معرف فحص الربط غير صالح');
+    const { data, error: queryError } = await getSupabase().from('telegram_test_runs')
+      .select('id,status,updated_at').eq('id', testRunId).eq('company_id', auth.companyId).eq('created_by', auth.userId).maybeSingle();
+    if (queryError) throw queryError;
+    if (!data) return error('لم يتم العثور على فحص الربط المطلوب', 404);
+    return success({ testRunId: data.id, status: data.status, updatedAt: data.updated_at });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-/**
- * POST /api/settings/telegram/test
- * إطلاق عملية فحص ربط جديدة تفاعلية وإرسال الأزرار المشفرة للبوت
- */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireModulePermission(request, 'telegram', 'create');
-    const s = sb();
-
-    // 1. التحقق من تمكين الميزة للباقة
-    const isAllowed = await checkModuleAccess(auth.companyId, 'telegram_integration');
-    if (!isAllowed) {
-      return error('هذه الميزة غير متوفرة في باقتك الحالية. يرجى ترقية الاشتراك.', 403);
-    }
-
-    // 2. جلب إعدادات التليجرام الحالية للشركة للتأكد من ربط المعرف
-    const { data: config } = await s.from('company_telegram_configs')
-      .select('chat_id, is_enabled')
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    const chatId = config?.chat_id;
-    if (!chatId || chatId.trim() === '') {
-      return error('يرجى تعيين وحفظ "معرف الدردشة" (Chat ID) أولاً قبل إطلاق الفحص التفاعلي');
-    }
-
-    // 3. إنشاء سجل فحص جديد بحالة انتظار (pending)
-    const { data: testRun, error: insertErr } = await s.from('telegram_test_runs')
-      .insert({
-        company_id: auth.companyId,
-        status: 'pending'
-      })
-      .select('id')
-      .single();
-
-    if (insertErr || !testRun) throw insertErr || new Error('Failed to create test run record');
-
-    const testRunId = testRun.id;
-
-    // 4. إرسال الرسالة التفاعلية وبها أزرار تليجرام المدمجة (Inline Buttons)
-    const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
-      ? process.env.TELEGRAM_BOT_TOKEN
-      : '';
-
-    const message = `🧪 <b>طلب فحص الربط التفاعلي</b> 🚀\n\nلقد أرسل موقعك الإلكتروني المحاسبي طلباً تفاعلياً للتأكد من جاهزية البوت لاستقبال الموافقات والتنبيهات المباشرة.\n\nالرجاء الضغط على أحد الأزرار أدناه لتأكيد حالة الربط:`;
-
-    const telegramApiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
-    const replyMarkup = {
-      inline_keyboard: [
-        [
-          { text: "موافق (قبول) ✅", callback_data: `test:accept:${testRunId}` },
-          { text: "مرفوض (رفض) ❌", callback_data: `test:reject:${testRunId}` }
-        ]
-      ]
-    };
-
-    const response = await fetch(telegramApiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: 'HTML',
-        reply_markup: replyMarkup
-      })
+    const auth = await requireAdmin(request);
+    if (!await checkModuleAccess(auth.companyId, 'telegram_integration')) return error('هذه الميزة غير متوفرة في باقتك الحالية', 403);
+    const supabase = getSupabase();
+    const { data: run, error: startError } = await supabase.rpc('create_telegram_test_run_atomic', {
+      p_company_id: auth.companyId, p_user_id: auth.userId,
     });
-
-    if (!response.ok) {
-      const errBody = await response.text();
-      console.error('Failed to send Telegram Test message:', response.status, errBody);
-      return error('تعذر إرسال طلب الفحص إلى تليجرام. يرجى التأكد من تشغيل البوت وإدخال المعرف بشكل صحيح.');
+    if (startError) {
+      const message = String(startError.message || 'تعذر بدء الاختبار');
+      if (/غير مفعلة|غير موجود/.test(message)) return error(message, 400);
+      if (/قيد التنفيذ/.test(message)) return error(message, 409);
+      throw startError;
     }
-
-    return success({
-      message: 'تم إرسال رسالة فحص تفاعلية إلى حسابك في تليجرام. يرجى الضغط على زر القبول أو الرفض هناك.',
-      testRunId
-    }, 201);
-
-  } catch (err) {
-    return handleApiError(err);
+    const testRunId = (run as { id?: string } | null)?.id;
+    const chatId = (run as { chat_id?: string } | null)?.chat_id;
+    if (!testRunId || !chatId) throw new Error('استجابة بدء اختبار تيليجرام غير صالحة');
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    let sendError = '';
+    if (!token) {
+      sendError = 'رمز بوت تيليجرام غير مهيأ في الخادم';
+    } else {
+      try {
+        const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(10_000),
+          body: JSON.stringify({
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🧪 <b>طلب فحص الربط التفاعلي</b>\n\nاضغط على أحد الزرين لتأكيد جاهزية الربط.',
+            reply_markup: { inline_keyboard: [[
+              { text: 'موافق ✅', callback_data: `test:accept:${testRunId}` },
+              { text: 'مرفوض ❌', callback_data: `test:reject:${testRunId}` },
+            ]] },
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result?.ok !== true) sendError = String(result?.description || `Telegram HTTP ${response.status}`).slice(0, 500);
+      } catch (cause) {
+        sendError = cause instanceof Error ? cause.message.slice(0, 500) : 'تعذر الاتصال بتيليجرام';
+      }
+    }
+    if (sendError) {
+      await supabase.rpc('expire_telegram_test_run_atomic', {
+        p_company_id: auth.companyId, p_test_run_id: testRunId, p_user_id: auth.userId,
+      });
+      return error(sendError, 502);
+    }
+    return success({ message: 'تم إرسال رسالة الفحص التفاعلي إلى تيليجرام', testRunId }, 201);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

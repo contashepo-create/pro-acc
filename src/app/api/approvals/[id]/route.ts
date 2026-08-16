@@ -1,185 +1,68 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import { approvalDecisionSchema, communicationUuid } from '@/lib/communication-validation';
 
-const sb = () => getSupabase();
+const APPROVAL_COLUMNS = `id,entity_type,entity_id,transaction_type,transaction_id,amount,description,message,status,
+  requester_id,approver_id,approved_by,approver_chat_id,approved_at,approval_comments,created_at,updated_at,
+  requester:users!requester_id(id,name),approver:users!approver_id(id,name)`;
 
-/**
- * PUT /api/approvals/[id]
- * Approve or reject an approval request
- */
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireModulePermission(request, 'approvals', 'update');
+    const auth = await requireModulePermission(request, 'approvals', 'read');
     const { id } = await params;
-    const s = sb();
-    const { action, comments } = await parseBody<{ action?: string; comments?: string }>(request); // action: 'approve' | 'reject'
-
-    if (!action || !['approve', 'reject'].includes(action) || (comments !== undefined && comments.length > 2000)) {
-      return error('بيانات الاعتماد غير صالحة');
-    }
-
-    // Fetch the approval request
-    const { data: approvalReq, error: fetchErr } = await s.from('approval_requests')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (fetchErr || !approvalReq) {
-      return error('طلب الاعتماد غير موجود', 404);
-    }
-
-    const req = approvalReq as any;
-
-    // Verify the current user is the designated approver
-    if (req.approver_id !== auth.userId && auth.role !== 'admin') {
-      return error('لست المخول بالاعتماد على هذا الطلب', 403);
-    }
-
-    // Verify it's still pending
-    if (req.status !== 'pending') {
-      return error(`هذا الطلب ${req.status === 'approved' ? 'مُعتمد بالفعل' : 'مرفوض بالفعل'}`);
-    }
-
-    const now = new Date().toISOString();
-    const newStatus = action === 'approve' ? 'approved' : 'rejected';
-
-    // Update the approval request
-    const { error: updateErr } = await s.from('approval_requests')
-      .update({
-        status: newStatus,
-        approved_by: auth.userId,
-        approved_at: now,
-        approval_comments: comments || null,
-      })
-      .eq('id', id).eq('company_id', auth.companyId);
-
-    if (updateErr) throw updateErr;
-
-    // If approved, execute the entity-specific action
-    if (action === 'approve') {
-      try {
-        await executeApprovedEntity(s, auth, req.entity_type, req.entity_id);
-      } catch (execErr) {
-        console.error('Failed to execute approved entity:', execErr);
-        // Revert approval status
-        await s.from('approval_requests')
-          .update({ status: 'pending', approved_by: null, approved_at: null })
-          .eq('id', id).eq('company_id', auth.companyId);
-        return error('فشل تنفيذ الإجراء بعد الاعتماد');
-      }
-    }
-
-    // Notify the requester
-    try {
-      await s.from('notifications').insert({
-        id: generateId(),
-        company_id: auth.companyId,
-        user_id: req.requester_id,
-        type: 'approval_response',
-        title: action === 'approve' ? 'تم اعتماد طلبك' : 'تم رفض طلبك',
-        message: `${getEntityTypeName(req.entity_type)} — ${comments || (action === 'approve' ? 'تم الاعتماد بنجاح' : 'تم الرفض')}`,
-        entity_type: 'approval_request',
-        entity_id: id,
-        created_at: now,
-      });
-    } catch (notifErr) {
-      console.warn('Failed to send notification:', notifErr);
-    }
-
-    // Log in audit trail
-    try {
-      await s.from('audit_log').insert({
-        id: generateId(),
-        company_id: auth.companyId,
-        user_id: auth.userId,
-        action: `${action}_approval`,
-        entity_type: 'approval_request',
-        entity_id: id,
-        old_values: { status: 'pending' },
-        new_values: { status: newStatus, entity_type: req.entity_type, entity_id: req.entity_id, comments },
-      });
-    } catch { /* ignore */ }
-
-    return success({
-      id,
-      status: newStatus,
-      approved_by: auth.userId,
-      approved_at: now,
-      comments: comments || null,
-    });
-  } catch (err) {
-    return handleApiError(err);
+    if (!communicationUuid.safeParse(id).success) return error('معرف طلب الاعتماد غير صالح');
+    let query = getSupabase().from('approval_requests').select(APPROVAL_COLUMNS).eq('id', id).eq('company_id', auth.companyId);
+    if (auth.role !== 'admin') query = query.eq('approver_id', auth.userId);
+    const { data, error: queryError } = await query.single();
+    if (queryError || !data) return error('طلب الموافقة غير موجود', 404);
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-/**
- * Execute entity-specific action after approval
- */
-async function executeApprovedEntity(
-  s: any,
-  auth: { companyId: string; userId: string; role: string },
-  entityType: string,
-  entityId: string
-) {
-  switch (entityType) {
-    case 'journal_entry':
-      // Mark journal entry as approved/posted
-      await s.from('journal_entries')
-        .update({ status: 'posted', approved_by: auth.userId, approved_at: new Date().toISOString() })
-        .eq('id', entityId)
-        .eq('company_id', auth.companyId);
-      break;
-
-    case 'voucher_disbursement':
-    case 'voucher_receipt':
-      // Mark voucher as approved
-      const voucherTable = entityType === 'voucher_disbursement' ? 'voucher_disbursements' : 'voucher_receipts';
-      await s.from(voucherTable)
-        .update({ status: 'approved', approved_by: auth.userId, approved_at: new Date().toISOString() })
-        .eq('id', entityId)
-        .eq('company_id', auth.companyId);
-      break;
-
-    case 'purchase_invoice':
-      await s.from('purchase_invoices')
-        .update({ status: 'approved', approved_by: auth.userId, approved_at: new Date().toISOString() })
-        .eq('id', entityId)
-        .eq('company_id', auth.companyId);
-      break;
-
-    case 'payroll':
-      await s.from('salary_sheets')
-        .update({ status: 'approved', approved_by: auth.userId, approved_at: new Date().toISOString() })
-        .eq('id', entityId)
-        .eq('company_id', auth.companyId);
-      break;
-
-    case 'cash_transaction':
-      await s.from('cash_transactions')
-        .update({ status: 'approved', approved_by: auth.userId, approved_at: new Date().toISOString() })
-        .eq('id', entityId)
-        .eq('company_id', auth.companyId);
-      break;
-
-    default:
-      console.warn(`Unknown entity type for approval: ${entityType}`);
+async function decideApproval(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireModulePermission(request, 'approvals', 'approve');
+    const { id } = await params;
+    if (!communicationUuid.safeParse(id).success) return error('معرف طلب الاعتماد غير صالح');
+    const parsed = approvalDecisionSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات قرار الاعتماد غير صالحة');
+    const supabase = getSupabase();
+    const { data: approval, error: fetchError } = await supabase.from('approval_requests')
+      .select('id,entity_type,transaction_type,status,approver_id').eq('id', id).eq('company_id', auth.companyId).single();
+    if (fetchError || !approval) return error('طلب الموافقة غير موجود', 404);
+    if (auth.role !== 'admin' && approval.approver_id !== auth.userId) return error('ليس لديك صلاحية لاتخاذ قرار على هذا الطلب', 403);
+    if (!['pending', 'processing'].includes(approval.status)) {
+      const requestedStatus = parsed.data.action === 'approve' ? 'approved' : 'rejected';
+      if (approval.status === requestedStatus) return success({ id, status: approval.status, replayed: true });
+      return error('تم اتخاذ قرار مختلف على هذا الطلب مسبقاً', 409);
+    }
+    const entityType = approval.entity_type || approval.transaction_type;
+    const isVoucher = entityType === 'voucher_disbursement' || entityType === 'voucher_receipt';
+    const rpcName = entityType === 'voucher_disbursement' ? 'respond_voucher_disbursement_approval'
+      : entityType === 'voucher_receipt' ? 'respond_voucher_receipt_approval' : 'respond_approval_request_atomic';
+    const rpcParams = isVoucher ? {
+      p_company_id: auth.companyId, p_approval_id: id, p_action: parsed.data.action,
+      p_approver_user_id: auth.userId, p_approver_chat_id: null, p_comments: parsed.data.comments || '',
+    } : {
+      p_company_id: auth.companyId, p_approval_id: id, p_action: parsed.data.action,
+      p_approver_user_id: auth.userId, p_comments: parsed.data.comments || '',
+    };
+    const { data, error: rpcError } = await supabase.rpc(rpcName, rpcParams);
+    if (rpcError) {
+      const message = String(rpcError.message || 'تعذر معالجة طلب الموافقة');
+      if (/مسبق|قيد المعالجة|غير صالح/.test(message)) return error(message, 409);
+      if (/صلاحية|مخول/.test(message)) return error(message, 403);
+      if (/غير موجود/.test(message)) return error(message, 404);
+      throw rpcError;
+    }
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-function getEntityTypeName(type: string): string {
-  const names: Record<string, string> = {
-    journal_entry: 'قيد يومية',
-    voucher_disbursement: 'سند صرف',
-    voucher_receipt: 'سند قبض',
-    purchase_invoice: 'فاتورة شراء',
-    payroll: 'رواتب',
-    cash_transaction: 'سند صندوق',
-  };
-  return names[type] || type;
-}
+export const PUT = decideApproval;
+export const POST = decideApproval;

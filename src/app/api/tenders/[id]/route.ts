@@ -1,200 +1,131 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import {
+  relationshipUuid, tenderConversionSchema, tenderCostItemSchema, tenderStatusSchema, tenderUpdateSchema,
+} from '@/lib/relationship-validation';
 
 const sb = () => getSupabase();
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'tenders', 'read');
     const { id } = await params;
+    if (!relationshipUuid.safeParse(id).success) return error('معرف المناقصة غير صالح');
     const s = sb();
-
-    const { data: tender } = await s.from('tenders')
-      .select('*, tenders_contacts(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
+    const { data: tender, error: tenderError } = await s.from('tenders').select('*, tenders_contacts(name)')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (tenderError) throw tenderError;
     if (!tender) return notFound();
-
-    // Get cost breakdown
-    const { data: costItems } = await s.from('tender_cost_items')
-      .select('*')
-      .eq('tender_id', id);
-
-    const t = tender as any;
-    const totalCost = (costItems || []).reduce((sum: number, item: any) => sum + (parseFloat(item.amount) || 0), 0);
-    const bidAmount = parseFloat(t.estimated_value) || 0;
-    const profitMargin = bidAmount > 0 && totalCost > 0 ? ((bidAmount - totalCost) / bidAmount * 100) : 0;
-
+    const { data: costItems, error: costsError } = await s.from('tender_cost_items').select('*')
+      .eq('tender_id', id).eq('company_id', auth.companyId).order('created_at');
+    if (costsError) throw costsError;
+    const row = tender as Record<string, unknown>;
+    const contact = row.tenders_contacts as { name?: string } | null;
+    const totalCost = (costItems || []).reduce((sum: number, item: Record<string, unknown>) => sum + (Number(item.amount) || 0), 0);
+    const bidAmount = Number(row.estimated_value) || 0;
+    const profitMargin = bidAmount > 0 ? ((bidAmount - totalCost) / bidAmount) * 100 : 0;
     return success({
-      ...t,
-      contact_name: t.tenders_contacts?.name || null,
-      cost_items: costItems || [],
-      total_cost: totalCost,
-      bid_amount: bidAmount,
-      profit_margin: profitMargin,
+      ...row,
+      contact_name: contact?.name || null,
+      cost_items: costItems || [], total_cost: totalCost, bid_amount: bidAmount, profit_margin: profitMargin,
     });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'tenders', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await request.json();
-    const { action } = body;
+    if (!relationshipUuid.safeParse(id).success) return error('معرف المناقصة غير صالح');
+    const raw = await parseBody(request);
+    const action = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>).action : undefined;
 
-    // Handle status change
     if (action === 'update_status') {
-      const { status, notes } = body;
-      if (!status) return error('الحالة مطلوبة');
-
-      const { data, error: updateErr } = await s.from('tenders')
-        .update({ status, notes: notes || null, updated_at: new Date().toISOString() })
-        .eq('id', id)
-        .eq('company_id', auth.companyId)
-        .select()
-        .single();
-
-      if (updateErr) throw updateErr;
+      const parsed = tenderStatusSchema.safeParse(raw);
+      if (!parsed.success) return error(parsed.error.issues[0].message);
+      const { data, error: transitionError } = await sb().rpc('transition_tender_atomic', {
+        p_company_id: auth.companyId,
+        p_tender_id: id,
+        p_status: parsed.data.status,
+        p_notes: parsed.data.notes || null,
+        p_user_id: auth.userId,
+      });
+      if (transitionError) return tenderMutationError(transitionError);
       return success(data);
     }
 
-    // Handle conversion to project (when tender is won)
     if (action === 'convert_to_project') {
-      const { data: tender } = await s.from('tenders')
-        .select('*')
-        .eq('id', id)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-
-      if (!tender) return notFound();
-      const t = tender as any;
-
-      if (t.status !== 'won') return error('يمكن تحويل العطاءات الرابحة فقط إلى مشروع');
-
-      // Create project from tender
-      const projectId = generateId();
-      const { data: project, error: projErr } = await s.from('projects')
-        .insert({
-          id: projectId,
-          company_id: auth.companyId,
-          name: t.title,
-          description: t.description || null,
-          location: t.project_location || null,
-          budget: t.estimated_value || 0,
-          start_date: new Date().toISOString().split('T')[0],
-          end_date: t.project_duration_months
-            ? new Date(Date.now() + parseInt(t.project_duration_months) * 30 * 86400000).toISOString().split('T')[0]
-            : null,
-          status: 'active',
-          tender_id: id,
-          created_by: auth.userId,
-          created_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-
-      if (projErr) throw projErr;
-
-      // Update tender with project reference
-      await s.from('tenders')
-        .update({ project_id: projectId, updated_at: new Date().toISOString() })
-        .eq('id', id).eq('company_id', auth.companyId);
-
-      return success({ project, tender_id: id }, 201);
+      const parsed = tenderConversionSchema.safeParse(raw);
+      if (!parsed.success) return error(parsed.error.issues[0].message);
+      const { data, error: conversionError } = await sb().rpc('convert_won_tender_to_project_atomic', {
+        p_company_id: auth.companyId,
+        p_tender_id: id,
+        p_user_id: auth.userId,
+      });
+      if (conversionError) return tenderMutationError(conversionError);
+      return success(data, 201);
     }
 
-    // Regular update
-    const allowedFields = ['title', 'client_name', 'contact_id', 'reference_number', 'description',
-      'estimated_value', 'bid_bond_amount', 'submission_deadline', 'opening_date',
-      'project_location', 'project_duration_months', 'win_probability', 'notes'];
-
-    const updateData: Record<string, any> = {};
-    for (const field of allowedFields) {
-      if (body[field] !== undefined) updateData[field] = body[field];
-    }
-    updateData.updated_at = new Date().toISOString();
-
-    const { data, error: updateErr } = await s.from('tenders')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select()
-      .single();
-
-    if (updateErr) throw updateErr;
+    const parsed = tenderUpdateSchema.safeParse(raw);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { data, error: updateError } = await sb().rpc('update_tender_atomic', {
+      p_company_id: auth.companyId,
+      p_tender_id: id,
+      p_patch: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (updateError) return tenderMutationError(updateError);
     return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'tenders', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    await s.from('tender_cost_items').delete().eq('tender_id', id);
-    await s.from('tenders').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
+    if (!relationshipUuid.safeParse(id).success) return error('معرف المناقصة غير صالح');
+    const { data, error: deleteError } = await sb().rpc('delete_draft_tender_atomic', {
+      p_company_id: auth.companyId,
+      p_tender_id: id,
+      p_user_id: auth.userId,
+    });
+    if (deleteError) return tenderMutationError(deleteError);
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-/**
- * POST /api/tenders/[id]/cost-items — Add cost breakdown item
- */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+/** POST /api/tenders/[id] — add an atomic, tenant-bound cost item. */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'tenders', 'create');
     const { id } = await params;
-    const s = sb();
-    const body = await request.json();
-
-    if (!body.category || !body.amount) {
-      return error('الفئة والمبلغ مطلوبان');
-    }
-
-    const itemId = generateId();
-    const { data, error: insertErr } = await s.from('tender_cost_items')
-      .insert({
-        id: itemId,
-        tender_id: id,
-        company_id: auth.companyId,
-        category: body.category, // materials, labor, equipment, subcontractor, overhead, other
-        description: body.description || null,
-        amount: body.amount,
-        notes: body.notes || null,
-        created_by: auth.userId,
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
+    if (!relationshipUuid.safeParse(id).success) return error('معرف المناقصة غير صالح');
+    const parsed = tenderCostItemSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { data, error: createError } = await sb().rpc('create_tender_cost_item_atomic', {
+      p_company_id: auth.companyId,
+      p_tender_id: id,
+      p_payload: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (createError) return tenderMutationError(createError);
     return success(data, 201);
   } catch (err) {
     return handleApiError(err);
   }
+}
+
+function tenderMutationError(mutationError: { message?: string | null }) {
+  const message = String(mutationError.message || 'تعذر تنفيذ عملية المناقصة');
+  if (message.includes('غير موجودة')) return notFound();
+  if (message.includes('لا يمكن') || message.includes('انتقال حالة') || message.includes('مسبقاً')) return error(message, 409);
+  if (message.includes('غير صالحة') || message.includes('طويلة')) return error(message);
+  throw mutationError;
 }

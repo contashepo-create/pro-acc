@@ -557,7 +557,7 @@ export default function ReportsPage() {
             ]} />
             <Button variant="secondary" leftIcon={<FileText size={16} />} onClick={load}>عرض</Button>
           </div>
-          {opType === 'project-costs' && operational && !Array.isArray(operational) && (
+          {opType === 'project-costs' && operational && (
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
               <StatCard title="تكاليف المواد" value={formatCurrency(operational.materials || 0)} accentColor="var(--color-info)" />
               <StatCard title="تكاليف العمالة" value={formatCurrency(operational.workers || 0)} accentColor="var(--color-warning)" />
@@ -566,7 +566,7 @@ export default function ReportsPage() {
               <StatCard title="الإجمالي" value={formatCurrency(operational.total || 0)} />
             </div>
           )}
-          {Array.isArray(operational) && (
+          {Array.isArray(operational?.rows) && (
             <Table
               columns={[
                 { key: 'date', label: 'التاريخ' },
@@ -576,7 +576,7 @@ export default function ReportsPage() {
                 { key: 'quantity', label: 'الكمية' },
                 { key: 'total_value', label: 'القيمة', render: (r: any) => formatCurrency(r.total_value || 0) },
               ]}
-              data={operational}
+              data={operational.rows}
             />
           )}
         </div>

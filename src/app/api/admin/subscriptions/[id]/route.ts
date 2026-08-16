@@ -5,18 +5,13 @@ import { success, error, parseBody } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
 
-function normInt(v: unknown, def: number | null = null): number | null {
-  if (v === null || v === undefined || v === '') return def;
-  const n = Number(v);
-  if (!Number.isFinite(n)) return def;
-  return Math.max(0, Math.floor(n));
-}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await requireAdmin(_req);
     const { id } = await params;
-    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الاشتراك غير صالح', 400);
+    if (!UUID_RE.test(id)) return error('معرّف الاشتراك غير صالح', 400);
     const s = sb();
     const { data, error: err } = await s.from('subscriptions')
       .select(`
@@ -42,7 +37,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const admin = await requireAdmin(req);
     const { id } = await params;
-    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الاشتراك غير صالح', 400);
+    if (!UUID_RE.test(id)) return error('معرّف الاشتراك غير صالح', 400);
     const body = await parseBody<{
       plan_id?: string;
       status?: string;
@@ -53,52 +48,49 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       notes?: string;
     }>(req);
 
-    const s = sb();
-    const { data: existing } = await s.from('subscriptions').select('id,company_id,extra_users,extra_branches,extra_storage_gb').eq('id', id).maybeSingle();
-    if (!existing) return error('الاشتراك غير موجود', 404);
-
-    const patch: Record<string, any> = { updated_at: new Date().toISOString() };
-    if (body.plan_id) patch.plan_id = body.plan_id;
-    if (body.status && ['active','trial','cancelled','expired'].includes(body.status)) patch.status = body.status;
-    if (body.end_date) patch.end_date = body.end_date;
-    if (body.extra_users !== undefined) patch.extra_users = normInt(body.extra_users, 0) ?? 0;
-    if (body.extra_branches !== undefined) patch.extra_branches = normInt(body.extra_branches, 0) ?? 0;
-    if (body.extra_storage_gb !== undefined) patch.extra_storage_gb = normInt(body.extra_storage_gb, 0) ?? 0;
-
-    const prev = existing as any;
-    const { data: updated, error: uErr } = await s.from('subscriptions').update(patch).eq('id', id).select().single();
-    if (uErr) throw uErr;
-
-    // Audit changes to addons
-    const addonChanged = patch.extra_users !== undefined
-      || patch.extra_branches !== undefined
-      || patch.extra_storage_gb !== undefined;
-    if (addonChanged) {
-      const addonType =
-        patch.extra_users !== undefined ? 'extra_user' :
-        patch.extra_branches !== undefined ? 'extra_branch' :
-        'storage_gb';
-      const newUsers = Number(patch.extra_users ?? prev.extra_users ?? 0);
-      const newBranches = Number(patch.extra_branches ?? prev.extra_branches ?? 0);
-      const prevUsers = Number(prev.extra_users || 0);
-      const prevBranches = Number(prev.extra_branches || 0);
-      const qty = addonType === 'extra_user' ? Math.abs(newUsers - prevUsers)
-        : addonType === 'extra_branch' ? Math.abs(newBranches - prevBranches)
-        : Math.abs(Number(patch.extra_storage_gb ?? prev.extra_storage_gb ?? 0) - Number(prev.extra_storage_gb || 0));
-      try { await s.from('addon_grant_audit').insert({
-        company_id: prev.company_id,
-        admin_id: admin.adminId,
-        addon_type: addonType,
-        quantity: qty,
-        months_granted: 0,
-        previous_extra_users: prevUsers,
-        previous_extra_branches: prevBranches,
-        new_extra_users: newUsers,
-        new_extra_branches: newBranches,
-        note: body.notes || 'manual admin adjustment',
-      }); } catch {}
+    // This editor can only revoke entitlements. Paid activation, upgrades, and
+    // trial extensions each have a separate proof-bearing workflow.
+    if (body.plan_id !== undefined) {
+      return error('تغيير الباقة المدفوعة يتم فقط عبر طلب ترقية معتمد أو كود تفعيل', 409);
+    }
+    if (body.status !== undefined && !['cancelled', 'expired'].includes(body.status)) {
+      return error('لا يمكن منح حالة اشتراك مدفوعة من هذا المسار', 409);
+    }
+    if (body.end_date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(body.end_date)) {
+      return error('تاريخ نهاية الاشتراك غير صالح');
     }
 
+    const parsedExtras: Record<'extra_users' | 'extra_branches' | 'extra_storage_gb', number | null> = {
+      extra_users: null,
+      extra_branches: null,
+      extra_storage_gb: null,
+    };
+    for (const key of Object.keys(parsedExtras) as Array<keyof typeof parsedExtras>) {
+      if (body[key] === undefined) continue;
+      const value = Number(body[key]);
+      if (!Number.isSafeInteger(value) || value < 0) return error('قيمة الإضافة غير صالحة');
+      parsedExtras[key] = value;
+    }
+    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) {
+      return error('الملاحظات غير صالحة');
+    }
+
+    const { data: updated, error: rpcError } = await sb().rpc('restrict_subscription_atomic', {
+      p_subscription_id: id,
+      p_admin_id: admin.adminId,
+      p_status: body.status ?? null,
+      p_end_date: body.end_date ?? null,
+      p_extra_users: parsedExtras.extra_users,
+      p_extra_branches: parsedExtras.extra_branches,
+      p_extra_storage_gb: parsedExtras.extra_storage_gb,
+      p_notes: body.notes?.trim() || null,
+    });
+    if (rpcError) {
+      if (rpcError.message.includes('الاشتراك غير موجود')) return error('الاشتراك غير موجود', 404);
+      if (rpcError.message.includes('لا توجد تغييرات')) return error(rpcError.message, 400);
+      if (rpcError.message.includes('لا يمكن') || rpcError.message.includes('تمديد')) return error(rpcError.message, 409);
+      throw rpcError;
+    }
     return success({ subscription: updated });
   } catch (e) { return adminJsonError(e); }
 }

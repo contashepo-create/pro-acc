@@ -1,10 +1,8 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { loadCustodyFile, assertFileOpen } from '@/lib/custody';
-import { postReversalEntry } from '@/lib/voucher-utils';
-
-const sb = () => getSupabase();
+import { custodyUuid, updateCustodySchema } from '@/lib/custody-validation';
 
 export async function GET(
   request: NextRequest,
@@ -13,11 +11,12 @@ export async function GET(
   try {
     const auth = await requireModulePermission(request, 'custodies', 'read');
     const { id } = await params;
+    if (!custodyUuid.safeParse(id).success) return error('معرف ملف العهدة غير صالح');
     const file = await loadCustodyFile(auth.companyId, id);
     if (!file) return notFound();
     return success(file);
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
@@ -28,34 +27,23 @@ export async function PUT(
   try {
     const auth = await requireModulePermission(request, 'custodies', 'update');
     const { id } = await params;
+    if (!custodyUuid.safeParse(id).success) return error('معرف ملف العهدة غير صالح');
+    const parsed = updateCustodySchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات ملف العهدة غير صالحة');
     const file = await loadCustodyFile(auth.companyId, id);
     if (!file) return notFound();
     assertFileOpen(file);
 
-    const body = await request.json();
-    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (body.reason !== undefined || body.description !== undefined) {
-      update.reason = body.reason ?? body.description;
-      update.description = body.description ?? body.reason;
-    }
-    if (body.notes !== undefined) update.notes = body.notes;
-    if (body.project_id !== undefined) {
-      if (body.project_id) {
-        const { data: p } = await sb().from('projects').select('id').eq('id', body.project_id).eq('company_id', auth.companyId).maybeSingle();
-        if (!p) return error('المشروع غير موجود', 404);
-      }
-      update.project_id = body.project_id || null;
-    }
-    if (body.amount !== undefined || body.employee_id !== undefined) {
-      return error('لا يُعدَّل مبلغ الملف أو الموظف بعد الصرف — استخدم تعزيز أو قيد عكسي');
-    }
-
-    const { data, error: uErr } = await sb().from('custodies')
-      .update(update).eq('id', id).eq('company_id', auth.companyId).select('*').single();
-    if (uErr) throw uErr;
+    const { data, error: rpcError } = await getSupabase().rpc('update_custody_metadata_atomic', {
+      p_company_id: auth.companyId,
+      p_custody_id: id,
+      p_patch: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
     return success(data);
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
@@ -66,31 +54,20 @@ export async function DELETE(
   try {
     const auth = await requireManagerOrAbove(request);
     const { id } = await params;
+    if (!custodyUuid.safeParse(id).success) return error('معرف ملف العهدة غير صالح');
     const file = await loadCustodyFile(auth.companyId, id);
     if (!file) return notFound();
-    if (file.is_closed) return error('لا يمكن حذف ملف مغلق');
-    if (file.total_expenses > 0.005) return error('لا يمكن حذف ملف عليه إثباتات مصروف — اعكس المصروفات أولاً');
+    if (file.is_closed) return error('لا يمكن إلغاء ملف مغلق', 409);
+    if (file.total_expenses > 0.005) return error('لا يمكن إلغاء ملف عليه إثباتات مصروف — اعكس المصروفات أولاً', 409);
 
-    if (file.journal_entry_id) {
-      const { error: revErr } = await postReversalEntry(auth.companyId, {
-        journalEntryId: file.journal_entry_id,
-        referenceType: 'custody_reversal',
-        referenceId: id,
-        description: `عكس افتتاح عهدة ${file.file_number || id}`,
-        userId: auth.userId,
-      });
-      if (revErr) throw revErr;
-    }
-
-    await sb().from('custodies').update({
-      status: 'settled',
-      remaining_amount: 0,
-      notes: `${file.notes || ''} [ملغى]`.trim(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ cancelled: true });
-  } catch (err) {
-    return handleApiError(err);
+    const { data: cancelled, error: rpcError } = await getSupabase().rpc('cancel_custody_file', {
+      p_company_id: auth.companyId,
+      p_custody_id: id,
+      p_created_by: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(cancelled);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Plus, FileText, Building2, User, Phone, Mail, MapPin, CreditCard, FileText as Notes, Calendar } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Plus, FileText, Building2, User, Phone, MapPin, CreditCard } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -10,10 +10,10 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
 import { Badge } from '@/components/ui/Badge';
-import { Checkbox } from '@/components/ui/Checkbox';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { Pagination } from '@/components/ui/Pagination';
 import { toast } from '@/components/ui/Toast';
 import { formatCurrency } from '@/lib/utils';
 
@@ -25,6 +25,9 @@ export default function ClientsPage() {
   const [editingClient, setEditingClient] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
   const [form, setForm] = useState<any>({
     name: '', type: 'client', phone: '', email: '', address: '',
     tax_number: '', commercial_registration: '', credit_limit: 0,
@@ -36,18 +39,25 @@ export default function ClientsPage() {
     date_of_birth: '', gender: '', national_id: '', category: '',
   });
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/clients?_ts=${Date.now()}`, { cache: 'no-store', credentials: 'same-origin' });
+      setError('');
+      const res = await fetch(`/api/clients?page=${page}&pageSize=${pageSize}&_ts=${Date.now()}`, { cache: 'no-store', credentials: 'same-origin' });
       const json = await res.json();
-      if (json.success) setClients(json.data?.clients || []);
-      else { setError(json.message || 'فشل'); toast.error(json.message || 'فشل تحميل البيانات'); }
+      if (json.success) {
+        setClients(json.data?.clients || []);
+        setTotal(Number(json.data?.total) || 0);
+      } else { setError(json.message || 'فشل'); toast.error(json.message || 'فشل تحميل البيانات'); }
     } catch { setError('فشل تحميل البيانات'); }
     finally { setLoading(false); }
-  };
+  }, [page, pageSize]);
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    // The effect intentionally refreshes server-backed rows when pagination changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+  }, [fetchData]);
 
   const handleSave = async () => {
     if (!form.name) { setSaveError('اسم العميل مطلوب'); return; }
@@ -55,7 +65,12 @@ export default function ClientsPage() {
     try {
       const url = editingClient ? `/api/clients/${editingClient.id}` : '/api/clients';
       const method = editingClient ? 'PUT' : 'POST';
-      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      const payload = { ...form };
+      if (editingClient) {
+        delete payload.opening_balance;
+        delete payload.opening_balance_type;
+      }
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const json = await res.json();
       if (json.success) {
         setShowModal(false); setEditingClient(null);
@@ -94,8 +109,12 @@ export default function ClientsPage() {
     try {
       const res = await fetch(`/api/clients/${client.id}`, { method: 'DELETE' });
       const json = await res.json();
-      if (json.success) { toast.success('تم حذف العميل'); fetchData(); }
-      else toast.error(json.message || 'فشل الحذف');
+      if (json.success) {
+        toast.success('تم تعطيل العميل مع الاحتفاظ بسجله التاريخي');
+        if (clients.length === 1 && page > 1) setPage((value) => value - 1);
+        else fetchData();
+      }
+      else toast.error(json.message || 'فشل التعطيل');
     } catch { toast.error('خطأ في الاتصال'); }
   };
 
@@ -124,7 +143,7 @@ export default function ClientsPage() {
         <a href={`/clients/${row.id}/statement`} target="_blank" rel="noopener noreferrer">
           <Button variant="ghost" size="sm" title="كشف حساب"><FileText size={16} className="text-blue-600" /></Button>
         </a>
-        <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} />
+        <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} deleteMode="deactivate" />
       </div>
     ) },
   ];
@@ -143,10 +162,21 @@ export default function ClientsPage() {
       {clients.length === 0 ? (
         <EmptyState title="لا يوجد عملاء" actionLabel="إضافة عميل" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={clients} searchable searchKeys={['name', 'phone', 'tax_number', 'city']} />
+        <>
+          <DataTable columns={columns} data={clients} searchable searchKeys={['name', 'phone', 'tax_number', 'city']} />
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, Math.ceil(total / pageSize))}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPage(1); setPageSize(size); }}
+          />
+        </>
       )}
 
       {/* Comprehensive Client Form */}
+
       <Modal
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditingClient(null); }}
@@ -169,7 +199,7 @@ export default function ClientsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="اسم العميل *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="col-span-2" />
               <Select label="النوع" value={form.type} onChange={(v) => setForm({ ...form, type: v })}
-                options={[{ value: 'client', label: 'عميل' }, { value: 'supplier', label: 'مورد' }, { value: 'both', label: 'عميل ومورد' }]} />
+                options={[{ value: 'client', label: 'عميل' }, { value: 'both', label: 'عميل ومورد' }]} />
               <Input label="التصنيف" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="مثال: VIP, عادي..." />
             </div>
           </div>
@@ -261,9 +291,15 @@ export default function ClientsPage() {
                   { value: 'net_60', label: '60 يوم' },
                   { value: 'net_90', label: '90 يوم' },
                 ]} />
-              <Input label="الرصيد الافتتاحي" type="number" value={form.opening_balance} onChange={(e) => setForm({ ...form, opening_balance: parseFloat(e.target.value) || 0 })} />
-              <Select label="نوع الرصيد الافتتاحي" value={form.opening_balance_type} onChange={(v) => setForm({ ...form, opening_balance_type: v })}
-                options={[{ value: 'debit', label: 'مدين (له)' }, { value: 'credit', label: 'دائن (عليه)' }]} />
+              {!editingClient ? <>
+                <Input label="الرصيد الافتتاحي" type="number" value={form.opening_balance} onChange={(e) => setForm({ ...form, opening_balance: parseFloat(e.target.value) || 0 })} />
+                <Select label="نوع الرصيد الافتتاحي" value={form.opening_balance_type} onChange={(v) => setForm({ ...form, opening_balance_type: v })}
+                  options={[{ value: 'debit', label: 'مدين (له)' }, { value: 'credit', label: 'دائن (عليه)' }]} />
+              </> : (
+                <p className="sm:col-span-2 text-sm text-text-muted">
+                  لا يمكن تعديل الرصيد الافتتاحي بعد إنشاء العميل؛ استخدم قيد تسوية معتمد عند الحاجة.
+                </p>
+              )}
             </div>
           </div>
 

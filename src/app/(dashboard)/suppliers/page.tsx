@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Plus, User, Phone, Mail, FileText } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/Textarea';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { Pagination } from '@/components/ui/Pagination';
 import { toast } from '@/components/ui/Toast';
 
 export default function SuppliersPage() {
@@ -21,20 +22,30 @@ export default function SuppliersPage() {
   const [editing, setEditing] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
   const [form, setForm] = useState<any>({ name: '', phone: '', email: '', tax_number: '', notes: '' });
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/contacts?type=supplier');
+      setError('');
+      const res = await fetch(`/api/contacts?type=supplier&page=${page}&pageSize=${pageSize}`);
       const json = await res.json();
-      if (json.success) setRows(json.data?.contacts || []);
-      else { setError(json.message || 'فشل'); toast.error(json.message || 'فشل تحميل البيانات'); }
+      if (json.success) {
+        setRows(json.data?.contacts || []);
+        setTotal(Number(json.data?.total) || 0);
+      } else { setError(json.message || 'فشل'); toast.error(json.message || 'فشل تحميل البيانات'); }
     } catch { setError('فشل تحميل البيانات'); }
     finally { setLoading(false); }
-  };
+  }, [page, pageSize]);
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    // The effect intentionally refreshes server-backed rows when pagination changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+  }, [fetchData]);
 
   const handleSave = async () => {
     if (!form.name) { setSaveError('اسم المورد مطلوب'); return; }
@@ -45,7 +56,7 @@ export default function SuppliersPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, type: 'supplier' }),
+        body: JSON.stringify({ ...form, type: editing?.type || 'supplier' }),
       });
       const json = await res.json();
       if (json.success) {
@@ -68,8 +79,11 @@ export default function SuppliersPage() {
     try {
       const res = await fetch(`/api/contacts/${row.id}`, { method: 'DELETE' });
       const json = await res.json();
-      if (json.success) { toast.success('تم حذف المورد'); fetchData(); }
-      else toast.error(json.message || 'فشل الحذف');
+      if (json.success) {
+        toast.success('تم تعطيل المورد مع الاحتفاظ بسجله التاريخي');
+        if (rows.length === 1 && page > 1) setPage((value) => value - 1);
+        else fetchData();
+      } else toast.error(json.message || 'فشل التعطيل');
     } catch { toast.error('خطأ في الاتصال'); }
   };
 
@@ -79,7 +93,7 @@ export default function SuppliersPage() {
     { key: 'email', label: 'البريد', render: (r: any) => <span dir="ltr">{r.email || '—'}</span> },
     { key: 'tax_number', label: 'الرقم الضريبي' },
     { key: 'notes', label: 'ملاحظات' },
-    { key: 'actions', label: 'إجراءات', render: (r: any) => <ActionButtons item={r} onEdit={handleEdit} onDelete={handleDelete} /> },
+    { key: 'actions', label: 'إجراءات', render: (r: any) => <ActionButtons item={r} onEdit={handleEdit} onDelete={handleDelete} deleteMode="deactivate" /> },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
@@ -95,7 +109,17 @@ export default function SuppliersPage() {
       {rows.length === 0 ? (
         <EmptyState title="لا يوجد موردون" actionLabel="إضافة مورد" onAction={() => setShowModal(true)} />
       ) : (
-        <DataTable columns={columns} data={rows} searchable searchKeys={['name', 'phone', 'tax_number']} />
+        <>
+          <DataTable columns={columns} data={rows} searchable searchKeys={['name', 'phone', 'tax_number']} />
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, Math.ceil(total / pageSize))}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPage(1); setPageSize(size); }}
+          />
+        </>
       )}
       <Modal
         isOpen={showModal}

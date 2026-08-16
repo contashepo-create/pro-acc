@@ -5,6 +5,7 @@ import { registerSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
 import { sendEmail } from '@/lib/email';
 import { randomBytes, createHmac, createHash } from 'crypto';
+import { DEFAULT_CHART_OF_ACCOUNTS } from '@/lib/default-accounts';
 
 const sb = () => getSupabase();
 
@@ -28,6 +29,10 @@ function isDisposableEmail(email: string): boolean {
 const CAPTCHA_ENABLED = process.env.CAPTCHA_ENABLED !== 'false';
 
 export async function GET(request: NextRequest) {
+  if (process.env.NODE_ENV === 'production'
+    && (!process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY)) {
+    return error('التسجيل غير مهيأ بأمان. يجب إعداد Cloudflare Turnstile.', 503);
+  }
   // If Turnstile is configured, frontend should use it instead
   if (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) {
     return success({ 
@@ -80,6 +85,13 @@ export function verifyCaptchaToken(token: string, userAnswer: number): boolean {
 
 export async function POST(request: NextRequest) {
   try {
+    // The stateless math challenge is intentionally development-only: it can
+    // be replayed until expiry. Production registration requires Turnstile so
+    // one solved challenge cannot be reused for bulk tenant creation.
+    if (process.env.NODE_ENV === 'production'
+      && (!process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY)) {
+      return error('التسجيل غير مهيأ بأمان. يجب إعداد Cloudflare Turnstile.', 503);
+    }
     const body = await parseBody<any>(request);
     const parsed = registerSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
@@ -89,7 +101,7 @@ export async function POST(request: NextRequest) {
 
     // CAPTCHA is MANDATORY when enabled. Previously omitting the captcha
     // fields entirely skipped verification (bot-registration bypass).
-    if (CAPTCHA_ENABLED) {
+    if (CAPTCHA_ENABLED || process.env.NODE_ENV === 'production') {
       if (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) {
         // Turnstile configured — require and verify the token
         const turnstileToken = body.turnstileToken;
@@ -134,29 +146,31 @@ export async function POST(request: NextRequest) {
 
     const s = sb();
 
-    // Rate limiting - prevent bot registration spam
-    try {
-      const { checkRateLimit } = await import('@/lib/rate-limit');
-      const ip = (typeof request !== 'undefined' ? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() : null) || 'unknown';
-      const rateLimit = await checkRateLimit(email.toLowerCase(), ip);
-      if (!rateLimit.allowed) {
-        return error(`عدد محاولات التسجيل كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
-      }
-    } catch {}
+    // Registration rate limiting is a security control and therefore fails
+    // closed if its backing store is unavailable.
+    const { checkRateLimit } = await import('@/lib/rate-limit');
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const rateLimit = await checkRateLimit(email.toLowerCase(), ip);
+    if (!rateLimit.allowed) {
+      return error(`عدد محاولات التسجيل كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
+    }
 
     // Check email duplication (case-insensitive)
-    const { data: existing } = await s.from('users').select('id').ilike('email', email.toLowerCase()).limit(1);
+    const { data: existing, error: existingErr } = await s.from('users').select('id').ilike('email', email.toLowerCase()).limit(1);
+    if (existingErr) throw existingErr;
     if (existing && existing.length > 0) return error('البريد الإلكتروني مسجل مسبقاً', 409);
 
     // Check company name duplication (case-insensitive)
-    const { data: companyCheck } = await s.from('companies').select('id').ilike('name', companyName).limit(1);
+    const { data: companyCheck, error: companyCheckErr } = await s.from('companies').select('id').ilike('name', companyName).limit(1);
+    if (companyCheckErr) throw companyCheckErr;
     if (companyCheck && companyCheck.length > 0) return error('اسم الشركة موجود مسبقاً', 409);
 
     // Check phone duplication if provided
     if (phone) {
       const cleanPhone = phone.replace(/[^0-9+]/g, '');
       if (cleanPhone.length >= 8) {
-        const { data: phoneCheck } = await s.from('companies').select('id').eq('phone', phone).limit(1);
+        const { data: phoneCheck, error: phoneCheckErr } = await s.from('companies').select('id').eq('phone', phone).limit(1);
+        if (phoneCheckErr) throw phoneCheckErr;
         if (phoneCheck && phoneCheck.length > 0) return error('رقم الهاتف مسجل مسبقاً لشركة أخرى', 409);
       }
     }
@@ -177,94 +191,34 @@ export async function POST(request: NextRequest) {
     const countryCode = body.country || 'SA';
     const countryConfig = getCountryConfig(countryCode);
 
-    const { data: company, error: companyErr } = await s.from('companies')
-      .insert({
-        name: companyName,
-        email: email.toLowerCase(),
-        phone: phone || null,
-        is_active: true,
-        country: countryConfig.name,
-        country_code: countryConfig.code,
-        currency_code: countryConfig.currencyCode,
-        currency_symbol: countryConfig.currencySymbol,
-        locale: countryConfig.locale,
-        vat_rate: countryConfig.vatRate,
-      })
-      .select('id').single();
-    if (companyErr || !company) return error('فشل إنشاء الشركة', 500);
-    const co = company as Record<string, any>;
-
-    // Create default chart of accounts for new company
-    try {
-      const { createDefaultChartOfAccounts } = await import('@/lib/default-accounts');
-      await createDefaultChartOfAccounts(s, co.id);
-    } catch (e) {
-      console.warn('Failed to create default chart of accounts:', e);
-      // Don't fail registration if chart creation fails
+    const accountTemplate=DEFAULT_CHART_OF_ACCOUNTS.map((account)=>({
+      code:account.code,name:account.name,name_en:account.nameEn,type:account.type,
+      parent_code:account.parentCode||null,is_header:account.isHeader===true,
+    }));
+    const { data: registration, error: registrationErr } = await s.rpc('register_company', {
+      p_company_name:companyName,
+      p_email:email.toLowerCase(),
+      p_phone:phone||'',
+      p_country:countryConfig.name,
+      p_country_code:countryConfig.code,
+      p_currency_code:countryConfig.currencyCode,
+      p_currency_symbol:countryConfig.currencySymbol,
+      p_locale:countryConfig.locale,
+      p_vat_rate:countryConfig.vatRate,
+      p_user_name:name,
+      p_password_hash:passwordHash,
+      p_verification_hash:verificationTokenHash,
+      p_verification_expires:new Date(Date.now()+24*60*60*1000).toISOString(),
+      p_accounts:accountTemplate,
+    });
+    if (registrationErr) {
+      const message=String(registrationErr.message||'');
+      if (message.includes('مسجل مسبقاً') || message.includes('موجود مسبقاً')) return error(message,409);
+      throw registrationErr;
     }
-
-    // Try with email_verified column, fall back without
-    const insertData: any = {
-      company_id: co.id, name, email: email.toLowerCase(), password_hash: passwordHash,
-      role: 'admin', is_active: true,
-    };
-    let user = null;
-    const { data: u1, error: e1 } = await s.from('users')
-      .insert({ ...insertData, email_verified: false, email_verification_token: verificationTokenHash, email_verification_expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() })
-      .select('id, name, email, role').single();
-    if (e1) {
-      // Column doesn't exist — create without email_verified
-      const { data: u2, error: e2 } = await s.from('users')
-        .insert(insertData).select('id, name, email, role').single();
-      if (e2 || !u2) return error('فشل إنشاء المستخدم', 500);
-      user = u2;
-    } else {
-      user = u1;
-    }
-    if (!user) return error('فشل إنشاء المستخدم', 500);
-
-    // Create trial subscription on the Start plan (7 days).
-    // We never auto-recreate a 'trial' plan row; new registrations start on
-    // the Start plan with status='trial' for 7 days.
-    try {
-      const DEFAULT_TRIAL_DAYS = 7;
-      let trialPlanId: string | null = null;
-      let trialDays = DEFAULT_TRIAL_DAYS;
-      let planCode: string = 'start';
-
-      const { data: plan } = await s.from('subscription_plans')
-        .select('id, code, trial_days')
-        .eq('code', 'start')
-        .eq('is_active', true)
-        .limit(1)
-        .maybeSingle();
-
-      if (plan) {
-        const p = plan as Record<string, any>;
-        trialPlanId = p.id;
-        planCode = p.code || 'start';
-        trialDays = Number(p.trial_days) > 0 ? Number(p.trial_days) : DEFAULT_TRIAL_DAYS;
-      }
-
-      if (trialPlanId) {
-        await s.from('subscriptions').upsert({
-          company_id: co.id,
-          plan_id: trialPlanId,
-          plan_code: planCode,
-          status: 'trial',
-          start_date: new Date().toISOString().split('T')[0],
-          end_date: new Date(Date.now() + trialDays * 86400000).toISOString().split('T')[0],
-          trial_end_date: new Date(Date.now() + trialDays * 86400000).toISOString().split('T')[0],
-          auto_renew: false,
-        }, { onConflict: 'company_id' });
-      } else {
-        console.warn('[register] Start plan not found; skipping trial subscription creation. Run migration 032.');
-      }
-    } catch (e) {
-      // Log but don't fail registration — subscription status is enforced
-      // at login only when a subscription row exists.
-      console.warn('[register] failed to create trial subscription:', e);
-    }
+    const registered=registration as {company:{id:string;name:string};user:{id:string;name:string;email:string;role:string}};
+    const co=registered.company;
+    const user=registered.user;
 
     // Send verification email (if SMTP configured) - FIXED XSS
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://pro-acc.vercel.app';
@@ -286,7 +240,10 @@ export async function POST(request: NextRequest) {
       </div>`
     );
 
-    const token = createToken(user.id, user.role);
+    // Production registration does not issue an authenticated session before
+    // mailbox ownership is proven. The user signs in after verification.
+    const issueDevelopmentSession = process.env.NODE_ENV !== 'production';
+    const token = issueDevelopmentSession ? createToken(user.id, user.role) : null;
     const response = success({
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
       company: { id: co.id, name: companyName },
@@ -297,7 +254,7 @@ export async function POST(request: NextRequest) {
         : 'تم إنشاء الحساب بنجاح',
     }, 201);
 
-    setAuthCookie(response, 'token', token, 86400 * 7);
+    if (token) setAuthCookie(response, 'token', token, 86400 * 7);
 
     return response;
   } catch (err) {

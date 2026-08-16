@@ -11,7 +11,6 @@
  */
 
 import { getSupabase } from '@/lib/supabase-client';
-import { insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
 
@@ -81,42 +80,15 @@ export async function postReversalEntry(
   }
 ): Promise<{ error: any | null }> {
   const s = sb();
-
-  // Scope the source lines as well as the header: this utility is reused by
-  // several financial modules and must not trust a caller-provided journal id.
-  const { data: oldLines } = await s.from('journal_lines')
-    .select('account_id, debit, credit, description, contact_id, project_id')
-    .eq('journal_entry_id', opts.journalEntryId)
-    .eq('company_id', companyId);
-
-  if (!oldLines || oldLines.length === 0) return { error: null };
-
-  const today = new Date().toISOString().split('T')[0];
-  const { insertJournalHeader } = await import('@/lib/journal-utils');
-  const { data: revJe, error: revErr } = await insertJournalHeader(companyId, {
-    date: today,
-    type: 'general',
-    description: opts.description,
-    reference_type: opts.referenceType,
-    reference_id: opts.referenceId,
-    created_by: opts.userId,
+  const { data, error } = await s.rpc('post_journal_reversal', {
+    p_company_id: companyId,
+    p_journal_entry_id: opts.journalEntryId,
+    p_reference_type: opts.referenceType,
+    p_reference_id: opts.referenceId,
+    p_description: opts.description,
+    p_user_id: opts.userId,
   });
-  if (revErr || !revJe) return { error: revErr || new Error('فشل قيد عكسي') };
-
-  const { error: linesErr } = await insertJournalLines(
-    companyId,
-    oldLines.map((l: any) => ({
-      journal_entry_id: revJe.id,
-      account_id: l.account_id,
-      debit: parseFloat(l.credit) || 0, // تبديل مدين/دائن
-      credit: parseFloat(l.debit) || 0,
-      description: l.description,
-      contact_id: l.contact_id || null,   // يبقى الوسم ليتعادل رصيد الطرف
-      project_id: l.project_id || null,
-    }))
-  );
-  if (linesErr) return { error: linesErr };
-
+  if (error || !data) return { error: error || new Error('فشل إنشاء القيد العكسي') };
   return { error: null };
 }
 

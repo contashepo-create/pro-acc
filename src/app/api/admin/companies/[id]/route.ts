@@ -2,48 +2,52 @@ import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, notFound, parseBody } from '@/lib/api-helpers';
-import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
-import { randomInt } from 'crypto';
+import { verifyMasterPassword } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(
   request: NextRequest,
   { params: paramsPromise }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const __admin = await requireAdmin(request);
+    await requireAdmin(request);
     const { id } = await paramsPromise;
-    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الشركة غير صالح', 400);
+    if (!UUID.test(id)) return error('معرّف الشركة غير صالح', 400);
 
     const s = sb();
 
     // Get company info — safe column list (no secrets / internal metadata)
     const { data: company, error: companyErr } = await s.from('companies')
-      .select('id, name, commercial_registration, tax_number, vat_number, address, phone, email, country, country_code, currency_code, currency_symbol, vat_rate, is_active, created_at, updated_at, trial_end_date')
+      .select('id, name, commercial_registration, tax_number, address, phone, email, country, country_code, currency_code, currency_symbol, vat_rate, is_active, created_at, updated_at, trial_end_date')
       .eq('id', id)
       .maybeSingle();
 
-    if (companyErr || !company) return notFound();
+    if (companyErr) throw companyErr;
+    if (!company) return notFound();
 
     // Get users
-    const { data: users } = await s.from('users')
+    const { data: users, error: usersError } = await s.from('users')
       .select('id, name, email, role, is_active, created_at, last_login')
       .eq('company_id', id)
       .order('created_at');
+    if (usersError) throw usersError;
 
     // Get subscription
-    const { data: subscription } = await s.from('subscriptions')
+    const { data: subscription, error: subscriptionError } = await s.from('subscriptions')
       .select('id, subscriber_number, plan_id, plan_code, status, start_date, end_date, trial_end_date, auto_renew, subscription_plans(name, max_users, max_projects, max_clients, max_suppliers, max_employees, features)')
       .eq('company_id', id)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (subscriptionError) throw subscriptionError;
 
     // Get project count
-    const { count: projectCount } = await s.from('projects')
-      .select('*', { count: 'exact', head: true })
+    const { count: projectCount, error: projectCountError } = await s.from('projects')
+      .select('id', { count: 'exact', head: true })
       .eq('company_id', id);
+    if (projectCountError) throw projectCountError;
 
     return success({
       company,
@@ -66,34 +70,33 @@ export async function PATCH(
   try {
     const __admin = await requireAdmin(request);
     const { id } = await paramsPromise;
-    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف الشركة غير صالح', 400);
+    if (!UUID.test(id)) return error('معرّف الشركة غير صالح', 400);
 
     const body = await parseBody<any>(request);
 
     const s = sb();
-    const { data: company } = await s.from('companies')
+    const { data: company, error: companyError } = await s.from('companies')
       .select('id, name, is_active')
       .eq('id', id)
       .maybeSingle();
 
+    if (companyError) throw companyError;
     if (!company) return notFound();
 
     // Determine action
     if (body.action === 'toggle_status') {
-      // Toggle status - requires master password
       const masterHeader = request.headers.get('x-master-password');
       if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
       const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
+      if (typeof body.is_active !== 'boolean') return error('حالة الشركة غير صالحة');
 
-      const { error: updateErr } = await s.from('companies')
-        .update({ is_active: body.is_active, updated_at: new Date().toISOString() })
-        .eq('id', id);
+      const { error: updateErr } = await s.rpc('set_company_status_atomic', {
+        p_company_id: id,
+        p_admin_id: __admin.adminId,
+        p_is_active: body.is_active,
+      });
       if (updateErr) throw updateErr;
-
-      await auditLog(__admin.adminId, body.is_active ? 'activate_company' : 'deactivate_company',
-        JSON.stringify({ companyName: company.name }), 'company', id);
-
       return success({ message: body.is_active ? 'تم تفعيل الشركة' : 'تم إيقاف الشركة' });
     }
 
@@ -104,153 +107,41 @@ export async function PATCH(
       const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
 
-      const updateData: any = { updated_at: new Date().toISOString() };
-      if (body.name !== undefined) updateData.name = body.name;
-      if (body.commercial_registration !== undefined) updateData.commercial_registration = body.commercial_registration;
-      if (body.tax_number !== undefined) updateData.tax_number = body.tax_number;
-      if (body.phone !== undefined) updateData.phone = body.phone;
-      if (body.email !== undefined) updateData.email = body.email;
-      if (body.address !== undefined) updateData.address = body.address;
-      if (body.country !== undefined) updateData.country = body.country;
-      if (body.vat_rate !== undefined) updateData.vat_rate = body.vat_rate;
+      const limits: Record<string, number> = {
+        name: 200, commercial_registration: 100, tax_number: 100, phone: 50,
+        email: 254, address: 1000, country: 100,
+      };
+      const patch: Record<string, string | number> = {};
+      for (const [field, max] of Object.entries(limits)) {
+        if (body[field] === undefined) continue;
+        if (typeof body[field] !== 'string' || body[field].length > max) return error(`قيمة ${field} غير صالحة`);
+        if (field === 'name' && !body[field].trim()) return error('اسم الشركة مطلوب');
+        patch[field] = body[field].trim();
+      }
+      if (patch.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(patch.email))) return error('البريد الإلكتروني غير صالح');
+      if (body.vat_rate !== undefined) {
+        const vatRate = Number(body.vat_rate);
+        if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 1) return error('نسبة الضريبة غير صالحة');
+        patch.vat_rate = vatRate;
+      }
+      if (!Object.keys(patch).length) return error('لا توجد حقول قابلة للتحديث');
 
-      const { error: updateErr } = await s.from('companies')
-        .update(updateData)
-        .eq('id', id);
+      const { data: updated, error: updateErr } = await s.rpc('admin_update_company_profile', {
+        p_admin_id: __admin.adminId,
+        p_company_id: id,
+        p_patch: patch,
+      });
       if (updateErr) throw updateErr;
-
-      await auditLog(__admin.adminId, 'edit_company',
-        JSON.stringify({ companyName: company.name, fields: Object.keys(updateData) }), 'company', id);
-
-      return success({ message: 'تم تحديث بيانات الشركة' });
+      if ((updated as { not_found?: boolean } | null)?.not_found) return notFound();
+      return success({ message: 'تم تحديث بيانات الشركة', company: updated });
     }
 
     if (body.action === 'change_plan') {
-      // Change subscription plan - requires master password
-      const masterHeader = request.headers.get('x-master-password');
-      if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
-      if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
-
-      const { data: plan } = await s.from('subscription_plans')
-        .select('id, code, name, duration_days')
-        .eq('id', body.plan_id)
-        .maybeSingle();
-
-      if (!plan) return error('الباقة غير موجودة');
-
-      const now = new Date();
-      const endDate = new Date();
-      if (body.duration_days) {
-        endDate.setDate(endDate.getDate() + body.duration_days);
-      } else if ((plan as any).duration_days) {
-        endDate.setDate(endDate.getDate() + (plan as any).duration_days);
-      } else {
-        endDate.setMonth(endDate.getMonth() + 1);
-      }
-
-      // Get next subscriber number if new subscription
-      let subscriberNumber: number | null = null;
-      const { data: existingSub } = await s.from('subscriptions')
-        .select('id, subscriber_number')
-        .eq('company_id', id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (existingSub && (existingSub as any).subscriber_number) {
-        subscriberNumber = (existingSub as any).subscriber_number;
-      } else {
-        const { data: seqResult } = await s.rpc('nextval', { seq: 'subscriber_number_seq' }).single();
-        try {
-          subscriberNumber = seqResult as any || Number(randomInt(10000, 99999));
-        } catch {
-          subscriberNumber = seqResult as any || 10000 + Math.floor(Date.now() % 90000);
-        }
-      }
-
-      if (existingSub) {
-        // Update existing subscription
-        await s.from('subscriptions')
-          .update({
-            plan_id: body.plan_id,
-            plan_code: (plan as any).code,
-            status: 'active',
-            start_date: now.toISOString().split('T')[0],
-            end_date: endDate.toISOString().split('T')[0],
-            subscriber_number: subscriberNumber,
-            auto_renew: body.auto_renew || false,
-          })
-          .eq('id', (existingSub as any).id);
-      } else {
-        // Create new subscription
-        await s.from('subscriptions')
-          .insert({
-            company_id: id,
-            plan_id: body.plan_id,
-            plan_code: (plan as any).code,
-            status: 'active',
-            start_date: now.toISOString().split('T')[0],
-            end_date: endDate.toISOString().split('T')[0],
-            subscriber_number: subscriberNumber,
-            auto_renew: body.auto_renew || false,
-          });
-      }
-
-      // Send notification to company
-      try {
-        await s.from('notifications').insert({
-          company_id: id,
-          title: 'تم تغيير باقة اشتراكك',
-          message: `تم تغيير باقتك إلى: ${(plan as any).name}. تنتهي في: ${endDate.toISOString().split('T')[0]}`,
-          type: 'subscription',
-          is_read: false,
-        });
-      } catch {}
-
-      await auditLog(__admin.adminId, 'change_company_plan',
-        JSON.stringify({ companyName: company.name, planName: (plan as any).name }), 'company', id);
-
-      return success({ message: `تم تغيير الباقة إلى ${(plan as any).name}` });
+      return error('تغيير الباقة المدفوعة يتم فقط عبر طلب ترقية معتمد أو كود تفعيل', 409);
     }
 
     if (body.action === 'extend_subscription') {
-      const masterHeader = request.headers.get('x-master-password');
-      if (!masterHeader) return error('كلمة المرور الرئيسية مطلوبة', 401);
-      const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
-      if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
-
-      const { data: sub } = await s.from('subscriptions')
-        .select('id, end_date, status')
-        .eq('company_id', id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (!sub) return error('لا يوجد اشتراك لهذه الشركة');
-
-      const currentEnd = new Date((sub as any).end_date || new Date());
-      const newEnd = new Date(currentEnd);
-      newEnd.setDate(newEnd.getDate() + (body.days || 30));
-
-      await s.from('subscriptions')
-        .update({ end_date: newEnd.toISOString().split('T')[0], status: 'active' })
-        .eq('id', (sub as any).id);
-
-      try {
-        await s.from('notifications').insert({
-          company_id: id,
-          title: 'تم تمديد اشتراكك',
-          message: `تم تمديد اشتراكك ${body.days || 30} يوم. تاريخ الانتهاء الجديد: ${newEnd.toISOString().split('T')[0]}`,
-          type: 'subscription',
-          is_read: false,
-        });
-      } catch {}
-
-      await auditLog(__admin.adminId, 'extend_subscription',
-        JSON.stringify({ companyName: company.name, days: body.days || 30 }), 'company', id);
-
-      return success({ message: `تم تمديد الاشتراك ${body.days || 30} يوم` });
+      return error('تمديد الاشتراك المدفوع يتطلب دفعاً معتمداً أو كود تفعيل؛ التجربة تمدد من المسار المخصص', 409);
     }
 
     if (body.action === 'cancel_subscription') {
@@ -259,32 +150,30 @@ export async function PATCH(
       const valid = await verifyMasterPassword(__admin.adminId, masterHeader);
       if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);
 
-      const { data: sub } = await s.from('subscriptions')
+      const { data: sub, error: subscriptionError } = await s.from('subscriptions')
         .select('id')
         .eq('company_id', id)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
 
+      if (subscriptionError) throw subscriptionError;
       if (!sub) return error('لا يوجد اشتراك');
 
-      await s.from('subscriptions')
-        .update({ status: 'cancelled', auto_renew: false })
-        .eq('id', (sub as any).id);
+      const { error: cancelError } = await s.rpc('restrict_subscription_atomic', {
+        p_subscription_id: (sub as any).id,
+        p_admin_id: __admin.adminId,
+        p_status: 'cancelled',
+        p_end_date: null,
+        p_extra_users: null,
+        p_extra_branches: null,
+        p_extra_storage_gb: null,
+        p_notes: 'cancelled from company administration',
+      });
+      if (cancelError) throw cancelError;
 
-      try {
-        await s.from('notifications').insert({
-          company_id: id,
-          title: 'تم إلغاء اشتراكك',
-          message: 'تم إلغاء اشتراكك. يرجى التواصل مع الدعم لإعادة التفعيل.',
-          type: 'subscription',
-          is_read: false,
-        });
-      } catch {}
-
-      await auditLog(__admin.adminId, 'cancel_subscription',
-        JSON.stringify({ companyName: company.name }), 'company', id);
-
+      // A database trigger creates the warning in the same transaction as the
+      // subscription restriction and its audit record.
       return success({ message: 'تم إلغاء الاشتراك' });
     }
 

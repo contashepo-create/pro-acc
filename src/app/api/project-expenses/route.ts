@@ -1,220 +1,77 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { createJournalEntry } from '@/lib/journal-utils';
-import { ACCOUNT_CODES, PROJECT_EXPENSE_CODES } from '@/lib/constants';
+import { deliveryDate, deliveryUuid, projectExpenseCreateSchema } from '@/lib/project-delivery-validation';
+import { PROJECT_EXPENSE_CODES } from '@/lib/constants';
 
-const sb = () => getSupabase();
+const EXPENSE_COLUMNS = `id,project_id,expense_type,description,amount,date,contact_id,journal_entry_id,status,
+  approved_by,approved_at,notes,created_at,updated_at,projects(name),contacts(name),users(name)`;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'projects', 'read');
-    const s = sb();
     const url = new URL(req.url);
     const { page, pageSize } = getPaginationParams(url);
-    const projectId = url.searchParams.get('projectId');
-    const expenseType = url.searchParams.get('expense_type');
-
-    let query = s.from('project_expenses')
-      .select('*, projects(name), contacts(name)', { count: 'exact' })
-      .eq('company_id', auth.companyId);
-
+    const projectId = url.searchParams.get('project_id') || url.searchParams.get('projectId');
+    const fromDate = url.searchParams.get('from_date');
+    const toDate = url.searchParams.get('to_date');
+    if (projectId && !deliveryUuid.safeParse(projectId).success) return error('معرف المشروع غير صالح');
+    if (fromDate && !deliveryDate.safeParse(fromDate).success) return error('تاريخ البداية غير صالح');
+    if (toDate && !deliveryDate.safeParse(toDate).success) return error('تاريخ النهاية غير صالح');
+    if (fromDate && toDate && fromDate > toDate) return error('نطاق التاريخ غير صالح');
+    let query = getSupabase().from('project_expenses').select(EXPENSE_COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId);
     if (projectId) query = query.eq('project_id', projectId);
-    if (expenseType) query = query.eq('expense_type', expenseType);
-
+    if (fromDate) query = query.gte('date', fromDate);
+    if (toDate) query = query.lte('date', toDate);
     const offset = (page - 1) * pageSize;
-    const { data, error: queryError, count } = await query
-      .order('date', { ascending: false })
-      .range(offset, offset + pageSize - 1);
-
-    if (queryError) {
-      console.warn('Project expenses table query error:', queryError);
-      return success({ expenses: [], total: 0, page, pageSize });
-    }
-
-    const expenses = (data || []).map((e: any) => ({
-      ...e,
-      project_name: e.projects?.name || null,
-      contact_name: e.contacts?.name || null,
-    }));
-
+    const { data, error: queryError, count } = await query.order('date', { ascending: false }).range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
+    const expenses = (data || []).map((row: any) => ({ ...row, project_name: row.projects?.name || null, projects: undefined }));
     return success({ expenses, total: count || 0, page, pageSize });
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'projects', 'create');
-    const s = sb();
-    const body = await parseBody(req);
-
-    const { project_id, expense_type, description, amount, date, contact_id, bank_safe_id, notes, tax_rate, tax_enabled } = body;
-
-    if (!project_id || !expense_type || !description || !amount || !date) {
-      return error('project_id, expense_type, description, amount, date are required');
+    const parsed = projectExpenseCreateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات المصروف غير صالحة');
+    const input = parsed.data;
+    const supabase = getSupabase();
+    const [projectResult, expenseAccountResult, bankResult] = await Promise.all([
+      supabase.from('projects').select('id').eq('id', input.project_id).eq('company_id', auth.companyId).maybeSingle(),
+      supabase.from('accounts').select('id').eq('company_id', auth.companyId)
+        .eq('code', PROJECT_EXPENSE_CODES[input.expense_type]).eq('is_active', true).maybeSingle(),
+      input.bank_safe_id
+        ? supabase.from('banks_safes').select('id').eq('id', input.bank_safe_id).eq('company_id', auth.companyId).eq('is_active', true).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    if (projectResult.error) throw projectResult.error;
+    if (expenseAccountResult.error) throw expenseAccountResult.error;
+    if (bankResult.error) throw bankResult.error;
+    const project = projectResult.data;
+    const expenseAccount = expenseAccountResult.data;
+    if (!project) return error('المشروع غير موجود');
+    if (!expenseAccount) return error('حساب مصروفات المشاريع غير موجود');
+    if (input.bank_safe_id && !bankResult.data) return error('الخزينة أو البنك غير موجود');
+    if (input.contact_id) {
+      const { data: contact, error: contactError } = await supabase.from('contacts').select('id').eq('id', input.contact_id).eq('company_id', auth.companyId).maybeSingle();
+      if (contactError) throw contactError;
+      if (!contact) return error('جهة الاتصال غير موجودة');
     }
-
-    const expenseAmount = Number(amount);
-    if (!Number.isFinite(expenseAmount) || expenseAmount <= 0 || Math.abs(expenseAmount * 100 - Math.round(expenseAmount * 100)) > 1e-8) {
-      return error('المبلغ يجب أن يكون موجباً وبمنزلتين عشريتين كحد أقصى');
-    }
-
-    if (!PROJECT_EXPENSE_CODES[expense_type]) {
-      return error('expense_type must be one of: materials, labor, subcontractor, equipment, other');
-    }
-
-    const { data: project } = await s.from('projects')
-      .select('id, name, status')
-      .eq('id', project_id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!project) return error('المشروع غير موجود', 404);
-
-    if ((project as any).status === 'completed' || (project as any).status === 'cancelled') {
-      return error('لا يمكن تسجيل مصروفات على مشروع مكتمل أو ملغى');
-    }
-
-    // الطرف المحدد (إن وُجد) يجب أن ينتمي للشركة
-    if (contact_id) {
-      const { data: contact } = await s.from('contacts')
-        .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!contact) return error('الطرف المحدد غير موجود', 404);
-    }
-
-    const accountCode = PROJECT_EXPENSE_CODES[expense_type];
-
-    const { data: expenseAcc } = await s.from('accounts')
-      .select('id')
-      .eq('code', accountCode)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!expenseAcc) return error(`حساب المصروف برمز ${accountCode} غير موجود`);
-
-    let paymentAccountId: string | null = null;
-    if (bank_safe_id) {
-      const { data: bankSafe } = await s.from('banks_safes')
-        .select('account_id')
-        .eq('id', bank_safe_id)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-      if (!bankSafe?.account_id) return error('الخزينة/البنك غير موجود أو بلا حساب محاسبي', 404);
-      paymentAccountId = (bankSafe as any).account_id;
-    }
-
-    if (!paymentAccountId) {
-      const { data: cashAcc } = await s.from('accounts')
-        .select('id')
-        .eq('code', ACCOUNT_CODES.CASH)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-      if (cashAcc) paymentAccountId = (cashAcc as any).id;
-    }
-
-    if (!paymentAccountId) return error('لم يتم العثور على حساب النقدية أو البنك');
-
-    // VAT calculation (input VAT)
-    const vRate = (tax_enabled && tax_rate !== undefined) ? Number(tax_rate) : 0;
-    if (!Number.isFinite(vRate) || vRate < 0 || vRate > 1) return error('نسبة الضريبة غير صالحة');
-    const taxAmount = Math.round((expenseAmount * vRate + Number.EPSILON) * 100) / 100;
-    const totalPayment = expenseAmount + taxAmount;
-
-    // Build journal lines: debit expense (net) + debit VAT_PURCHASES + credit cash (total)
-    const journalLines: any[] = [
-      {
-        account_id: expenseAcc.id,
-        debit: expenseAmount,
-        credit: 0,
-        description: `${description} (${expense_type})`,
-        project_id: project_id,
-        contact_id: contact_id || null,
-      },
-      {
-        account_id: paymentAccountId,
-        debit: 0,
-        credit: totalPayment,
-        description: `دفع مصروف مشروع: ${description}`,
-        project_id: project_id,
-        contact_id: contact_id || null,
-      },
-    ];
-
-    // إلزامي وجود حساب ضريبة المدخلات عند احتساب ضريبة — وإلا قيد غير متوازن
-    if (taxAmount > 0) {
-      const { data: vatPurchAcc } = await s.from('accounts')
-        .select('id')
-        .eq('code', ACCOUNT_CODES.VAT_PURCHASES)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-      if (!vatPurchAcc) return error('حساب ضريبة المشتريات (1180) غير موجود');
-      journalLines.push({
-        account_id: (vatPurchAcc as any).id,
-        debit: taxAmount,
-        credit: 0,
-        description: `ضريبة مدخلات: ${description}`,
-        project_id: project_id,
-        contact_id: contact_id || null,
-      });
-    }
-
-    // 1. سجل المصروف أولاً (journal_entry_id مؤقتاً null)
-    const { data: expense, error: insertErr } = await s.from('project_expenses')
-      .insert({
-        company_id: auth.companyId,
-        project_id,
-        expense_type,
-        description,
-        amount: expenseAmount,
-        date,
-        contact_id: contact_id || null,
-        account_code: accountCode,
-        journal_entry_id: null,
-        notes: notes || null,
-        tax_rate: vRate,
-        tax_amount: taxAmount,
-        created_by: auth.userId,
-      })
-      .select('*')
-      .single();
-
-    if (insertErr) throw insertErr;
-
-    // 2. قيد المحاسبة — فشله يلغي المصروف بالكامل (لا مصروف بلا قيد)
-    const je = await createJournalEntry(auth.companyId, {
-      date,
-      type: 'general',
-      description: `مصروف مشروع: ${description} - ${(project as any).name}`,
-      lines: journalLines,
-      reference_type: 'project_expense',
-      reference_id: expense.id,
-      created_by: auth.userId,
+    const taxRate = input.tax_enabled === false ? 0 : (input.tax_rate || 0);
+    const { data, error: rpcError } = await supabase.rpc('post_project_expense', {
+      p_company_id: auth.companyId, p_project_id: input.project_id, p_expense_type: input.expense_type,
+      p_description: input.description, p_amount: input.amount, p_date: input.date,
+      p_contact_id: input.contact_id || null, p_bank_safe_id: input.bank_safe_id || null,
+      p_expense_account_id: expenseAccount.id, p_notes: input.notes || '', p_tax_rate: taxRate,
+      p_created_by: auth.userId,
     });
-
-    if (je.error || !je.journalId) {
-      await s.from('project_expenses').delete().eq('id', expense.id).eq('company_id', auth.companyId);
-      throw je.error || new Error('فشل قيد مصروف المشروع');
-    }
-
-    // 3. اربط القيد بالمصروف
-    const { data: linked, error: linkErr } = await s.from('project_expenses')
-      .update({ journal_entry_id: je.journalId })
-      .eq('id', expense.id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-    if (linkErr) {
-      // تراجع: احذف القيد والمصروف معاً
-      await s.from('journal_lines').delete().eq('journal_entry_id', je.journalId);
-      await s.from('journal_entries').delete().eq('id', je.journalId).eq('company_id', auth.companyId);
-      await s.from('project_expenses').delete().eq('id', expense.id).eq('company_id', auth.companyId);
-      throw linkErr;
-    }
-
-    return success(linked, 201);
-  } catch (err) {
-    return handleApiError(err);
+    if (rpcError) throw rpcError;
+    return success(data, 201);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

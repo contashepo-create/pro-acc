@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
-import type { } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -19,9 +18,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     if (sheetError || !sheet) return error('Not found', 404);
 
-    const { data: items } = await s.from('salary_items')
+    const { data: items, error: itemsErr } = await s.from('salary_items')
       .select('*, employees(name)')
-      .eq('sheet_id', id);
+      .eq('sheet_id', id)
+      .eq('company_id', auth.companyId);
+    if (itemsErr) throw itemsErr;
 
     const itemsWithNames = (items || []).map((si: any) => ({
       ...si,
@@ -41,14 +42,23 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const body = await parseBody(req);
     const s = sb();
 
+    const { data: existing } = await s.from('salary_sheets').select('id, status')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (!existing) return error('Not found', 404);
+    if ((existing as any).status !== 'draft') return error('لا يمكن تعديل كشف رواتب بعد دخوله دورة الموافقة', 409);
+    if (body.status !== undefined) return error('تغيير حالة الكشف يتم عبر مسار الموافقات فقط', 409);
     const updateData: any = {};
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.status !== undefined) updateData.status = body.status;
+    if (body.name !== undefined) {
+      if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200) return error('اسم الكشف غير صالح');
+      updateData.name = body.name.trim();
+    }
+    if (!Object.keys(updateData).length) return error('لا توجد حقول قابلة للتعديل');
 
     const { data: result, error: updateError } = await s.from('salary_sheets')
       .update(updateData)
       .eq('id', id)
       .eq('company_id', auth.companyId)
+      .eq('status','draft')
       .select('*')
       .maybeSingle();
 
@@ -65,20 +75,12 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const { id } = await params;
     const s = sb();
 
-    const { data: sheet } = await s.from('salary_sheets').select('id').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!sheet) return error('Not found', 404);
-
-    await s.from('salary_items').delete().eq('sheet_id', id);
-
-    const { data: result, error: deleteError } = await s.from('salary_sheets')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('id')
-      .maybeSingle();
-
-    if (deleteError || !result) return error('Not found', 404);
-    return success({ deleted: true });
+    const { data: deleted, error: rpcErr } = await s.rpc('delete_draft_salary_sheet', {
+      p_company_id: auth.companyId,
+      p_sheet_id: id,
+    });
+    if (rpcErr) throw rpcErr;
+    return success({ deleted: deleted===true });
   } catch (e) {
     return handleApiError(e);
   }

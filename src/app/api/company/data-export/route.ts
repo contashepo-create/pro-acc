@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
   try {
     const { requireApiAuth } = await import('@/lib/api-helpers');
     const auth = await requireApiAuth(req, { skipModuleGuard: true });
+    if (auth.role !== 'admin') return error('تصدير جميع بيانات الشركة متاح لمدير الشركة فقط', 403);
     const s = sb();
 
     // Self-healing: if an export got stuck in pending/processing (e.g. the
@@ -83,6 +84,7 @@ export async function POST(req: NextRequest) {
   try {
     const { requireApiAuth } = await import('@/lib/api-helpers');
     const auth = await requireApiAuth(req, { skipModuleGuard: true });
+    if (auth.role !== 'admin') return error('تصدير جميع بيانات الشركة متاح لمدير الشركة فقط', 403);
     const s = sb();
 
     // Rate-limit 1: at most one pending export per company at a time
@@ -152,18 +154,30 @@ export async function processPendingExports(companyId?: string) {
     try {
       await s.from('company_data_exports').update({ status: 'processing' }).eq('id', exp.id).eq('company_id', exp.company_id);
       const dump = await buildCompanyDump(exp.company_id);
-      // Store the dump as a compact JSON string in download_url for
-      // simplicity. In production, upload to S3/Blob storage and put a
-      // signed URL here.
       const json = JSON.stringify(dump, null, 2);
-      const size = Buffer.byteLength(json, 'utf8');
-      await s.from('company_data_exports').update({
+      const payload = Buffer.from(json, 'utf8');
+      const size = payload.byteLength;
+      const objectPath = `${exp.company_id}/${exp.id}.json`;
+      const { error: uploadError } = await s.storage.from('company-exports').upload(
+        objectPath,
+        payload,
+        { contentType: 'application/json; charset=utf-8', upsert: false },
+      );
+      if (uploadError) throw uploadError;
+
+      const { error: readyError } = await s.from('company_data_exports').update({
         status: 'ready',
         completed_at: new Date().toISOString(),
-        download_url: `data:application/json;charset=utf-8;base64,${Buffer.from(json).toString('base64')}`,
+        // Store an opaque private object reference, never a giant data URL or
+        // long-lived public/signed URL.
+        download_url: `storage:company-exports/${objectPath}`,
         file_size_bytes: size,
         expires_at: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
       }).eq('id', exp.id).eq('company_id', exp.company_id);
+      if (readyError) {
+        await s.storage.from('company-exports').remove([objectPath]);
+        throw readyError;
+      }
     } catch (e: any) {
       await s.from('company_data_exports').update({
         status: 'failed',

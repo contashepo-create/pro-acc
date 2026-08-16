@@ -1,102 +1,67 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
+import { parseReportPagination } from '@/lib/report-validation';
 
-const sb = () => getSupabase();
+const number = (value: unknown) => Number(value) || 0;
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'reports', 'read');
+    const s = getSupabase();
     const projectId = req.nextUrl.searchParams.get('projectId');
     const type = req.nextUrl.searchParams.get('type') || 'project-costs';
-    const s = sb();
+    const from = req.nextUrl.searchParams.get('from');
+    const to = req.nextUrl.searchParams.get('to');
+    const pagination = parseReportPagination(req.nextUrl.searchParams);
+    if (!pagination) return error('بيانات التصفح غير صالحة');
+    const { page, pageSize } = pagination;
+    if (!['project-costs', 'material-issuances', 'inventory-transfers'].includes(type)) return error('نوع التقرير غير صالح');
+    if (projectId && !uuid.test(projectId)) return error('معرّف المشروع غير صالح');
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    if (projectId) {
+      const { data: project, error: projectError } = await s.from('projects').select('id')
+        .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+      if (projectError) throw projectError;
+      if (!project) return error('المشروع غير موجود', 404);
+    }
 
     if (type === 'project-costs') {
-      // Material costs
-      let materialsQ = s.from('inventory_transactions')
-        .select('total_value')
-        .eq('company_id', auth.companyId)
-        .eq('type', 'issue');
-      if (projectId) materialsQ = materialsQ.eq('project_id', projectId);
-      const { data: materials } = await materialsQ;
-      const materialTotal = (materials || []).reduce((sum: number, m: any) => sum + (parseFloat(m.total_value) || 0), 0);
-
-      // Worker costs
-      let workersQ = s.from('daily_worker_records')
-        .select('wage, days')
-        .eq('company_id', auth.companyId);
-      if (projectId) workersQ = workersQ.eq('project_id', projectId);
-      const { data: workers } = await workersQ;
-      const workerTotal = (workers || []).reduce((sum: number, w: any) => sum + ((parseFloat(w.wage) || 0) * (parseFloat(w.days) || 0)), 0);
-
-      // Purchase costs
-      let purchasesQ = s.from('purchase_invoices')
-        .select('total')
-        .eq('company_id', auth.companyId)
-        .neq('status', 'cancelled');
-      if (projectId) purchasesQ = purchasesQ.eq('project_id', projectId);
-      const { data: purchases } = await purchasesQ;
-      const purchaseTotal = (purchases || []).reduce((sum: number, p: any) => sum + (parseFloat(p.total) || 0), 0);
-
-      // Subcontractor costs
-      let contractsQ = s.from('subcontractor_contracts')
-        .select('id')
-        .eq('company_id', auth.companyId);
-      if (projectId) contractsQ = contractsQ.eq('project_id', projectId);
-      const { data: contracts } = await contractsQ;
-      const contractIds = (contracts || []).map((c: any) => c.id);
-      let subTotal = 0;
-
-      if (contractIds.length > 0) {
-        const { data: certs } = await s.from('subcontractor_certificates')
-          .select('amount')
-          .in('contract_id', contractIds)
-          .eq('status', 'paid');
-
-        subTotal = (certs || []).reduce((sum: number, sc: any) => sum + (parseFloat(sc.amount) || 0), 0);
-      }
-
-      return success({
-        materials: materialTotal,
-        workers: workerTotal,
-        purchases: purchaseTotal,
-        subcontractors: subTotal,
-        total: materialTotal + workerTotal + purchaseTotal + subTotal,
+      const { data, error: queryError } = await s.rpc('get_project_account_totals', {
+        p_company_id: auth.companyId, p_project_ids: projectId ? [projectId] : null, p_from: from, p_to: to,
       });
+      if (queryError) throw queryError;
+      const costs = { materials: 0, workers: 0, purchases: 0, subcontractors: 0, total: 0 };
+      for (const row of data || []) {
+        if (row.account_type !== 'expense') continue;
+        const amount = number(row.debit) - number(row.credit);
+        costs.total += amount;
+        const code = String(row.code || '');
+        if (code.startsWith('511')) costs.materials += amount;
+        else if (code.startsWith('521') || code.startsWith('522')) costs.workers += amount;
+        else if (code.startsWith('513')) costs.subcontractors += amount;
+        else costs.purchases += amount;
+      }
+      return success({ ...costs, source: 'general_ledger', period: { from, to } });
     }
 
-    if (type === 'material-issuances') {
-      const { data: result } = await s.from('inventory_transactions')
-        .select('*, inventory_items(name, code), projects(name)')
-        .eq('company_id', auth.companyId)
-        .in('type', ['issue', 'return'])
-        .order('date', { ascending: false })
-        .limit(100);
-
-      return success((result || []).map((it: any) => ({
-        ...it,
-        item_name: it.inventory_items?.name || null,
-        item_code: it.inventory_items?.code || null,
-        project_name: it.projects?.name || null,
-      })));
-    }
-
-    if (type === 'inventory-transfers') {
-      const { data: result } = await s.from('inventory_transactions')
-        .select('*, inventory_items(name, code)')
-        .eq('company_id', auth.companyId)
-        .eq('type', 'transfer')
-        .order('date', { ascending: false })
-        .limit(100);
-
-      return success((result || []).map((it: any) => ({
-        ...it,
-        item_name: it.inventory_items?.name || null,
-        item_code: it.inventory_items?.code || null,
-      })));
-    }
-
-    return error('Invalid type or missing projectId');
+    let query = s.from('inventory_transactions')
+      .select(type === 'material-issuances' ? '*, inventory_items(name, code), projects(name)' : '*, inventory_items(name, code)', { count: 'exact' })
+      .eq('company_id', auth.companyId).eq('status', 'posted');
+    query = type === 'material-issuances' ? query.in('type', ['issue', 'return']) : query.eq('type', 'transfer');
+    if (projectId) query = query.eq('project_id', projectId);
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
+    const { data, error: queryError, count } = await query.order('date', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+    if (queryError) throw queryError;
+    const rows = (data || []).map((item: any) => ({
+      ...item, item_name: item.inventory_items?.name || null,
+      item_code: item.inventory_items?.code || null, project_name: item.projects?.name || null,
+    }));
+    return success({ rows, page, pageSize, total: count || 0, totalPages: Math.ceil((count || 0) / pageSize) });
   } catch (err) {
     return handleApiError(err);
   }

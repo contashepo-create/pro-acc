@@ -43,7 +43,7 @@ describe('1. ZATCA Advanced & Cryptographic Validation', () => {
     expect(() => generateZatcaQRData(invalidQRData)).toThrow('VAT number must be 15 digits');
   });
 
-  test('should validate XML hash consistency for Phase 2 standard invoices', () => {
+  test('should produce a deterministic raw XML digest (not a Phase 2 signature)', () => {
     const xmlContent = `<Invoice><cbc:ID>123</cbc:ID></Invoice>`;
     const hash1 = generateInvoiceHash(xmlContent);
     const hash2 = generateInvoiceHash(xmlContent);

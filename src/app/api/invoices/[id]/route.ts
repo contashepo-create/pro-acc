@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(
   request: NextRequest,
@@ -11,89 +13,82 @@ export async function GET(
   try {
     const auth = await requireModulePermission(request, 'invoices', 'read');
     const { id } = await paramsPromise;
+    if (!UUID_RE.test(id)) return error('معرّف الفاتورة غير صالح');
     const s = sb();
 
-    // Schema-drift resilient: vat_* vs tax_*, optional deleted_at / contacts embed.
-    let invRes: any = null;
-    let invErr: any = null;
-    const primary = await s.from('invoices')
+    const { data: invoice, error: invoiceError } = await s.from('invoices')
       .select(`
         id, number, contact_id, project_id, date, due_date, subtotal,
-        vat_rate, vat_amount, tax_rate, tax_amount, total, paid_amount, status, notes,
-        journal_entry_id, created_by, created_at,
-        contacts(id, name, tax_number, address, phone, email, commercial_registration)
+        vat_rate, vat_amount, total, paid_amount, status, notes,
+        journal_entry_id, created_by, created_at, tax_snapshot
       `)
-      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    invRes = primary.data; invErr = primary.error;
+      .eq('id', id).eq('company_id', auth.companyId).is('deleted_at', null).maybeSingle();
+    if (invoiceError) throw invoiceError;
+    if (!invoice) return notFound();
+    const inv = invoice as Record<string, any>;
 
-    if (invErr) {
-      const fallback = await s.from('invoices')
-        .select('id, number, contact_id, project_id, date, due_date, subtotal, total, paid_amount, status, notes, journal_entry_id, created_by, created_at')
-        .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-      invRes = fallback.data; invErr = fallback.error;
-    }
-    if (invErr || !invRes) return notFound();
-
-    const { data: itemsRes } = await s.from('invoice_items')
+    const { data: itemsRes, error: itemsError } = await s.from('invoice_items')
       .select('id, description, quantity, unit_price, total, barcode')
-      .eq('invoice_id', id).order('id');
+      .eq('invoice_id', id).eq('company_id', auth.companyId).order('id');
+    if (itemsError) throw itemsError;
 
-    // Fetch company info with all relevant fields
-    const { data: company } = await s.from('companies')
+    const { data: company, error: companyError } = await s.from('companies')
       .select('name, tax_number, commercial_registration, address, phone, email, currency_symbol, currency_code, locale, country_code, logo_url, vat_rate')
       .eq('id', auth.companyId).maybeSingle();
+    if (companyError) throw companyError;
+    if (!company) throw new Error('Invoice company is missing');
 
-    // Fetch project name if linked
+    const { data: contact, error: contactError } = await s.from('contacts')
+      .select('id, name, tax_number, address, phone, email, commercial_registration, city, region, postal_code, national_id, contact_person')
+      .eq('id', inv.contact_id).eq('company_id', auth.companyId).maybeSingle();
+    if (contactError) throw contactError;
+    if (!contact) throw new Error('Invoice contact is missing or belongs to another tenant');
+    const contactRow = contact as Record<string, any>;
+
     let projectName: string | null = null;
-    const inv = invRes as Record<string, any>;
     if (inv.project_id) {
-      const { data: proj } = await s.from('projects')
+      const { data: project, error: projectError } = await s.from('projects')
         .select('name').eq('id', inv.project_id).eq('company_id', auth.companyId).maybeSingle();
-      projectName = (proj as any)?.name || null;
+      if (projectError) throw projectError;
+      if (!project) throw new Error('Invoice project is missing or belongs to another tenant');
+      projectName = (project as any).name;
     }
 
-    // Fetch the user who created the invoice
     let createdBy: string | null = null;
     if (inv.created_by) {
-      const { data: user } = await s.from('users')
-        .select('name').eq('id', inv.created_by).maybeSingle();
+      const { data: user, error: userError } = await s.from('users')
+        .select('name').eq('id', inv.created_by).eq('company_id', auth.companyId).maybeSingle();
+      if (userError) throw userError;
       createdBy = (user as any)?.name || null;
     }
 
-    // Fetch journal entry lines for this invoice (for display)
     let journalLines: any[] = [];
     if (inv.journal_entry_id) {
-      const { data: jl } = await s.from('journal_lines')
+      const { data: entry, error: entryError } = await s.from('journal_entries')
+        .select('id').eq('id', inv.journal_entry_id).eq('company_id', auth.companyId).maybeSingle();
+      if (entryError) throw entryError;
+      if (!entry) throw new Error('Invoice journal entry is missing or belongs to another tenant');
+      const { data: lines, error: linesError } = await s.from('journal_lines')
         .select('id, account_id, account_code, account_name, debit, credit, description')
-        .eq('journal_entry_id', inv.journal_entry_id)
-        .eq('company_id', auth.companyId);
-      journalLines = jl || [];
-    }
-
-    let contact = (inv.contacts as Record<string, any> | null) || null;
-    if ((!contact || !contact.name) && inv.contact_id) {
-      const { data: cRow } = await s.from('contacts')
-        .select('id, name, tax_number, address, phone, email, commercial_registration, city, region, postal_code, national_id, contact_person')
-        .eq('id', inv.contact_id)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-      if (cRow) contact = cRow as Record<string, any>;
+        .eq('journal_entry_id', inv.journal_entry_id).eq('company_id', auth.companyId);
+      if (linesError) throw linesError;
+      journalLines = lines || [];
     }
 
     return success({
       ...inv,
-      client_name: contact?.name || '',
-      client_tax_number: contact?.tax_number || null,
-      client_address: contact?.address || null,
-      client_phone: contact?.phone || null,
-      client_email: contact?.email || null,
-      client_commercial_registration: contact?.commercial_registration || null,
-      client_city: contact?.city || null,
-      client_contact_person: contact?.contact_person || null,
+      client_name: contactRow.name || '',
+      client_tax_number: contactRow.tax_number || null,
+      client_address: contactRow.address || null,
+      client_phone: contactRow.phone || null,
+      client_email: contactRow.email || null,
+      client_commercial_registration: contactRow.commercial_registration || null,
+      client_city: contactRow.city || null,
+      client_contact_person: contactRow.contact_person || null,
       project_name: projectName,
       created_by_name: createdBy,
       items: itemsRes || [],
-      company: company || {},
+      company,
       journal_lines: journalLines,
     });
   } catch (err) {
@@ -108,96 +103,36 @@ export async function PUT(
   try {
     const auth = await requireModulePermission(request, 'invoices', 'update');
     const { id } = await paramsPromise;
+    if (!UUID_RE.test(id)) return error('معرّف الفاتورة غير صالح');
     const s = sb();
     const body = await parseBody<any>(request);
-
-    const { data: existing } = await s.from('invoices')
-      .select('id, status, journal_entry_id, number, paid_amount, contact_id, date, total')
-      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!existing) return notFound();
-    const inv = existing as Record<string, any>;
-    if (inv.status === 'cancelled') return error('لا يمكن تعديل فاتورة ملغاة');
-
-    const paid = parseFloat(inv.paid_amount) || 0;
-    const wantsFinancial = Array.isArray(body.items) && body.items.length > 0;
-    if (wantsFinancial && paid > 0.005) {
-      return error('لا يمكن تعديل بنود فاتورة عليها تحصيل — اعكس سندات القبض أولاً');
+    // Posted financial fields are immutable; only presentation metadata can
+    // change, under a row lock that cannot race with cancellation.
+    const immutableFields = [
+      'items', 'date', 'clientId', 'contact_id', 'projectId', 'project_id',
+      'vatRate', 'vat_rate', 'vatAmount', 'vat_amount', 'tax_rate', 'tax_amount',
+      'vatEnabled', 'subtotal', 'total',
+    ];
+    if (immutableFields.some((field) => body[field] !== undefined)) {
+      return error('لا يمكن تعديل البيانات المحاسبية لفاتورة مرحّلة؛ ألغِ الفاتورة وأنشئ أخرى', 409);
     }
-
-    const header: any = {};
-    if (body.notes !== undefined) header.notes = body.notes;
-    if (body.dueDate || body.due_date) header.due_date = body.dueDate || body.due_date;
-    if (body.date) header.date = body.date;
-    if (body.clientId || body.contact_id) header.contact_id = body.clientId || body.contact_id;
-    if (body.projectId !== undefined || body.project_id !== undefined) {
-      header.project_id = body.projectId ?? body.project_id ?? null;
+    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) {
+      return error('الملاحظات طويلة جداً');
     }
-
-    if (wantsFinancial) {
-      const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-      const items = body.items.map((it: any) => {
-        const qty = Number(it.quantity) || 0;
-        const price = Number(it.unitPrice ?? it.unit_price) || 0;
-        const disc = Number(it.discount) || 0;
-        const gross = round2(qty * price);
-        const discount = Math.min(round2(disc), gross);
-        return { description: it.description, quantity: qty, unit_price: price, total: round2(gross - discount) };
-      });
-      const subtotal = round2(items.reduce((sum: number, i: any) => sum + i.total, 0));
-      const vatRate = body.vatEnabled === false ? 0 : Number(body.vatRate ?? body.vat_rate ?? 0.15);
-      const vatAmount = round2(subtotal * vatRate);
-      header.subtotal = subtotal;
-      header.vat_rate = vatRate;
-      header.vat_amount = vatAmount;
-      header.tax_rate = vatRate;
-      header.tax_amount = vatAmount;
-      header.total = round2(subtotal + vatAmount);
-
-      await s.from('invoice_items').delete().eq('invoice_id', id).eq('company_id', auth.companyId);
-      for (const item of items) {
-        await s.from('invoice_items').insert({ company_id: auth.companyId, invoice_id: id, ...item });
-      }
-
-      if (inv.journal_entry_id) {
-        const { postReversalEntry } = await import('@/lib/voucher-utils');
-        const { error: revErr } = await postReversalEntry(auth.companyId, {
-          journalEntryId: inv.journal_entry_id,
-          referenceType: 'invoice_reversal',
-          referenceId: id,
-          description: `عكس قيد فاتورة رقم ${inv.number} قبل إعادة الترحيل`,
-          userId: auth.userId,
-        });
-        if (revErr) throw revErr;
-      }
-
-      const { postSalesInvoiceJournal } = await import('@/lib/invoice-accounting');
-      const newJe = await postSalesInvoiceJournal({
-        companyId: auth.companyId,
-        userId: auth.userId,
-        invoiceId: id,
-        invoiceNumber: inv.number,
-        date: header.date || inv.date,
-        contactId: header.contact_id || inv.contact_id,
-        projectId: header.project_id,
-        subtotal,
-        vatAmount,
-        total: header.total,
-      });
-      header.journal_entry_id = newJe;
+    const dueDate = body.dueDate ?? body.due_date;
+    if (dueDate !== undefined && (typeof dueDate !== 'string' || !isValidDate(dueDate))) {
+      return error('تاريخ الاستحقاق غير صالح');
     }
-
-    const { data: updated, error: updErr } = await s.from('invoices')
-      .update(header).eq('id', id).eq('company_id', auth.companyId).select('*').single();
-    if (updErr) throw updErr;
-
-    // تغيير المشروع فقط: انقل وسم السطور دون إعادة ترحيل المبالغ
-    if (!wantsFinancial && header.project_id !== undefined && inv.journal_entry_id) {
-      await s.from('journal_lines')
-        .update({ project_id: header.project_id })
-        .eq('journal_entry_id', inv.journal_entry_id)
-        .eq('company_id', auth.companyId);
-    }
-
+    if (body.notes === undefined && dueDate === undefined) return error('لا توجد حقول قابلة للتعديل');
+    const { data: updated, error: updateError } = await s.rpc('update_sales_invoice_metadata', {
+      p_company_id: auth.companyId,
+      p_invoice_id: id,
+      p_due_date: dueDate || null,
+      p_notes: typeof body.notes === 'string' ? body.notes : '',
+      p_notes_set: body.notes !== undefined,
+      p_user_id: auth.userId,
+    });
+    if (updateError) throw updateError;
     return success(updated);
   } catch (err) {
     return handleApiError(err);
@@ -211,44 +146,27 @@ export async function PATCH(
   try {
     const auth = await requireModulePermission(request, 'invoices', 'update');
     const { id } = await paramsPromise;
+    if (!UUID_RE.test(id)) return error('معرّف الفاتورة غير صالح');
     const s = sb();
     const body = await parseBody<{ status: string; notes?: string }>(request);
-
-    const { data: invRes } = await s.from('invoices')
-      .select('id, number, total, status, journal_entry_id, paid_amount').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!invRes) return notFound();
-    const invoice = invRes as Record<string, any>;
 
     if (body.status === 'paid') {
       return error('لا يمكن تعليم الفاتورة مدفوعة يدوياً. سجّل سند قبض وخصّصه على الفاتورة');
     }
-
-    if (body.status === 'cancelled') {
-      if (invoice.status === 'cancelled') return error('الفاتورة ملغية مسبقاً');
-      const paidAmt = parseFloat(invoice.paid_amount || '0') || 0;
-      if (paidAmt > 0.005 || invoice.status === 'paid' || invoice.status === 'partial') {
-        return error('لا يمكن إلغاء فاتورة عليها تحصيل — اعكس سندات القبض أولاً');
-      }
-
-      if (invoice.journal_entry_id) {
-        const { postReversalEntry } = await import('@/lib/voucher-utils');
-        const { error: revErr } = await postReversalEntry(auth.companyId, {
-          journalEntryId: invoice.journal_entry_id,
-          referenceType: 'invoice_reversal',
-          referenceId: id,
-          description: `قيد عكسي لفاتورة رقم ${invoice.number}`,
-          userId: auth.userId,
-        });
-        if (revErr) throw revErr;
-      }
-
-      await s.from('invoices')
-        .update({ status: 'cancelled', notes: body.notes || null, updated_at: new Date().toISOString() })
-        .eq('id', id).eq('company_id', auth.companyId);
-      return success({ message: 'تم إلغاء الفاتورة بنجاح' });
+    if (body.status !== 'cancelled') {
+      return error('حالة غير صالحة. الحالة المسموحة هنا: cancelled');
     }
-
-    return error('حالة غير صالحة. الحالات المسموحة: paid, cancelled');
+    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) {
+      return error('الملاحظات طويلة جداً');
+    }
+    const { data: cancelled, error: cancelError } = await s.rpc('cancel_sales_invoice_atomic', {
+      p_company_id: auth.companyId,
+      p_invoice_id: id,
+      p_notes: body.notes || '',
+      p_user_id: auth.userId,
+    });
+    if (cancelError) throw cancelError;
+    return success(cancelled);
   } catch (err) {
     return handleApiError(err);
   }

@@ -1,105 +1,66 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { employeeUpdateSchema, hrUuid } from '@/lib/hr-validation';
 
-const sb = () => getSupabase();
+const EMPLOYEE_COLUMNS = 'id,name,phone,email,salary,department,position,hire_date,is_active,branch_id,cost_center_id,created_at';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+async function findEmployee(companyId: string, id: string) {
+  const { data, error: queryError } = await getSupabase().from('employees').select(EMPLOYEE_COLUMNS)
+    .eq('id', id).eq('company_id', companyId).maybeSingle();
+  if (queryError) throw queryError;
+  return data;
+}
+
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'employees', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: employee } = await s.from('employees')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!employee) return notFound();
-
-    return success(employee);
-  } catch (err) {
-    return handleApiError(err);
+    if (!hrUuid.safeParse(id).success) return error('معرف الموظف غير صالح');
+    const employee = await findEmployee(auth.companyId, id);
+    return employee ? success(employee) : notFound();
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireManagerOrAbove(request);
     const { id } = await params;
-    const s = sb();
-    const body = await request.json();
-
-    const { data: existing } = await s.from('employees')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const updateData: any = {};
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.phone !== undefined) updateData.phone = body.phone;
-    if (body.email !== undefined) updateData.email = body.email;
-    if (body.salary !== undefined) updateData.salary = body.salary;
-    if (body.department !== undefined) updateData.department = body.department;
-    if (body.position !== undefined) updateData.position = body.position;
-    if (body.hire_date !== undefined) updateData.hire_date = body.hire_date;
-
-    const { data: updated, error: updateErr } = await s.from('employees')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    return success(updated);
-  } catch (err) {
-    return handleApiError(err);
+    if (!hrUuid.safeParse(id).success) return error('معرف الموظف غير صالح');
+    const parsed = employeeUpdateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات الموظف غير صالحة');
+    if (!await findEmployee(auth.companyId, id)) return notFound();
+    const { data, error: rpcError } = await getSupabase().rpc('update_employee_atomic', {
+      p_company_id: auth.companyId,
+      p_employee_id: id,
+      p_patch: parsed.data,
+      p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireManagerOrAbove(request);
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('employees')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
+    if (!hrUuid.safeParse(id).success) return error('معرف الموظف غير صالح');
+    const existing = await findEmployee(auth.companyId, id);
     if (!existing) return notFound();
-
-    // Check if employee has payroll records
-    const { data: payroll } = await s.from('salary_sheets')
-      .select('id')
-      .eq('employee_id', id)
-      .limit(1);
-
-    if (payroll && payroll.length > 0) {
-      return error('لا يمكن حذف الموظف لأنه مرتبط بسجلات رواتب');
-    }
-
-    await s.from('employees').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
-  } catch (err) {
-    return handleApiError(err);
+    if ((existing as any).is_active === false) return error('الموظف غير نشط بالفعل', 409);
+    const { data, error: rpcError } = await getSupabase().rpc('deactivate_employee_atomic', {
+      p_company_id: auth.companyId,
+      p_employee_id: id,
+      p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success({ deactivated: true, employee: data });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

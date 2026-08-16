@@ -1,103 +1,72 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
+import { z } from 'zod';
+import { success, error, notFound, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const updateSchema = z.object({
+  name: z.string().trim().min(1, 'اسم المستودع مطلوب').max(200).optional(),
+  location: z.string().trim().max(300).nullable().optional(),
+  is_active: z.boolean().optional(),
+}).strict();
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'warehouses', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: warehouse } = await s.from('warehouses')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!warehouse) return notFound();
-
-    return success(warehouse);
+    if (!UUID_RE.test(id)) return error('معرّف المستودع غير صالح');
+    const { data, error: queryError } = await sb().from('warehouses').select('id, name, location, is_active')
+      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (queryError) throw queryError;
+    if (!data) return notFound();
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'warehouses', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await request.json();
-
-    const { data: existing } = await s.from('warehouses')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200)) {
-      return error('اسم المستودع غير صالح');
-    }
-    const updateData: any = {};
-    if (body.name !== undefined) updateData.name = body.name.trim();
-    if (body.location !== undefined) updateData.location = body.location;
-    if (body.is_active !== undefined) updateData.is_active = body.is_active;
-
-    const { data: updated, error: updateErr } = await s.from('warehouses')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    return success(updated);
+    if (!UUID_RE.test(id)) return error('معرّف المستودع غير صالح');
+    const parsed = updateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    if (!Object.keys(parsed.data).length) return error('لا توجد بيانات للتحديث');
+    const { data, error: updateError } = await sb().rpc('update_warehouse_atomic', {
+      p_company_id: auth.companyId,
+      p_warehouse_id: id,
+      p_patch: parsed.data,
+      p_user_id: auth.userId,
+    });
+    const message = String(updateError?.message || '');
+    if (message.includes('المستودع غير موجود')) return notFound();
+    if (message.includes('اسم المستودع مستخدم')) return error('اسم المستودع مستخدم مسبقاً', 409);
+    if (message.includes('لا يمكن تعطيل')) return error(message, 409);
+    if (updateError) throw updateError;
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireManagerOrAbove(request);
+    const auth = await requireModulePermission(request, 'warehouses', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('warehouses')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    // Check if warehouse has inventory items
-    const { data: items } = await s.from('inventory_items')
-      .select('id')
-      .eq('warehouse_id', id)
-      .limit(1);
-
-    if (items && items.length > 0) {
-      return error('لا يمكن حذف المستودع لأنه يحتوي على أصناف');
-    }
-
-    await s.from('warehouses').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
+    if (!UUID_RE.test(id)) return error('معرّف المستودع غير صالح');
+    const { data, error: deactivateError } = await sb().rpc('update_warehouse_atomic', {
+      p_company_id: auth.companyId,
+      p_warehouse_id: id,
+      p_patch: { is_active: false },
+      p_user_id: auth.userId,
+    });
+    const message = String(deactivateError?.message || '');
+    if (message.includes('المستودع غير موجود')) return notFound();
+    if (message.includes('لا يمكن تعطيل')) return error(message, 409);
+    if (deactivateError) throw deactivateError;
+    return success({ ...((data || {}) as Record<string, unknown>), deactivated: true });
   } catch (err) {
     return handleApiError(err);
   }

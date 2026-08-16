@@ -1,21 +1,4 @@
-/**
- * Section 8 tests — Customers & Suppliers (contacts / clients / balances)
- *
- * Critical fixes covered:
- * 1. Contact balances were ALWAYS 0: creation flows never set account_id, yet
- *    balance was computed from account_id. Now computed from contact_id-tagged
- *    journal lines (control-account model).
- * 2. contacts/[id] GET loaded EVERY journal_entries row of the company (N+1
- *    bomb) to compute one balance — now a single contact_id-scoped query.
- * 3. contacts/[id] PUT auto-created a sub-account with a DUPLICATE control
- *    code (1130/2110/2150), corrupting the chart and breaking
- *    resolveAccountId — now removed (control accounts + contact_id only).
- * 4. Opening balance was stored as a dead column (no JE) — now posts a
- *    balanced opening entry tagged with contact_id.
- * 5. AR/AP counterpart lines now carry contact_id (receipts, disbursements,
- *    purchase invoices, sales invoices) so payments reduce contact balances.
- * 6. Validation + tenant scoping + fuller delete dependency guards.
- */
+/** Customers/suppliers: atomic lifecycle, control-account balances and tenant scope. */
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
@@ -27,78 +10,88 @@ type Op = { op: string; col?: string; val?: any };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
-  let insertCounter = 0;
-
+  const rpcCalls: Array<{ name: string; params: any }> = [];
   const from = (table: string) => {
     const ops: Op[] = [];
     const mut: { kind?: string; payload?: any } = {};
-    const call: any = { table, ops, mut };
-    calls.push(call);
-
-    const applyFilters = () =>
-      (db[table] || []).filter((r) =>
-        ops.every((o) => {
-          if (o.op === 'eq') return r[o.col!] === o.val;
-          if (o.op === 'neq') return r[o.col!] !== o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
-          if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
-          if (o.op === 'gt') return (Number(r[o.col!]) || 0) > (Number(o.val) || 0);
-          return true;
-        })
-      );
-
+    calls.push({ table, ops, mut });
+    const applyFilters = () => (db[table] || []).filter((row) => ops.every((op) => {
+      if (op.op === 'eq') return row[op.col!] === op.val;
+      if (op.op === 'neq') return row[op.col!] !== op.val;
+      if (op.op === 'in') return (op.val as any[]).includes(row[op.col!]);
+      if (op.op === 'is') return op.val === null ? row[op.col!] == null : row[op.col!] === op.val;
+      return true;
+    }));
     const api: any = {
       select: () => api,
       eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
       neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      in: (col: string, val: any[]) => { ops.push({ op: 'in', col, val }); return api; },
       is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
-      or: () => api,
-      gte: () => api,
-      lte: () => api,
       order: () => api,
       limit: () => api,
       range: () => api,
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
-      delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
       single: async () => {
-        if (mut.kind === 'insert') {
-          mut.payload = { id: `id-${++insertCounter}`, ...mut.payload };
-          (db[table] = db[table] || []).push(mut.payload);
-          return { data: mut.payload, error: null };
-        }
-        if (mut.kind === 'update') {
-          return { data: { ...applyFilters()[0], ...mut.payload }, error: null };
-        }
-        if (mut.kind === 'delete') {
-          return { data: applyFilters()[0] ?? { deleted: true }, error: null };
-        }
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) =>
-        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
+      then: (onFulfilled: any, onRejected: any) => Promise.resolve({ data: applyFilters(), error: null, count: applyFilters().length }).then(onFulfilled, onRejected),
     };
     return api;
   };
 
-  const db_: any = { from, calls };
-  db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `missing ${name}` } });
-  db_.rpc = (name: string, params: any) => db_.rpcImpl(name, params);
-  return db_;
+  const allowedCodes = (type: string) => type === 'client' ? ['1130', '2180']
+    : type === 'supplier' ? ['2110']
+      : type === 'subcontractor' ? ['2110', '2150'] : ['1130', '2110', '2180'];
+  const balanceFor = (companyId: string, contactId: string) => {
+    const contact = (db.contacts || []).find((row) => row.id === contactId && row.company_id === companyId);
+    if (!contact) return 0;
+    const accountById = Object.fromEntries((db.accounts || [])
+      .filter((row) => row.company_id === companyId).map((row) => [row.id, row.code]));
+    return (db.journal_lines || [])
+      .filter((line) => line.company_id === companyId && line.contact_id === contactId
+        && allowedCodes(contact.type).includes(accountById[line.account_id]))
+      .reduce((sum, line) => sum + (Number(line.debit) || 0) - (Number(line.credit) || 0), 0);
+  };
+
+  const instance: any = { from, calls, rpcCalls };
+  instance.rpcImpl = async (name: string, params: any) => {
+    if (name === 'get_contact_balance') return { data: balanceFor(params.p_company_id, params.p_contact_id), error: null };
+    if (name === 'get_contact_balance_batch') return {
+      data: params.p_contact_ids.map((id: string) => ({ contact_id: id, balance: balanceFor(params.p_company_id, id) })), error: null,
+    };
+    if (name === 'create_contact_atomic') return {
+      data: { id: '90000000-0000-4000-8000-000000000001', company_id: params.p_company_id, ...params.p_data,
+        opening_journal_id: params.p_opening_amount > 0 ? '90000000-0000-4000-8000-000000000002' : null }, error: null,
+    };
+    if (name === 'update_contact_atomic') {
+      const contact = (db.contacts || []).find((row) => row.id === params.p_contact_id && row.company_id === params.p_company_id);
+      if (!contact) return { data: null, error: { message: 'الطرف غير موجود' } };
+      return { data: { ...contact, ...params.p_patch }, error: null };
+    }
+    if (name === 'deactivate_contact_atomic') {
+      const contact = (db.contacts || []).find((row) => row.id === params.p_contact_id && row.company_id === params.p_company_id);
+      if (!contact) return { data: null, error: { message: 'الطرف غير موجود' } };
+      return { data: { id: params.p_contact_id, is_active: false, already_processed: false }, error: null };
+    }
+    return { data: null, error: { message: `missing ${name}` } };
+  };
+  instance.rpc = (name: string, params: any) => {
+    rpcCalls.push({ name, params });
+    return instance.rpcImpl(name, params);
+  };
+  return instance;
 }
 
 let mockDb: ReturnType<typeof makeDb>;
-
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
-jest.mock('@/lib/plan-limits', () => ({ checkPlanLimit: jest.fn(async () => ({ allowed: true })) }));
-jest.mock('@/lib/usage-limits', () => ({ checkUsageLimit: jest.fn(async () => ({ allowed: true })) }));
 
-import { GET as contactGET, POST as contactPOST } from '@/app/api/contacts/route';
+import { POST as contactPOST } from '@/app/api/contacts/route';
 import { GET as contactOneGET, PUT as contactPUT, DELETE as contactDELETE } from '@/app/api/contacts/[id]/route';
 import { GET as clientsGET, POST as clientsPOST } from '@/app/api/clients/route';
+import { GET as clientOneGET, PUT as clientPUT, DELETE as clientDELETE } from '@/app/api/clients/[id]/route';
+import { GET as clientStatementGET } from '@/app/api/clients/[id]/statement/route';
 import { GET as contactBalanceGET } from '@/app/api/vouchers/contact-balance/route';
 
 const C1 = 'company-1';
@@ -106,310 +99,185 @@ const C2 = 'company-2';
 const CLIENT = '00000000-0000-4000-8000-000000000c01';
 const CLIENT2 = '00000000-0000-4000-8000-000000000c02';
 const SUPPLIER = '00000000-0000-4000-8000-000000000501';
+const FOREIGN = '00000000-0000-4000-8000-000000000f01';
 const AR = '00000000-0000-4000-8000-000000001130';
 const AP = '00000000-0000-4000-8000-000000002110';
-const CAPITAL = '00000000-0000-4000-8000-000000003100';
 const REVENUE = '00000000-0000-4000-8000-000000004100';
+const BANK = '00000000-0000-4000-8000-000000001000';
 
 function baseDb() {
   return {
     users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    companies: [{ id: C1, is_active: true }],
     contacts: [
-      { id: CLIENT, company_id: C1, name: 'عميل', type: 'client', account_id: null },
-      { id: CLIENT2, company_id: C1, name: 'عميل 2', type: 'client', account_id: null },
-      { id: SUPPLIER, company_id: C1, name: 'مورد', type: 'supplier', account_id: null },
+      { id: CLIENT, company_id: C1, name: 'عميل', type: 'client', is_active: true, deleted_at: null },
+      { id: CLIENT2, company_id: C1, name: 'عميل 2', type: 'client', is_active: true, deleted_at: null },
+      { id: SUPPLIER, company_id: C1, name: 'مورد', type: 'supplier', is_active: true, deleted_at: null },
     ],
     accounts: [
-      { id: AR, company_id: C1, code: '1130', name: 'العملاء' },
-      { id: AP, company_id: C1, code: '2110', name: 'ذمم الموردين' },
-      { id: CAPITAL, company_id: C1, code: '3100', name: 'رأس المال' },
-      { id: REVENUE, company_id: C1, code: '4100', name: 'إيرادات' },
+      { id: AR, company_id: C1, code: '1130' },
+      { id: AP, company_id: C1, code: '2110' },
+      { id: REVENUE, company_id: C1, code: '4100' },
+      { id: BANK, company_id: C1, code: '1000' },
     ],
-    journal_entries: [] as Row[],
     journal_lines: [] as Row[],
-        subscriptions: [{
-      id: 's1', company_id: C1, plan_id: 'p1', plan_code: 'enterprise', status: 'active',
-      start_date: '2024-01-01',
-      end_date: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      subscription_plans: { code: 'enterprise', name: 'Enterprise', features_modules: {
-        dashboard: true, accounts: true, journal: true, invoices: true, quotations: true,
-        clients: true, contacts: true, reports_basic: true, reports_advanced: true,
-        reports_consolidated: true, settings: true, subscription: true, inventory: true,
-        purchases: true, cost_centers: true, banks: true, cash: true, warehouses: true,
-        branches: true, tax_reports: true, fixed_assets: true, pos: true, workflows: true,
-        approvals: true, custody: true, employees: true, projects: true, budgets: true,
-        messages: true, crm: true, contracts: true, tenders: true, boq: true,
-        progress_billing: true, subcontractors: true, payroll: true
-      } },
-    }],
-journal_sequences: [] as Row[],
     invoices: [] as Row[],
     purchase_invoices: [] as Row[],
     voucher_receipts: [] as Row[],
     voucher_disbursements: [] as Row[],
     projects: [] as Row[],
+    subscriptions: [{
+      id: 's1', company_id: C1, status: 'active', start_date: '2024-01-01',
+      end_date: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+      subscription_plans: { features_modules: { clients: true, contacts: true, receipts: true } },
+    }],
   } as Record<string, Row[]>;
 }
 
 function authedRequest(body?: any, method = 'GET') {
   const token = createToken('u1', 'admin');
+  const url = 'http://localhost/api/test';
   return {
-    url: 'http://localhost/api/test',
-    method,
-    headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
-    cookies: { get: () => undefined },
-    json: async () => body,
+    url, nextUrl: new URL(url), method,
+    headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
+    cookies: { get: () => undefined }, json: async () => body,
   } as any;
 }
-
+const withQuery = (request: any, query: string) => {
+  const url = `http://localhost/api/test${query}`;
+  return { ...request, url, nextUrl: new URL(url) };
+};
 const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
-const urlOf = (qs = '') => `http://localhost/api/test${qs}`;
-const withUrl = (req: any, qs = '') => ({ ...req, url: urlOf(qs), nextUrl: new URL(urlOf(qs)) });
-const insertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === t);
-const deletesOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'delete' && c.table === t);
 
-// ---------------------------------------------------------------------------
+beforeEach(() => { mockDb = makeDb(baseDb()); });
 
-describe('getContactBalance — contact_id-based, company-scoped', () => {
-  test('sums only contact_id-tagged lines within the company', async () => {
+describe('control-account contact balances', () => {
+  test('ignores tagged revenue/bank counterpart lines and foreign tenants', async () => {
     const db = baseDb();
     db.journal_lines.push(
       { company_id: C1, contact_id: CLIENT, account_id: AR, debit: 1000, credit: 0 },
+      { company_id: C1, contact_id: CLIENT, account_id: REVENUE, debit: 0, credit: 1000 },
+      { company_id: C1, contact_id: CLIENT, account_id: BANK, debit: 300, credit: 0 },
       { company_id: C1, contact_id: CLIENT, account_id: AR, debit: 0, credit: 300 },
-      { company_id: C1, contact_id: CLIENT2, account_id: AR, debit: 500, credit: 0 },
-      { company_id: C2, contact_id: CLIENT, account_id: AR, debit: 9999, credit: 0 }, // foreign company
+      { company_id: C2, contact_id: CLIENT, account_id: AR, debit: 9999, credit: 0 },
     );
     mockDb = makeDb(db);
     expect(await getContactBalance(C1, CLIENT)).toBe(700);
-    expect(await getContactBalance(C1, CLIENT2)).toBe(500);
   });
 
-  test('batch returns a map and ignores cross-tenant lines', async () => {
+  test('batch preserves client debit and supplier credit signs', async () => {
     const db = baseDb();
     db.journal_lines.push(
-      { company_id: C1, contact_id: CLIENT, debit: 100, credit: 0 },
-      { company_id: C1, contact_id: SUPPLIER, debit: 0, credit: 250 },
-      { company_id: C2, contact_id: CLIENT, debit: 5000, credit: 0 },
+      { company_id: C1, contact_id: CLIENT, account_id: AR, debit: 500, credit: 0 },
+      { company_id: C1, contact_id: SUPPLIER, account_id: AP, debit: 0, credit: 250 },
     );
     mockDb = makeDb(db);
-    const map = await getContactBalances(C1, [CLIENT, SUPPLIER]);
-    expect(map[CLIENT]).toBe(100);
-    expect(map[SUPPLIER]).toBe(-250);
+    expect(await getContactBalances(C1, [CLIENT, SUPPLIER])).toEqual({ [CLIENT]: 500, [SUPPLIER]: -250 });
   });
 });
 
-describe('contacts/[id] GET — balance + no N+1', () => {
-  test('balance from contact_id lines; does NOT load all journal_entries', async () => {
+describe('tenant-scoped reads', () => {
+  test('contact detail returns the authoritative balance', async () => {
+    const db = baseDb();
+    db.journal_lines.push({ company_id: C1, contact_id: CLIENT, account_id: AR, debit: 800, credit: 200 });
+    mockDb = makeDb(db);
+    const response = await contactOneGET(authedRequest(), paramsOf(CLIENT));
+    expect(response.status).toBe(200);
+    expect((await response.json()).data.balance).toBe(600);
+  });
+
+  test('cross-tenant contact is not exposed', async () => {
+    const db = baseDb();
+    db.contacts.push({ id: FOREIGN, company_id: C2, name: 'أجنبي', type: 'client', is_active: true, deleted_at: null });
+    mockDb = makeDb(db);
+    expect((await contactOneGET(authedRequest(), paramsOf(FOREIGN))).status).toBe(404);
+  });
+
+  test('client list receives balances from one batch RPC', async () => {
+    const db = baseDb();
+    db.journal_lines.push({ company_id: C1, contact_id: CLIENT, account_id: AR, debit: 125, credit: 0 });
+    mockDb = makeDb(db);
+    const response = await clientsGET(authedRequest());
+    const clients = (await response.json()).data.clients;
+    expect(clients.find((row: Row) => row.id === CLIENT).balance).toBe(125);
+    expect(mockDb.rpcCalls.filter((call) => call.name === 'get_contact_balance_batch')).toHaveLength(1);
+  });
+
+  test('client detail, statement, update and deactivate reject a foreign-tenant id', async () => {
+    const db = baseDb();
+    db.contacts.push({ id: FOREIGN, company_id: C2, name: 'أجنبي', type: 'client', is_active: true, deleted_at: null });
+    mockDb = makeDb(db);
+    expect((await clientOneGET(authedRequest(), paramsOf(FOREIGN))).status).toBe(404);
+    expect((await clientStatementGET(authedRequest(), paramsOf(FOREIGN))).status).toBe(404);
+    expect((await clientPUT(authedRequest({ name: 'محاولة عابرة' }, 'PUT'), paramsOf(FOREIGN))).status).toBe(404);
+    expect((await clientDELETE(authedRequest(undefined, 'DELETE'), paramsOf(FOREIGN))).status).toBe(404);
+  });
+});
+
+describe('voucher contact balance labels', () => {
+  test('uses signed client and supplier control balances', async () => {
     const db = baseDb();
     db.journal_lines.push(
-      { company_id: C1, contact_id: CLIENT, account_id: AR, debit: 800, credit: 0 },
-      { company_id: C1, contact_id: CLIENT, account_id: AR, debit: 0, credit: 200 },
+      { company_id: C1, contact_id: CLIENT, account_id: AR, debit: 400, credit: 100 },
+      { company_id: C1, contact_id: SUPPLIER, account_id: AP, debit: 0, credit: 500 },
     );
     mockDb = makeDb(db);
-
-    const res = await contactOneGET(authedRequest(), paramsOf(CLIENT));
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.data.balance).toBe(600);
-    expect(json.data.balance_type).toBe('debit');
-    // The old N+1 fetched every journal_entries row — that must be gone.
-    expect(mockDb.calls.find((c) => c.table === 'journal_entries')).toBeUndefined();
-  });
-
-  test('cross-tenant contact → 404', async () => {
-    const db = baseDb();
-    db.contacts.push({ id: 'foreign', company_id: C2, name: 'أجنبي', type: 'client' });
-    mockDb = makeDb(db);
-    const res = await contactOneGET(authedRequest(), paramsOf('foreign'));
-    expect(res.status).toBe(404);
+    const clientResponse = await contactBalanceGET(withQuery(authedRequest(), `?contactId=${CLIENT}`));
+    expect((await clientResponse.json()).data).toMatchObject({ balance: 300, label: 'مدين' });
+    const supplierResponse = await contactBalanceGET(withQuery(authedRequest(), `?contactId=${SUPPLIER}`));
+    expect((await supplierResponse.json()).data.label).toContain('مستحق');
   });
 });
 
-describe('clients GET — real balances (batch)', () => {
-  test('each client carries its signed balance', async () => {
-    const db = baseDb();
-    db.journal_lines.push(
-      { company_id: C1, contact_id: CLIENT, debit: 500, credit: 0 },
-      { company_id: C1, contact_id: CLIENT2, debit: 0, credit: 300 },
-    );
-    mockDb = makeDb(db);
-    const res = await clientsGET(withUrl(authedRequest()));
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    const byId: Record<string, number> = {};
-    for (const c of json.data.clients) byId[c.id] = c.balance;
-    expect(byId[CLIENT]).toBe(500);
-    expect(byId[CLIENT2]).toBe(-300);
-  });
-});
-
-describe('vouchers/contact-balance — labels by type', () => {
-  test('client debit balance → مدين', async () => {
-    const db = baseDb();
-    db.journal_lines.push({ company_id: C1, contact_id: CLIENT, debit: 400, credit: 100 });
-    mockDb = makeDb(db);
-    const res = await contactBalanceGET(withUrl(authedRequest(), `?contactId=${CLIENT}`));
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.data.balance).toBe(300);
-    expect(json.data.label).toBe('مدين');
-    // no full journal_entries scan
-    expect(mockDb.calls.find((c) => c.table === 'journal_entries')).toBeUndefined();
-  });
-
-  test('supplier credit balance → دائن/مستحق له', async () => {
-    const db = baseDb();
-    db.journal_lines.push({ company_id: C1, contact_id: SUPPLIER, debit: 0, credit: 500 });
-    mockDb = makeDb(db);
-    const res = await contactBalanceGET(withUrl(authedRequest(), `?contactId=${SUPPLIER}`));
-    expect(res.status).toBe(200);
-    const json = await res.json();
-    expect(json.data.balance).toBe(500);
-    expect(json.data.label).toContain('مستحق');
-  });
-});
-
-describe('contacts POST — opening balance becomes a real balanced JE', () => {
-  test('debit opening: Dr AR (contact_id) / Cr capital', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await contactPOST(authedRequest({
+describe('atomic contact mutations', () => {
+  test('creation sends contact and opening balance to one tenant-bound RPC', async () => {
+    const response = await contactPOST(authedRequest({
       name: 'عميل جديد', type: 'client', opening_balance: 1000, opening_balance_type: 'debit',
     }, 'POST'));
-    expect(res.status).toBe(201);
-
-    const je = insertsOf('journal_entries')[0].mut.payload;
-    expect(je.type).toBe('opening_balance');
-
-    const lines = insertsOf('journal_lines')[0].mut.payload as Row[];
-    expect(lines).toHaveLength(2);
-    const arLine = lines.find((l) => l.account_id === AR);
-    const capLine = lines.find((l) => l.account_id === CAPITAL);
-    expect(arLine.debit).toBe(1000);
-    expect(arLine.credit).toBe(0);
-    expect(arLine.contact_id).toBeTruthy(); // tagged → enters contact balance
-    expect(capLine.credit).toBe(1000);
-    // balanced
-    const sum = (k: 'debit' | 'credit') => lines.reduce((s, l) => s + (l[k] || 0), 0);
-    expect(sum('debit')).toBe(sum('credit'));
+    expect(response.status).toBe(201);
+    expect(mockDb.rpcCalls).toEqual([{
+      name: 'create_contact_atomic',
+      params: {
+        p_company_id: C1, p_user_id: 'u1', p_data: { name: 'عميل جديد', type: 'client' },
+        p_opening_amount: 1000, p_opening_type: 'debit',
+      },
+    }]);
+    expect(mockDb.calls.find((call) => call.mut.kind && call.table === 'contacts')).toBeUndefined();
   });
 
-  test('credit opening: Cr AR (contact_id) / Dr capital', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await contactPOST(authedRequest({
-      name: 'عميل دائن', type: 'client', opening_balance: 250, opening_balance_type: 'credit',
-    }, 'POST'));
-    expect(res.status).toBe(201);
-    const lines = insertsOf('journal_lines')[0].mut.payload as Row[];
-    const arLine = lines.find((l) => l.account_id === AR);
-    expect(arLine.credit).toBe(250);
-    expect(arLine.contact_id).toBeTruthy();
-    expect(lines.find((l) => l.account_id === CAPITAL).debit).toBe(250);
+  test('update uses one audited RPC and never creates a duplicate control account', async () => {
+    const response = await contactPUT(authedRequest({ name: 'اسم محدّث' }, 'PUT'), paramsOf(CLIENT));
+    expect(response.status).toBe(200);
+    expect(mockDb.rpcCalls[0]).toEqual({
+      name: 'update_contact_atomic',
+      params: { p_company_id: C1, p_contact_id: CLIENT, p_patch: { name: 'اسم محدّث' }, p_user_id: 'u1' },
+    });
+    expect(mockDb.calls.find((call) => call.table === 'accounts')).toBeUndefined();
   });
 
-  test('supplier opening uses AP (2110)', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await contactPOST(authedRequest({
-      name: 'مورد جديد', type: 'supplier', opening_balance: 700, opening_balance_type: 'credit',
-    }, 'POST'));
-    expect(res.status).toBe(201);
-    const lines = insertsOf('journal_lines')[0].mut.payload as Row[];
-    expect(lines.find((l) => l.account_id === AP).credit).toBe(700);
-  });
-
-  test('no opening balance → no JE created', async () => {
-    mockDb = makeDb(baseDb());
-    await contactPOST(authedRequest({ name: 'بسيط', type: 'client' }, 'POST'));
-    expect(insertsOf('journal_entries')).toHaveLength(0);
-  });
-
-  test('opening balance without capital account → rollback (no orphan contact)', async () => {
+  test('DELETE soft-deactivates even when history exists and performs no hard delete', async () => {
     const db = baseDb();
-    db.accounts = db.accounts.filter((a) => a.code !== '3100');
+    db.invoices.push({ id: 'invoice-1', company_id: C1, contact_id: CLIENT });
+    db.journal_lines.push({ company_id: C1, contact_id: CLIENT, account_id: AR, debit: 100, credit: 0 });
     mockDb = makeDb(db);
-    const res = await contactPOST(authedRequest({
-      name: 'بدون رأس مال', type: 'client', opening_balance: 500, opening_balance_type: 'debit',
-    }, 'POST'));
-    expect(res.status).toBe(500);
-    // contact was rolled back
-    expect(deletesOf('contacts').length).toBeGreaterThan(0);
-    // no JE lines committed
-    expect(insertsOf('journal_lines')).toHaveLength(0);
+    const response = await contactDELETE(authedRequest(undefined, 'DELETE'), paramsOf(CLIENT));
+    expect(response.status).toBe(200);
+    expect(mockDb.rpcCalls[0].name).toBe('deactivate_contact_atomic');
+    expect(mockDb.calls.some((call) => call.mut.kind === 'delete')).toBe(false);
   });
 
-  test('invalid type / email rejected before any write', async () => {
-    mockDb = makeDb(baseDb());
-    const r1 = await contactPOST(authedRequest({ name: 'x', type: 'alien' }, 'POST'));
-    expect(r1.status).toBe(400);
-    const r2 = await contactPOST(authedRequest({ name: 'x', type: 'client', email: 'not-an-email' }, 'POST'));
-    expect(r2.status).toBe(400);
-    expect(insertsOf('contacts')).toHaveLength(0);
+  test('rejects invalid input before any RPC', async () => {
+    expect((await contactPOST(authedRequest({ name: 'x', type: 'alien' }, 'POST'))).status).toBe(400);
+    expect((await contactPUT(authedRequest({ opening_balance: 5 }, 'PUT'), paramsOf(CLIENT))).status).toBe(400);
+    expect((await contactPOST(authedRequest({ name: 'عابر', type: 'client', company_id: C2 }, 'POST'))).status).toBe(400);
+    expect(mockDb.rpcCalls).toHaveLength(0);
   });
 });
 
-describe('contacts/[id] PUT — no duplicate control-account creation', () => {
-  test('editing a contact without account_id does NOT insert an account', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await contactPUT(authedRequest({ name: 'اسم محدّث' }, 'PUT'), paramsOf(CLIENT));
-    expect(res.status).toBe(200);
-    expect(insertsOf('accounts')).toHaveLength(0); // was creating a duplicate '1130'
-    const upd = mockDb.calls.find((c) => c.mut.kind === 'update' && c.table === 'contacts');
-    expect(upd!.mut.payload.name).toBe('اسم محدّث');
-    expect(upd!.ops.some((o) => o.col === 'company_id' && o.val === C1)).toBe(true);
-  });
-
-  test('invalid update body rejected', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await contactPUT(authedRequest({ type: 'alien' }, 'PUT'), paramsOf(CLIENT));
-    expect(res.status).toBe(400);
-  });
-});
-
-describe('contacts/[id] DELETE — guards', () => {
-  test('blocked when the contact has a balance', async () => {
-    const db = baseDb();
-    db.journal_lines.push({ company_id: C1, contact_id: CLIENT, debit: 100, credit: 0 });
-    mockDb = makeDb(db);
-    const res = await contactDELETE(authedRequest(undefined, 'DELETE'), paramsOf(CLIENT));
-    expect(res.status).toBe(400);
-    expect(deletesOf('contacts')).toHaveLength(0);
-  });
-
-  test('blocked when linked to an invoice', async () => {
-    const db = baseDb();
-    db.invoices.push({ id: 'inv-1', company_id: C1, contact_id: CLIENT });
-    mockDb = makeDb(db);
-    const res = await contactDELETE(authedRequest(undefined, 'DELETE'), paramsOf(CLIENT));
-    expect(res.status).toBe(400);
-    expect((await res.json()).message).toContain('فواتير');
-  });
-
-  test('blocked when linked to a purchase invoice (supplier)', async () => {
-    const db = baseDb();
-    db.purchase_invoices.push({ id: 'pi-1', company_id: C1, supplier_id: SUPPLIER });
-    mockDb = makeDb(db);
-    const res = await contactDELETE(authedRequest(undefined, 'DELETE'), paramsOf(SUPPLIER));
-    expect(res.status).toBe(400);
-  });
-
-  test('allowed for a clean contact', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await contactDELETE(authedRequest(undefined, 'DELETE'), paramsOf(CLIENT));
-    expect(res.status).toBe(200);
-    expect(deletesOf('contacts').length).toBeGreaterThan(0);
-  });
-});
-
-describe('clients POST — validation', () => {
-  test('rejects invalid type', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await clientsPOST(authedRequest({ name: 'x', type: 'alien' }, 'POST'));
-    expect(res.status).toBe(400);
-    expect(insertsOf('contacts')).toHaveLength(0);
-  });
-
-  test('rejects invalid email', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await clientsPOST(authedRequest({ name: 'x', email: 'bad' }, 'POST'));
-    expect(res.status).toBe(400);
+describe('clients endpoint type boundary', () => {
+  test('does not create a supplier that would disappear from the client list', async () => {
+    const response = await clientsPOST(authedRequest({ name: 'مورد', type: 'supplier' }, 'POST'));
+    expect(response.status).toBe(400);
+    expect(mockDb.rpcCalls).toHaveLength(0);
   });
 });

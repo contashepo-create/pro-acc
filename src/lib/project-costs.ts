@@ -13,99 +13,45 @@ export function accumulateProjectLine(
   return acc;
 }
 
-/**
- * تكلفة/إيراد المشروع = سطور القيد الموسومة بـ project_id فقط.
- * 1150/1130/2110 أصول وخصوم فلا تُحتسب تكلفة.
- * مصروف (5100…) مدين − دائن. إيراد (4100…) دائن − مدين.
- */
-export async function sumProjectJournal(companyId: string, projectId: string) {
-  const s = getSupabase();
-  const joined = await s.from('journal_lines')
-    .select('debit, credit, account_id, accounts(code, name, type)')
-    .eq('company_id', companyId)
-    .eq('project_id', projectId);
-  let lines: any[] = joined.data || [];
-  if (joined.error) {
-    const fallback = await s.from('journal_lines')
-      .select('debit, credit, account_id')
-      .eq('company_id', companyId)
-      .eq('project_id', projectId);
-    if (fallback.error) throw fallback.error;
-    lines = fallback.data || [];
-  }
-  const needTypes = lines.some((l: any) => !l.accounts);
-  let typeById = new Map<string, { code: string; name: string; type: string }>();
-  if (needTypes) {
-    const ids = [...new Set(lines.map((l: any) => l.account_id).filter(Boolean))];
-    if (ids.length) {
-      const { data: accs } = await s.from('accounts').select('id, code, name, type').in('id', ids).eq('company_id', companyId);
-      typeById = new Map((accs || []).map((a: any) => [a.id, a]));
-    }
-  }
-
+export async function sumProjectJournal(companyId: string, projectId: string, from?: string | null, to?: string | null) {
+  const { data, error } = await getSupabase().rpc('get_project_account_totals', {
+    p_company_id: companyId, p_project_ids: [projectId], p_from: from || null, p_to: to || null,
+  });
+  if (error) throw error;
   let expenses = 0;
   let revenue = 0;
-  const byAccount: Record<string, { code: string; name: string; type: string; debit: number; credit: number }> = {};
-
-  for (const l of lines || []) {
-    const acc = (l as any).accounts || typeById.get((l as any).account_id);
-    if (!acc) continue;
-    const debit = parseFloat((l as any).debit) || 0;
-    const credit = parseFloat((l as any).credit) || 0;
-    if (!byAccount[acc.code]) {
-      byAccount[acc.code] = { code: acc.code, name: acc.name, type: acc.type, debit: 0, credit: 0 };
-    }
-    byAccount[acc.code].debit += debit;
-    byAccount[acc.code].credit += credit;
-    if (acc.type === 'expense') expenses += debit - credit;
-    else if (acc.type === 'revenue') revenue += credit - debit;
-  }
-
+  const accounts = (data || []).map((row: any) => {
+    const debit = Number(row.debit) || 0;
+    const credit = Number(row.credit) || 0;
+    if (row.account_type === 'expense') expenses += debit - credit;
+    if (row.account_type === 'revenue') revenue += credit - debit;
+    return { code: row.code, name: row.name, type: row.account_type, debit, credit };
+  });
   return {
-    expenses: round2(expenses),
-    revenue: round2(revenue),
-    profit: round2(revenue - expenses),
-    accounts: Object.values(byAccount),
+    expenses: round2(expenses), revenue: round2(revenue), profit: round2(revenue - expenses), accounts,
   };
 }
 
-export async function sumProjectsJournal(companyId: string, projectIds: string[]) {
+export async function sumProjectsJournal(
+  companyId: string, projectIds: string[], from?: string | null, to?: string | null,
+) {
   const map: Record<string, { expenses: number; revenue: number }> = {};
   for (const id of projectIds) map[id] = { expenses: 0, revenue: 0 };
-  if (projectIds.length === 0) return map;
-
-  const s = getSupabase();
-  const joined = await s.from('journal_lines')
-    .select('project_id, account_id, debit, credit, accounts(type)')
-    .eq('company_id', companyId)
-    .in('project_id', projectIds);
-  let lines: any[] = joined.data || [];
-  if (joined.error) {
-    const fallback = await s.from('journal_lines')
-      .select('project_id, account_id, debit, credit')
-      .eq('company_id', companyId)
-      .in('project_id', projectIds);
-    if (fallback.error) throw fallback.error;
-    lines = fallback.data || [];
+  if (!projectIds.length) return map;
+  const { data, error } = await getSupabase().rpc('get_project_account_totals', {
+    p_company_id: companyId, p_project_ids: projectIds, p_from: from || null, p_to: to || null,
+  });
+  if (error) throw error;
+  for (const row of data || []) {
+    if (!map[row.project_id]) continue;
+    const debit = Number(row.debit) || 0;
+    const credit = Number(row.credit) || 0;
+    if (row.account_type === 'expense') map[row.project_id].expenses += debit - credit;
+    if (row.account_type === 'revenue') map[row.project_id].revenue += credit - debit;
   }
-  const typeById = new Map<string, string>();
-  if (lines.some((l: any) => !l.accounts)) {
-    const ids = [...new Set(lines.map((l: any) => l.account_id).filter(Boolean))];
-    if (ids.length) {
-      const { data: accs } = await s.from('accounts').select('id, type').in('id', ids).eq('company_id', companyId);
-      for (const a of accs || []) typeById.set(a.id, a.type);
-    }
-  }
-
-  for (const l of lines) {
-    const pid = (l as any).project_id;
-    if (!pid || !map[pid]) continue;
-    const accType = (l as any).accounts?.type || typeById.get((l as any).account_id);
-    if (!accType) continue;
-    const debit = parseFloat((l as any).debit) || 0;
-    const credit = parseFloat((l as any).credit) || 0;
-    if (accType === 'expense') map[pid].expenses += debit - credit;
-    if (accType === 'revenue') map[pid].revenue += credit - debit;
+  for (const value of Object.values(map)) {
+    value.expenses = round2(value.expenses);
+    value.revenue = round2(value.revenue);
   }
   return map;
 }

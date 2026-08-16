@@ -1,6 +1,6 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
-import { success, error, serverError } from '@/lib/api-helpers';
+import { success, error } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -9,11 +9,17 @@ const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
   try {
-    const __admin = await requireAdmin(request);
+    await requireAdmin(request);
     const url = new URL(request.url);
     const type = url.searchParams.get('type') || 'ads';
     const startDate = url.searchParams.get('start');
     const endDate = url.searchParams.get('end');
+    const validDate = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
+    if ((startDate && (!validDate.test(startDate) || Number.isNaN(Date.parse(startDate)))) ||
+        (endDate && (!validDate.test(endDate) || Number.isNaN(Date.parse(endDate))))) {
+      return error('نطاق التاريخ غير صالح');
+    }
+    if (startDate && endDate && Date.parse(startDate) > Date.parse(endDate)) return error('بداية النطاق بعد نهايته');
 
     const s = sb();
 
@@ -34,22 +40,15 @@ export async function GET(request: NextRequest) {
         query = query.lte('created_at', endDate);
       }
 
-      const { data: ads } = await query;
+      const { data: ads, error: adsError } = await query.limit(500);
+      if (adsError) throw adsError;
 
       // Get detailed statistics for each ad
       const enrichedAds = await Promise.all(
         (ads || []).map(async (ad: any) => {
-          const { data: views } = await s.from('ad_views')
-            .select('user_id, company_id, viewed_at')
-            .eq('advertisement_id', ad.id);
-
-          const { data: clicks } = await s.from('ad_clicks')
-            .select('user_id, company_id, clicked_at')
-            .eq('advertisement_id', ad.id);
-
-          const { data: notifications } = await s.from('ad_notifications')
-            .select('user_id, company_id, sent_at')
-            .eq('advertisement_id', ad.id);
+          const { data: views, error: viewsError } = await s.from('ad_views')
+            .select('user_id, company_id').eq('advertisement_id', ad.id).limit(5000);
+          if (viewsError) throw viewsError;
 
           const uniqueUsers = new Set((views || []).map((v: any) => v.user_id));
           const uniqueCompanies = new Set((views || []).map((v: any) => v.company_id));
@@ -81,15 +80,17 @@ export async function GET(request: NextRequest) {
         query = query.lte('created_at', endDate);
       }
 
-      const { data: approvals } = await query;
+      const { data: approvals, error: approvalsError } = await query.limit(500);
+      if (approvalsError) throw approvalsError;
 
       // Enrich with user data
       const enrichedApprovals = await Promise.all(
         (approvals || []).map(async (approval: any) => {
-          const { data: requester } = await s.from('users')
+          const { data: requester, error: requesterError } = await s.from('users')
             .select('name')
             .eq('id', approval.requester_id)
-            .single();
+            .maybeSingle();
+          if (requesterError) throw requesterError;
 
           return {
             ...approval,

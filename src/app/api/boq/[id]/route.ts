@@ -1,97 +1,61 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, parseBody, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { boqUpdateSchema, deliveryUuid } from '@/lib/project-delivery-validation';
 
-const sb = () => getSupabase();
+async function findItem(companyId: string, id: string) {
+  const { data, error: queryError } = await getSupabase().from('boq_items')
+    .select('id,project_id,item_code,code,description,unit,quantity,unit_price,total,parent_id,level,created_at,projects(name)')
+    .eq('id', id).eq('company_id', companyId).maybeSingle();
+  if (queryError) throw queryError;
+  return data;
+}
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'boq', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: item, error: queryErr } = await s.from('boq_items')
-      .select('*, projects(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (queryErr) throw queryErr;
+    if (!deliveryUuid.safeParse(id).success) return error('معرف بند المقايسة غير صالح');
+    const item = await findItem(auth.companyId, id);
     if (!item) return notFound();
-
-    const result = item as Record<string, any>;
-    result.project_name = result.projects?.name || null;
-
-    return success(result);
-  } catch (err) {
-    return handleApiError(err);
+    return success({ ...item, project_name: (item as any).projects?.name || null, projects: undefined });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'boq', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody(req);
-
-    const { data: existing } = await s.from('boq_items')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const updateData: any = {};
-    if (body.item_code !== undefined) updateData.item_code = body.item_code;
-    if (body.code !== undefined) updateData.item_code = body.code;
-    if (body.description !== undefined) updateData.description = body.description;
-    if (body.unit !== undefined) updateData.unit = body.unit;
-    if (body.quantity !== undefined) updateData.quantity = body.quantity;
-    if (body.unit_price !== undefined) updateData.unit_price = body.unit_price;
-
-    const { data: updated, error: updateErr } = await s.from('boq_items')
-      .update(updateData)
-      .eq('id', id).eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    return success(updated);
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف بند المقايسة غير صالح');
+    const parsed = boqUpdateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات بند المقايسة غير صالحة');
+    if (!await findItem(auth.companyId, id)) return notFound();
+    const { code, ...rest } = parsed.data;
+    const patch = { ...rest, ...(parsed.data.item_code || code ? { item_code: parsed.data.item_code || code } : {}) };
+    const { data, error: rpcError } = await getSupabase().rpc('update_boq_item_atomic', {
+      p_company_id: auth.companyId, p_item_id: id, p_patch: patch, p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'boq', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('boq_items')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    await s.from('boq_items').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف بند المقايسة غير صالح');
+    if (!await findItem(auth.companyId, id)) return notFound();
+    const { data, error: rpcError } = await getSupabase().rpc('delete_boq_item_atomic', {
+      p_company_id: auth.companyId, p_item_id: id, p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

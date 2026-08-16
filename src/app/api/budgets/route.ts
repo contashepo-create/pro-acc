@@ -1,50 +1,56 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { z } from 'zod';
+import { success, error, notFound, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
 
-const sb = () => getSupabase();
+const uuidSchema = z.string().uuid();
+const createSchema = z.object({
+  project_id: uuidSchema,
+  category: z.enum(['materials', 'labor', 'equipment', 'subcontractor', 'overhead', 'other']),
+  subcategory: z.string().trim().max(100).optional().nullable(),
+  amount: z.number().finite().positive().max(9999999999999.99)
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8),
+  period: z.enum(['total', 'monthly', 'quarterly', 'phase']).default('total'),
+  notes: z.string().trim().max(1000).optional().nullable(),
+}).strict();
+const amount = (value: unknown) => Number(value) || 0;
 
-/**
- * GET /api/budgets — List budgets with actual comparison
- */
+/** List atomic project budgets with posted-ledger net actuals. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'budgets', 'read');
-    const s = sb();
-    const url = new URL(request.url);
-    const projectId = url.searchParams.get('project_id');
+    const projectId = new URL(request.url).searchParams.get('project_id');
+    if (projectId && !uuidSchema.safeParse(projectId).success) return error('معرّف المشروع غير صالح');
+    const s = getSupabase();
+    if (projectId) {
+      const { data: project, error: projectError } = await s.from('projects').select('id')
+        .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+      if (projectError) throw projectError;
+      if (!project) return notFound();
+    }
 
-    let query = s.from('project_budgets')
-      .select('*, projects(name)')
-      .eq('company_id', auth.companyId);
-
-    if (projectId) query = query.eq('project_id', projectId);
-
-    const { data, error: qErr } = await query.order('created_at', { ascending: false });
-    if (qErr) throw qErr;
-
-    const budgets = await Promise.all((data || []).map(async (b: any) => {
-      // Calculate actual spending for this budget category
-      const actual = await getActualSpending(s, auth.companyId, b.project_id, b.category);
-      const variance = (parseFloat(b.amount) || 0) - actual;
-      const variancePercent = (parseFloat(b.amount) || 0) > 0
-        ? (variance / parseFloat(b.amount)) * 100 : 0;
-
+    const { data, error: queryError } = await s.rpc('get_project_budget_rows', {
+      p_company_id: auth.companyId,
+      p_project_id: projectId || null,
+    });
+    if (queryError) throw queryError;
+    const actualByScope = new Map<string, number>();
+    const budgets = (data || []).map((row: any) => {
+      const budgetAmount = amount(row.amount);
+      const actual = amount(row.actual_spent);
+      actualByScope.set(`${row.project_id}:${row.category}`, actual);
+      const variance = budgetAmount - actual;
       return {
-        ...b,
-        project_name: b.projects?.name || null,
+        ...row,
+        projects: undefined,
         actual_spent: actual,
         variance,
-        variance_percent: variancePercent,
+        variance_percent: budgetAmount > 0 ? (variance / budgetAmount) * 100 : 0,
         is_over_budget: variance < 0,
       };
-    }));
-
-    // Summary
-    const totalBudget = budgets.reduce((s: number, b: any) => s + (parseFloat(b.amount) || 0), 0);
-    const totalActual = budgets.reduce((s: number, b: any) => s + b.actual_spent, 0);
-
+    });
+    const totalBudget = budgets.reduce((sum: number, row: any) => sum + amount(row.amount), 0);
+    const totalActual = [...actualByScope.values()].reduce((sum, value) => sum + value, 0);
     return success({
       budgets,
       summary: {
@@ -59,75 +65,32 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/**
- * POST /api/budgets — Create budget entry
- */
+/** Create exactly one audited budget per project/category. */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'budgets', 'create');
-    const s = sb();
-    const body = await request.json();
-
-    if (!body.project_id || !body.category || !body.amount) {
-      return error('المشروع والفئة والمبلغ مطلوبة');
+    const parsed = createSchema.safeParse(await parseBody<unknown>(request));
+    if (!parsed.success) return error('بيانات الميزانية غير صالحة');
+    const input = parsed.data;
+    const { data, error: createError } = await getSupabase().rpc('create_project_budget_atomic', {
+      p_company_id: auth.companyId,
+      p_project_id: input.project_id,
+      p_category: input.category,
+      p_subcategory: input.subcategory || '',
+      p_amount: input.amount,
+      p_period: input.period,
+      p_notes: input.notes || '',
+      p_user_id: auth.userId,
+    });
+    if (createError) {
+      const message = String(createError.message || '');
+      if (message.includes('المشروع غير موجود')) return notFound();
+      if (message.includes('توجد ميزانية')) return error(message, 409);
+      if (message.includes('غير صالحة')) return error(message);
+      throw createError;
     }
-
-    const budgetId = generateId();
-    const { data, error: insertErr } = await s.from('project_budgets')
-      .insert({
-        id: budgetId,
-        company_id: auth.companyId,
-        project_id: body.project_id,
-        category: body.category, // materials, labor, equipment, subcontractor, overhead
-        subcategory: body.subcategory || null,
-        amount: body.amount,
-        period: body.period || 'total', // total, monthly, quarterly
-        notes: body.notes || null,
-        created_by: auth.userId,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
     return success(data, 201);
   } catch (err) {
     return handleApiError(err);
-  }
-}
-
-async function getActualSpending(s: any, companyId: string, projectId: string, category: string): Promise<number> {
-  try {
-    // Map budget category to account codes
-    const categoryAccounts: Record<string, string[]> = {
-      materials: ['5100', '5110', '5120'],
-      labor: ['5200', '5210', '5220'],
-      equipment: ['5300', '5310'],
-      subcontractor: ['5400', '5410'],
-      overhead: ['5500', '5510', '5520'],
-    };
-
-    const accountCodes = categoryAccounts[category] || [];
-    if (accountCodes.length === 0) return 0;
-
-    // Get account IDs
-    const { data: accounts } = await s.from('accounts')
-      .select('id')
-      .eq('company_id', companyId)
-      .in('code', accountCodes);
-
-    if (!accounts || accounts.length === 0) return 0;
-    const accountIds = accounts.map((a: any) => a.id);
-
-    // Get actual spending from journal lines linked to this project
-    const { data: lines } = await s.from('journal_lines')
-      .select('debit')
-      .eq('company_id', companyId)
-      .eq('project_id', projectId)
-      .in('account_id', accountIds);
-
-    return (lines || []).reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
-  } catch {
-    return 0;
   }
 }

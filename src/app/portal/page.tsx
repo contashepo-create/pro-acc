@@ -222,7 +222,7 @@ export default function CustomerPortalPage() {
               {/* ZATCA QR */}
               {selectedInvoice.zatca_qr && (
                 <div className="mt-6 text-center">
-                  <p className="text-sm text-gray-500 mb-2">رمز ZATCA</p>
+                  <p className="text-sm text-gray-500 mb-2">رمز ZATCA للمرحلة الأولى</p>
                   <div className="inline-block bg-white p-3 rounded-lg border">
                     <div className="w-32 h-32 bg-gray-100 flex items-center justify-center text-xs text-gray-400">
                       QR Code

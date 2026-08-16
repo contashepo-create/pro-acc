@@ -77,9 +77,12 @@ function makeDb(db: Record<string, Row[]>) {
     return api;
   };
 
-  const db_: any = { from, calls };
+  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
   db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `Could not find the function ${name}` } });
-  db_.rpc = (name: string, params: any) => db_.rpcImpl(name, params);
+  db_.rpc = (name: string, params: any) => {
+    db_.rpcCalls.push({ name, params });
+    return db_.rpcImpl(name, params);
+  };
   return db_;
 }
 
@@ -93,6 +96,7 @@ jest.mock('@/lib/usage-limits', () => ({
 
 import { POST as invoicesPOST } from '@/app/api/invoices/route';
 import { PATCH as invoicePATCH } from '@/app/api/invoices/[id]/route';
+import { GET as invoiceZatcaGET } from '@/app/api/invoices/[id]/zatca/route';
 
 const C1 = 'company-1';
 const CLIENT = '00000000-0000-4000-8000-0000000000c1';
@@ -174,201 +178,157 @@ function insertsOf(table: string) {
 
 // ---------------------------------------------------------------------------
 
-describe('POST /api/invoices — server-side amounts (never trust client)', () => {
-  test('recomputes subtotal/vat/total from items, ignoring client lies', async () => {
+describe('POST /api/invoices — atomic financial boundary', () => {
+  beforeEach(() => {
     mockDb = makeDb(baseDb());
+  });
+
+  test('passes trusted tenant/user context and source items to one transaction RPC', async () => {
+    mockDb.rpcImpl = async () => ({
+      data: { id: 'inv-1', total: 402.5, vat_amount: 52.5, journal_entry_id: 'je-1' },
+      error: null,
+    });
     const res = await invoicesPOST(authedRequest(invoiceBody()));
     expect(res.status).toBe(201);
-
-    const inv = insertsOf('invoices')[0].mut.payload;
-    expect(inv.subtotal).toBe(350);         // 2*100 + 3*50 — not 0.01
-    expect(inv.vat_amount).toBe(52.5);      // 350 * 15% — not 0
-    expect(inv.total).toBe(402.5);          // not 0.01
-    expect(inv.company_id).toBe(C1);
-    expect(inv.status).toBe('unpaid');
-    expect(inv.paid_amount).toBe(0);
-
-    const itemInserts = insertsOf('invoice_items');
-    expect(itemInserts.length).toBeGreaterThan(0);
-    for (const ins of itemInserts) {
-      expect(ins.mut.payload.company_id).toBe(C1);
-    }
-  });
-
-  test('honours per-item discount in server computation', async () => {
-    mockDb = makeDb(baseDb());
-    const body = invoiceBody({
-      items: [{ description: 'بند', quantity: 2, unitPrice: 100, discount: 50, total: 150 }],
+    expect(mockDb.rpcCalls).toHaveLength(1);
+    expect(mockDb.rpcCalls[0]).toMatchObject({
+      name: 'create_sales_invoice_atomic',
+      params: {
+        p_company_id: C1,
+        p_user_id: 'u1',
+        p_contact_id: CLIENT,
+        p_items: invoiceBody().items,
+        p_vat_rate: 0.15,
+        p_collected_amount: 0,
+      },
     });
-    const res = await invoicesPOST(authedRequest(body));
-    expect(res.status).toBe(201);
-    const inv = insertsOf('invoices')[0].mut.payload;
-    expect(inv.subtotal).toBe(150);   // 200 - 50
-    expect(inv.vat_amount).toBe(22.5);
-    expect(inv.total).toBe(172.5);
-    const item = insertsOf('invoice_items')[0].mut.payload;
-    expect(item.total).toBe(150);
-    expect(item.unit_price).toBe(100);
-    expect(item.company_id).toBe(C1);
-  });
-
-  test('discount is capped at the item gross', async () => {
-    mockDb = makeDb(baseDb());
-    const body = invoiceBody({
-      items: [{ description: 'بند', quantity: 1, unitPrice: 100, discount: 99999 }],
-    });
-    const res = await invoicesPOST(authedRequest(body));
-    expect(res.status).toBe(201);
-    expect(insertsOf('invoices')[0].mut.payload.subtotal).toBe(0);
-    expect(insertsOf('invoices')[0].mut.payload.total).toBe(0);
-  });
-
-  test('vatEnabled=false zeroes the VAT', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await invoicesPOST(authedRequest(invoiceBody({ vatEnabled: false, vatRate: 0 })));
-    expect(res.status).toBe(201);
-    const inv = insertsOf('invoices')[0].mut.payload;
-    expect(inv.vat_amount).toBe(0);
-    expect(inv.total).toBe(350);
-  });
-});
-
-describe('POST /api/invoices — journal posting', () => {
-  test('uses the journal sequence (not the invoice number) and posts balanced, tenant-scoped lines', async () => {
-    const db = baseDb();
-    db.journal_sequences.push({ company_id: C1, year: 2026, last_number: 7 });
-    mockDb = makeDb(db);
-
-    const res = await invoicesPOST(authedRequest(invoiceBody()));
-    expect(res.status).toBe(201);
-
-    const invInsert = insertsOf('invoices')[0].mut.payload;
-    const jeInsert = insertsOf('journal_entries')[0].mut.payload;
-    expect(invInsert.number).toBe(1);            // first invoice
-    expect(jeInsert.number).toBe(8);             // journal sequence continued — NOT 1
-    expect(jeInsert.company_id).toBe(C1);
-
-    const jl = insertsOf('journal_lines')[0].mut.payload as Row[];
-    const sum = (k: 'debit' | 'credit') => jl.reduce((s, l) => s + (l[k] || 0), 0);
-    expect(sum('debit')).toBeCloseTo(402.5);
-    expect(sum('credit')).toBeCloseTo(402.5);
-    for (const l of jl) {
-      expect(l.company_id).toBe(C1);
-      expect(l.account_code).toMatch(/^\d{4}$/);
-      expect(l.account_name).toBeTruthy();
-    }
-    // AR line carries the full total when unpaid
-    const arLine = jl.find((l) => l.account_code === '1130');
-    expect(arLine.debit).toBeCloseTo(402.5);
-    const vatLine = jl.find((l) => l.account_code === '2120');
-    expect(vatLine.credit).toBeCloseTo(52.5);
-  });
-
-  test('immediate collection: bank line uses the REAL account code, voucher created, status paid', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await invoicesPOST(authedRequest(invoiceBody({
-      collected_amount: 402.5,
-      bank_safe_id: SAFE,
-    })));
-    expect(res.status).toBe(201);
-
-    const inv = insertsOf('invoices')[0].mut.payload;
-    // Open items: الفاتورة تُنشأ غير مدفوعة ثم يخصص سند القبض الحالة
-    expect(inv.status).toBe('unpaid');
-    expect(inv.paid_amount).toBe(0);
-
-    const invoiceJl = insertsOf('journal_lines')[0].mut.payload as Row[];
-    const arLine = invoiceJl.find((l) => l.account_code === '1130');
-    expect(arLine.debit).toBeCloseTo(402.5);
-    expect(invoiceJl.find((l) => l.account_id === BANK_ACC)).toBeUndefined();
-
-    const voucher = insertsOf('voucher_receipts')[0].mut.payload;
-    expect(voucher.company_id).toBe(C1);
-    expect(voucher.amount).toBe(402.5);
-
-    const receiptJl = insertsOf('journal_lines').map((c) => c.mut.payload).flat() as Row[];
-    const bankLine = receiptJl.find((l) => l.account_id === BANK_ACC);
-    expect(bankLine).toBeTruthy();
-    expect(bankLine.debit).toBeCloseTo(402.5);
-  });
-});
-
-describe('POST /api/invoices — tenant isolation', () => {
-  test('foreign clientId → 404 with zero writes', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await invoicesPOST(authedRequest(invoiceBody({ clientId: '00000000-0000-4000-8000-00000000dead' })));
-    expect(res.status).toBe(404);
+    expect(mockDb.rpcCalls[0].params).not.toHaveProperty('p_total');
+    expect(mockDb.rpcCalls[0].params).not.toHaveProperty('p_subtotal');
     expect(insertsOf('invoices')).toHaveLength(0);
     expect(insertsOf('journal_entries')).toHaveLength(0);
-    // sequence must not be burned by a rejected request
-    expect(insertsOf('invoice_sequences')).toHaveLength(0);
   });
 
-  test('immediate collection requires a linked bank/safe and never silently ignores the amount', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await invoicesPOST(authedRequest(invoiceBody({ collected_amount: 10 })));
-    expect(res.status).toBe(400);
-    expect(insertsOf('invoices')).toHaveLength(0);
+  test('normalizes optional immediate collection into the atomic call', async () => {
+    mockDb.rpcImpl = async () => ({ data: { id: 'inv-2', total: 402.5 }, error: null });
+    const res = await invoicesPOST(authedRequest(invoiceBody({ collected_amount: 100, bank_safe_id: SAFE })));
+    expect(res.status).toBe(201);
+    expect(mockDb.rpcCalls[0].params).toMatchObject({
+      p_collected_amount: 100,
+      p_bank_safe_id: SAFE,
+    });
   });
 
-  test('rejects collection above the computed server-side total', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await invoicesPOST(authedRequest(invoiceBody({ collected_amount: 999999, bank_safe_id: SAFE })));
+  test.each([
+    [{ collected_amount: -1 }, 'مبلغ التحصيل'],
+    [{ collected_amount: 1.001 }, 'مبلغ التحصيل'],
+  ])('rejects invalid collection input before PostgreSQL', async (overrides, message) => {
+    const res = await invoicesPOST(authedRequest(invoiceBody(overrides)));
     expect(res.status).toBe(400);
-    expect(insertsOf('invoices')).toHaveLength(0);
+    expect((await res.json()).message).toContain(message);
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
+});
+
+describe('PATCH /api/invoices/[id] — lifecycle RPC', () => {
+  beforeEach(() => {
+    mockDb = makeDb(baseDb());
   });
 
-  test('foreign bank_safe_id → 400 with zero writes', async () => {
-    mockDb = makeDb(baseDb());
-    const res = await invoicesPOST(authedRequest(invoiceBody({
-      collected_amount: 402.5,
-      bank_safe_id: '00000000-0000-4000-8000-00000000beef',
-    })));
+  test('refuses to mark paid without a receipt allocation', async () => {
+    const res = await invoicePATCH(authedRequest({ status: 'paid' }), paramsOf('30000000-0000-4000-8000-000000000001'));
     expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.message).toContain('الخزينة');
-    expect(insertsOf('invoices')).toHaveLength(0);
+    expect((await res.json()).message).toMatch(/سند قبض|مدفوعة/);
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
+
+  test('cancels through one tenant-scoped reversal transaction', async () => {
+    mockDb.rpcImpl = async () => ({ data: { id: 'inv-1', status: 'cancelled', reversal_id: 'je-r1' }, error: null });
+    const res = await invoicePATCH(authedRequest({ status: 'cancelled', notes: 'سبب' }), paramsOf('30000000-0000-4000-8000-000000000001'));
+    expect(res.status).toBe(200);
+    expect(mockDb.rpcCalls).toEqual([{
+      name: 'cancel_sales_invoice_atomic',
+      params: {
+        p_company_id: C1,
+        p_invoice_id: '30000000-0000-4000-8000-000000000001',
+        p_notes: 'سبب',
+        p_user_id: 'u1',
+      },
+    }]);
+    expect(insertsOf('journal_entries')).toHaveLength(0);
     expect(insertsOf('journal_lines')).toHaveLength(0);
   });
 });
 
-describe('PATCH /api/invoices/[id]', () => {
-  test('refuses to mark paid without a receipt allocation', async () => {
-    const db = baseDb();
-    db.invoices.push({ id: 'inv-1', company_id: C1, number: 3, total: 1150, paid_amount: 0, status: 'unpaid', journal_entry_id: null });
-    mockDb = makeDb(db);
-    const res = await invoicePATCH(authedRequest({ status: 'paid' }), paramsOf('inv-1'));
-    expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.message).toMatch(/سند قبض|مدفوعة/);
-    const upd = mockDb.calls.find((c) => c.mut.kind === 'update' && c.table === 'invoices');
-    expect(upd).toBeUndefined();
+describe('GET /api/invoices/[id]/zatca — immutable tenant tax document', () => {
+  const invoiceId = '30000000-0000-4000-8000-000000000001';
+  const invoiceRow = {
+    id: invoiceId,
+    company_id: C1,
+    number: 7,
+    date: '2026-08-01',
+    subtotal: 100,
+    vat_rate: 0.15,
+    vat_amount: 15,
+    // Deliberately wrong legacy aliases: the endpoint must ignore them.
+    tax_rate: 15,
+    tax_amount: 0,
+    total: 115,
+    status: 'unpaid',
+    deleted_at: null,
+    created_at: '2026-08-01T10:11:12Z',
+    tax_snapshot: {
+      seller: {
+        name: 'البائع وقت الإصدار', vat_number: '300000000000003',
+        commercial_registration: 'CR-1', address: 'عنوان البائع',
+        country_code: 'SA', currency_code: 'SAR',
+      },
+      buyer: { name: 'المشتري وقت الإصدار', vat_number: '310000000000003', address: 'عنوان المشتري', country_code: 'SA' },
+    },
+  };
+
+  beforeEach(() => {
+    const data = baseDb();
+    data.invoices = [invoiceRow];
+    data.invoice_items = [{
+      id: 'line-1', company_id: C1, invoice_id: invoiceId,
+      description: 'خدمة', quantity: 1, unit_price: 100, total: 100,
+    }];
+    // Current master data differs; historical output must use tax_snapshot.
+    data.companies[0] = { ...data.companies[0], name: 'اسم البائع الجديد', tax_number: '399999999999993' };
+    mockDb = makeDb(data);
   });
 
-  test('cancelling creates a reversal entry with swapped debit/credit', async () => {
-    const db = baseDb();
-    db.invoices.push({ id: 'inv-1', company_id: C1, number: 3, total: 1150, paid_amount: 0, status: 'unpaid', journal_entry_id: 'je-1' });
-    db.journal_lines.push(
-      { id: 'l1', company_id: C1, journal_entry_id: 'je-1', account_id: AR, account_code: '1130', account_name: 'العملاء', debit: 1150, credit: 0, description: 'ذمم' },
-      { id: 'l2', company_id: C1, journal_entry_id: 'je-1', account_id: REV, account_code: '4100', account_name: 'إيرادات', debit: 0, credit: 1000, description: 'إيراد' },
-      { id: 'l3', company_id: C1, journal_entry_id: 'je-1', account_id: VAT, account_code: '2120', account_name: 'ضريبة', debit: 0, credit: 150, description: 'ضريبة' },
-    );
-    mockDb = makeDb(db);
-
-    const res = await invoicePATCH(authedRequest({ status: 'cancelled' }), paramsOf('inv-1'));
+  test('uses modern VAT facts and frozen parties and labels the output unsigned', async () => {
+    const res = await invoiceZatcaGET(authedRequest(), paramsOf(invoiceId));
     expect(res.status).toBe(200);
+    const payload = (await res.json()).data;
+    expect(payload.ublXml).toContain('البائع وقت الإصدار');
+    expect(payload.ublXml).not.toContain('اسم البائع الجديد');
+    expect(payload.ublXml).toContain('<cbc:Percent>15</cbc:Percent>');
+    expect(payload.ublXml).toContain('<cbc:TaxAmount currencyID="SAR">15.00</cbc:TaxAmount>');
+    expect(payload.artifact).toMatchObject({
+      format: 'ubl_2_1_unsigned', cryptographicallySigned: false,
+      clearanceSubmitted: false, reportingSubmitted: false, phase2Compliant: false,
+    });
+  });
 
-    const revEntry = insertsOf('journal_entries')[0].mut.payload;
-    expect(revEntry.reference_type).toBe('invoice_reversal');
-    expect(revEntry.company_id).toBe(C1);
+  test('does not expose an invoice owned by another company', async () => {
+    const db = baseDb();
+    db.invoices = [{ ...invoiceRow, company_id: 'company-2' }];
+    db.invoice_items = [];
+    mockDb = makeDb(db);
+    const res = await invoiceZatcaGET(authedRequest(), paramsOf(invoiceId));
+    expect(res.status).toBe(404);
+  });
 
-    const revLines = insertsOf('journal_lines')[0].mut.payload as Row[];
-    expect(revLines).toHaveLength(3);
-    // swapped: original debit 1150 becomes credit
-    const arReversal = revLines.find((l) => l.account_code === '1130');
-    expect(arReversal.debit).toBe(0);
-    expect(arReversal.credit).toBe(1150);
-    for (const l of revLines) expect(l.company_id).toBe(C1);
+  test('refuses to serialize inconsistent financial source facts', async () => {
+    mockDb = makeDb({
+      ...baseDb(),
+      invoices: [{ ...invoiceRow, vat_amount: 0 }],
+      invoice_items: [{ id: 'line-1', company_id: C1, invoice_id: invoiceId, description: 'خدمة', quantity: 1, unit_price: 100, total: 100 }],
+    });
+    const res = await invoiceZatcaGET(authedRequest(), paramsOf(invoiceId));
+    expect(res.status).toBe(409);
   });
 });
 

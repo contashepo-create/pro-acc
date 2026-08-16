@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
-import { success, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
+const number = (value: unknown) => Number(value) || 0;
 
 interface ConsolidatedItem {
   companyId: string;
@@ -13,107 +15,42 @@ interface ConsolidatedItem {
   balance: number;
 }
 
-interface AccountRow {
-  id: string;
-  code: string;
-  name: string;
-  type: string;
-}
-
-interface JournalLine {
-  debit: number | string;
-  credit: number | string;
-}
-
 /**
- * GET /api/reports/consolidation
- * توحيد مالي لمجموعة شركات (Financial Consolidation)
+ * Standalone company consolidation view. Cross-company consolidation is not
+ * exposed until an explicit, authorized group-company model exists.
  */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'financial_reports', 'read');
-    const s = sb();
     const url = new URL(request.url);
-
     const asOfDate = url.searchParams.get('as_of_date') || new Date().toISOString().split('T')[0];
+    if (!isValidDate(asOfDate)) return error('تاريخ التقرير غير صالح');
 
-    // SECURITY: كان يقبل company_ids من المستخدم ويقرأ دفاتر أي شركة (تسريب
-    // مالي متقاطع للمستأجرين). لا يوجد نموذج مجموعات شركات في النظام، لذا
-    // التوحيد يقتصر على شركة المستخدم المصادَق فقط.
-    const companyIds: string[] = [auth.companyId];
+    const { data, error: queryError } = await sb().rpc('get_trial_balance_rows', {
+      p_company_id: auth.companyId, p_as_of: asOfDate,
+    });
+    if (queryError) throw queryError;
 
     const consolidatedData = {
-      assets: [] as ConsolidatedItem[],
-      liabilities: [] as ConsolidatedItem[],
-      equity: [] as ConsolidatedItem[],
-      revenue: [] as ConsolidatedItem[],
-      expenses: [] as ConsolidatedItem[],
+      assets: [] as ConsolidatedItem[], liabilities: [] as ConsolidatedItem[],
+      equity: [] as ConsolidatedItem[], revenue: [] as ConsolidatedItem[], expenses: [] as ConsolidatedItem[],
     };
-
-    const intercompanyEliminations = {
-      receivables: 0,
-      payables: 0,
-      revenue: 0,
-      expenses: 0,
-    };
-
-    for (const companyId of companyIds) {
-      const { data: accounts } = await s.from('accounts')
-        .select('id, code, name, type')
-        .eq('company_id', companyId)
-        .eq('is_active', true) as { data: AccountRow[] | null };
-
-      if (!accounts) continue;
-
-      for (const acc of accounts) {
-        const { data: lines } = await s.from('journal_lines')
-          .select('debit, credit')
-          .eq('account_id', acc.id)
-          .eq('company_id', companyId)
-          .lte('created_at', asOfDate) as { data: JournalLine[] | null };
-
-        const totalDebit = (lines || []).reduce((sum: number, l: JournalLine) => 
-          sum + (parseFloat(String(l.debit)) || 0), 0);
-        const totalCredit = (lines || []).reduce((sum: number, l: JournalLine) => 
-          sum + (parseFloat(String(l.credit)) || 0), 0);
-
-        let balance = 0;
-        if (acc.type === 'asset' || acc.type === 'expense') {
-          balance = totalDebit - totalCredit;
-        } else {
-          balance = totalCredit - totalDebit;
-        }
-
-        const item: ConsolidatedItem = {
-          companyId,
-          accountId: acc.id,
-          accountCode: acc.code,
-          accountName: acc.name,
-          accountType: acc.type,
-          balance,
-        };
-
-        switch (acc.type) {
-          case 'asset':
-            consolidatedData.assets.push(item);
-            break;
-          case 'liability':
-            consolidatedData.liabilities.push(item);
-            break;
-          case 'equity':
-            consolidatedData.equity.push(item);
-            break;
-          case 'revenue':
-            consolidatedData.revenue.push(item);
-            break;
-          case 'expense':
-            consolidatedData.expenses.push(item);
-            break;
-        }
-      }
+    for (const row of data || []) {
+      const debit = number((row as any).debit);
+      const credit = number((row as any).credit);
+      const type = String((row as any).account_type);
+      const balance = ['asset', 'expense'].includes(type) ? debit - credit : credit - debit;
+      if (Math.abs(balance) < 0.0001) continue;
+      const item: ConsolidatedItem = {
+        companyId: auth.companyId, accountId: (row as any).account_id,
+        accountCode: (row as any).account_code, accountName: (row as any).account_name,
+        accountType: type, balance,
+      };
+      const bucket = type === 'asset' ? 'assets' : type === 'liability' ? 'liabilities'
+        : type === 'equity' ? 'equity' : type === 'revenue' ? 'revenue' : type === 'expense' ? 'expenses' : null;
+      if (bucket) consolidatedData[bucket].push(item);
     }
 
-    // Calculate totals
     const totals = {
       assets: consolidatedData.assets.reduce((sum, item) => sum + item.balance, 0),
       liabilities: consolidatedData.liabilities.reduce((sum, item) => sum + item.balance, 0),
@@ -121,14 +58,12 @@ export async function GET(request: NextRequest) {
       revenue: consolidatedData.revenue.reduce((sum, item) => sum + item.balance, 0),
       expenses: consolidatedData.expenses.reduce((sum, item) => sum + item.balance, 0),
     };
-
+    const accountingDifference = totals.assets - (totals.liabilities + totals.equity + totals.revenue - totals.expenses);
     return success({
-      asOfDate,
-      companyIds,
-      data: consolidatedData,
-      totals,
-      eliminations: intercompanyEliminations,
-      isBalanced: Math.abs(totals.assets - (totals.liabilities + totals.equity + (totals.revenue - totals.expenses))) < 0.01,
+      asOfDate, companyIds: [auth.companyId], data: consolidatedData, totals,
+      eliminations: { receivables: 0, payables: 0, revenue: 0, expenses: 0 },
+      accountingDifference, isBalanced: Math.abs(accountingDifference) < 0.01,
+      scope: 'single_company',
     });
   } catch (err) {
     return handleApiError(err);

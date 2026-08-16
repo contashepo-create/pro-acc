@@ -1,8 +1,8 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, notFound, parseBody } from '@/lib/api-helpers';
-import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
+import { success, error, notFound, parseBody } from '@/lib/api-helpers';
+import { verifyMasterPassword } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
 
@@ -13,7 +13,7 @@ export async function PATCH(
   try {
     const __admin = await requireAdmin(request);
     const { id } = await paramsPromise;
-    if (!/^[0-9a-fA-F-]{8,}$/.test(id)) return error('معرّف المستخدم غير صالح', 400);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return error('معرّف المستخدم غير صالح', 400);
 
     const masterHeader = request.headers.get('x-master-password');
     if (!masterHeader) {
@@ -30,28 +30,17 @@ export async function PATCH(
       return error('كلمة المرور الرئيسية غير صحيحة', 401);
     }
 
-    const s = sb();
-    const { data: user, error: userErr } = await s.from('users')
-      .select('id, name, email, is_active')
-      .eq('id', id)
-      .single();
-
-    if (userErr || !user) {
-      return notFound();
+    const { error: updateErr } = await sb().rpc('set_company_user_status_atomic', {
+      p_user_id: id,
+      p_admin_id: __admin.adminId,
+      p_is_active: body.is_active,
+    });
+    if (updateErr) {
+      const message = String(updateErr.message || '');
+      if (message.includes('المستخدم غير موجود')) return notFound();
+      if (message.includes('آخر مدير')) return error(message, 409);
+      throw updateErr;
     }
-
-    const { error: updateErr } = await s.from('users')
-      .update({ is_active: body.is_active, updated_at: new Date().toISOString() })
-      .eq('id', id);
-    if (updateErr) throw updateErr;
-
-    await auditLog(
-      __admin.adminId,
-      body.is_active ? 'activate_user' : 'deactivate_user',
-      JSON.stringify({ userName: user.name, userEmail: user.email, previousState: user.is_active }),
-      'user',
-      id
-    );
 
     return success({
       message: body.is_active ? 'تم تفعيل المستخدم بنجاح' : 'تم إيقاف المستخدم بنجاح',

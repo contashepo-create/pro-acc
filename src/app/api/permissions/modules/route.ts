@@ -71,6 +71,7 @@ export async function POST(request: NextRequest) {
         name_en: name_en || null,
         icon: icon || '📁',
         group_name: group_name || 'custom',
+        code: `custom_${crypto.randomUUID().replace(/-/g, '')}`,
         is_system: false,
         sort_order: 100, // الأقسام المخصصة تأتي بعد النظامية
         is_active: true,
@@ -103,28 +104,17 @@ export async function DELETE(request: NextRequest) {
 
     if (!id) return error('معرف القسم مطلوب');
 
-    // التحقق من وجود القسم
-    const { data: moduleData } = await s.from('custom_modules')
-      .select('id, name, is_system')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!moduleData) return error('القسم غير موجود');
-
-    if ((moduleData as any).is_system) {
-      return error('لا يمكن حذف قسم نظامي');
+    const { error: deleteError } = await s.rpc('delete_custom_module_atomic', {
+      p_company_id: auth.companyId,
+      p_module_id: id,
+      p_user_id: auth.userId,
+    });
+    if (deleteError) {
+      const message = String(deleteError.message || 'فشل حذف القسم');
+      if (/غير موجود/.test(message)) return error(message, 404);
+      if (/نظامي/.test(message)) return error(message, 409);
+      throw deleteError;
     }
-
-    // حذف القسم
-    await s.from('custom_modules').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    // حذف الصلاحيات المرتبطة بهذا القسم
-    await s.from('user_permissions')
-      .delete()
-      .eq('company_id', auth.companyId)
-      .eq('module', (moduleData as any).name);
-
     return success({ message: 'تم حذف القسم بنجاح' });
   } catch (err) {
     return handleApiError(err);

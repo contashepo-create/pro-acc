@@ -12,7 +12,7 @@
  */
 
 // --- Mock modules before importing the routes ---
-import { mockClient, resetMock, setResult, findOp, callsForTable } from './helpers/supabase-mock';
+import { mockClient, resetMock, setResult, setRpcResult, getRpcCalls, findOp } from './helpers/supabase-mock';
 import { forgotPasswordSchema, resetPasswordSchema } from '@/lib/validation';
 import { createHash } from 'crypto';
 
@@ -27,6 +27,9 @@ jest.mock('@/lib/email', () => ({
 
 jest.mock('@/lib/rate-limit', () => ({
   checkRateLimit: jest.fn(async () => ({ allowed: true, remainingMinutes: 0 })),
+  checkPasswordResetRateLimit: jest.fn(async () => ({ allowed: true, remainingMinutes: 0 })),
+  recordPasswordResetRequest: jest.fn(async () => 'request-1'),
+  markPasswordResetRequest: jest.fn(async () => undefined),
   sanitizeEmailForFilter: (e: string) => e,
   sanitizeIpAddress: (i: string) => i,
 }));
@@ -126,87 +129,37 @@ describe('forgot-password — token stored hashed', () => {
   });
 });
 
-describe('reset-password — validation & token checks', () => {
+describe('reset-password — atomic token consumption', () => {
   beforeEach(resetMock);
 
-  test('rejects a weak password via schema', async () => {
+  test('rejects a weak password before calling PostgreSQL', async () => {
     expect(resetPasswordSchema.safeParse({ token: 't', password: 'short' }).success).toBe(false);
     const res = await resetPOST(req({ token: 'c'.repeat(64), password: 'weak' }));
     expect(res.status).toBe(400);
+    expect(getRpcCalls()).toHaveLength(0);
   });
 
-  test('rejects an invalid token', async () => {
-    setResult('password_reset_tokens', 'maybeSingle', null);
-    const res = await resetPOST(req({ token: 'unknown-token', password: 'Str0ng!Pass' }));
-    expect(res.status).toBe(400);
-    const j = await res.json();
-    expect(j.message).toContain('غير صالح');
-  });
-
-  test('rejects a used token', async () => {
-    setResult('password_reset_tokens', 'maybeSingle', { id: 't1', user_id: 'u1', expires_at: new Date(Date.now() + 600000).toISOString(), used: true });
-    const res = await resetPOST(req({ token: 'd'.repeat(64), password: 'Str0ng!Pass' }));
-    expect(res.status).toBe(400);
-    const j = await res.json();
-    expect(j.message).toContain('مسبقاً');
-  });
-
-  test('rejects an expired token', async () => {
-    setResult('password_reset_tokens', 'maybeSingle', { id: 't1', user_id: 'u1', expires_at: new Date(Date.now() - 60000).toISOString(), used: false });
-    const res = await resetPOST(req({ token: 'e'.repeat(64), password: 'Str0ng!Pass' }));
-    expect(res.status).toBe(400);
-    const j = await res.json();
-    expect(j.message).toContain('انتهت');
-  });
-
-  test('queries by the sha256-hashed token (not the raw token)', async () => {
-    setResult('password_reset_tokens', 'maybeSingle', { id: 't1', user_id: 'u1', expires_at: new Date(Date.now() + 600000).toISOString(), used: false });
-    setResult('users', 'maybeSingle', { token_version: 0 });
-    setResult('users', 'update', null);
-    setResult('password_reset_tokens', 'update', null);
-
-    await resetPOST(req({ token: 'a'.repeat(64), password: 'Str0ng!Pass' }));
-
-    // Find the .eq('token', ...) filter within the password_reset_tokens query.
-    const eqCalls = callsForTable('password_reset_tokens')
-      .flatMap((c) => c.ops)
-      .filter((o) => o.op === 'eq' && o.args[0] === 'token');
-    expect(eqCalls.length).toBe(1); // hashed path only (found) — no plain fallback
-    // The filter value is the sha256 hash of the raw token, NOT the raw token.
-    expect(eqCalls[0].args[1]).toBe(createHash('sha256').update('a'.repeat(64)).digest('hex'));
-    expect(eqCalls[0].args[1]).not.toBe('a'.repeat(64));
-  });
-});
-
-describe('reset-password — password change & session invalidation', () => {
-  beforeEach(resetMock);
-
-  test('bumps token_version so old JWTs become invalid', async () => {
-    setResult('password_reset_tokens', 'maybeSingle', { id: 't1', user_id: 'u1', expires_at: new Date(Date.now() + 600000).toISOString(), used: false });
-    setResult('users', 'maybeSingle', { token_version: 3 });
-    setResult('users', 'update', null);
-    setResult('password_reset_tokens', 'update', null);
-
-    const res = await resetPOST(req({ token: 'b'.repeat(64), password: 'NewStr0ng!Pass' }));
+  test('hashes the URL token and delegates consume/update/session revocation to one RPC', async () => {
+    setRpcResult('consume_password_reset_token', { id: 'u1' });
+    const raw = 'a'.repeat(64);
+    const res = await resetPOST(req({ token: raw, password: 'NewStr0ng!Pass' }));
     expect(res.status).toBe(200);
-
-    const userUpdate = findOp('users', 'update')!;
-    const data = userUpdate.args[0] as any;
-    expect(data.token_version).toBe(4); // 3 + 1
-    expect(data.password_hash).toContain(':'); // scrypt salt:key format
-
-    const tokenUpdate = findOp('password_reset_tokens', 'update')!;
-    expect(tokenUpdate.args[0]).toEqual({ used: true });
+    const call = getRpcCalls()[0];
+    expect(call.name).toBe('consume_password_reset_token');
+    expect(call.params.p_token_hash).toBe(createHash('sha256').update(raw).digest('hex'));
+    expect(call.params.p_token_hash).not.toBe(raw);
+    expect(call.params.p_password_hash).toContain(':');
+    expect(findOp('users', 'update')).toBeNull();
+    expect(findOp('password_reset_tokens', 'update')).toBeNull();
   });
 
-  test('treats a user with no token_version as 0 and bumps to 1', async () => {
-    setResult('password_reset_tokens', 'maybeSingle', { id: 't1', user_id: 'u1', expires_at: new Date(Date.now() + 600000).toISOString(), used: false });
-    setResult('users', 'maybeSingle', null); // no version stored
-    setResult('users', 'update', null);
-    setResult('password_reset_tokens', 'update', null);
-
-    await resetPOST(req({ token: 'c'.repeat(64), password: 'NewStr0ng!Pass' }));
-    const userUpdate = findOp('users', 'update')!;
-    expect((userUpdate.args[0] as any).token_version).toBe(1);
+  test.each([
+    ['الرمز غير صالح أو مستخدم', 'الرمز غير صالح'],
+    ['انتهت صلاحية الرمز', 'انتهت صلاحية'],
+  ])('maps one-time token failures without exposing database details', async (dbMessage, responseMessage) => {
+    setRpcResult('consume_password_reset_token', { data: null, error: { code: 'P0001', message: dbMessage } });
+    const res = await resetPOST(req({ token: 'b'.repeat(64), password: 'NewStr0ng!Pass' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toContain(responseMessage);
   });
 });

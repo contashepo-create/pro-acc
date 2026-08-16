@@ -1,98 +1,57 @@
 import { NextRequest } from 'next/server';
+import { z } from 'zod';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError, success, error, parseBody, requireModulePermission } from '@/lib/api-helpers';
-import { createJournalEntry } from '@/lib/journal-utils';
-const sb = () => getSupabase() as any;
+import { handleApiError, success, error, parseBody, requireModulePermission, getPaginationParams } from '@/lib/api-helpers';
+
+const sb = () => getSupabase();
+const saleSchema = z.object({
+  terminal_id: z.string().uuid('طرفية نقطة البيع غير صالحة'),
+  total: z.number().finite().positive('إجمالي البيع غير صالح')
+    .refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, 'إجمالي البيع يجب ألا يتجاوز منزلتين'),
+  payment_method: z.enum(['cash', 'card', 'transfer'], { message: 'طريقة الدفع غير صالحة' }).optional().default('cash'),
+}).strict();
+const COLUMNS = 'id, branch_id, terminal_id, number, date, time, subtotal, tax_amount, discount_amount, total, payment_method, status, cashier_id, journal_entry_id, created_at, pos_terminals!terminal_id(name, code)';
 
 export async function GET(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'pos', 'read');
-    const s = sb();
-    const { data, error: err } = await s.from('pos_sales').select('*').eq('company_id', auth.companyId).order('date', { ascending: false }).limit(50);
-    if (err) throw err;
-    return success({ sales: data || [] });
-  } catch (e) { return handleApiError(e); }
+    const { page, pageSize } = getPaginationParams(req.url);
+    const offset = (page - 1) * pageSize;
+    const { data, error: queryError, count } = await sb().from('pos_sales')
+      .select(COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId)
+      .order('date', { ascending: false }).order('created_at', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
+    const sales = (data || []).map((row: Record<string, unknown>) => ({
+      ...row,
+      terminal_name: (row.pos_terminals as { name?: string } | null)?.name || null,
+      terminal_code: (row.pos_terminals as { code?: string } | null)?.code || null,
+      pos_terminals: undefined,
+    }));
+    return success({ sales, total: count || 0, page, pageSize });
+  } catch (err) {
+    return handleApiError(err);
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const auth = await requireModulePermission(req, 'pos', 'create');
-    const s = sb();
-    const body = await parseBody(req);
-    const { terminal_id, total, payment_method } = body;
-    const saleTotal = Number(total);
-    if (!Number.isFinite(saleTotal) || saleTotal <= 0 || Math.abs(saleTotal * 100 - Math.round(saleTotal * 100)) > 1e-8) {
-      return error('إجمالي البيع غير صالح');
-    }
-    if (payment_method !== undefined && !['cash', 'card', 'transfer', 'credit'].includes(String(payment_method))) {
-      return error('طريقة الدفع غير صالحة');
-    }
-
-    // عزل مستأجرين: الطرفية (إن حُددت) يجب أن تنتمي لهذه الشركة
-    if (terminal_id) {
-      const { data: terminal } = await s.from('pos_terminals')
-        .select('id').eq('id', terminal_id).eq('company_id', auth.companyId).maybeSingle();
-      if (!terminal) return error('الطرفية غير موجودة', 404);
-    }
-
-    // Get next number
-    let number = 1;
-    try {
-      const { data } = await s.rpc('next_voucher_number', { p_company_id: auth.companyId, p_table_name: 'pos_sales' });
-      number = data as number;
-    } catch {
-      const { data: max } = await s.from('pos_sales').select('number').eq('company_id', auth.companyId).order('number', { ascending: false }).limit(1).maybeSingle();
-      number = ((max as any)?.number || 0) + 1;
-    }
-
-    const { data, error: err } = await s.from('pos_sales').insert({
-      company_id: auth.companyId,
-      terminal_id: terminal_id || null,
-      number,
-      total: saleTotal,
-      payment_method: payment_method || 'cash',
-      status: 'completed',
-    }).select().single();
-
-    if (err) throw err;
-
-    // POS collections must post to a real cash/bank leaf account, never the
-    // 1110 group header. Require an active mapped safe until terminals gain
-    // their own settlement-account column.
-    const { data: settlementSafe } = await s.from('banks_safes').select('account_id')
-      .eq('company_id', auth.companyId).eq('is_active', true).limit(1).maybeSingle();
-    const { data: revAcc } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', '4100').maybeSingle();
-    if (!settlementSafe?.account_id || !revAcc) {
-      await s.from('pos_sales').delete().eq('id', data.id).eq('company_id', auth.companyId);
-      return error('يلزم ربط خزينة أو بنك نشط وحساب إيراد قبل إتمام مبيعات POS', 400);
-    }
-    const saleDate = new Date().toISOString().split('T')[0];
-    const { journalId, error: jeErr } = await createJournalEntry(auth.companyId, {
-      date: saleDate,
-      type: 'general',
-      description: `مبيعات POS #${number}`,
-      reference_type: 'pos_sale',
-      reference_id: data.id,
-      created_by: auth.userId,
-      lines: [
-        { account_id: settlementSafe.account_id, debit: saleTotal, credit: 0, description: `مبيعات POS ${number}` },
-        { account_id: revAcc.id, debit: 0, credit: saleTotal, description: `إيراد POS ${number}` },
-      ],
+    const parsed = saleSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const value = parsed.data;
+    const { data, error: createError } = await sb().rpc('create_pos_sale_atomic', {
+      p_company_id: auth.companyId,
+      p_terminal_id: value.terminal_id,
+      p_total: value.total,
+      p_payment_method: value.payment_method,
+      p_user_id: auth.userId,
     });
-    if (jeErr || !journalId) {
-      await s.from('pos_sales').delete().eq('id', data.id).eq('company_id', auth.companyId);
-      throw jeErr || new Error('فشل قيد مبيعات نقطة البيع');
-    }
-
-    // ربط القيد بالبيعة (كان يبقى journal_entry_id فارغاً رغم نجاح الترحيل)
-    const { data: linked, error: linkErr } = await s.from('pos_sales')
-      .update({ journal_entry_id: journalId })
-      .eq('id', data.id)
-      .eq('company_id', auth.companyId)
-      .select()
-      .single();
-    if (linkErr) throw linkErr;
-
-    return success(linked, 201);
-  } catch (e) { return handleApiError(e); }
+    const message = String(createError?.message || '');
+    if (message.includes('طرفية') || message.includes('خزينة تسوية')) return error(message, 404);
+    if (createError) throw createError;
+    return success(data, 201);
+  } catch (err) {
+    return handleApiError(err);
+  }
 }

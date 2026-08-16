@@ -22,10 +22,12 @@ export async function GET(
     if (queryErr) throw queryErr;
     if (!quotation) return notFound();
 
-    const { data: items } = await s.from('quotation_items')
+    const { data: items, error: itemsErr } = await s.from('quotation_items')
       .select('*')
       .eq('quotation_id', id)
+      .eq('company_id',auth.companyId)
       .order('id');
+    if (itemsErr) throw itemsErr;
 
     const result = quotation as Record<string, any>;
     result.items = items || [];
@@ -47,56 +49,18 @@ export async function PUT(
     const s = sb();
     const body = await parseBody(req);
 
-    const { data: existing } = await s.from('quotations')
-      .select('id, status')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const updateData: any = {};
-    if (body.date !== undefined) updateData.date = body.date;
-    if (body.contact_id !== undefined) updateData.contact_id = body.contact_id;
-    if (body.valid_until !== undefined) updateData.valid_until = body.valid_until;
-    if (body.status !== undefined) updateData.status = body.status;
-    if (body.notes !== undefined) updateData.notes = body.notes;
-    if (body.terms !== undefined) updateData.terms = body.terms;
-
-    if (body.items !== undefined) {
-      let subtotal = 0;
-      for (const item of body.items) subtotal += (item.quantity || 0) * (item.unit_price || 0);
-      const rate = body.tax_rate || 0;
-      const taxAmount = subtotal * rate;
-      const total = subtotal + taxAmount - (body.discount_amount || 0);
-
-      updateData.subtotal = subtotal;
-      updateData.tax_amount = taxAmount;
-      updateData.total = total;
-      if (body.tax_rate !== undefined) updateData.tax_rate = body.tax_rate;
-      if (body.discount_amount !== undefined) updateData.discount_amount = body.discount_amount;
-
-      await s.from('quotation_items').delete().eq('quotation_id', id).eq('company_id', auth.companyId);
-      for (const item of body.items) {
-        await s.from('quotation_items').insert({
-          company_id: auth.companyId,
-          quotation_id: id,
-          description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total: item.quantity * item.unit_price,
-        });
-      }
-    }
-
-    const { data: updated, error: updateErr } = await s.from('quotations')
-      .update(updateData)
-      .eq('id', id).eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
+    const allowed=new Set(['date','contact_id','valid_until','status','notes','terms','items','tax_rate','discount_amount']);
+    if (Object.keys(body).some((key)=>!allowed.has(key))) return error('يتضمن الطلب حقولاً غير قابلة للتعديل');
+    if (body.items!==undefined && (!Array.isArray(body.items) || body.items.length<1 || body.items.length>1000)) return error('بنود عرض السعر غير صالحة');
+    const payload={...body};
+    delete (payload as any).items;
+    const { data: updated, error: rpcErr } = await s.rpc('update_draft_quotation', {
+      p_company_id:auth.companyId,
+      p_quotation_id:id,
+      p_payload:payload,
+      p_items:body.items===undefined?null:body.items,
+    });
+    if (rpcErr) throw rpcErr;
     return success(updated);
   } catch (err) {
     return handleApiError(err);
@@ -112,22 +76,12 @@ export async function DELETE(
     const { id } = await params;
     const s = sb();
 
-    const { data: existing } = await s.from('quotations')
-      .select('id, status')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    if ((existing as any).status === 'converted') {
-      return error('لا يمكن حذف عرض محول إلى مشروع');
-    }
-
-    await s.from('quotation_items').delete().eq('quotation_id', id).eq('company_id', auth.companyId);
-    await s.from('quotations').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
+    const { data: deleted, error: rpcErr } = await s.rpc('delete_draft_quotation', {
+      p_company_id:auth.companyId,
+      p_quotation_id:id,
+    });
+    if (rpcErr) throw rpcErr;
+    return success({deleted:deleted===true});
   } catch (err) {
     return handleApiError(err);
   }

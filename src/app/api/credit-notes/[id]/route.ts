@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(
   req: NextRequest,
@@ -11,25 +12,43 @@ export async function GET(
   try {
     const auth = await requireModulePermission(req, 'credit_notes', 'read');
     const { id } = await params;
+    if (!UUID_RE.test(id)) return error('معرّف الإشعار غير صالح');
     const s = sb();
 
-    const { data: cn, error: err } = await s.from('credit_notes')
-      .select('*, contacts(name), invoices(number), projects(name)')
-      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    const { data: note, error: noteError } = await s.from('credit_notes')
+      .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (noteError) throw noteError;
+    if (!note) return notFound();
+    const row = note as Record<string, any>;
 
-    if (err) throw err;
-    if (!cn) return notFound();
+    const { data: items, error: itemsError } = await s.from('credit_note_items')
+      .select('*').eq('credit_note_id', id).eq('company_id', auth.companyId).order('id');
+    if (itemsError) throw itemsError;
 
-    const { data: items } = await s.from('credit_note_items')
-      .select('*').eq('credit_note_id', id).order('id');
+    const [contactResult, invoiceResult, projectResult] = await Promise.all([
+      row.contact_id
+        ? s.from('contacts').select('id, name').eq('id', row.contact_id).eq('company_id', auth.companyId).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      row.invoice_id
+        ? s.from('invoices').select('id, number').eq('id', row.invoice_id).eq('company_id', auth.companyId).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      row.project_id
+        ? s.from('projects').select('id, name').eq('id', row.project_id).eq('company_id', auth.companyId).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    for (const result of [contactResult, invoiceResult, projectResult]) if (result.error) throw result.error;
+    if ((row.contact_id && !contactResult.data) || (row.invoice_id && !invoiceResult.data)
+      || (row.project_id && !projectResult.data)) {
+      throw new Error('Credit note contains a missing or cross-tenant relationship');
+    }
 
-    const result = cn as Record<string, any>;
-    result.items = items || [];
-    result.contact_name = result.contacts?.name || null;
-    result.invoice_number = result.invoices?.number || null;
-    result.project_name = result.projects?.name || null;
-
-    return success(result);
+    return success({
+      ...row,
+      items: items || [],
+      contact_name: (contactResult.data as any)?.name || null,
+      invoice_number: (invoiceResult.data as any)?.number || null,
+      project_name: (projectResult.data as any)?.name || null,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -42,26 +61,14 @@ export async function DELETE(
   try {
     const auth = await requireModulePermission(req, 'credit_notes', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('credit_notes')
-      .select('id, journal_entry_id, number')
-      .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-
-    if (!existing) return notFound();
-
-    const cn = existing as any;
-
-    // Delete journal entry if exists
-    if (cn.journal_entry_id) {
-      const { deleteJournalEntry } = await import('@/lib/journal-utils');
-      await deleteJournalEntry(auth.companyId, cn.journal_entry_id);
-    }
-
-    await s.from('credit_note_items').delete().eq('credit_note_id', id);
-    await s.from('credit_notes').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
+    if (!UUID_RE.test(id)) return error('معرّف الإشعار غير صالح');
+    const { data: cancelled, error: cancelError } = await sb().rpc('cancel_credit_note_atomic', {
+      p_company_id: auth.companyId,
+      p_credit_note_id: id,
+      p_user_id: auth.userId,
+    });
+    if (cancelError) throw cancelError;
+    return success(cancelled);
   } catch (err) {
     return handleApiError(err);
   }

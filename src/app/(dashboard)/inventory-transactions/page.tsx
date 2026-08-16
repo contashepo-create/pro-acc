@@ -56,7 +56,8 @@ export default function InventoryTransactionsPage() {
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
-    if (!form.item_id || !form.warehouse_id || !form.quantity || form.quantity <= 0) {
+    if (!editingTransaction && (!form.item_id || !form.warehouse_id
+      || (form.type !== 'adjustment' && form.quantity <= 0) || form.quantity < 0)) {
       setSaveError('الصنف والمستودع والكمية مطلوبة');
       return;
     }
@@ -65,10 +66,9 @@ export default function InventoryTransactionsPage() {
       const url = editingTransaction ? `/api/inventory-transactions/${editingTransaction.id}` : '/api/inventory-transactions';
       const method = editingTransaction ? 'PUT' : 'POST';
       
-      // التعديل: الملاحظات/التاريخ فقط (الكمية والسعر لا يُعدَّلان — حركة عكسية)
-      // الإنشاء: الحقول الجوهرية فقط — القيم يحسبها الخادم (total_value وغيرها)
+      // التعديل يقتصر على الملاحظات؛ التاريخ والقيم المالية والمخزنية غير قابلة للتغيير.
       const payload = editingTransaction
-        ? { date: form.date, notes: form.notes }
+        ? { notes: form.notes }
         : {
             item_id: form.item_id,
             warehouse_id: form.warehouse_id,
@@ -170,16 +170,20 @@ export default function InventoryTransactionsPage() {
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingTransaction(null); }} title={editingTransaction ? 'تعديل معاملة مخزون' : 'إضافة معاملة مخزون'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingTransaction(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select label="الصنف" value={form.item_id} onChange={(v) => setForm({...form, item_id: v})} disabled={isEdit} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i: any) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
-            <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} disabled={isEdit} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w: any) => ({ value: w.id, label: w.name }))]} />
+            <Select label="الصنف" value={form.item_id} onChange={(v) => {
+              const item = items.find((candidate: any) => candidate.id === v);
+              setForm({ ...form, item_id: v, warehouse_id: item?.warehouse_id || '' });
+            }} disabled={isEdit} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i: any) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
+            <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} disabled={isEdit || !!form.item_id} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w: any) => ({ value: w.id, label: w.name }))]} />
             <Select label="النوع" value={form.type} onChange={(v) => setForm({...form, type: v})} disabled={isEdit} options={[{ value: 'add', label: 'إضافة' }, { value: 'issue', label: 'صرف' }, { value: 'adjustment', label: 'تسوية' }, { value: 'transfer', label: 'تحويل' }, { value: 'return', label: 'مرتجع' }]} />
             {!isEdit && form.type === 'transfer' && (
               <Select label="إلى مستودع" value={form.to_warehouse_id} onChange={(v) => setForm({...form, to_warehouse_id: v})} options={[{ value: '', label: 'اختر مستودع الوجهة' }, ...warehouses.filter((w: any) => w.id !== form.warehouse_id).map((w: any) => ({ value: w.id, label: w.name }))]} />
             )}
             <Input label="الكمية" type="number" value={form.quantity} disabled={isEdit} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
             <Input label="سعر الوحدة" type="number" value={form.unit_price} disabled={isEdit} onChange={(e) => setForm({...form, unit_price: parseFloat(e.target.value) || 0})} />
-            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+            <Input label="التاريخ" type="date" value={form.date} disabled={isEdit} onChange={(e) => setForm({...form, date: e.target.value})} />
           </div>
+          {isEdit && <p className="text-sm text-text-muted">لتصحيح الكمية أو التاريخ، سجّل حركة عكسية ثم حركة صحيحة بدلاً من تعديل الأثر التاريخي.</p>}
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات المعاملة" />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

@@ -1,104 +1,64 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
-import { success, error } from '@/lib/api-helpers';
+import { success } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
+type QueryResult = { error: unknown };
+
+function assertQuery(result: QueryResult): void {
+  if (result.error) throw result.error;
+}
+
 export async function GET(request: NextRequest) {
   try {
-  const __admin = await requireAdmin(request);
-
+    await requireAdmin(request);
     const s = sb();
 
-    let companiesCount = 0, usersCount = 0, activeSubs = 0, unusedCodes = 0;
-    let recentCompanies: any[] = [], recentSubs: any[] = [], plans: any[] = [], activity: any[] = [];
+    const [
+      companiesResult,
+      usersResult,
+      subscriptionsResult,
+      recentCompaniesResult,
+      recentSubscriptionsResult,
+      plansResult,
+      codesResult,
+      activityResult,
+    ] = await Promise.all([
+      s.from('companies').select('id', { count: 'exact', head: true }),
+      s.from('users').select('id', { count: 'exact', head: true }),
+      s.from('subscriptions').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+      s.from('companies').select('id, name, is_active, created_at').order('created_at', { ascending: false }).limit(5),
+      s.from('subscriptions').select('id, company_id, plan_code, status, end_date').order('created_at', { ascending: false }).limit(5),
+      s.from('subscription_plans').select('id, name, price_monthly, is_active').order('price_monthly').limit(100),
+      s.from('activation_codes').select('id', { count: 'exact', head: true }).eq('is_used', false),
+      s.from('admin_audit_log').select('action, details, created_at').order('created_at', { ascending: false }).limit(10),
+    ]);
 
-    try {
-      const { count } = await s.from('companies').select('id', { count: 'exact', head: true });
-      companiesCount = count || 0;
-    } catch (e) { console.warn('dashboard companies count failed', e); }
+    [companiesResult, usersResult, subscriptionsResult, recentCompaniesResult,
+      recentSubscriptionsResult, plansResult, codesResult, activityResult].forEach(assertQuery);
 
-    try {
-      const { count } = await s.from('users').select('id', { count: 'exact', head: true });
-      usersCount = count || 0;
-    } catch (e) { console.warn('dashboard users count failed', e); }
-
-    try {
-      const { count } = await s.from('subscriptions').select('id', { count: 'exact', head: true }).eq('status', 'active');
-      activeSubs = count || 0;
-    } catch (e) { console.warn('dashboard subs count failed', e); }
-
-    try {
-      const { data } = await s.from('companies')
-        .select('id, name, is_active, created_at')
-        .order('created_at', { ascending: false })
-        .limit(5);
-      recentCompanies = data || [];
-    } catch (e) { console.warn('dashboard recent companies failed', e); }
-
-    try {
-      const { data } = await s.from('subscriptions')
-        .select('id, company_id, plan_code, status, end_date')
-        .order('created_at', { ascending: false })
-        .limit(5);
-      recentSubs = data || [];
-    } catch (e) { console.warn('dashboard recent subs failed', e); }
-
-    try {
-      // eslint-disable-next-line prefer-const
-      let { data, error } = await s.from('subscription_plans')
-        .select('id, name, price_monthly, is_active')
-        .order('price_monthly');
-      if (error) {
-        const { data: oldData } = await s.from('subscription_plans')
-          .select('id, name, price, is_active')
-          .order('price');
-        data = oldData as any;
-      }
-      plans = (data || []) as any;
-    } catch (e) { console.warn('dashboard plans failed', e); }
-
-    try {
-      const { count } = await s.from('activation_codes')
-        .select('id', { count: 'exact', head: true })
-        .is('used_by', null);
-      unusedCodes = count || 0;
-    } catch (e) { console.warn('dashboard codes failed', e); }
-
-    try {
-      // eslint-disable-next-line prefer-const
-      let { data, error } = await s.from('admin_audit_log')
-        .select('action, details, created_at')
-        .order('created_at', { ascending: false })
-        .limit(10);
-      if (error) {
-        const { data: oldData } = await s.from('admin_audit_log')
-          .select('action, details, timestamp')
-          .order('timestamp', { ascending: false })
-          .limit(10);
-        data = oldData as any;
-      }
-      // Normalize to timestamp field for frontend
-      activity = ((data || []) as any).map((a: any) => ({
-        action: a.action,
-        details: a.details,
-        timestamp: a.timestamp || a.created_at,
-      }));
-    } catch (e) { console.warn('dashboard activity failed', e); }
+    const activity = (activityResult.data || []).map((entry: any) => ({
+      action: entry.action,
+      details: entry.details,
+      timestamp: entry.created_at,
+    }));
 
     return success({
-      companiesCount,
-      usersCount,
-      activeSubscriptions: activeSubs,
+      companiesCount: companiesResult.count || 0,
+      usersCount: usersResult.count || 0,
+      activeSubscriptions: subscriptionsResult.count || 0,
+      // Revenue recognition is not inferred from plans or subscriptions. It
+      // remains zero until backed by an authoritative ledger aggregation.
       monthlyRevenue: 0,
-      unusedCodes,
+      unusedCodes: codesResult.count || 0,
       dbSize: 'N/A',
       lastLogin: null,
       recentActivity: activity,
-      recentCompanies,
-      recentSubscriptions: recentSubs,
-      planDistribution: plans,
+      recentCompanies: recentCompaniesResult.data || [],
+      recentSubscriptions: recentSubscriptionsResult.data || [],
+      planDistribution: plansResult.data || [],
       systemHealth: {
         apiResponseTime: 'N/A',
         uptime: 'N/A',
@@ -106,7 +66,6 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (err) {
-    console.error('Admin dashboard error:', err);
-    return error('حدث خطأ في الخادم', 500);
+    return adminJsonError(err);
   }
 }

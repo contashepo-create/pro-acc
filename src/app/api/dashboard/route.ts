@@ -1,185 +1,66 @@
 import { NextRequest } from 'next/server';
-import { success, error, serverError, requireApiAuth, requireModulePermission } from '@/lib/api-helpers';
+import { success, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
-const sb = () => getSupabase();
+const amount = (value: unknown) => Number(value) || 0;
+const PROJECT_PREVIEW_LIMIT = 100;
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'reports', 'read');
-    const s = sb();
-    
-    // Parallelize all queries for better performance
-    const [
-      revenueResult,
-      expenseResult,
-      arResult,
-      apResult,
-      projectsResult,
-      overdueInvoicesResult,
-      cashResult,
-      revenueThisMonth,
-      expenseThisMonth
-    ] = await Promise.allSettled([
-      // Revenue
-      s.from('journal_lines')
-        .select('credit')
-        .eq('company_id', auth.companyId)
-        .gte('created_at', new Date(new Date().setDate(1)).toISOString()),
-      // Expenses
-      s.from('journal_lines')
-        .select('debit')
-        .eq('company_id', auth.companyId)
-        .gte('created_at', new Date(new Date().setDate(1)).toISOString()),
-      // Accounts Receivable
-      s.from('journal_lines')
-        .select('debit, credit')
-        .eq('company_id', auth.companyId)
-        .gt('debit', 0),
-      // Accounts Payable
-      s.from('journal_lines')
-        .select('credit, debit')
-        .eq('company_id', auth.companyId)
-        .gt('credit', 0),
-      // Projects
-      s.from('projects')
-        .select('id, name, status, contract_value, start_date, end_date')
-        .eq('company_id', auth.companyId),
-      // Overdue Invoices
-      s.from('invoices')
-        .select('id, number, total, due_date, contacts(name)')
-        .eq('company_id', auth.companyId)
-        .lt('due_date', new Date().toISOString())
-        .neq('status', 'paid'),
-      // Cash Balance
-      s.from('banks_safes')
-        .select('type, account_id')
-        .eq('company_id', auth.companyId),
-      // Revenue this month
-      s.from('journal_lines')
-        .select('credit')
-        .eq('company_id', auth.companyId)
-        .gte('created_at', new Date(new Date().setFullYear(new Date().getFullYear(), new Date().getMonth(), 1)).toISOString()),
-      // Expense this month
-      s.from('journal_lines')
-        .select('debit')
-        .eq('company_id', auth.companyId)
-        .gte('created_at', new Date(new Date().setFullYear(new Date().getFullYear(), new Date().getMonth(), 1)).toISOString()),
+    const s = getSupabase();
+    const today = new Date().toISOString().slice(0, 10);
+    const monthStart = `${today.slice(0, 7)}-01`;
+
+    const [allSummary, monthSummary, snapshotResult, projectsResult, activityResult] = await Promise.all([
+      s.rpc('get_financial_summary', { p_company_id: auth.companyId, p_from: null, p_to: today }),
+      s.rpc('get_financial_summary', { p_company_id: auth.companyId, p_from: monthStart, p_to: today }),
+      s.rpc('get_assistant_company_snapshot', { p_company_id: auth.companyId }),
+      s.from('projects').select('id, name, status, contract_value, start_date, end_date')
+        .eq('company_id', auth.companyId).order('created_at', { ascending: false }).limit(PROJECT_PREVIEW_LIMIT),
+      s.from('audit_log').select('action, entity_type, created_at')
+        .eq('company_id', auth.companyId).order('created_at', { ascending: false }).limit(10),
     ]);
+    for (const result of [allSummary, monthSummary, snapshotResult, projectsResult, activityResult]) {
+      if (result.error) throw result.error;
+    }
 
-    // Process results with proper error handling
-    const totalRevenue = revenueResult.status === 'fulfilled' && revenueResult.value.data 
-      ? revenueResult.value.data.reduce((sum: number, item: any) => sum + (parseFloat(item.credit) || 0), 0)
-      : 0;
-    
-    const totalExpense = expenseResult.status === 'fulfilled' && expenseResult.value.data
-      ? expenseResult.value.data.reduce((sum: number, item: any) => sum + (parseFloat(item.debit) || 0), 0)
-      : 0;
-    
-    const accountsReceivable = arResult.status === 'fulfilled' && arResult.value.data
-      ? arResult.value.data.reduce((sum: number, item: any) => (parseFloat(item.debit) || 0) - (parseFloat(item.credit) || 0), 0)
-      : 0;
-    
-    const accountsPayable = apResult.status === 'fulfilled' && apResult.value.data
-      ? apResult.value.data.reduce((sum: number, item: any) => (parseFloat(item.credit) || 0) - (parseFloat(item.debit) || 0), 0)
-      : 0;
-    
-    const projects = projectsResult.status === 'fulfilled' && projectsResult.value.data
-      ? projectsResult.value.data
-      : [];
-    
-    const overdueInvoices = overdueInvoicesResult.status === 'fulfilled' && overdueInvoicesResult.value
-      ? overdueInvoicesResult.value.data
-      : [];
-    
-    const cashBalance = cashResult.status === 'fulfilled' && cashResult.value.data
-      ? await calculateCashBalance(s, auth.companyId, cashResult.value.data)
-      : 0;
-
-    const revenueMonth = revenueThisMonth.status === 'fulfilled' && revenueThisMonth.value.data
-      ? revenueThisMonth.value.data.reduce((sum: number, item: any) => sum + (parseFloat(item.credit) || 0), 0)
-      : 0;
-
-    const expenseMonth = expenseThisMonth.status === 'fulfilled' && expenseThisMonth.value.data
-      ? expenseThisMonth.value.data.reduce((sum: number, item: any) => sum + (parseFloat(item.debit) || 0), 0)
-      : 0;
-
+    const ledger = (allSummary.data || {}) as Record<string, unknown>;
+    const month = (monthSummary.data || {}) as Record<string, unknown>;
+    const snapshot = (snapshotResult.data || {}) as Record<string, unknown>;
+    const projects = projectsResult.data || [];
+    const totalProjects = amount(snapshot.totalProjects);
+    const totalRevenue = amount(ledger.revenue);
+    const totalExpense = amount(ledger.expenses);
     return success({
       totalRevenue,
       totalExpense,
       netProfit: totalRevenue - totalExpense,
-      accountsReceivable,
-      accountsPayable,
-      cashBalance,
-      totalProjects: projects.length,
-      activeProjects: projects.filter((p: any) => p.status === 'active').length,
-      overdueInvoices: overdueInvoices.length,
-      overdueAmount: overdueInvoices.reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0),
-      revenueThisMonth: revenueMonth,
-      expenseThisMonth: expenseMonth,
-      projects: projects.map((p: any) => ({
-        ...p,
-        progress: calculateProjectProgress(p),
-      })),
-      recentActivity: await getRecentActivity(s, auth.companyId),
+      accountsReceivable: amount(ledger.accountsReceivable),
+      accountsPayable: amount(ledger.accountsPayable),
+      cashBalance: amount(ledger.cashBalance),
+      totalProjects,
+      activeProjects: amount(snapshot.activeProjects),
+      overdueInvoices: amount(snapshot.overdueInvoiceCount),
+      overdueAmount: amount(snapshot.overdueInvoices),
+      revenueThisMonth: amount(month.revenue),
+      expenseThisMonth: amount(month.expenses),
+      projects: projects.map((project: any) => ({ ...project, progress: calculateProjectProgress(project) })),
+      projectsTruncated: totalProjects > projects.length,
+      recentActivity: activityResult.data || [],
     });
   } catch (err) {
-    console.error('Dashboard error:', err);
-    return serverError(err);
+    return handleApiError(err);
   }
-}
-
-async function calculateCashBalance(s: any, companyId: string, banks: any[]): Promise<number> {
-  let totalBalance = 0;
-  
-  for (const bank of banks) {
-    if (bank.account_id) {
-      try {
-        const { data: lines } = await s.from('journal_lines')
-          .select('debit, credit')
-          .eq('company_id', companyId)
-          .eq('account_id', bank.account_id);
-        
-        if (lines) {
-          const debit = lines.reduce((sum: number, item: any) => sum + (parseFloat(item.debit) || 0), 0);
-          const credit = lines.reduce((sum: number, item: any) => sum + (parseFloat(item.credit) || 0), 0);
-          totalBalance += (debit - credit);
-        }
-      } catch (err) {
-        console.warn(`Failed to calculate balance for bank ${bank.id}:`, err);
-      }
-    }
-  }
-  
-  return totalBalance;
 }
 
 function calculateProjectProgress(project: any): number {
   if (!project.start_date || !project.end_date) return 0;
-  
-  const now = new Date();
-  const start = new Date(project.start_date);
-  const end = new Date(project.end_date);
-  
-  if (now < start) return 0;
-  if (now > end) return 100;
-  
-  const total = end.getTime() - start.getTime();
-  const elapsed = now.getTime() - start.getTime();
-  
-  return Math.min(100, Math.max(0, (elapsed / total) * 100));
-}
-
-async function getRecentActivity(s: any, companyId: string): Promise<any[]> {
-  try {
-    const { data } = await s.from('audit_log')
-      .select('action, entity_type, created_at')
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: false })
-      .limit(10);
-    
-    return data || [];
-  } catch {
-    return [];
-  }
+  const now = Date.now();
+  const start = Date.parse(project.start_date);
+  const end = Date.parse(project.end_date);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return now >= end ? 100 : 0;
+  if (now <= start) return 0;
+  if (now >= end) return 100;
+  return Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100));
 }

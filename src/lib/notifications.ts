@@ -1,17 +1,7 @@
-/**
- * نظام التنبيهات والتحقق من الرصيد (محسّن)
- * 
- * يوفر:
- * 1. إرسال تنبيهات بوت مع أزرار الموافقة/الرفض
- * 2. التحقق من رصيد البنك قبل إجراء المعاملات
- * 3. معالجة الردود عبر webhook
- * 4. حماية العمليات المعلقة من التنفيذ
- */
-
-import { getSupabase } from '@/lib/supabase-client';
+/** Tenant-scoped Telegram notifications and approval delivery. */
+import { getSupabase } from "@/lib/supabase-client";
 
 const sb = () => getSupabase();
-
 interface TelegramConfig {
   company_id: string;
   chat_id: string;
@@ -23,406 +13,311 @@ interface TelegramConfig {
   approval_threshold: number;
 }
 
-export async function getTelegramConfig(companyId: string): Promise<TelegramConfig | null> {
-  const s = sb();
-  const { data: config } = await s.from('company_telegram_configs')
-    .select('*')
-    .eq('company_id', companyId)
+export async function getTelegramConfig(
+  companyId: string,
+): Promise<TelegramConfig | null> {
+  const { data, error } = await sb()
+    .from("company_telegram_configs")
+    .select(
+      "company_id,chat_id,is_enabled,notify_invoices,notify_cash_transactions,notify_user_logins,approvals_enabled,approval_threshold",
+    )
+    .eq("company_id", companyId)
     .maybeSingle();
-  return config as TelegramConfig | null;
+  if (error) throw error;
+  return data as TelegramConfig | null;
 }
 
-export async function getAccountBalance(accountId: string, companyId?: string): Promise<number> {
-  const s = sb();
-  let query = s.from('journal_lines')
-    .select('debit, credit')
-    .eq('account_id', accountId);
-  if (companyId) query = query.eq('company_id', companyId);
-  const { data: lines } = await query;
-  if (!lines || lines.length === 0) return 0;
-  const totalDebit = lines.reduce((sum, l) => sum + (parseFloat(l.debit as any) || 0), 0);
-  const totalCredit = lines.reduce((sum, l) => sum + (parseFloat(l.credit as any) || 0), 0);
-  return totalDebit - totalCredit;
+export async function getAccountBalance(
+  accountId: string,
+  companyId?: string,
+): Promise<number> {
+  if (!companyId)
+    throw new Error("companyId is required for a tenant-scoped balance");
+  const { data, error } = await sb().rpc("get_account_balance", {
+    p_company_id: companyId,
+    p_account_id: accountId,
+    p_journal_type: null,
+    p_as_of: null,
+  });
+  if (error) throw error;
+  return Number(data) || 0;
 }
 
 export async function checkBankBalance(
   bankSafeId: string,
   amount: number,
-  companyId: string
-): Promise<{ allowed: boolean; balance: number; message?: string }> {
-  const s = sb();
-  const { data: bankAcc } = await s.from('banks_safes')
-    .select('account_id, name')
-    .eq('id', bankSafeId)
-    .eq('company_id', companyId)
+  companyId: string,
+) {
+  const { data: bankAcc } = await sb()
+    .from("banks_safes")
+    .select("account_id,name")
+    .eq("id", bankSafeId)
+    .eq("company_id", companyId)
     .maybeSingle();
-  if (!bankAcc) return { allowed: false, balance: 0, message: 'البنك/الخزينة غير موجود' };
-  let currentBalance = 0;
-  if (bankAcc.account_id) currentBalance = await getAccountBalance(bankAcc.account_id);
-  if (currentBalance < amount) {
-    return {
-      allowed: false,
-      balance: currentBalance,
-      message: `الرصيد غير كافٍ. الرصيد الحالي: ${currentBalance.toFixed(2)} ر.س، المبلغ المطلوب: ${amount.toFixed(2)} ر.س`,
-    };
-  }
-  return { allowed: true, balance: currentBalance };
+  if (!bankAcc)
+    return { allowed: false, balance: 0, message: "البنك/الخزينة غير موجود" };
+  const currentBalance = bankAcc.account_id
+    ? await getAccountBalance(bankAcc.account_id, companyId)
+    : 0;
+  return currentBalance < amount
+    ? {
+        allowed: false,
+        balance: currentBalance,
+        message: `الرصيد غير كافٍ. الرصيد الحالي: ${currentBalance.toFixed(2)} ر.س، المبلغ المطلوب: ${amount.toFixed(2)} ر.س`,
+      }
+    : { allowed: true, balance: currentBalance };
 }
 
-/**
- * التحقق من حد الموافقة وإنشاء طلب اعتماد
- * هذه الدالة تحفظ العملية بحالة "pending" وتطلب الاعتماد عبر التيليغرام
- */
 export async function requireApproval(
   companyId: string,
   amount: number,
   transactionType: string,
   userId: string,
   transactionId: string,
-  description?: string
+  description?: string,
 ): Promise<{ requiresApproval: boolean; blocked: boolean; message?: string }> {
   const config = await getTelegramConfig(companyId);
-  
-  // إذا لم يكن التيليجرام مفعلاً أو الاعتمادات غير مفعلة، لا نحتاج لاعتماد
-  if (!config || !config.is_enabled || !config.approvals_enabled) {
+  if (
+    !config?.is_enabled ||
+    !config.approvals_enabled ||
+    config.approval_threshold <= 0 ||
+    amount <= config.approval_threshold
+  ) {
     return { requiresApproval: false, blocked: false };
   }
-  
-  const threshold = config.approval_threshold || 0;
-  
-  // إذا كان المبلغ تحت الحد، لا نحتاج لاعتماد
-  if (threshold <= 0 || amount <= threshold) {
-    return { requiresApproval: false, blocked: false };
+  const { data: approval, error } = await sb().rpc(
+    "create_approval_request_atomic",
+    {
+      p_company_id: companyId,
+      p_entity_type: transactionType,
+      p_entity_id: transactionId,
+      p_description: description || "",
+      p_requester_id: userId,
+    },
+  );
+  if (error || !(approval as { id?: string } | null)?.id) {
+    return {
+      requiresApproval: true,
+      blocked: true,
+      message: String(
+        error?.message || "تعذر إنشاء طلب الاعتماد؛ لم تُنفذ العملية",
+      ),
+    };
   }
-  
-  // نحتاج لاعتماد - نحفظ العملية كـ pending ونرسل تنبيه
-  const s = sb();
-  
   try {
-    // 1. إنشاء طلب اعتماد في قاعدة البيانات
-    const { data: approvalReq, error: insertErr } = await s.from('approval_requests')
-      .insert({
-        company_id: companyId,
-        transaction_type: transactionType,
-        transaction_id: transactionId,
-        amount: amount,
-        requester_id: userId,
-        status: 'pending',
-        message: description || `طلب اعتماد ${getTransactionTypeName(transactionType)}`,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-    
-    if (insertErr) throw insertErr;
-    
-    const approvalId = (approvalReq as any).id;
-    
-    // 2. تحديث حالة العملية الأصلية إلى pending
-    await updateTransactionStatus(companyId, transactionType, transactionId, 'pending', approvalId);
-    
-    // 3. إرسال رسالة التيليغرام
-    await sendApprovalNotification(config, amount, transactionType, transactionId, userId, approvalId);
-    
+    await sendApprovalNotification(
+      config,
+      amount,
+      transactionType,
+      transactionId,
+      userId,
+      (approval as { id: string }).id,
+    );
+  } catch {
     return {
       requiresApproval: true,
-      blocked: true, // العملية محظورة حتى الاعتماد
-      message: `تم إرسال طلب الاعتماد. العملية محظورة حتى الموافقة.`
-    };
-    
-  } catch (err) {
-    console.error('Failed to create approval request:', err);
-    return {
-      requiresApproval: true,
-      blocked: false, // في حالة الخطأ، نسمح بالعملية لتجنب توقف النظام
-      message: 'فشل إنشاء طلب الاعتماد، تم السماح بالعملية'
+      blocked: true,
+      message: "أُنشئ طلب الاعتماد ولكن تعذر إرسال تنبيه تيليجرام",
     };
   }
-}
-
-/**
- * تحديث حالة العملية (دالة مساعدة)
- */
-async function updateTransactionStatus(
-  companyId: string,
-  transactionType: string,
-  transactionId: string,
-  status: string,
-  approvalId?: string
-): Promise<void> {
-  const s = sb();
-  const tableMap: Record<string, string> = {
-    'voucher_disbursement': 'voucher_disbursements',
-    'voucher_receipt': 'voucher_receipts',
-    'cash_transaction': 'cash_transactions',
-    'journal_entry': 'journal_entries',
-    'purchase_invoice': 'purchase_invoices',
+  return {
+    requiresApproval: true,
+    blocked: true,
+    message: "تم إرسال طلب الاعتماد. العملية محظورة حتى الموافقة.",
   };
-  
-  const tableName = tableMap[transactionType];
-  if (!tableName) return;
-  
-  const updateData: any = { status };
-  if (approvalId) updateData.approval_request_id = approvalId;
-  
-  await s.from(tableName)
-    .update(updateData)
-    .eq('id', transactionId)
-    .eq('company_id', companyId);
 }
 
-/**
- * إرسال رسالة الموافقة عبر التيليغرام
- */
 async function sendApprovalNotification(
   config: TelegramConfig,
   amount: number,
   transactionType: string,
   transactionId: string,
   userId: string,
-  approvalId: string
-): Promise<void> {
-  const s = sb();
-  
-  const { data: user } = await s.from('users')
-    .select('name, email')
-    .eq('id', userId)
+  approvalId: string,
+) {
+  const { data: user, error } = await sb()
+    .from("users")
+    .select("name,email")
+    .eq("id", userId)
+    .eq("company_id", config.company_id)
+    .eq("is_active", true)
     .maybeSingle();
-  
-  const userName = (user as any)?.name || 'مستخدم غير معروف';
-  const userEmail = (user as any)?.email || '';
-  
-  const message = `
-🔔 <b>طلب اعتماد جديد</b>
-
-📋 <b>النوع:</b> ${getTransactionTypeName(transactionType)}
-💰 <b>المبلغ:</b> ${amount.toFixed(2)} ر.س
-👤 <b>المستخدم:</b> ${userName}
-📧 <b>البريد:</b> ${userEmail}
-🆔 <b>رقم العملية:</b> ${transactionId.slice(0, 8)}...
-
-⚠️ يتجاوز حد الموافقة (${config.approval_threshold.toFixed(2)} ر.س)
-
-يرجى الموافقة أو الرفض:
-  `.trim();
-  
-  const inlineKeyboard = {
-    inline_keyboard: [
-      [
-        {
-          text: '✅ موافق',
-          callback_data: `approve_approve_${transactionType}_${transactionId}_${userId}`
+  if (error || !user) throw error || new Error("Approval requester not found");
+  const token = process.env.TELEGRAM_BOT_TOKEN || "";
+  if (!token || !config.chat_id) throw new Error("Telegram is not configured");
+  const response = await fetch(
+    `https://api.telegram.org/bot${token}/sendMessage`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify({
+        chat_id: config.chat_id,
+        parse_mode: "HTML",
+        text: `🔔 <b>طلب اعتماد جديد</b>\n\n📋 <b>النوع:</b> ${getTransactionTypeName(transactionType)}\n💰 <b>المبلغ:</b> ${amount.toFixed(2)}\n👤 <b>المستخدم:</b> ${user.name || user.email}\n🆔 <b>العملية:</b> ${transactionId.slice(0, 8)}…`,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "موافق ✅",
+                callback_data: `approval:approve:${approvalId}`,
+              },
+              {
+                text: "رفض ❌",
+                callback_data: `approval:reject:${approvalId}`,
+              },
+            ],
+          ],
         },
-        {
-          text: '❌ رافض',
-          callback_data: `approve_reject_${transactionType}_${transactionId}_${userId}`
-        }
-      ]
-    ]
-  };
-  
-  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
-    ? process.env.TELEGRAM_BOT_TOKEN
-    : '';
-
-  if (!botToken || !config.chat_id) {
-    console.warn('Telegram bot not configured or chat_id missing');
-    return;
-  }
-  
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: config.chat_id,
-      text: message,
-      parse_mode: 'HTML',
-      reply_markup: inlineKeyboard,
-    }),
-  });
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Failed to send Telegram approval notification:', response.status, errorText);
-    throw new Error('Failed to send Telegram message');
-  }
+      }),
+    },
+  );
+  if (!response.ok)
+    throw new Error(`Telegram send failed with ${response.status}`);
 }
 
-/**
- * معالجة الرد على طلب الموافقة (من webhook)
- */
-export async function handleApprovalResponse(
-  action: 'approve' | 'reject',
+export async function sendApprovalRequestNotification(
+  companyId: string,
+  amount: number,
   transactionType: string,
   transactionId: string,
-  userId: string,
-  approverChatId: string
-): Promise<{ success: boolean; message: string }> {
-  const s = sb();
-  
-  // جلب طلب الاعتماد
-  const { data: approvalReq, error: findErr } = await s.from('approval_requests')
-    .select('id, company_id, status')
-    .eq('transaction_id', transactionId)
-    .eq('transaction_type', transactionType)
-    .eq('status', 'pending')
-    .maybeSingle();
-  
-  if (findErr || !approvalReq) {
-    return { success: false, message: 'طلب الاعتماد غير موجود أو تمت معالجته بالفعل' };
-  }
-  
-  const companyId = (approvalReq as any).company_id;
-  const approvalId = (approvalReq as any).id;
-  
-  // SECURITY FIX: التحقق الصارم من أن معرّف المحادثة للموافق يتطابق تماماً مع المعرّف المسجل والمعتمد للشركة!
-  // يمنع هذا أي مستخدم تيليجرام غريب يعرف البوت من محاولة تخمين أو النقر والموافقة على العمليات المالية للشركات
-  const { data: config } = await s.from('company_telegram_configs')
-    .select('chat_id, approvals_enabled')
-    .eq('company_id', companyId)
-    .maybeSingle();
+  requesterId: string,
+  approvalId: string,
+) {
+  const config = await getTelegramConfig(companyId);
+  if (!config?.is_enabled || !config.approvals_enabled)
+    throw new Error("Telegram approvals are not enabled");
+  await sendApprovalNotification(
+    config,
+    amount,
+    transactionType,
+    transactionId,
+    requesterId,
+    approvalId,
+  );
+}
 
-  if (!config || !config.approvals_enabled || config.chat_id !== String(approverChatId)) {
-    return { success: false, message: '❌ عذراً، هذا الحساب في تيليجرام غير مصرح له باعتماد هذه المعاملة مالياً' };
-  }
-  
-  const newStatus = action === 'approve' ? 'approved' : 'rejected';
-  const now = new Date().toISOString();
-  
-  // تحديث حالة طلب الاعتماد
-  const { error: updateErr } = await s.from('approval_requests')
-    .update({
-      status: newStatus,
-      approver_chat_id: String(approverChatId),
-      approved_at: now,
-    })
-    .eq('id', approvalId);
-  
-  if (updateErr) {
-    console.error('Failed to update approval request:', updateErr);
-    return { success: false, message: 'فشل تحديث حالة الاعتماد' };
-  }
-  
-  // تحديث حالة العملية الأصلية
-  const finalStatus = action === 'approve' ? 'approved' : 'rejected';
-  await updateTransactionStatus(companyId, transactionType, transactionId, finalStatus, approvalId);
-  
-  // FIXED: توليد الترحيل المالي والقيود تلقائياً فور اعتماد طلب تيليجرام
-  if (action === 'approve') {
-    try {
-      const { createJournalEntryForApprovedTransaction } = await import('@/lib/approval-helpers');
-      await createJournalEntryForApprovedTransaction(companyId, userId, transactionType, transactionId);
-    } catch (createErr) {
-      console.error('Failed to create journal entry on approval:', createErr);
-      // An approval without its required financial posting is not an approval.
-      // Restore both records to pending so it can be corrected and retried.
-      await s.from('approval_requests')
-        .update({ status: 'pending', approver_chat_id: null, approved_at: null })
-        .eq('id', approvalId)
-        .eq('company_id', companyId);
-      await updateTransactionStatus(companyId, transactionType, transactionId, 'pending', approvalId);
-      return { success: false, message: 'فشل ترحيل القيد المحاسبي؛ أعيد الطلب إلى الانتظار للمراجعة' };
-    }
-  }
-  
-  // إرسال إشعار للمستخدم الطالب
-  try {
-    await s.from('notifications').insert({
-      id: crypto.randomUUID(),
-      company_id: companyId,
-      user_id: userId,
-      type: action === 'approve' ? 'approval_approved' : 'approval_rejected',
-      title: action === 'approve' ? 'تم اعتماد طلبك' : 'تم رفض طلبك',
-      message: `${getTransactionTypeName(transactionType)} - ${action === 'approve' ? 'تم الاعتماد بنجاح' : 'تم الرفض'}`,
-      entity_type: 'approval_request',
-      entity_id: approvalId,
-      created_at: now,
-    });
-  } catch (notifErr) {
-    console.warn('Failed to send notification:', notifErr);
-  }
-  
-  const successMessage = action === 'approve'
-    ? `✅ تم الموافقة على ${getTransactionTypeName(transactionType)} بنجاح!`
-    : `❌ تم رفض ${getTransactionTypeName(transactionType)}.`;
-  
-  return { success: true, message: successMessage };
+/** Legacy compatibility: requester identity is deliberately ignored and resolved in the RPC. */
+export async function handleApprovalResponse(
+  action: "approve" | "reject",
+  transactionType: string,
+  transactionId: string,
+  _untrustedRequesterId: string,
+  approverChatId: string,
+): Promise<{ success: boolean; message: string }> {
+  const { data, error } = await sb().rpc(
+    "respond_legacy_approval_by_telegram_atomic",
+    {
+      p_action: action,
+      p_transaction_type: transactionType,
+      p_transaction_id: transactionId,
+      p_chat_id: approverChatId,
+    },
+  );
+  return error
+    ? {
+        success: false,
+        message: String(error.message || "تعذر معالجة الاعتماد"),
+      }
+    : {
+        success: true,
+        message:
+          (data as { status?: string } | null)?.status === "approved"
+            ? "تم الاعتماد بنجاح ✅"
+            : "تم الرفض ❌",
+      };
 }
 
 export async function sendTelegramNotification(
   companyId: string,
-  message: string
+  message: string,
 ): Promise<{ success: boolean; error?: string }> {
   const config = await getTelegramConfig(companyId);
   if (!config || !config.is_enabled || !config.chat_id) {
-    return { success: false, error: 'إعدادات التيليجرام غير مفعلة' };
+    return { success: false, error: "إعدادات التيليجرام غير مفعلة" };
   }
-  const botToken = process.env.TELEGRAM_BOT_TOKEN && !process.env.TELEGRAM_BOT_TOKEN.startsWith('sk_')
-    ? process.env.TELEGRAM_BOT_TOKEN
-    : '';
-  if (!botToken) return { success: false, error: 'TELEGRAM_BOT_TOKEN غير محدد' };
-  
+  const botToken =
+    process.env.TELEGRAM_BOT_TOKEN &&
+    !process.env.TELEGRAM_BOT_TOKEN.startsWith("sk_")
+      ? process.env.TELEGRAM_BOT_TOKEN
+      : "";
+  if (!botToken)
+    return { success: false, error: "TELEGRAM_BOT_TOKEN غير محدد" };
+
   try {
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: config.chat_id, text: message, parse_mode: 'HTML' }),
-    });
+    const response = await fetch(
+      `https://api.telegram.org/bot${botToken}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: config.chat_id,
+          text: message,
+          parse_mode: "HTML",
+        }),
+      },
+    );
     if (!response.ok) {
       const errorData = await response.text();
-      console.error('Telegram API error:', errorData);
+      console.error("Telegram API error:", errorData);
       return { success: false, error: `فشل الإرسال: ${response.status}` };
     }
     return { success: true };
   } catch (err) {
-    console.error('Failed to send Telegram notification:', err);
-    return { success: false, error: 'خطأ في الاتصال' };
+    console.error("Failed to send Telegram notification:", err);
+    return { success: false, error: "خطأ في الاتصال" };
   }
 }
 
 export async function sendTransactionNotification(
   companyId: string,
-  type: 'receipt' | 'disbursement',
-  details: { amount: number; reason: string; bankName?: string; userName?: string; date: string; }
+  type: "receipt" | "disbursement",
+  details: {
+    amount: number;
+    reason: string;
+    bankName?: string;
+    userName?: string;
+    date: string;
+  },
 ): Promise<{ notified: boolean; message?: string }> {
   const config = await getTelegramConfig(companyId);
   if (!config || !config.is_enabled) return { notified: false };
   const threshold = config.approval_threshold || 0;
   if (threshold > 0 && details.amount < threshold) return { notified: false };
-  
-  const typeLabel = type === 'receipt' ? '📥 سند قبض' : '📤 سند صرف';
+
+  const typeLabel = type === "receipt" ? "📥 سند قبض" : "📤 سند صرف";
   const message = `
 ${typeLabel}
 
 💰 <b>المبلغ:</b> ${details.amount.toFixed(2)} ر.س
 📋 <b>البيان:</b> ${details.reason}
-🏦 <b>البنك/الخزينة:</b> ${details.bankName || 'غير محدد'}
+🏦 <b>البنك/الخزينة:</b> ${details.bankName || "غير محدد"}
 📅 <b>التاريخ:</b> ${details.date}
-👤 <b>المستخدم:</b> ${details.userName || 'غير معروف'}
+👤 <b>المستخدم:</b> ${details.userName || "غير معروف"}
   `.trim();
-  
+
   const result = await sendTelegramNotification(companyId, message);
   return {
     notified: result.success,
-    message: result.success ? 'تم إرسال الإشعار' : result.error,
+    message: result.success ? "تم إرسال الإشعار" : result.error,
   };
 }
 
 function getTransactionTypeName(type: string): string {
   const names: Record<string, string> = {
-    voucher_disbursement: 'سند صرف',
-    voucher_receipt: 'سند قبض',
-    cash_transaction: 'معاملة نقدية',
-    journal_entry: 'قيد يومية',
-    purchase_invoice: 'فاتورة شراء',
-    payroll: 'رواتب',
-    fixed_assets: 'أصل ثابت',
-    inventory_transaction: 'حركة مخزون',
-    project_expense: 'صرف مشروع',
-    employee_advance: 'سلفة موظف',
-    subcontractor_payment: 'دفع مقاول',
-    client_payment: 'قبض عميل',
-    payment_disbursement: 'دفع دائن',
+    voucher_disbursement: "سند صرف",
+    voucher_receipt: "سند قبض",
+    cash_transaction: "معاملة نقدية",
+    journal_entry: "قيد يومية",
+    purchase_invoice: "فاتورة شراء",
+    payroll: "رواتب",
+    fixed_assets: "أصل ثابت",
+    inventory_transaction: "حركة مخزون",
+    project_expense: "صرف مشروع",
+    employee_advance: "سلفة موظف",
+    subcontractor_payment: "دفع مقاول",
+    client_payment: "قبض عميل",
+    payment_disbursement: "دفع دائن",
   };
   return names[type] || type;
 }
@@ -430,8 +325,8 @@ function getTransactionTypeName(type: string): string {
 export async function checkApprovalThreshold(
   companyId: string,
   amount: number,
-  transactionType: string,
-  userId: string
+  _transactionType: string,
+  _userId: string,
 ): Promise<{ requiresApproval: boolean }> {
   const config = await getTelegramConfig(companyId);
   if (!config || !config.is_enabled || !config.approvals_enabled) {

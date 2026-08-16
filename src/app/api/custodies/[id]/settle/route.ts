@@ -1,116 +1,45 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { createJournalEntry } from '@/lib/journal-utils';
-import {
-  loadCustodyFile, assertFileOpen, resolveCustodyAccounts, recordCustodyTx, syncCustodyTotals, round2,
-} from '@/lib/custody';
+import { loadCustodyFile, assertFileOpen } from '@/lib/custody';
+import { custodyUuid, settleCustodySchema } from '@/lib/custody-validation';
 
-/**
- * إغلاق ملف عهدة — يتطلب confirm: true
- * المتبقي بعد المصروفات:
- *   مرتجع نقدي → مدين الصندوق / دائن 1150
- *   عجز بعد المرتجع → مدين 1160 سلفة / دائن 1150 + سجل سلفة على الراتب
- */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/** Confirmed closure: returned cash goes back to its safe and any remaining
+ * shortage becomes an employee advance, atomically with the closing entry. */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const auth = await requireModulePermission(req, 'custodies', 'approve');
+    const auth = await requireModulePermission(request, 'custodies', 'approve');
     const { id } = await params;
-    const data = await parseBody(req);
-
-    if (data.confirm !== true) {
-      return error('إغلاق الملف يتطلب تأكيداً صريحاً (confirm: true)');
-    }
+    if (!custodyUuid.safeParse(id).success) return error('معرف ملف العهدة غير صالح');
+    const parsed = settleCustodySchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات إغلاق العهدة غير صالحة');
+    const input = parsed.data;
 
     const file = await loadCustodyFile(auth.companyId, id);
     if (!file) return error('ملف العهدة غير موجود', 404);
     assertFileOpen(file);
+    const returnedCash = input.returned_cash || 0;
+    const bankSafeId = input.bank_safe_id || file.bank_safe_id || null;
+    if (returnedCash > 0 && !bankSafeId) return error('حدد الخزينة لاستلام المرتجع');
 
-    const date = data.date || new Date().toISOString().split('T')[0];
-    const returnedCash = round2(parseFloat(data.returned_cash) || 0);
-    const remaining = file.remaining_amount;
-    if (returnedCash < 0) return error('المرتجع لا يكون سالباً');
-    if (returnedCash > remaining + 0.005) {
-      return error(`المرتجع (${returnedCash}) أكبر من المتبقي في الملف (${remaining})`);
-    }
-
-    const shortage = round2(remaining - returnedCash);
-    const acc = await resolveCustodyAccounts(auth.companyId);
-    const s = getSupabase();
-
-    let bankAccountId: string | null = null;
-    const bankSafeId = data.bank_safe_id || file.bank_safe_id;
-    if (returnedCash > 0) {
-      if (!bankSafeId) return error('حدد الخزينة لاستلام المرتجع');
-      const { data: bank } = await s.from('banks_safes').select('account_id').eq('id', bankSafeId).eq('company_id', auth.companyId).maybeSingle();
-      if (!bank?.account_id) return error('حساب الخزينة غير موجود');
-      bankAccountId = bank.account_id;
-    }
-    if (shortage > 0 && !acc.advanceId) {
-      return error('حساب سلف الموظفين (1160) مطلوب لتسجيل العجز');
-    }
-
-    const lines: Array<{ account_id: string; debit: number; credit: number; description: string }> = [];
-    if (returnedCash > 0 && bankAccountId) {
-      lines.push({ account_id: bankAccountId, debit: returnedCash, credit: 0, description: 'مرتجع نقدي من العهدة' });
-      lines.push({ account_id: acc.custodyId, debit: 0, credit: returnedCash, description: 'إقفال مرتجع عهدة' });
-    }
-    if (shortage > 0 && acc.advanceId) {
-      lines.push({ account_id: acc.advanceId, debit: shortage, credit: 0, description: 'عجز عهدة — سلفة على الراتب' });
-      lines.push({ account_id: acc.custodyId, debit: 0, credit: shortage, description: 'إقفال عجز عهدة' });
-    }
-
-    let journalId: string | null = null;
-    if (lines.length > 0) {
-      const posted = await createJournalEntry(auth.companyId, {
-        date, type: 'general',
-        description: `إغلاق عهدة ${file.file_number || id}`,
-        reference_type: 'custody_close',
-        reference_id: id,
-        created_by: auth.userId,
-        lines,
-      });
-      if (posted.error || !posted.journalId) throw posted.error || new Error('فشل قيد الإغلاق');
-      journalId = posted.journalId;
-    }
-
-    if (returnedCash > 0) {
-      await recordCustodyTx(auth.companyId, id, 'return', returnedCash, 'مرتجع عند الإغلاق', auth.userId);
-    }
-    if (shortage > 0) {
-      await recordCustodyTx(auth.companyId, id, 'shortage', shortage, 'عجز يُخصم من الراتب', auth.userId);
-      try {
-        await s.from('employee_advances').insert({
-          company_id: auth.companyId,
-          employee_id: file.employee_id,
-          date,
-          amount: shortage,
-          remaining_amount: shortage,
-          reason: `عجز عهدة ${file.file_number || id}`,
-        });
-      } catch { /* عمود إضافي/الجدول غير متاح — القيد المحاسبي هو الأصل */ }
-    }
-
-    await s.from('custodies').update({
-      status: 'settled',
-      remaining_amount: 0,
-      settlement_amount: returnedCash,
-      settlement_date: date,
-      settlement_description: data.description || 'إغلاق مؤكد',
-      updated_at: new Date().toISOString(),
-    }).eq('id', id).eq('company_id', auth.companyId);
-
+    const { data: settled, error: rpcError } = await getSupabase().rpc('settle_custody_file', {
+      p_company_id: auth.companyId,
+      p_custody_id: id,
+      p_date: input.date || new Date().toISOString().slice(0, 10),
+      p_returned_cash: returnedCash,
+      p_bank_safe_id: bankSafeId,
+      p_description: input.description || '',
+      p_created_by: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    const result = settled as Record<string, any>;
     return success({
-      id,
-      status: 'settled',
-      returned_cash: returnedCash,
-      shortage,
-      journal_entry_id: journalId,
-      message: shortage > 0
-        ? `أُغلق الملف. عجز ${shortage} سلفة على راتب الموظف`
+      ...result,
+      message: Number(result.shortage) > 0
+        ? `أُغلق الملف. عجز ${result.shortage} سلفة على راتب الموظف`
         : 'أُغلق الملف دون عجز',
     });
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

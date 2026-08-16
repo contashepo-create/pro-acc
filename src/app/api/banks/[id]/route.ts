@@ -1,254 +1,101 @@
 import { NextRequest } from 'next/server';
+import { z } from 'zod';
 import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { getAccountBalanceFromJournal, insertJournalHeader, insertJournalLines } from '@/lib/journal-utils';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const money = z.number().finite().refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8,
+  'الرصيد الافتتاحي يجب ألا يتجاوز منزلتين');
+const updateSchema = z.object({
+  name: z.string().trim().min(1, 'اسم البنك/الخزينة غير صالح').max(200).optional(),
+  account_number: z.string().trim().max(100).nullable().optional(),
+  type: z.enum(['bank', 'safe']).optional(),
+  opening_balance: money.optional(),
+}).strict();
+const COLUMNS = 'id, name, type, account_number, account_id, opening_balance, opening_journal_entry_id, is_active, created_at, updated_at, accounts!account_id(code, name)';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+async function loadBank(companyId: string, id: string) {
+  return sb().from('banks_safes').select(COLUMNS).eq('id', id).eq('company_id', companyId).maybeSingle();
+}
+
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'banks', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: bankRes, error: queryError } = await s.from('banks_safes')
-      .select('*, accounts(code, name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (queryError || !bankRes) {
-      return notFound();
-    }
-
-    const bank = bankRes as Record<string, any>;
-    let currentBalance = 0;
-    let openingBalance = 0;
-
-    if (bank.account_id) {
-      // الرصيد الحالي = كل القيود (افتتاحي + عمليات)
-      currentBalance = await getAccountBalanceFromJournal(bank.account_id, auth.companyId);
-
-      // الرصيد الافتتاحي = قيود من نوع opening_balance فقط
-      const { data: openingLines } = await s.from('journal_lines')
-        .select('debit, credit, journal_entries!inner(type)')
-        .eq('account_id', bank.account_id)
-        .eq('company_id', auth.companyId);
-
-      if (openingLines) {
-        openingBalance = (openingLines as any[])
-          .filter((l: any) => l.journal_entries?.type === 'opening_balance')
-          .reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0) - (parseFloat(l.credit) || 0), 0);
-      }
-    }
-
-    // الرصيد الافتتاحي من عمود banks_safes (المحفوظ) له أولوية
-    const savedOpeningBalance = parseFloat(bank.opening_balance) || 0;
-
+    if (!UUID_RE.test(id)) return error('معرّف البنك أو الخزينة غير صالح');
+    const { data, error: queryError } = await loadBank(auth.companyId, id);
+    if (queryError) throw queryError;
+    if (!data) return notFound();
+    const { data: balances, error: balanceError } = await sb().rpc('get_bank_safe_balances', {
+      p_company_id: auth.companyId, p_bank_safe_ids: [id],
+    });
+    if (balanceError) throw balanceError;
+    const balance = Number((balances || [])[0]?.current_balance) || 0;
+    const opening = Number((balances || [])[0]?.opening_balance) || 0;
+    const row = data as Record<string, unknown>;
     return success({
-      ...bank,
-      account_code: bank.accounts?.code || null,
-      account_name: bank.accounts?.name || null,
-      opening_balance: savedOpeningBalance > 0 ? savedOpeningBalance : openingBalance,
-      current_balance: currentBalance,
-      balance: currentBalance,
+      ...row,
+      account_code: (row.accounts as { code?: string } | null)?.code || null,
+      account_name: (row.accounts as { name?: string } | null)?.name || null,
+      accounts: undefined,
+      configured_opening_balance: Number(row.opening_balance) || 0,
+      opening_balance: opening,
+      current_balance: balance,
+      balance,
     });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(request, 'banks', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody<Record<string, any>>(request);
-
-    const { data: bankRes } = await s.from('banks_safes')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!bankRes) {
-      return notFound();
+    if (!UUID_RE.test(id)) return error('معرّف البنك أو الخزينة غير صالح');
+    const parsed = updateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0].message);
+    const { data: current, error: currentError } = await sb().from('banks_safes')
+      .select('id, type, opening_balance').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
+    if (currentError) throw currentError;
+    if (!current) return notFound();
+    if (parsed.data.type !== undefined && parsed.data.type !== current.type) {
+      return error('لا يمكن تغيير نوع البنك/الخزينة بعد إنشاء حسابه المحاسبي', 409);
     }
-
-    const updateData: Record<string, any> = {};
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.type !== undefined) updateData.type = body.type;
-    if (body.account_number !== undefined) updateData.account_number = body.account_number;
-    if (body.is_active !== undefined) updateData.is_active = body.is_active;
-    if (body.opening_balance !== undefined) updateData.opening_balance = parseFloat(body.opening_balance) || 0;
-
-    if (Object.keys(updateData).length > 0) {
-      const { error: updateError } = await s.from('banks_safes')
-        .update(updateData)
-        .eq('id', id).eq('company_id', auth.companyId);
-      if (updateError) throw updateError;
+    if (parsed.data.opening_balance !== undefined && Number(parsed.data.opening_balance) !== Number(current.opening_balance || 0)) {
+      return error('الرصيد الافتتاحي المرحّل غير قابل للتعديل؛ استخدم قيد تصحيح عكسياً', 409);
     }
-
-    // إذا تم تغيير الرصيد الافتتاحي، نحدّث قيد الافتتاح الخاص بهذا البنك فقط
-    // (البحث السابق كان يلتقط "أحدث قيد افتتاحي بالشركة" — قيد بنكٍ آخر! —
-    // ويحذف سطر البنك فقط تاركاً سطر رأس المال → قيد غير متوازن)
-    if (body.opening_balance !== undefined && (bankRes as any).account_id) {
-      const newOpeningBalance = parseFloat(body.opening_balance) || 0;
-      const oldOpeningBalance = parseFloat((bankRes as any).opening_balance) || 0;
-      const accountId = (bankRes as any).account_id;
-      const bankName = body.name || (bankRes as any).name;
-
-      if (newOpeningBalance !== oldOpeningBalance) {
-        // حساب رأس المال إلزامي لأي رصيد غير صفري — بلا مقابل لا قيد متوازن
-        const { data: capitalAccount } = await s.from('accounts')
-          .select('id, code, name')
-          .eq('company_id', auth.companyId)
-          .eq('code', '3100')
-          .maybeSingle();
-
-        if (newOpeningBalance !== 0 && !capitalAccount) {
-          return error('حساب رأس المال (3100) مفقود — لا يمكن ترحيل رصيد افتتاحي متوازن');
-        }
-
-        // قيد الافتتاح الخاص بهذا البنك تحديداً: نستدل عليه من سطور حسابه
-        const { data: ownLines } = await s.from('journal_lines')
-          .select('journal_entry_id')
-          .eq('account_id', accountId)
-          .eq('company_id', auth.companyId);
-        const ownJeIds = [...new Set((ownLines || []).map((l: any) => l.journal_entry_id))];
-
-        let openingEntryId: string | null = null;
-        if (ownJeIds.length > 0) {
-          const { data: obEntries } = await s.from('journal_entries')
-            .select('id')
-            .eq('company_id', auth.companyId)
-            .eq('type', 'opening_balance')
-            .in('id', ownJeIds)
-            .limit(1);
-          openingEntryId = obEntries?.[0]?.id || null;
-        }
-
-        if (!openingEntryId && newOpeningBalance !== 0) {
-          // لا قيد افتتاحي لهذا البنك — ننشئ واحداً جديداً
-          const { data: newEntry, error: newEntryErr } = await insertJournalHeader(auth.companyId, {
-            date: new Date().toISOString().split('T')[0],
-            type: 'opening_balance',
-            description: `رصيد افتتاحي - ${bankName}`,
-            created_by: auth.userId,
-          });
-          if (newEntryErr || !newEntry) throw newEntryErr || new Error('فشل قيد الافتتاح');
-          openingEntryId = newEntry.id;
-        }
-
-        if (openingEntryId) {
-          // إعادة كتابة سطري الطرفين (بنك + رأس مال) — القيد يبقى متوازناً دائماً
-          const affectedAccountIds = capitalAccount ? [accountId, capitalAccount.id] : [accountId];
-          await s.from('journal_lines')
-            .delete()
-            .eq('journal_entry_id', openingEntryId)
-            .in('account_id', affectedAccountIds)
-            .eq('company_id', auth.companyId);
-
-          const lines: any[] = [];
-          if (newOpeningBalance > 0 && capitalAccount) {
-            lines.push(
-              { journal_entry_id: openingEntryId, account_id: accountId, debit: newOpeningBalance, credit: 0, description: `رصيد افتتاحي - ${bankName}` },
-              { journal_entry_id: openingEntryId, account_id: capitalAccount.id, debit: 0, credit: newOpeningBalance, description: `رصيد افتتاحي - ${bankName}` },
-            );
-          } else if (newOpeningBalance < 0 && capitalAccount) {
-            lines.push(
-              { journal_entry_id: openingEntryId, account_id: accountId, debit: 0, credit: Math.abs(newOpeningBalance), description: `رصيد افتتاحي - ${bankName}` },
-              { journal_entry_id: openingEntryId, account_id: capitalAccount.id, debit: Math.abs(newOpeningBalance), credit: 0, description: `رصيد افتتاحي - ${bankName}` },
-            );
-          }
-
-          if (lines.length > 0) {
-            const { error: linesErr } = await insertJournalLines(auth.companyId, lines);
-            if (linesErr) throw linesErr;
-          }
-        }
-      }
-    }
-
-    const { data: updated, error: fetchError } = await s.from('banks_safes')
-      .select('*, accounts(code, name)')
-      .eq('id', id)
-      .single();
-
-    if (fetchError) throw fetchError;
-
-    const u = updated as Record<string, any>;
-    return success({
-      ...u,
-      account_code: u.accounts?.code || null,
-      account_name: u.accounts?.name || null,
-      opening_balance: parseFloat(u.opening_balance) || 0,
-      current_balance: u.account_id ? await getAccountBalanceFromJournal(u.account_id, auth.companyId) : 0,
-      balance: u.account_id ? await getAccountBalanceFromJournal(u.account_id, auth.companyId) : 0,
+    const patch: Record<string, unknown> = {};
+    if (parsed.data.name !== undefined) patch.name = parsed.data.name;
+    if (parsed.data.account_number !== undefined) patch.account_number = parsed.data.account_number;
+    if (!Object.keys(patch).length) return error('لا توجد حقول قابلة للتعديل');
+    const { data, error: updateError } = await sb().rpc('update_bank_safe_metadata_atomic', {
+      p_company_id: auth.companyId, p_bank_safe_id: id, p_patch: patch, p_user_id: auth.userId,
     });
+    const message = String(updateError?.message || '');
+    if (message.includes('غير موجود')) return notFound();
+    if (message.includes('مستخدم مسبقاً')) return error(message, 409);
+    if (updateError) throw updateError;
+    return success(data);
   } catch (err) {
     return handleApiError(err);
   }
 }
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireManagerOrAbove(request);
     const { id } = await params;
-    const s = sb();
-
-    const { data: bankRes } = await s.from('banks_safes')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!bankRes) {
-      return notFound();
-    }
-
-    const { data: txDep } = await s.from('cash_transactions')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('bank_safe_id', id)
-      .limit(1);
-    if (txDep && txDep.length > 0) {
-      return error('لا يمكن حذف الخزينة/البنك لأنه مرتبط بحركات نقدية');
-    }
-
-    const { data: vouchDep } = await s.from('voucher_receipts')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('bank_safe_id', id)
-      .limit(1);
-    if (vouchDep && vouchDep.length > 0) {
-      return error('لا يمكن حذف الخزينة/البنك لأنه مرتبط بسندات قبض');
-    }
-
-    const { data: vouchDisDep } = await s.from('voucher_disbursements')
-      .select('id')
-      .eq('company_id', auth.companyId)
-      .eq('bank_safe_id', id)
-      .limit(1);
-    if (vouchDisDep && vouchDisDep.length > 0) {
-      return error('لا يمكن حذف الخزينة/البنك لأنه مرتبط بسندات صرف');
-    }
-
-    const { error: deleteError } = await s.from('banks_safes')
-      .delete()
-      .eq('id', id).eq('company_id', auth.companyId);
-    if (deleteError) throw deleteError;
-
-    return success({ deleted: true });
+    if (!UUID_RE.test(id)) return error('معرّف البنك أو الخزينة غير صالح');
+    const { data, error: deactivateError } = await sb().rpc('deactivate_bank_safe', {
+      p_company_id: auth.companyId, p_bank_safe_id: id, p_user_id: auth.userId,
+    });
+    const message = String(deactivateError?.message || '');
+    if (message.includes('غير موجود')) return notFound();
+    if (message.includes('رصيد غير صفري')) return error(message, 409);
+    if (deactivateError) throw deactivateError;
+    return success({ deactivated: true, bank: data });
   } catch (err) {
     return handleApiError(err);
   }

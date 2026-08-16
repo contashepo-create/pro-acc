@@ -20,20 +20,14 @@ export async function POST(request: NextRequest) {
     // Rate limiting: prevent attackers from flooding a target's inbox with
     // password-reset emails (email bombing / abuse). Counts real requests via
     // the password_reset_requests table so repeated resets are throttled.
-    try {
-      const { checkPasswordResetRateLimit } = await import('@/lib/rate-limit');
-      const rateLimit = await checkPasswordResetRateLimit(email.toLowerCase(), ip);
-      if (!rateLimit.allowed) {
-        return error(`عدد الطلبات كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
-      }
-    } catch {}
+    const { checkPasswordResetRateLimit, recordPasswordResetRequest } = await import('@/lib/rate-limit');
+    const rateLimit = await checkPasswordResetRateLimit(email.toLowerCase(), ip);
+    if (!rateLimit.allowed) {
+      return error(`عدد الطلبات كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
+    }
 
-    // Record the request (also gives us a delivery log for diagnostics).
-    let requestId: string | null = null;
-    try {
-      const { recordPasswordResetRequest } = await import('@/lib/rate-limit');
-      requestId = await recordPasswordResetRequest(email.toLowerCase(), ip);
-    } catch {}
+    // Recording is part of enforcement and therefore fails closed.
+    const requestId = await recordPasswordResetRequest(email.toLowerCase(), ip);
 
     const { data: user, error: queryError } = await s.from('users')
       .select('id, name, email')
@@ -51,13 +45,22 @@ export async function POST(request: NextRequest) {
     const hashedToken = createHash('sha256').update(rawToken).digest('hex');
     const expiresAt = new Date(Date.now() + 3600000).toISOString();
 
-    await s.from('password_reset_tokens').insert({
+    const { error: tokenErr } = await s.from('password_reset_tokens').insert({
       user_id: user.id,
       token: hashedToken,
       expires_at: expiresAt,
     });
+    if (tokenErr) throw tokenErr;
 
-    const resetUrl = `${request.nextUrl.origin}/reset-password?token=${rawToken}`;
+    const configuredUrl = (process.env.NEXT_PUBLIC_APP_URL || '').trim();
+    if (process.env.NODE_ENV === 'production' && !configuredUrl) {
+      throw new Error('NEXT_PUBLIC_APP_URL is required for password reset links');
+    }
+    const appUrl = configuredUrl ? new URL(configuredUrl) : request.nextUrl;
+    if (process.env.NODE_ENV === 'production' && appUrl.protocol !== 'https:') {
+      throw new Error('NEXT_PUBLIC_APP_URL must use HTTPS');
+    }
+    const resetUrl = `${appUrl.origin}/reset-password?token=${rawToken}`;
 
     const emailSent = await sendPasswordResetEmail(email, resetUrl);
 

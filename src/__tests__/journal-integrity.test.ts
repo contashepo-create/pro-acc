@@ -78,12 +78,15 @@ function makeDb(db: Record<string, Row[]>) {
     return api;
   };
 
-  const db_: any = { from, calls };
+  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
   db_.rpcImpl = async (_name: string, _params: any) => ({
     data: null,
     error: { message: `Could not find the function ${_name}` },
   });
-  db_.rpc = (name: string, params: any) => db_.rpcImpl(name, params);
+  db_.rpc = (name: string, params: any) => {
+    db_.rpcCalls.push({ name, params });
+    return db_.rpcImpl(name, params);
+  };
   return db_;
 }
 
@@ -370,164 +373,89 @@ describe('getNextJournalNumber fallback parity with RPC semantics', () => {
 // 4. POST /api/journal — legacy fallback path
 // ---------------------------------------------------------------------------
 
-describe('POST /api/journal (legacy fallback path)', () => {
-  test('inserted journal_lines carry company_id (regression)', async () => {
+describe('POST /api/journal — atomic posting boundary', () => {
+  test('rejects unbalanced entries before calling PostgreSQL', async () => {
     mockDb = makeDb(withTaxAccount(baseDb()));
-    const res = await journalPOST(authedRequest(balancedBody));
-    expect(res.status).toBe(201);
-
-    const lineInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'journal_lines');
-    expect(lineInserts.length).toBeGreaterThan(0);
-    for (const ins of lineInserts) {
-      const rows = Array.isArray(ins.mut.payload) ? ins.mut.payload : [ins.mut.payload];
-      for (const r of rows) {
-        expect(r.company_id).toBe(C1);
-        expect(r.account_name).toBeTruthy();
-      }
-    }
-    // journal entry itself is tenant-scoped
-    const je = mockDb.calls.find((c) => c.mut.kind === 'insert' && c.table === 'journal_entries');
-    expect(je!.mut.payload.company_id).toBe(C1);
-  });
-
-  test('rolls back the entry when an account code does not exist', async () => {
-    mockDb = makeDb(baseDb()); // no 2120 account here
-    const res = await journalPOST(authedRequest(balancedBody));
-    expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.message).toContain('غير موجود');
-    // no committed entry and no orphan lines anywhere
-    expect(mockDb.calls.find((c) => c.mut.kind === 'insert' && c.table === 'journal_entries')).toBeUndefined();
-    expect(mockDb.calls.find((c) => c.mut.kind === 'insert' && c.table === 'journal_lines')).toBeUndefined();
-  });
-
-  test('rejects clearly unbalanced entries before touching the database', async () => {
-    mockDb = makeDb(withTaxAccount(baseDb()));
-    const unbalanced = {
+    const res = await journalPOST(authedRequest({
       ...balancedBody,
       lines: [
         { accountCode: '1110', debit: 100, credit: 0 },
         { accountCode: '4100', debit: 0, credit: 50 },
       ],
-    };
-    const res = await journalPOST(authedRequest(unbalanced));
+    }));
     expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.message).toContain('الدائنين');
-    // schema-level rejection: zero database mutations
-    expect(mockDb.calls.find((c) => c.mut.kind === 'insert')).toBeUndefined();
+    expect(mockDb.rpcCalls).toHaveLength(0);
   });
-});
 
-// ---------------------------------------------------------------------------
-// 5. POST /api/journal — primary atomic RPC path
-// ---------------------------------------------------------------------------
+  test('rejects an account outside the tenant before posting', async () => {
+    mockDb = makeDb(baseDb()); // no 2120 account
+    const res = await journalPOST(authedRequest(balancedBody));
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toContain('غير موجود');
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
 
-describe('POST /api/journal (atomic RPC path)', () => {
-  test('creates via RPC with tenant params and returns totals', async () => {
+  test('resolves tenant accounts then posts through one RPC with trusted context', async () => {
     const db = withTaxAccount(baseDb());
-    db.journal_entries.push({ id: 'je-rpc-1', company_id: C1, number: 5, date: '2026-08-01', type: 'general', description: 'قيد', created_at: 'x' });
+    db.journal_entries.push({ id: 'je-rpc-1', company_id: C1, number: 5, date: '2026-08-01', type: 'general', description: 'قيد اختبار', created_at: 'x' });
     db.journal_lines.push(
-      { id: 'l1', journal_entry_id: 'je-rpc-1', account_code: '1110', debit: 1150, credit: 0 },
-      { id: 'l2', journal_entry_id: 'je-rpc-1', account_code: '4100', debit: 0, credit: 1000 },
+      { id: 'l1', company_id: C1, journal_entry_id: 'je-rpc-1', account_code: '1110', debit: 1150, credit: 0 },
+      { id: 'l2', company_id: C1, journal_entry_id: 'je-rpc-1', account_code: '4100', debit: 0, credit: 1000 },
+      { id: 'l3', company_id: C1, journal_entry_id: 'je-rpc-1', account_code: '2120', debit: 0, credit: 150 },
     );
     mockDb = makeDb(db);
-    mockDb.rpcImpl = async (name: string, params: any) => {
-      if (name === 'create_journal_entry') {
-        expect(params.p_company_id).toBe(C1);
-        expect(params.p_created_by).toBe('u1');
-        return { data: { id: 'je-rpc-1', number: 5, total_debit: 1150, total_credit: 1150, lines_count: 2 }, error: null };
-      }
-      return { data: null, error: { message: `Could not find the function ${name}` } };
-    };
+    mockDb.rpcImpl = async (name: string) => name === 'create_journal_entry'
+      ? { data: { id: 'je-rpc-1', number: 5, total_debit: 1150, total_credit: 1150, lines_count: 3 }, error: null }
+      : { data: null, error: { message: `missing ${name}` } };
 
     const res = await journalPOST(authedRequest(balancedBody));
     expect(res.status).toBe(201);
-    const json = await res.json();
-    expect(json.data.totalDebit).toBe(1150);
-    expect(json.data.totalCredit).toBe(1150);
+    expect((await res.json()).data).toMatchObject({ totalDebit: 1150, totalCredit: 1150 });
+    expect(mockDb.rpcCalls[0]).toMatchObject({
+      name: 'create_journal_entry',
+      params: { p_company_id: C1, p_created_by: 'u1', p_date: '2026-08-01', p_type: 'general' },
+    });
+    const rpcLines = mockDb.rpcCalls[0].params.p_lines;
+    expect(rpcLines).toHaveLength(3);
+    expect(rpcLines.every((line: any) => line.accountId)).toBe(true);
+    expect(mockDb.calls.find((call) => call.mut.kind === 'insert' && call.table === 'journal_entries')).toBeUndefined();
   });
 
-  test('surfaces RPC balance violations as 400', async () => {
+  test('does not fall back to partial route writes when the RPC rejects', async () => {
     mockDb = makeDb(withTaxAccount(baseDb()));
-    mockDb.rpcImpl = async () => ({ data: null, error: { message: 'خطأ في الموازنة: المدين لا يساوي الدائن', code: 'P0001' } });
+    mockDb.rpcImpl = async () => ({ data: null, error: { code: 'P0001', message: 'السنة المالية مغلقة' } });
     const res = await journalPOST(authedRequest(balancedBody));
-    expect(res.status).toBe(400);
-  });
-
-  test('falls back to legacy insert (with company_id) when live RPC omits company_id', async () => {
-    mockDb = makeDb(withTaxAccount(baseDb()));
-    mockDb.rpcImpl = async (name: string) => {
-      if (name === 'create_journal_entry') {
-        return {
-          data: null,
-          error: {
-            code: '23502',
-            message: 'null value in column "company_id" of relation "journal_lines" violates not-null constraint',
-          },
-        };
-      }
-      return { data: null, error: { message: `Could not find the function ${name}` } };
-    };
-
-    const res = await journalPOST(authedRequest(balancedBody));
-    expect(res.status).toBe(201);
-
-    const lineInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'journal_lines');
-    expect(lineInserts.length).toBeGreaterThan(0);
-    for (const ins of lineInserts) {
-      const rows = Array.isArray(ins.mut.payload) ? ins.mut.payload : [ins.mut.payload];
-      for (const r of rows) expect(r.company_id).toBe(C1);
-    }
+    expect(res.status).toBe(409);
+    expect(mockDb.calls.find((call) => call.mut.kind === 'insert' && ['journal_entries', 'journal_lines'].includes(call.table))).toBeUndefined();
   });
 });
 
-// ---------------------------------------------------------------------------
-// 6. DELETE /api/journal/[id] protections
-// ---------------------------------------------------------------------------
-
-describe('DELETE /api/journal/[id]', () => {
+describe('DELETE /api/journal/[id] — reversal-only lifecycle', () => {
   function seedEntry(db: Record<string, Row[]>) {
-    db.journal_entries.push({ id: 'je-1', company_id: C1, number: 9, date: '2026-08-01', type: 'general' });
+    db.journal_entries.push({ id: 'je-1', company_id: C1, number: 9, date: '2026-08-01', type: 'general', description: 'قيد' });
     return db;
   }
 
-  test('blocks delete when an invoice is linked to the entry', async () => {
-    const db = seedEntry(baseDb());
-    db.invoices.push({ id: 'inv-1', company_id: C1, journal_entry_id: 'je-1' });
-    mockDb = makeDb(db);
-    const res = await journalDELETE(authedRequest(), paramsOf('je-1'));
-    expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.message).toContain('فاتورة');
-    expect(mockDb.calls.find((c) => c.mut.kind === 'delete')).toBeUndefined();
-  });
-
-  test('blocks delete when a reversal entry references it', async () => {
-    const db = seedEntry(baseDb());
-    db.journal_entries.push({ id: 'je-rev', company_id: C1, reversal_of: 'je-1' });
-    mockDb = makeDb(db);
-    const res = await journalDELETE(authedRequest(), paramsOf('je-1'));
-    expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.message).toContain('عكسية');
-  });
-
-  test('deletes lines then entry for a clean entry', async () => {
-    mockDb = makeDb(seedEntry(baseDb()));
-    const res = await journalDELETE(authedRequest(), paramsOf('je-1'));
-    expect(res.status).toBe(200);
-    const delLines = mockDb.calls.find((c) => c.mut.kind === 'delete' && c.table === 'journal_lines');
-    const delEntry = mockDb.calls.find((c) => c.mut.kind === 'delete' && c.table === 'journal_entries');
-    expect(delLines).toBeDefined();
-    expect(delEntry).toBeDefined();
-  });
-
-  test('cross-tenant access returns 404', async () => {
+  test('cross-tenant access returns 404 without invoking reversal', async () => {
     const db = seedEntry(baseDb());
     db.journal_entries.push({ id: 'je-9', company_id: 'company-2', number: 1 });
     mockDb = makeDb(db);
     const res = await journalDELETE(authedRequest(), paramsOf('je-9'));
     expect(res.status).toBe(404);
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
+
+  test('creates an atomic reversal and never hard-deletes ledger rows', async () => {
+    mockDb = makeDb(seedEntry(baseDb()));
+    mockDb.rpcImpl = async (name: string) => name === 'post_journal_reversal'
+      ? { data: { id: 'je-reversal-1' }, error: null }
+      : { data: null, error: { message: `missing ${name}` } };
+    const res = await journalDELETE(authedRequest(), paramsOf('je-1'));
+    expect(res.status).toBe(200);
+    expect(mockDb.rpcCalls[0]).toMatchObject({
+      name: 'post_journal_reversal',
+      params: { p_company_id: C1, p_journal_entry_id: 'je-1', p_user_id: 'u1' },
+    });
+    expect(mockDb.calls.find((call) => call.mut.kind === 'delete')).toBeUndefined();
   });
 });

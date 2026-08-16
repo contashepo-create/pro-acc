@@ -1,110 +1,45 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import { deliveryUuid, equipmentCreateSchema } from '@/lib/project-delivery-validation';
 
-const sb = () => getSupabase();
+const EQUIPMENT_COLUMNS = `id,name,type,model,manufacturer,year_of_manufacture,serial_number,plate_number,purchase_date,
+  purchase_cost,depreciation_method,useful_life_years,hourly_rate,assigned_project_id,assigned_operator_id,status,
+  location,notes,last_maintenance_date,next_maintenance_date,maintenance_interval_days,total_operating_hours,
+  current_value,created_at,updated_at,projects(name),employees(name)`;
 
-/**
- * GET /api/equipment — List all equipment
- */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'equipment', 'read');
-    const s = sb();
     const url = new URL(request.url);
     const { page, pageSize } = getPaginationParams(url);
     const status = url.searchParams.get('status');
-    const project_id = url.searchParams.get('project_id');
-
-    let query = s.from('equipment')
-      .select('*, projects(name)', { count: 'exact' })
-      .eq('company_id', auth.companyId);
-
+    const projectId = url.searchParams.get('project_id');
+    if (status && !['available', 'in_use', 'maintenance', 'decommissioned', 'sold'].includes(status)) return error('حالة المعدة غير صالحة');
+    if (projectId && !deliveryUuid.safeParse(projectId).success) return error('معرف المشروع غير صالح');
+    let query = getSupabase().from('equipment').select(EQUIPMENT_COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId);
     if (status) query = query.eq('status', status);
-    if (project_id) query = query.eq('assigned_project_id', project_id);
-
+    if (projectId) query = query.eq('assigned_project_id', projectId);
     const offset = (page - 1) * pageSize;
-    const { data, error: qErr, count } = await query
-      .order('name')
-      .range(offset, offset + pageSize - 1);
-
-    if (qErr) throw qErr;
-
-    const equipment = (data || []).map((e: any) => ({
-      ...e,
-      project_name: e.projects?.name || null,
-      nextMaintenanceDue: calculateNextMaintenance(e.last_maintenance_date, e.maintenance_interval_days),
-      isOverdue: isMaintenanceOverdue(e.last_maintenance_date, e.maintenance_interval_days),
-    }));
-
-    return success({ equipment, total: count || 0, page, pageSize });
-  } catch (err) {
-    return handleApiError(err);
+    const { data, error: queryError, count } = await query.order('created_at', { ascending: false }).range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
+    return success({ equipment: data || [], total: count || 0, page, pageSize });
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-/**
- * POST /api/equipment — Create new equipment
- */
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'equipment', 'create');
-    const s = sb();
-    const body = await request.json();
-
-    if (!body.name || !body.type) {
-      return error('اسم المعدة ونوعها مطلوبان');
-    }
-
-    const equipId = generateId();
-    const { data, error: insertErr } = await s.from('equipment')
-      .insert({
-        id: equipId,
-        company_id: auth.companyId,
-        name: body.name,
-        type: body.type, // excavator, crane, mixer, truck, generator, etc.
-        model: body.model || null,
-        manufacturer: body.manufacturer || null,
-        year_of_manufacture: body.year_of_manufacture || null,
-        serial_number: body.serial_number || null,
-        plate_number: body.plate_number || null,
-        purchase_date: body.purchase_date || null,
-        purchase_cost: body.purchase_cost || 0,
-        depreciation_method: body.depreciation_method || 'straight_line', // straight_line, declining_balance
-        useful_life_years: body.useful_life_years || 10,
-        hourly_rate: body.hourly_rate || 0,
-        assigned_project_id: body.assigned_project_id || null,
-        assigned_operator_id: body.assigned_operator_id || null,
-        status: body.status || 'available', // available, in_use, maintenance, decommissioned
-        location: body.location || null,
-        notes: body.notes || null,
-        last_maintenance_date: body.last_maintenance_date || null,
-        maintenance_interval_days: body.maintenance_interval_days || 90,
-        created_by: auth.userId,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (insertErr) throw insertErr;
-
+    const parsed = equipmentCreateSchema.safeParse(await parseBody(request));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات المعدة غير صالحة');
+    const { data, error: rpcError } = await getSupabase().rpc('create_equipment_atomic', {
+      p_company_id: auth.companyId, p_payload: parsed.data, p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
     return success(data, 201);
-  } catch (err) {
-    return handleApiError(err);
+  } catch (cause) {
+    return handleApiError(cause);
   }
-}
-
-function calculateNextMaintenance(lastDate: string | null, intervalDays: number | null): string | null {
-  if (!lastDate || !intervalDays) return null;
-  const next = new Date(lastDate);
-  next.setDate(next.getDate() + intervalDays);
-  return next.toISOString().split('T')[0];
-}
-
-function isMaintenanceOverdue(lastDate: string | null, intervalDays: number | null): boolean {
-  if (!lastDate || !intervalDays) return false;
-  const next = new Date(lastDate);
-  next.setDate(next.getDate() + intervalDays);
-  return next < new Date();
 }

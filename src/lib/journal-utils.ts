@@ -142,34 +142,6 @@ export async function insertJournalLines(
 }
 
 /**
- * حذف جميع سطور والقيد المحاسبي مع التعامل مع القيود المرتبطة
- * يحذف بشكل آمن: سطور القيد أولاً ثم القيد نفسه
- */
-export async function deleteJournalEntry(
-  companyId: string,
-  journalEntryId: string
-): Promise<{ error: any | null; message?: string }> {
-  const s = sb();
-
-  // حذف سطور القيد أولاً
-  const { error: linesErr } = await s.from('journal_lines')
-    .delete()
-    .eq('journal_entry_id', journalEntryId);
-  
-  if (linesErr) return { error: linesErr, message: 'فشل حذف سطور القيد' };
-
-  // حذف القيد نفسه
-  const { error: entryErr } = await s.from('journal_entries')
-    .delete()
-    .eq('id', journalEntryId)
-    .eq('company_id', companyId);
-  
-  if (entryErr) return { error: entryErr, message: 'فشل حذف القيد' };
-
-  return { error: null };
-}
-
-/**
  * حساب رصيد حساب معين من القيود المحاسبية
  * الرصيد = إجمالي المدين - إجمالي الدائن
  */
@@ -179,18 +151,12 @@ export async function getAccountBalanceFromJournal(
 ): Promise<number> {
   const s = sb();
 
-  let query = s.from('journal_lines')
-    .select('debit, credit')
-    .eq('account_id', accountId);
-  if (companyId) query = query.eq('company_id', companyId);
-  const { data: lines } = await query;
-
-  if (!lines || lines.length === 0) return 0;
-
-  const totalDebit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.debit) || 0), 0);
-  const totalCredit = lines.reduce((sum: number, l: any) => sum + (parseFloat(l.credit) || 0), 0);
-
-  return totalDebit - totalCredit;
+  if (!companyId) throw new Error('companyId مطلوب لحساب رصيد الحساب بأمان');
+  const { data, error } = await s.rpc('get_account_balance', {
+    p_company_id: companyId, p_account_id: accountId, p_journal_type: null, p_as_of: null,
+  });
+  if (error) throw error;
+  return Number(data) || 0;
 }
 
 /**

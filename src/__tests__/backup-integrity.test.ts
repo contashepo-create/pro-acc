@@ -56,7 +56,11 @@ function makeDb(db: Record<string, Row[]>) {
     };
     return api;
   };
-  const db_: any = { from, calls };
+  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
+  db_.rpc = async (name: string, params: any) => {
+    db_.rpcCalls.push({ name, params });
+    return { data: { restored: true }, error: null };
+  };
   return db_;
 }
 
@@ -114,7 +118,7 @@ describe('backup download — admin-only', () => {
   test('supervisor cannot export company data', async () => {
     mockDb = makeDb(baseDb());
     const res = await backupDownloadGET(authedAs('u-sup', 'supervisor', undefined, 'GET'));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
     expect(insertsOf('backup_logs')).toHaveLength(0);
   });
 
@@ -134,7 +138,7 @@ describe('backup upload — admin-only + anti-tamper + tenant', () => {
   test('supervisor cannot restore', async () => {
     mockDb = makeDb(baseDb());
     const res = await backupUploadPOST(authedAs('u-sup', 'supervisor', { backupData: {}, fileHash: 'x' }, 'POST'));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
   });
 
   test('backup for another company is rejected', async () => {
@@ -158,7 +162,7 @@ describe('backup upload — admin-only + anti-tamper + tenant', () => {
     expect(upsertsOf('accounts')).toHaveLength(0);
   });
 
-  test('a valid, unmodified backup restores via upsert', async () => {
+  test('a valid, unmodified backup restores through one atomic RPC', async () => {
     const db = baseDb();
     const backupData = {
       metadata: { company_id: C1, email: 'co@x.com' },
@@ -170,9 +174,16 @@ describe('backup upload — admin-only + anti-tamper + tenant', () => {
       backupData, fileHash: sign(backupData).substring(0, 16),
     }, 'POST'));
     expect(res.status).toBe(200);
-    expect(upsertsOf('accounts').length).toBeGreaterThan(0);
-    // restore is company-scoped
-    expect(upsertsOf('accounts')[0].mut.payload.company_id).toBe(C1);
+    expect(mockDb.rpcCalls).toEqual([{
+      name: 'restore_company_backup_atomic',
+      params: {
+        p_company_id: C1,
+        p_user_id: 'u-admin',
+        p_hmac_signature: sign(backupData),
+        p_data: backupData.data,
+      },
+    }]);
+    expect(upsertsOf('accounts')).toHaveLength(0);
   });
 
   test('a backup containing another company row is rejected', async () => {

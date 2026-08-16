@@ -1,168 +1,58 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { deleteJournalEntry } from '@/lib/journal-utils';
-import { ACCOUNT_CODES, PROJECT_EXPENSE_CODES } from '@/lib/constants';
+import { deliveryUuid, projectExpenseUpdateSchema } from '@/lib/project-delivery-validation';
 
-const sb = () => getSupabase();
+async function findExpense(companyId: string, id: string) {
+  const { data, error: queryError } = await getSupabase().from('project_expenses')
+    .select('id,project_id,expense_type,description,amount,date,contact_id,journal_entry_id,status,approved_by,approved_at,notes,created_at,updated_at,projects(name),contacts(name),users(name)')
+    .eq('id', id).eq('company_id', companyId).maybeSingle();
+  if (queryError) throw queryError;
+  return data;
+}
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'projects', 'read');
     const { id } = await params;
-    const s = sb();
-
-    const { data: expense, error: queryErr } = await s.from('project_expenses')
-      .select('*, projects(name), contacts(name)')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (queryErr) throw queryErr;
-    if (!expense) return notFound();
-
-    const result = expense as Record<string, any>;
-    result.project_name = result.projects?.name || null;
-    result.contact_name = result.contacts?.name || null;
-
-    return success(result);
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المصروف غير صالح');
+    const expense = await findExpense(auth.companyId, id);
+    return expense ? success(expense) : error('المصروف غير موجود', 404);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'projects', 'update');
     const { id } = await params;
-    const s = sb();
-    const body = await parseBody(req);
-
-    const { data: existing } = await s.from('project_expenses')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const oldExpense = existing as any;
-    const updateData: any = {};
-
-    if (body.description !== undefined) updateData.description = body.description;
-    if (body.amount !== undefined) updateData.amount = body.amount;
-    if (body.date !== undefined) updateData.date = body.date;
-    if (body.contact_id !== undefined) updateData.contact_id = body.contact_id;
-    if (body.notes !== undefined) updateData.notes = body.notes;
-
-    if (body.expense_type !== undefined && PROJECT_EXPENSE_CODES[body.expense_type]) {
-      updateData.expense_type = body.expense_type;
-      updateData.account_code = PROJECT_EXPENSE_CODES[body.expense_type];
-    }
-
-    const { data: updated, error: updateErr } = await s.from('project_expenses')
-      .update(updateData)
-      .eq('id', id).eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-
-    if (updateErr) throw updateErr;
-
-    if (body.amount !== undefined && oldExpense.journal_entry_id) {
-      await deleteJournalEntry(auth.companyId, oldExpense.journal_entry_id);
-
-      const accountCode = body.expense_type
-        ? PROJECT_EXPENSE_CODES[body.expense_type]
-        : oldExpense.account_code;
-
-      const { data: expenseAcc } = await s.from('accounts')
-        .select('id')
-        .eq('code', accountCode)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-
-      const { data: cashAcc } = await s.from('accounts')
-        .select('id')
-        .eq('code', ACCOUNT_CODES.CASH)
-        .eq('company_id', auth.companyId)
-        .maybeSingle();
-
-      if (expenseAcc && cashAcc) {
-        const { createJournalEntry } = await import('@/lib/journal-utils');
-        const je = await createJournalEntry(auth.companyId, {
-          date: body.date || oldExpense.date,
-          type: 'general',
-          description: `تعديل مصروف مشروع: ${body.description || oldExpense.description}`,
-          lines: [
-            {
-              account_id: (expenseAcc as any).id,
-              debit: body.amount,
-              credit: 0,
-              description: body.description || oldExpense.description,
-              project_id: oldExpense.project_id,
-              contact_id: body.contact_id || oldExpense.contact_id,
-            },
-            {
-              account_id: (cashAcc as any).id,
-              debit: 0,
-              credit: body.amount,
-              description: `دفع مصروف مشروع`,
-              project_id: oldExpense.project_id,
-              contact_id: body.contact_id || oldExpense.contact_id,
-            },
-          ],
-          reference_type: 'project_expense',
-          reference_id: id,
-          created_by: auth.userId,
-        });
-
-        if (!je.error) {
-          await s.from('project_expenses')
-            .update({ journal_entry_id: je.journalId })
-            .eq('id', id).eq('company_id', auth.companyId);
-        }
-      }
-    }
-
-    return success(updated);
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المصروف غير صالح');
+    const parsed = projectExpenseUpdateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'لا يُسمح إلا بتعديل الملاحظات');
+    if (!await findExpense(auth.companyId, id)) return error('المصروف غير موجود', 404);
+    const { data, error: rpcError } = await getSupabase().rpc('update_project_expense_note_atomic', {
+      p_company_id: auth.companyId, p_expense_id: id, p_notes: parsed.data.notes || '', p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireModulePermission(req, 'projects', 'delete');
     const { id } = await params;
-    const s = sb();
-
-    const { data: existing } = await s.from('project_expenses')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', auth.companyId)
-      .maybeSingle();
-
-    if (!existing) return notFound();
-
-    const expense = existing as any;
-
-    if (expense.journal_entry_id) {
-      await deleteJournalEntry(auth.companyId, expense.journal_entry_id);
-    }
-
-    await s.from('project_expenses').delete().eq('id', id).eq('company_id', auth.companyId);
-
-    return success({ deleted: true });
-  } catch (err) {
-    return handleApiError(err);
+    if (!deliveryUuid.safeParse(id).success) return error('معرف المصروف غير صالح');
+    if (!await findExpense(auth.companyId, id)) return error('المصروف غير موجود', 404);
+    const { data, error: rpcError } = await getSupabase().rpc('cancel_project_expense', {
+      p_company_id: auth.companyId, p_expense_id: id, p_user_id: auth.userId,
+    });
+    if (rpcError) throw rpcError;
+    return success(data);
+  } catch (cause) {
+    return handleApiError(cause);
   }
 }

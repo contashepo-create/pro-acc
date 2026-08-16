@@ -84,8 +84,12 @@ export default function CashPage() {
       setSaveError('يجب إدخال مبلغ صحيح');
       return;
     }
-    if (!form.account_id) {
-      setSaveError('يجب اختيار الحساب');
+    if (!editingTransaction && (!form.account_id || !form.bank_safe_id)) {
+      setSaveError('يجب اختيار الحساب والخزينة/البنك');
+      return;
+    }
+    if (!form.reason?.trim()) {
+      setSaveError('بيان المعاملة مطلوب');
       return;
     }
 
@@ -98,12 +102,16 @@ export default function CashPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...form,
+        body: JSON.stringify(editingTransaction ? {
+          reason: form.reason.trim(),
+        } : {
+          date: form.date,
           type: form.type === 'receipt' || form.type === 'revenue' ? 'revenue' : 'expense',
+          amount: form.amount,
           accountId: form.account_id,
           bankSafeId: form.bank_safe_id,
-          contactId: form.contact_id,
+          contactId: form.contact_id || null,
+          reason: form.reason.trim(),
         }),
       });
       const json = await res.json();
@@ -153,7 +161,7 @@ export default function CashPage() {
       const res = await fetch(`/api/cash/${transaction.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        toast.success('تم حذف المعاملة بنجاح');
+        toast.success('تم إلغاء المعاملة وعكس قيدها بنجاح');
         fetchData();
       } else {
         toast.error(json.message || 'فشل الحذف');
@@ -179,7 +187,9 @@ export default function CashPage() {
     return <Badge variant={m.variant}>{m.label}</Badge>;
   };
 
-  const filtered = typeTab === 'all' ? transactions : transactions.filter(t => t.type === typeTab);
+  const filtered = typeTab === 'all' ? transactions : transactions.filter(t =>
+    typeTab === 'receipt' ? t.type === 'receipt' || t.type === 'revenue' : t.type === typeTab,
+  );
   
   const columns = [
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
@@ -241,32 +251,36 @@ export default function CashPage() {
       >
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
+            <Input label="التاريخ" type="date" value={form.date} disabled={!!editingTransaction} onChange={(e) => setForm({...form, date: e.target.value})} />
             <Select
               label="النوع"
               value={form.type}
+              disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, type: v})}
               options={[
                 { value: 'receipt', label: 'قبض' },
                 { value: 'expense', label: 'صرف' },
               ]}
             />
-            <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
+            <Input label="المبلغ" type="number" value={form.amount} disabled={!!editingTransaction} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
             <Select
               label="الحساب"
               value={form.account_id}
+              disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, account_id: v})}
               options={[{ value: '', label: 'اختر حساباً' }, ...accounts.map((a: any) => ({ value: a.id, label: `${a.code} - ${a.name}` }))]}
             />
             <Select
-              label="الخزينة/البنك (اختياري)"
+              label="الخزينة/البنك"
               value={form.bank_safe_id}
+              disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, bank_safe_id: v})}
               options={[{ value: '', label: 'بدون' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]}
             />
             <Select
               label="جهة الاتصال (اختياري)"
               value={form.contact_id}
+              disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, contact_id: v})}
               options={[{ value: '', label: 'بدون' }, ...contacts.map((c: any) => ({ value: c.id, label: c.name }))]}
             />

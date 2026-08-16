@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError } from '@/lib/api-helpers';
+import { success, error } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 
 const sb = () => getSupabase();
@@ -8,7 +8,7 @@ const sb = () => getSupabase();
 function sanitizeId(v: unknown): string | null {
   if (typeof v !== 'string') return null;
   const cleaned = v.trim();
-  if (!/^[0-9a-fA-F-]{8,}$/.test(cleaned)) return null;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cleaned)) return null;
   return cleaned;
 }
 
@@ -31,11 +31,17 @@ export async function GET(req: NextRequest) {
     if (!ad) return error('الإعلان غير موجود', 404);
 
     // Stats only — do NOT leak IPs or PII to the admin dashboard beyond counts
-    const [{ count: viewCount }, { count: clickCount }, { count: notifCount }] = await Promise.all([
-      s.from('ad_views').select('*', { count: 'exact', head: true }).eq('advertisement_id', adId),
-      s.from('ad_clicks').select('*', { count: 'exact', head: true }).eq('advertisement_id', adId),
-      s.from('ad_notifications').select('*', { count: 'exact', head: true }).eq('advertisement_id', adId),
+    const [viewsResult, clicksResult, notificationsResult] = await Promise.all([
+      s.from('ad_views').select('id', { count: 'exact', head: true }).eq('advertisement_id', adId),
+      s.from('ad_clicks').select('id', { count: 'exact', head: true }).eq('advertisement_id', adId),
+      s.from('ad_notifications').select('id', { count: 'exact', head: true }).eq('advertisement_id', adId),
     ]);
+    if (viewsResult.error) throw viewsResult.error;
+    if (clicksResult.error) throw clicksResult.error;
+    if (notificationsResult.error) throw notificationsResult.error;
+    const viewCount = viewsResult.count;
+    const clickCount = clicksResult.count;
+    const notifCount = notificationsResult.count;
 
     return success({
       ad,

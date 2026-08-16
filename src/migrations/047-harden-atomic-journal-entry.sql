@@ -29,7 +29,7 @@ BEGIN
   IF p_company_id IS NULL OR p_created_by IS NULL OR p_date IS NULL THEN
     RAISE EXCEPTION 'بيانات القيد الأساسية غير مكتملة';
   END IF;
-  IF p_type NOT IN ('general', 'opening_balance', 'accrual') THEN
+  IF p_type NOT IN ('general', 'opening_balance', 'accrual', 'closing', 'reversing') THEN
     RAISE EXCEPTION 'نوع القيد غير صالح';
   END IF;
   IF jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) < 2 THEN

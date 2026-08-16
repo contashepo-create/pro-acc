@@ -1,7 +1,7 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError } from '@/lib/api-helpers';
+import { success } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
 
@@ -14,16 +14,19 @@ const KNOWN_TABLES = [
 
 export async function GET(request: NextRequest) {
   try {
-  const __admin = await requireAdmin(request);
+    await requireAdmin(request);
 
     const s = sb();
 
     const [companiesRes, usersRes, activeUsersRes, adminUsersRes] = await Promise.all([
-      s.from('companies').select('*', { count: 'exact', head: true }),
-      s.from('users').select('*', { count: 'exact', head: true }),
-      s.from('users').select('*', { count: 'exact', head: true }).eq('is_active', true),
-      s.from('admin_users').select('*', { count: 'exact', head: true }),
+      s.from('companies').select('id', { count: 'exact', head: true }),
+      s.from('users').select('id', { count: 'exact', head: true }),
+      s.from('users').select('id', { count: 'exact', head: true }).eq('is_active', true),
+      s.from('admin_users').select('id', { count: 'exact', head: true }),
     ]);
+    for (const result of [companiesRes, usersRes, activeUsersRes, adminUsersRes]) {
+      if (result.error) throw result.error;
+    }
 
     return success({
       companies: companiesRes.count || 0,

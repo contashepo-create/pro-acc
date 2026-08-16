@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { trustedReceiptReference } from '@/lib/safe-input';
+import { supportTicketCreateSchema } from '@/lib/communication-validation';
 
 const sb = () => getSupabase();
-
-const VALID_CATEGORIES = ['billing','payment','technical','account','data_request','other'] as const;
 
 /** GET /api/support - list current user's tickets */
 export async function GET(req: NextRequest) {
@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
     const { data, error: err } = await s.from('support_tickets')
       .select('id, subject, category, status, created_at, updated_at, admin_notes')
       .eq('company_id', auth.companyId)
+      .eq('user_id', auth.userId)
       .order('created_at', { ascending: false })
       .limit(50);
     if (err) throw err;
@@ -30,55 +31,31 @@ export async function POST(req: NextRequest) {
   try {
     const { requireApiAuth } = await import('@/lib/api-helpers');
     const auth = await requireApiAuth(req, { skipModuleGuard: true });
-    const body = await parseBody<{ subject?: string; message?: string; category?: string; attachment_url?: string }>(req);
-    const subject = (body.subject || '').trim();
-    const message = (body.message || '').trim();
-    const category = (body.category || 'other').trim();
+    const parsed = supportTicketCreateSchema.safeParse(await parseBody(req));
+    if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات تذكرة الدعم غير صالحة');
+    const { subject, message, category } = parsed.data;
 
-    if (!subject || subject.length < 3) return error('عنوان الرسالة مطلوب (3 أحرف على الأقل)');
-    if (!message || message.length < 10) return error('نص الرسالة مطلوب (10 أحرف على الأقل)');
-    if (subject.length > 200) return error('العنوان طويل جداً (حد أقصى 200 حرف)');
-    if (message.length > 5000) return error('نص الرسالة طويل جداً (حد أقصى 5000 حرف)');
-    if (!VALID_CATEGORIES.includes(category as any)) return error('فئة الرسالة غير صالحة');
-
-    // Optional attachment URL — validate it's an http(s) URL if provided
-    let attachment = null;
-    if (body.attachment_url) {
-      try {
-        const u = new URL(body.attachment_url);
-        if (!['http:', 'https:'].includes(u.protocol)) return error('رابط المرفق غير صالح');
-        attachment = body.attachment_url.slice(0, 1000);
-      } catch {
-        return error('رابط المرفق غير صالح');
-      }
+    // Attachments must have been uploaded into this tenant's private receipt
+    // namespace. Arbitrary external URLs would expose administrators to
+    // tracking/phishing links and bypass the company's storage accounting.
+    const attachment = parsed.data.attachment_url
+      ? trustedReceiptReference(parsed.data.attachment_url, auth.companyId)
+      : null;
+    if (parsed.data.attachment_url && !attachment) {
+      return error('يجب رفع المرفق عبر التخزين الآمن للشركة أولاً');
     }
 
-    const s = sb();
-    const { data, error: insErr } = await s.from('support_tickets')
-      .insert({
-        company_id: auth.companyId,
-        user_id: auth.userId,
-        subject,
-        message,
-        category,
-        attachment_url: attachment,
-        status: 'open',
-      })
-      .select('id, subject, category, status, created_at')
-      .single();
-    if (insErr) throw insErr;
-
-    // Also write a company_message so existing admin UI surfaces it.
-    try {
-      await s.from('company_messages').insert({
-        company_id: auth.companyId,
-        user_id: auth.userId,
-        subject: `[دعم/${category}] ${subject}`,
-        body: message,
-        type: 'support',
-        status: 'open',
-      });
-    } catch {}
+    // Ticket, admin-facing message and tenant audit either all commit or all
+    // roll back. The RPC revalidates the authenticated user/company relation.
+    const { data, error: createError } = await sb().rpc('create_support_ticket_atomic', {
+      p_company_id: auth.companyId,
+      p_user_id: auth.userId,
+      p_subject: subject,
+      p_message: message,
+      p_category: category,
+      p_attachment_url: attachment,
+    });
+    if (createError) throw createError;
 
     return success({ ticket: data, message: 'تم إرسال الرسالة. سنتواصل معك قريباً.' }, 201);
   } catch (e) {

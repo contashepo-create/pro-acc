@@ -2,9 +2,10 @@ import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
-import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
+import { verifyMasterPassword } from '@/lib/admin-auth';
 
 const sb = () => getSupabase();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,32 +25,20 @@ export async function POST(request: NextRequest) {
     if (!body.companyId || typeof body.is_active !== 'boolean') {
       return error('companyId و is_active مطلوبان');
     }
-    if (!/^[0-9a-fA-F-]{8,}$/.test(body.companyId)) {
+    if (!UUID.test(body.companyId)) {
       return error('معرّف الشركة غير صالح', 400);
     }
 
-    const s = sb();
-    const { data: company, error: companyErr } = await s.from('companies')
-      .select('id, name, is_active')
-      .eq('id', body.companyId)
-      .single();
-
-    if (companyErr || !company) {
-      return error('الشركة غير موجودة', 404);
+    const { error: updateErr } = await sb().rpc('set_company_status_atomic', {
+      p_company_id: body.companyId,
+      p_admin_id: __admin.adminId,
+      p_is_active: body.is_active,
+    });
+    if (updateErr) {
+      const message = String(updateErr.message || '');
+      if (message.includes('الشركة غير موجودة')) return error(message, 404);
+      throw updateErr;
     }
-
-    const { error: updateErr } = await s.from('companies')
-      .update({ is_active: body.is_active, updated_at: new Date().toISOString() })
-      .eq('id', body.companyId);
-    if (updateErr) throw updateErr;
-
-    await auditLog(
-      __admin.adminId,
-      body.is_active ? 'activate_company' : 'deactivate_company',
-      JSON.stringify({ companyName: company.name, previousState: company.is_active }),
-      'company',
-      body.companyId
-    );
 
     return success({
       message: body.is_active ? 'تم تفعيل الشركة بنجاح' : 'تم إيقاف الشركة بنجاح',

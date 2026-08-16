@@ -17,12 +17,13 @@ export default function ClientStatementPage() {
   const [reportEntry, setReportEntry] = useState<any>(null);
   const [reportNote, setReportNote] = useState('');
   const [reportSent, setReportSent] = useState(false);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`/api/clients/${params.id}/statement`);
+        const res = await fetch(`/api/clients/${params.id}/statement?page=${page}&pageSize=100`);
         const json = await res.json();
         if (json.success) setData(json.data);
         else setError(json.message || 'فشل تحميل البيانات');
@@ -30,7 +31,7 @@ export default function ClientStatementPage() {
       finally { setLoading(false); }
     };
     fetchData();
-  }, [params.id]);
+  }, [params.id, page]);
 
   const handlePrint = () => window.print();
 
@@ -45,17 +46,17 @@ export default function ClientStatementPage() {
     if (!reportEntry || !reportNote) return;
     try {
       // Send error report to admin
-      await fetch('/api/complaints', {
+      const response = await fetch('/api/complaints', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           subject: `خطأ في كشف حساب - ${data?.client?.name || ''}`,
-          message: `خطأ في القيد رقم ${reportEntry.entry_number} بتاريخ ${reportEntry.date}.\nالوصف: ${reportEntry.description}\nملاحظة المستخدم: ${reportNote}\nنوع العملية: ${reportEntry.type}\nمرجع: ${reportEntry.reference_id || '—'}`,
-          type: 'accounting_error',
-          reference_type: reportEntry.type,
-          reference_id: reportEntry.reference_id || reportEntry.entry_id,
+          body: `خطأ في القيد رقم ${reportEntry.entry_number} بتاريخ ${reportEntry.date}.\nالوصف: ${reportEntry.description}\nملاحظة المستخدم: ${reportNote}\nنوع العملية: ${reportEntry.type}\nمرجع: ${reportEntry.reference_id || '—'}`,
+          type: 'complaint',
         }),
       });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.message || 'فشل إرسال البلاغ');
       setReportSent(true);
     } catch {
       setError('فشل إرسال البلاغ');
@@ -83,7 +84,9 @@ export default function ClientStatementPage() {
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
   if (!data) return null;
 
-  const { client, entries, balance, total_debit, total_credit, invoices, receipts } = data;
+  const { client, entries, balance, total_debit, total_credit, pagination } = data;
+  const totalEntries = pagination?.total ?? entries.length;
+  const totalPages = Math.max(1, pagination?.totalPages ?? 1);
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-bg-secondary">
@@ -93,7 +96,7 @@ export default function ClientStatementPage() {
           <Button variant="ghost" size="sm" onClick={() => router.back()}><ArrowRight size={20} /></Button>
           <div>
             <h1 className="text-xl font-bold text-text-primary">كشف حساب: {client.name}</h1>
-            <p className="text-sm text-text-secondary">{entries.length} حركة</p>
+            <p className="text-sm text-text-secondary">{totalEntries} حركة</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -219,6 +222,17 @@ export default function ClientStatementPage() {
                 </tfoot>
               )}
             </table>
+            {totalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between gap-3 no-print">
+                <Button variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
+                  الصفحة السابقة
+                </Button>
+                <span className="text-sm text-gray-500">صفحة {page} من {totalPages}</span>
+                <Button variant="ghost" size="sm" disabled={page >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>
+                  الصفحة التالية
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Footer */}

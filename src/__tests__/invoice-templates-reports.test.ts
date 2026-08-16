@@ -60,7 +60,27 @@ function makeDb(db: Record<string, Row[]>) {
     return api;
   };
 
-  return { from, calls };
+  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const rpc = async (name: string, params: any) => {
+    rpcCalls.push({ name, params });
+    if (name === 'get_equity_changes_summary') return {
+      data: { periodRevenue: 50000, periodExpenses: 30000 }, error: null,
+    };
+    if (name === 'get_contact_balances') return {
+      data: [
+        { contact_id: 'c1', name: 'شركة الأفق', contact_type: 'client', opening: 0, period_debit: 50000, period_credit: 0, closing: 50000 },
+        { contact_id: 's1', name: 'مؤسسة التوريدات', contact_type: 'supplier', opening: 0, period_debit: 20000, period_credit: 0, closing: 20000 },
+      ], error: null,
+    };
+    if (name === 'get_account_period_totals') return {
+      data: [
+        { account_id: 'a-exp1', code: '5110', name: 'مواد خام', debit: 20000, credit: 0 },
+        { account_id: 'a-exp2', code: '5210', name: 'رواتب وأجور', debit: 10000, credit: 0 },
+      ], error: null,
+    };
+    return { data: null, error: { message: `missing ${name}` } };
+  };
+  return { from, calls, rpc, rpcCalls };
 }
 
 let mockDb: ReturnType<typeof makeDb>;

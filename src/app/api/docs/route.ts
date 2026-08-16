@@ -33,8 +33,8 @@ Authorization: Bearer <token>
 | accountant | إنشاء/تعديل القيود والفواتير |
 | supervisor | عرض + إنشاء سندات محدودة |
 
-### ZATCA Phase 2
-الفواتير تُنشأ مع QR code تلقائي (TLV) + UBL 2.1 XML متاح عبر \`/api/invoices/{id}/zatca\`
+### مخرجات الفاتورة الإلكترونية
+يتوفر QR بصيغة TLV للمرحلة الأولى (الوسوم 1–5) وملف UBL 2.1 غير موقع عبر \`/api/invoices/{id}/zatca\`. لا تنفذ الخدمة توقيع أو hash chain أو clearance/reporting للمرحلة الثانية.
       `.trim(),
       version: '2.0.0',
       contact: { name: 'Pro Acc Team' },
@@ -117,7 +117,7 @@ Authorization: Bearer <token>
 
       // ZATCA
       '/api/invoices/{id}/zatca': {
-        get: { tags: ['ZATCA'], summary: 'QR + UBL XML للفاتورة', security: [{ bearerAuth: [] }], responses: { '200': { description: 'qrData + ublXml' } } }
+        get: { tags: ['ZATCA'], summary: 'QR مرحلة أولى + UBL 2.1 غير موقع', security: [{ bearerAuth: [] }], responses: { '200': { description: 'qrData + ublXml + explicit unsigned capability metadata' } } }
       },
 
       // Cash

@@ -1,7 +1,7 @@
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError } from '@/lib/api-helpers';
+import { success, error } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
 
@@ -9,25 +9,26 @@ const sb = () => getSupabase();
 
 export async function GET(req: NextRequest) {
   try {
-    const __admin = await requireAdmin(req);
+    await requireAdmin(req);
     const status = req.nextUrl.searchParams.get('status');
+    if (status && !['active','trial','expired','cancelled'].includes(status)) return error('حالة الاشتراك غير صالحة');
     const s = sb();
 
-    let queryBuilder = s.from('subscriptions').select('*');
-    if (status) {
-      queryBuilder = queryBuilder.eq('status', status);
-    }
-    queryBuilder = queryBuilder.order('created_at', { ascending: false });
+    let queryBuilder = s.from('subscriptions').select(
+      'id, subscriber_number, company_id, plan_id, plan_code, status, start_date, end_date, trial_end_date, auto_renew, extra_users, extra_branches, extra_storage_gb, addons_json, created_at, updated_at'
+    );
+    if (status) queryBuilder = queryBuilder.eq('status', status);
+    queryBuilder = queryBuilder.order('created_at', { ascending: false }).limit(500);
     const { data: subscriptions, error: err } = await queryBuilder;
     if (err) throw err;
 
     const companyIds = (subscriptions || []).map((s: any) => s.company_id).filter(Boolean);
     let companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
-      const { data: companies } = await s.from('companies')
+      const { data: companies, error: companiesError } = await s.from('companies')
         .select('id, name')
         .in('id', [...new Set(companyIds)]);
-      (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
+      if (companiesError) throw companiesError;
       companyMap = Object.fromEntries((companies || []).map((c: any) => [c.id, c.name]));
     }
 

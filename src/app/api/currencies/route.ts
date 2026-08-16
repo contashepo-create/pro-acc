@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -19,15 +19,24 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requireApiAuth(req);
+    const auth = await requireModulePermission(req, 'currencies', 'create');
     const s = sb();
     const { code, name, rate, isBase } = await parseBody(req);
-    if (!code || !name) return error('code and name are required');
-    const { data: result, error: insertError } = await s.from('currencies')
-      .insert({ company_id: auth.companyId, code, name, rate: rate ?? 1, is_base: isBase ?? false })
-      .select('*').single();
-    if (insertError) throw insertError;
-    return success(result);
+    const normalizedCode = typeof code === 'string' ? code.trim().toUpperCase() : '';
+    const normalizedName = typeof name === 'string' ? name.trim() : '';
+    const normalizedRate = rate === undefined ? 1 : Number(rate);
+    if (!/^[A-Z]{3,10}$/.test(normalizedCode) || !normalizedName || normalizedName.length > 100) return error('بيانات العملة غير صالحة');
+    if (!Number.isFinite(normalizedRate) || normalizedRate <= 0) return error('سعر الصرف غير صالح');
+    if (isBase !== undefined && typeof isBase !== 'boolean') return error('قيمة العملة الأساسية غير صالحة');
+    const { data: currencyId, error: saveError } = await s.rpc('save_currency', {
+      p_company_id: auth.companyId, p_id: null, p_code: normalizedCode,
+      p_name: normalizedName, p_rate: normalizedRate, p_is_base: !!isBase,
+    });
+    if (saveError) throw saveError;
+    const { data: result, error: readError } = await s.from('currencies').select('*')
+      .eq('id', currencyId).eq('company_id', auth.companyId).maybeSingle();
+    if (readError || !result) throw readError || new Error('تعذر قراءة العملة');
+    return success(result, 201);
   } catch (err) {
     return handleApiError(err);
   }

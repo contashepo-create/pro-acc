@@ -1,223 +1,113 @@
 import { NextRequest } from 'next/server';
-import { success, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { loadReportJournalEntries, loadReportJournalLines } from '@/lib/report-journal';
+import { isValidDate } from '@/lib/utils';
 
-const sb = () => getSupabase();
+const number = (value: unknown) => Number(value) || 0;
 
-/**
- * Cash Flow Statement (قائمة التدفقات النقدية)
- * - Operating Activities (الأنشطة التشغيلية)
- * - Investing Activities (الأنشطة الاستثمارية)
- * - Financing Activities (الأنشطة التمويلية)
- * With exact proportional multi-line journal attribution (no multiplier bugs).
- */
+type Bucket = { inflows: any[]; outflows: any[] };
+
+/** Direct-method cash flow, based only on cash/bank ledger movements. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'reports', 'read');
-    const s = sb();
+    const s = getSupabase();
     const url = new URL(request.url);
     const from = url.searchParams.get('from');
     const to = url.searchParams.get('to');
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
 
     const { listCashBankAccountIds } = await import('@/lib/account-resolve');
     const cashAccountIds = await listCashBankAccountIds(s, auth.companyId);
-    const cashIdSet = new Set(cashAccountIds);
+    const cashIds = new Set(cashAccountIds);
+    if (!cashAccountIds.length) return success(emptyReport(from, to));
 
-    if (cashAccountIds.length === 0) {
-      return success({
-        operating: { inflows: [], outflows: [], net: 0, total_inflows: 0, total_outflows: 0 },
-        investing: { inflows: [], outflows: [], net: 0, total_inflows: 0, total_outflows: 0 },
-        financing: { inflows: [], outflows: [], net: 0, total_inflows: 0, total_outflows: 0 },
-        net_change: 0,
-        opening_balance: 0,
-        closing_balance: 0,
-      });
-    }
+    const { data: accounts, error: accountsError } = await s.from('accounts')
+      .select('id, code, name, type').eq('company_id', auth.companyId);
+    if (accountsError) throw accountsError;
+    const accountMap = new Map((accounts || []).map((account: any) => [account.id, account]));
 
-    // 1. Calculate opening cash balance (before 'from' date)
     let openingBalance = 0;
     if (from) {
-      const { data: priorEntries } = await s.from('journal_entries')
-        .select('id')
-        .eq('company_id', auth.companyId)
-        .lt('date', from)
-        .is('deleted_at', null);
-
-      const priorEntryIds = (priorEntries || []).map((e: any) => e.id);
-      if (priorEntryIds.length > 0) {
-        const { data: priorLines } = await s.from('journal_lines')
-          .select('debit, credit')
-          .eq('company_id', auth.companyId)
-          .in('account_id', cashAccountIds)
-          .in('journal_entry_id', priorEntryIds);
-
-        for (const l of priorLines || []) {
-          openingBalance += (parseFloat(l.debit) || 0) - (parseFloat(l.credit) || 0);
-        }
-      }
+      const priorEntries = await loadReportJournalEntries(s, auth.companyId, { to: previousDate(from) });
+      const priorLines = await loadReportJournalLines(s, auth.companyId, priorEntries.map((entry) => entry.id));
+      openingBalance = priorLines.filter((line: any) => cashIds.has(line.account_id))
+        .reduce((sum: number, line: any) => sum + number(line.debit) - number(line.credit), 0);
     }
 
-    // 2. Fetch period journal entries
-    let jeQuery = s.from('journal_entries')
-      .select('id, number, date, description')
-      .eq('company_id', auth.companyId)
-      .is('deleted_at', null)
-      .order('date', { ascending: true });
-
-    if (from) jeQuery = jeQuery.gte('date', from);
-    if (to) jeQuery = jeQuery.lte('date', to);
-
-    const { data: entries } = await jeQuery;
-    const entryIds = (entries || []).map((e: any) => e.id);
-    const entryMap = new Map((entries || []).map((e: any) => [e.id, e]));
-
-    if (entryIds.length === 0) {
-      return success({
-        period: { from, to },
-        opening_balance: openingBalance,
-        operating: { inflows: [], outflows: [], total_inflows: 0, total_outflows: 0, net: 0 },
-        investing: { inflows: [], outflows: [], total_inflows: 0, total_outflows: 0, net: 0 },
-        financing: { inflows: [], outflows: [], total_inflows: 0, total_outflows: 0, net: 0 },
-        net_change: 0,
-        closing_balance: openingBalance,
-      });
-    }
-
-    // 3. Batch fetch all lines for these period entries
-    const { data: allLines } = await s.from('journal_lines')
-      .select('journal_entry_id, account_id, account_code, account_name, debit, credit, description, accounts!account_id(code, name, type)')
-      .eq('company_id', auth.companyId)
-      .in('journal_entry_id', entryIds);
-
+    const entries = await loadReportJournalEntries(s, auth.companyId, { from, to });
+    const entryMap = new Map(entries.map((entry) => [entry.id, entry]));
+    const allLines = await loadReportJournalLines(s, auth.companyId, entries.map((entry) => entry.id));
     const linesByEntry = new Map<string, any[]>();
-    for (const l of allLines || []) {
-      const list = linesByEntry.get(l.journal_entry_id) || [];
-      list.push(l);
-      linesByEntry.set(l.journal_entry_id, list);
+    for (const line of allLines) {
+      const list = linesByEntry.get(line.journal_entry_id) || [];
+      list.push(line);
+      linesByEntry.set(line.journal_entry_id, list);
     }
 
-    const operatingInflows: any[] = [];
-    const operatingOutflows: any[] = [];
-    const investingInflows: any[] = [];
-    const investingOutflows: any[] = [];
-    const financingInflows: any[] = [];
-    const financingOutflows: any[] = [];
-
-    for (const [jeId, lines] of linesByEntry.entries()) {
-      const entry = entryMap.get(jeId);
-      const cashLinesInEntry = lines.filter((l: any) => cashIdSet.has(l.account_id));
-      const nonCashLines = lines.filter((l: any) => !cashIdSet.has(l.account_id));
-
-      if (cashLinesInEntry.length === 0) continue;
-
-      const totalCashDebit = cashLinesInEntry.reduce((s: number, l: any) => s + (parseFloat(l.debit) || 0), 0);
-      const totalCashCredit = cashLinesInEntry.reduce((s: number, l: any) => s + (parseFloat(l.credit) || 0), 0);
-
-      // Cash Inflow (Debit to Cash)
-      if (totalCashDebit > 0) {
-        const totalCredits = nonCashLines.reduce((s: number, l: any) => s + (parseFloat(l.credit) || 0), 0);
-        for (const o of nonCashLines) {
-          const cred = parseFloat(o.credit) || 0;
-          if (cred <= 0) continue;
-
-          // Proportional share of cash in
-          const lineShare = totalCredits > 0 ? (cred / totalCredits) * totalCashDebit : cred;
-          const accCode = o.account_code || o.accounts?.code || '';
-          const accType = o.accounts?.type || '';
-
-          let activity = 'operating';
-          if (accCode.startsWith('12') || accCode.startsWith('13')) activity = 'investing';
-          else if (accCode.startsWith('22') || accCode.startsWith('31') || accCode.startsWith('32')) activity = 'financing';
-
-          const item = {
-            date: entry?.date,
-            number: entry?.number,
-            account_code: accCode,
-            account_name: o.account_name || o.accounts?.name || 'حساب',
-            amount: lineShare,
-            description: o.description || entry?.description || 'مقبوضات نقدية',
-          };
-
-          if (activity === 'operating') operatingInflows.push(item);
-          else if (activity === 'investing') investingInflows.push(item);
-          else financingInflows.push(item);
-        }
-      }
-
-      // Cash Outflow (Credit to Cash)
-      if (totalCashCredit > 0) {
-        const totalDebits = nonCashLines.reduce((s: number, l: any) => s + (parseFloat(l.debit) || 0), 0);
-        for (const o of nonCashLines) {
-          const deb = parseFloat(o.debit) || 0;
-          if (deb <= 0) continue;
-
-          const lineShare = totalDebits > 0 ? (deb / totalDebits) * totalCashCredit : deb;
-          const accCode = o.account_code || o.accounts?.code || '';
-          const accType = o.accounts?.type || '';
-
-          let activity = 'operating';
-          if (accCode.startsWith('12') || accCode.startsWith('13')) activity = 'investing';
-          else if (accCode.startsWith('22') || accCode.startsWith('31') || accCode.startsWith('32')) activity = 'financing';
-
-          const item = {
-            date: entry?.date,
-            number: entry?.number,
-            account_code: accCode,
-            account_name: o.account_name || o.accounts?.name || 'حساب',
-            amount: lineShare,
-            description: o.description || entry?.description || 'مدفوعات نقدية',
-          };
-
-          if (activity === 'operating') operatingOutflows.push(item);
-          else if (activity === 'investing') investingOutflows.push(item);
-          else financingOutflows.push(item);
-        }
-      }
+    const buckets: Record<'operating' | 'investing' | 'financing', Bucket> = {
+      operating: { inflows: [], outflows: [] }, investing: { inflows: [], outflows: [] }, financing: { inflows: [], outflows: [] },
+    };
+    for (const [entryId, lines] of linesByEntry) {
+      const entry = entryMap.get(entryId);
+      const cashLines = lines.filter((line: any) => cashIds.has(line.account_id));
+      const counterpartLines = lines.filter((line: any) => !cashIds.has(line.account_id));
+      const cashDebit = cashLines.reduce((sum: number, line: any) => sum + number(line.debit), 0);
+      const cashCredit = cashLines.reduce((sum: number, line: any) => sum + number(line.credit), 0);
+      if (cashDebit > 0) allocate(counterpartLines, 'credit', cashDebit, entry, buckets, 'inflows', accountMap);
+      if (cashCredit > 0) allocate(counterpartLines, 'debit', cashCredit, entry, buckets, 'outflows', accountMap);
     }
 
-    const totalOpIn = operatingInflows.reduce((s, i) => s + i.amount, 0);
-    const totalOpOut = operatingOutflows.reduce((s, i) => s + i.amount, 0);
-    const operatingNet = totalOpIn - totalOpOut;
-
-    const totalInvIn = investingInflows.reduce((s, i) => s + i.amount, 0);
-    const totalInvOut = investingOutflows.reduce((s, i) => s + i.amount, 0);
-    const investingNet = totalInvIn - totalInvOut;
-
-    const totalFinIn = financingInflows.reduce((s, i) => s + i.amount, 0);
-    const totalFinOut = financingOutflows.reduce((s, i) => s + i.amount, 0);
-    const financingNet = totalFinIn - totalFinOut;
-
-    const netChange = operatingNet + investingNet + financingNet;
-    const closingBalance = openingBalance + netChange;
-
+    const format = (bucket: Bucket) => {
+      const totalInflows = bucket.inflows.reduce((sum, item) => sum + item.amount, 0);
+      const totalOutflows = bucket.outflows.reduce((sum, item) => sum + item.amount, 0);
+      return { ...bucket, total_inflows: totalInflows, total_outflows: totalOutflows, net: totalInflows - totalOutflows };
+    };
+    const operating = format(buckets.operating);
+    const investing = format(buckets.investing);
+    const financing = format(buckets.financing);
+    const netChange = operating.net + investing.net + financing.net;
     return success({
-      period: { from, to },
-      opening_balance: openingBalance,
-      operating: {
-        inflows: operatingInflows,
-        outflows: operatingOutflows,
-        total_inflows: totalOpIn,
-        total_outflows: totalOpOut,
-        net: operatingNet,
-      },
-      investing: {
-        inflows: investingInflows,
-        outflows: investingOutflows,
-        total_inflows: totalInvIn,
-        total_outflows: totalInvOut,
-        net: investingNet,
-      },
-      financing: {
-        inflows: financingInflows,
-        outflows: financingOutflows,
-        total_inflows: totalFinIn,
-        total_outflows: totalFinOut,
-        net: financingNet,
-      },
-      net_change: netChange,
-      closing_balance: closingBalance,
+      period: { from, to }, opening_balance: openingBalance,
+      operating, investing, financing, net_change: netChange, closing_balance: openingBalance + netChange,
     });
   } catch (err) {
     return handleApiError(err);
   }
+}
+
+function allocate(
+  lines: any[], side: 'debit' | 'credit', cashTotal: number, entry: any,
+  buckets: Record<'operating' | 'investing' | 'financing', Bucket>, flow: 'inflows' | 'outflows', accountMap: Map<any, any>,
+) {
+  const eligible = lines.filter((line) => number(line[side]) > 0);
+  const counterpartTotal = eligible.reduce((sum, line) => sum + number(line[side]), 0);
+  if (!counterpartTotal) return;
+  for (const line of eligible) {
+    const account = accountMap.get(line.account_id);
+    const code = String(line.account_code || account?.code || '');
+    const activity = classify(code);
+    buckets[activity][flow].push({
+      date: entry?.date, number: entry?.number, account_code: code,
+      account_name: line.account_name || account?.name || 'حساب',
+      amount: (number(line[side]) / counterpartTotal) * cashTotal,
+      description: line.description || entry?.description || (flow === 'inflows' ? 'مقبوضات نقدية' : 'مدفوعات نقدية'),
+    });
+  }
+}
+
+function classify(code: string): 'operating' | 'investing' | 'financing' {
+  if (code.startsWith('12') || code.startsWith('13')) return 'investing';
+  if (code.startsWith('22') || code.startsWith('31') || code.startsWith('32')) return 'financing';
+  return 'operating';
+}
+
+function previousDate(date: string) {
+  return new Date(Date.parse(`${date}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+}
+
+function emptyReport(from: string | null, to: string | null) {
+  const bucket = { inflows: [], outflows: [], total_inflows: 0, total_outflows: 0, net: 0 };
+  return { period: { from, to }, operating: bucket, investing: bucket, financing: bucket, net_change: 0, opening_balance: 0, closing_balance: 0 };
 }

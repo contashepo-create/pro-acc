@@ -1,14 +1,12 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { createJournalEntry } from '@/lib/journal-utils';
-import { ACCOUNT_CODES } from '@/lib/constants';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/**
- * GET /api/credit-notes?projectId=&invoiceId=
- */
+/** GET /api/credit-notes?projectId=&invoiceId= */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'credit_notes', 'read');
@@ -17,31 +15,48 @@ export async function GET(request: NextRequest) {
     const { page, pageSize } = getPaginationParams(url);
     const projectId = url.searchParams.get('projectId');
     const invoiceId = url.searchParams.get('invoiceId');
+    if (projectId && !UUID_RE.test(projectId)) return error('معرّف المشروع غير صالح');
+    if (invoiceId && !UUID_RE.test(invoiceId)) return error('معرّف الفاتورة غير صالح');
 
     let query = s.from('credit_notes')
-      .select('*, contacts(name), invoices(number), projects(name)', { count: 'exact' })
+      .select('*', { count: 'exact' })
       .eq('company_id', auth.companyId);
-
     if (projectId) query = query.eq('project_id', projectId);
     if (invoiceId) query = query.eq('invoice_id', invoiceId);
 
     const offset = (page - 1) * pageSize;
-    const { data, error: err, count } = await query
+    const { data, error: queryError, count } = await query
       .order('date', { ascending: false })
       .range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
 
-    if (err) {
-      console.warn('Credit notes query error:', err);
-      return success({ credit_notes: [], total: 0, page, pageSize });
-    }
+    const rows = (data || []) as Array<Record<string, any>>;
+    const contactIds = [...new Set(rows.map((row) => row.contact_id).filter(Boolean))];
+    const invoiceIds = [...new Set(rows.map((row) => row.invoice_id).filter(Boolean))];
+    const projectIds = [...new Set(rows.map((row) => row.project_id).filter(Boolean))];
+    const [contactsResult, invoicesResult, projectsResult] = await Promise.all([
+      contactIds.length
+        ? s.from('contacts').select('id, name').eq('company_id', auth.companyId).in('id', contactIds)
+        : Promise.resolve({ data: [], error: null }),
+      invoiceIds.length
+        ? s.from('invoices').select('id, number').eq('company_id', auth.companyId).in('id', invoiceIds)
+        : Promise.resolve({ data: [], error: null }),
+      projectIds.length
+        ? s.from('projects').select('id, name').eq('company_id', auth.companyId).in('id', projectIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    for (const result of [contactsResult, invoicesResult, projectsResult]) if (result.error) throw result.error;
+    const names = (records: any[] | null, value: string) => Object.fromEntries((records || []).map((record) => [record.id, record[value]]));
+    const contactNames = names(contactsResult.data, 'name');
+    const invoiceNumbers = names(invoicesResult.data, 'number');
+    const projectNames = names(projectsResult.data, 'name');
 
-    const creditNotes = (data || []).map((cn: any) => ({
-      ...cn,
-      contact_name: cn.contacts?.name || null,
-      invoice_number: cn.invoices?.number || null,
-      project_name: cn.projects?.name || null,
+    const creditNotes = rows.map((note) => ({
+      ...note,
+      contact_name: contactNames[note.contact_id] || null,
+      invoice_number: invoiceNumbers[note.invoice_id] || null,
+      project_name: projectNames[note.project_id] || null,
     }));
-
     return success({ credit_notes: creditNotes, total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
@@ -59,127 +74,42 @@ export async function POST(request: NextRequest) {
     const body = await parseBody(request);
     const { invoice_id, project_id, contact_id, reason, items, date } = body;
 
-    if (!reason) return error('السبب مطلوب');
-    if (!items || !Array.isArray(items) || items.length === 0) return error('يجب إضافة بند واحد على الأقل');
+    if (typeof reason !== 'string' || !reason.trim() || reason.length > 1000) return error('السبب مطلوب');
+    for (const [value, label] of [[invoice_id, 'الفاتورة'], [project_id, 'المشروع'], [contact_id, 'الطرف']] as const) {
+      if (value !== undefined && value !== null && value !== ''
+        && (typeof value !== 'string' || !UUID_RE.test(value))) return error(`معرّف ${label} غير صالح`);
+    }
+    if (!Array.isArray(items) || items.length === 0 || items.length > 200) return error('يجب إضافة بند واحد على الأقل');
+    const normalizedItems = items.map((item: any) => ({
+      description: typeof item.description === 'string' ? item.description.trim() : '',
+      quantity: Number(item.quantity), unit_price: Number(item.unit_price),
+    }));
+    if (normalizedItems.some((item: any) => !item.description || item.description.length > 500 || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unit_price) || item.unit_price < 0)) return error('أحد بنود الإشعار غير صالح');
 
-    // Get linked invoice's tax rate if invoice_id provided
-    let taxRate = body.tax_rate || 0;
-    let linkedContactId = contact_id || null;
-
-    if (invoice_id) {
-      const { data: linkedInvoice } = await s.from('invoices')
-        .select('tax_rate, contact_id, project_id')
-        .eq('id', invoice_id).eq('company_id', auth.companyId).maybeSingle();
-
-      if (linkedInvoice) {
-        const inv = linkedInvoice as any;
-        taxRate = parseFloat(inv.tax_rate) || 0;
-        if (inv.contact_id) linkedContactId = inv.contact_id;
-        if (inv.project_id && !project_id) {
-          // inherit project from invoice
-        }
-      }
+    const effectiveDate = date || new Date().toISOString().split('T')[0];
+    if (typeof effectiveDate !== 'string' || !isValidDate(effectiveDate)) {
+      return error('تاريخ الإشعار غير صالح');
+    }
+    const taxRate = Number(body.tax_rate ?? 0);
+    if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) {
+      return error('نسبة الضريبة غير صالحة');
     }
 
-    const subtotal = items.reduce((sum: number, it: any) => sum + (it.quantity * it.unit_price || 0), 0);
-    const taxAmount = subtotal * taxRate;
-    const total = subtotal + taxAmount;
-
-    // Generate credit note number (own sequence, not invoice sequence)
-    const year = new Date().getFullYear();
-    let number: number;
-    const { data: seqData } = await s.from('credit_note_sequences')
-      .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
-
-    if (seqData) {
-      number = (seqData as any).last_number + 1;
-      await s.from('credit_note_sequences').update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
-    } else {
-      number = 1;
-      await s.from('credit_note_sequences').insert({ company_id: auth.companyId, year, last_number: 1 });
-    }
-
-    // حل الحسابات قبل أي كتابة — القيد العكسي إلزامي متوازن
-    const { data: arAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.ACCOUNTS_RECEIVABLE).maybeSingle();
-    const { data: revAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.CONTRACT_REVENUE).maybeSingle();
-    if (!arAccount || !revAccount) {
-      return error('حسابات الذمم (1130) أو الإيرادات (4100) غير موجودة — راجع دليل الحسابات');
-    }
-    let vatAccountId: string | null = null;
-    if (taxAmount > 0) {
-      const { data: vatAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId).eq('code', ACCOUNT_CODES.VAT_SALES).maybeSingle();
-      if (!vatAccount) return error('حساب ضريبة المبيعات (2120) غير موجود');
-      vatAccountId = vatAccount.id;
-    }
-
-    // Insert credit note
-    const { data: cn, error: cnErr } = await s.from('credit_notes')
-      .insert({
-        company_id: auth.companyId,
-        number: `CN-${number}`,
-        invoice_id: invoice_id || null,
-        project_id: project_id || null,
-        contact_id: linkedContactId,
-        date: date || new Date().toISOString().split('T')[0],
-        reason,
-        subtotal,
-        tax_rate: taxRate,
-        tax_amount: taxAmount,
-        total,
-        status: 'approved',
-        created_by: auth.userId,
-      })
-      .select('*').single();
-
-    if (cnErr) throw cnErr;
-
-    // Insert items
-    for (const item of items) {
-      const { error: itemErr } = await s.from('credit_note_items').insert({
-        company_id: auth.companyId,
-        credit_note_id: cn.id,
-        description: item.description,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        total: item.quantity * item.unit_price,
-      });
-      if (itemErr) throw itemErr;
-    }
-
-    // Create reversal journal entry — فشله يلغي الإشعار بالكامل
-    const journalLines: any[] = [
-      { account_id: revAccount.id, debit: subtotal, credit: 0, description: `إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId },
-      { account_id: arAccount.id, debit: 0, credit: total, description: `إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId },
-    ];
-    if (taxAmount > 0 && vatAccountId) {
-      journalLines.push({ account_id: vatAccountId, debit: taxAmount, credit: 0, description: `ضريبة إشعار دائن: ${reason}`, project_id: project_id || null, contact_id: linkedContactId });
-    }
-
-    const je = await createJournalEntry(auth.companyId, {
-      date: date || new Date().toISOString().split('T')[0],
-      type: 'general',
-      description: `إشعار دائن ${cn.number} - ${reason}`,
-      lines: journalLines,
-      reference_type: 'credit_note',
-      reference_id: cn.id,
-      created_by: auth.userId,
+    // The linked invoice is row-locked before the remaining credit is checked.
+    // Number, note, lines, journal and audit then commit in one transaction.
+    const { data: creditNote, error: createError } = await s.rpc('create_credit_note_atomic', {
+      p_company_id: auth.companyId,
+      p_invoice_id: invoice_id || null,
+      p_project_id: project_id || null,
+      p_contact_id: contact_id || null,
+      p_date: effectiveDate,
+      p_reason: reason.trim(),
+      p_items: normalizedItems,
+      p_tax_rate: taxRate,
+      p_user_id: auth.userId,
     });
-
-    if (je.error || !je.journalId) {
-      await s.from('credit_note_items').delete().eq('credit_note_id', cn.id);
-      await s.from('credit_notes').delete().eq('id', cn.id).eq('company_id', auth.companyId);
-      throw je.error || new Error('فشل قيد الإشعار الدائن');
-    }
-
-    const { data: linked, error: linkErr } = await s.from('credit_notes')
-      .update({ journal_entry_id: je.journalId })
-      .eq('id', cn.id)
-      .eq('company_id', auth.companyId)
-      .select('*')
-      .single();
-    if (linkErr) throw linkErr;
-
-    return success(linked, 201);
+    if (createError) throw createError;
+    return success(creditNote, 201);
   } catch (err) {
     return handleApiError(err);
   }

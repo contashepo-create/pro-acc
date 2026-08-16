@@ -164,17 +164,24 @@ export async function getCompanyContext(
     if (!payload) return null;
 
     const { query } = await import('@/lib/db');
-    const res = await query('SELECT company_id, token_version FROM users WHERE id = $1', [payload.userId]);
+    const res = await query(
+      `SELECT u.company_id, u.token_version, u.role
+         FROM users u
+         JOIN companies c ON c.id = u.company_id
+        WHERE u.id = $1 AND u.is_active = TRUE AND c.is_active = TRUE`,
+      [payload.userId]
+    );
     if (res.rows.length === 0) return null;
 
-    // SECURITY: Reject stale tokens after logout / password change.
+    // Reject stale tokens after logout/password changes. The database role is
+    // authoritative as roles can be downgraded while a JWT remains valid.
     const storedVersion = Number(res.rows[0].token_version) || 0;
     if (payload.ver !== storedVersion) return null;
 
     return {
       companyId: res.rows[0].company_id,
       userId: payload.userId,
-      role: payload.role,
+      role: res.rows[0].role,
     };
   } catch {
     return null;

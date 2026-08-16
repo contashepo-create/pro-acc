@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { Pagination } from '@/components/ui/Pagination';
 
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<any[]>([]);
@@ -21,20 +22,29 @@ export default function ContactsPage() {
   const [editingContact, setEditingContact] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
   const [form, setForm] = useState<any>({ name: '', type: 'client', phone: '', email: '', tax_number: '', address: '' });
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const res = await fetch('/api/contacts');
+      const res = await fetch(`/api/contacts?page=${page}&pageSize=${pageSize}`);
       const json = await res.json();
-      if (json.success) setContacts(json.data?.contacts || []);
-      else setError(json.message || 'فشل');
+      if (json.success) {
+        setContacts(json.data?.contacts || []);
+        setTotal(Number(json.data?.total) || 0);
+      } else setError(json.message || 'فشل');
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
-  };
+  }, [page, pageSize]);
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    // The effect intentionally refreshes server-backed rows when pagination changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+  }, [fetchData]);
 
   const handleSave = async () => {
     if (!form.name) { setSaveError('الاسم مطلوب'); return; }
@@ -84,9 +94,10 @@ export default function ContactsPage() {
       const res = await fetch(`/api/contacts/${contact.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        fetchData();
+        if (contacts.length === 1 && page > 1) setPage((value) => value - 1);
+        else fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        alert(json.message || 'فشل التعطيل');
       }
     } catch (e) {
       alert('خطأ في الاتصال بالخادم');
@@ -117,6 +128,7 @@ export default function ContactsPage() {
           item={row}
           onEdit={handleEdit}
           onDelete={handleDelete}
+          deleteMode="deactivate"
         />
       ),
     },
@@ -128,7 +140,21 @@ export default function ContactsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="جهات الاتصال" description="إدارة العملاء والموردين" actions={<Button onClick={() => { setEditingContact(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة جهة اتصال</Button>} />
-      {contacts.length === 0 ? <EmptyState title="لا توجد جهات اتصال" actionLabel="إضافة جهة اتصال" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={contacts} searchable searchKeys={['name', 'phone', 'email']} />}
+      {contacts.length === 0 ? (
+        <EmptyState title="لا توجد جهات اتصال" actionLabel="إضافة جهة اتصال" onAction={() => setShowModal(true)} />
+      ) : (
+        <>
+          <DataTable columns={columns} data={contacts} searchable searchKeys={['name', 'phone', 'email']} />
+          <Pagination
+            currentPage={page}
+            totalPages={Math.max(1, Math.ceil(total / pageSize))}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPage(1); setPageSize(size); }}
+          />
+        </>
+      )}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingContact(null); }} title={editingContact ? `تعديل: ${editingContact.name}` : 'إضافة جهة اتصال'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingContact(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

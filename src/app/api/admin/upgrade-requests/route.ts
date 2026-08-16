@@ -1,239 +1,105 @@
-import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { NextRequest } from 'next/server';
+import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, serverError, parseBody } from '@/lib/api-helpers';
+import { success, error, parseBody } from '@/lib/api-helpers';
+import { signPrivateReceiptReference } from '@/lib/storage-references';
 
 const sb = () => getSupabase();
-
-
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(req: NextRequest) {
   try {
-    const __admin = await requireAdmin(req);
-    const s = sb();
+    await requireAdmin(req);
     const status = req.nextUrl.searchParams.get('status') || 'pending';
-
-    // جلب طلبات الترقية مع البيانات الأساسية
-    const { data: requests, error: reqErr } = await s.from('upgrade_requests')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (reqErr) {
-      console.error('Error fetching upgrade requests:', reqErr);
-      // إذا كان الجدول غير موجود
-      if (reqErr.code === '42P01') {
-        return success({ requests: [] });
-      }
-      throw reqErr;
+    if (!['pending', 'approved', 'rejected', 'cancelled', 'all'].includes(status)) {
+      return error('حالة غير صالحة');
     }
 
-    let filtered = requests || [];
-    if (status !== 'all') {
-      filtered = filtered.filter((r: any) => r.status === status);
-    }
+    let query = sb().from('upgrade_requests')
+      .select(`
+        id, company_id, user_id, current_plan_id, requested_plan_id,
+        duration_type, status, payment_method_code, payment_amount,
+        payment_date, payment_time, receipt_image_url, receipt_text, notes,
+        admin_notes, reviewed_by, reviewed_at, created_at, updated_at
+      `)
+      .order('created_at', { ascending: false })
+      .limit(300);
+    if (status !== 'all') query = query.eq('status', status);
+    const { data: requests, error: requestError } = await query;
+    if (requestError) throw requestError;
 
-    // جلب بيانات الشركات والباقات يدوياً
-    const enriched = await Promise.all(filtered.map(async (req: any) => {
-      let companyData = { name: '', email: '', phone: '' };
-      let planData = { name: '', code: '' };
-      let userData = { name: '', email: '' };
+    const companyIds = [...new Set((requests || []).map((r: any) => r.company_id).filter(Boolean))];
+    const planIds = [...new Set((requests || []).map((r: any) => r.requested_plan_id).filter(Boolean))];
+    const userIds = [...new Set((requests || []).map((r: any) => r.user_id).filter(Boolean))];
+    const s = sb();
+    const [companiesResult, plansResult, usersResult] = await Promise.all([
+      companyIds.length ? s.from('companies').select('id,name,email,phone').in('id', companyIds) : Promise.resolve({ data: [], error: null }),
+      planIds.length ? s.from('subscription_plans').select('id,name,code,price_monthly,price_yearly,currency').in('id', planIds) : Promise.resolve({ data: [], error: null }),
+      userIds.length ? s.from('users').select('id,name,email').in('id', userIds) : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (companiesResult.error) throw companiesResult.error;
+    if (plansResult.error) throw plansResult.error;
+    if (usersResult.error) throw usersResult.error;
+    const companyMap = new Map((companiesResult.data || []).map((row: any) => [row.id, row]));
+    const planMap = new Map((plansResult.data || []).map((row: any) => [row.id, row]));
+    const userMap = new Map((usersResult.data || []).map((row: any) => [row.id, row]));
 
-      try {
-        const { data: company } = await s.from('companies')
-          .select('name, email, phone')
-          .eq('id', req.company_id)
-          .maybeSingle();
-        if (company) companyData = company as any;
-      } catch {}
-
-      try {
-        const { data: plan } = await s.from('subscription_plans')
-          .select('name, code')
-          .eq('id', req.requested_plan_id)
-          .maybeSingle();
-        if (plan) planData = plan as any;
-      } catch {}
-
-      try {
-        const { data: user } = await s.from('users')
-          .select('name, email')
-          .eq('id', req.user_id)
-          .maybeSingle();
-        if (user) userData = user as any;
-      } catch {}
-
-      return {
-        ...req,
-        companies: companyData,
-        subscription_plans: planData,
-        users: userData,
-      };
-    }));
-
-    return success({ requests: enriched });
-  } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    console.error('Upgrade requests GET error:', e);
-    return adminJsonError(e);
+    return success({
+      requests: await Promise.all((requests || []).map(async (row: any) => ({
+        ...row,
+        receipt_image_url: await signPrivateReceiptReference(s, row.receipt_image_url),
+        companies: companyMap.get(row.company_id) || null,
+        subscription_plans: planMap.get(row.requested_plan_id) || null,
+        users: userMap.get(row.user_id) || null,
+      }))),
+    });
+  } catch (err) {
+    return adminJsonError(err);
   }
 }
 
 export async function PUT(req: NextRequest) {
   try {
-    const __admin = await requireAdmin(req);
-    const body = await parseBody(req);
-    const { id, status, admin_notes } = body;
+    const admin = await requireAdmin(req);
+    const body = await parseBody<{ id?: string; status?: 'approved' | 'rejected'; admin_notes?: string }>(req);
+    if (!body.id || !UUID.test(body.id)) return error('id غير صالح');
+    if (body.status !== 'approved' && body.status !== 'rejected') return error('حالة غير صالحة');
+    if (body.admin_notes && body.admin_notes.length > 2000) return error('ملاحظات الإدارة طويلة جداً');
 
-    if (!id || !status) return error('id and status required');
-    if (!['approved', 'rejected'].includes(status)) return error('Invalid status');
-
-    const s = sb();
-
-    // جلب الطلب
-    const { data: existing, error: fetchErr } = await s.from('upgrade_requests')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-
-    if (fetchErr || !existing) {
-      console.error('Error fetching upgrade request:', fetchErr);
-      return error('الطلب غير موجود', 404);
-    }
-
-    const reqData = existing as Record<string, any>;
-
-    // تحديث حالة الطلب — resilient to live DBs missing optional columns
-    // (updated_at / admin_notes / reviewed_*): retry with the minimal patch
-    // instead of failing the whole approval with
-    // "Could not find the 'updated_at' column ... in the schema cache".
-    const fullPatch: Record<string, unknown> = {
-      status,
-      admin_notes: admin_notes || null,
-      reviewed_by: __admin.adminId,
-      reviewed_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    let { error: updateErr } = await s.from('upgrade_requests')
-      .update(fullPatch)
-      .eq('id', id);
-
-    if (updateErr && /column|schema cache|Could not find|42703/i.test(`${updateErr.message} ${updateErr.code}`)) {
-      console.warn('[upgrade-requests] optional columns missing — apply migration 044. Retrying with minimal patch.');
-      ({ error: updateErr } = await s.from('upgrade_requests')
-        .update({ status })
-        .eq('id', id));
-    }
-
-    if (updateErr) {
-      console.error('Error updating request status:', updateErr);
-      throw updateErr;
-    }
-
-    // إذا تم قبول الطلب، نقوم بترقية الاشتراك
-    if (status === 'approved') {
-      try {
-        const months = reqData.duration_type === 'yearly' ? 12 : 1;
-
-        // جلب كود الباقة
-        let planCode = 'start';
-        let planName = '';
-        if (reqData.requested_plan_id) {
-          const { data: plan } = await s.from('subscription_plans')
-            .select('code, name')
-            .eq('id', reqData.requested_plan_id)
-            .maybeSingle();
-          if (plan) {
-            planCode = (plan as any).code;
-            planName = (plan as any).name || planCode;
-          }
-        }
-
-        // البحث عن اشتراك حالي لحساب تاريخ البدء (stack if active)
-        const { data: currentSub } = await s.from('subscriptions')
-          .select('id, end_date, status')
-          .eq('company_id', reqData.company_id)
-          .order('created_at', { ascending: false})
-          .limit(1)
-          .maybeSingle();
-
-        const now = new Date();
-        let startDate: Date = now;
-        if (currentSub) {
-          const cur = currentSub as any;
-          const curEnd = cur.end_date ? new Date(cur.end_date) : null;
-          if (curEnd && curEnd > now) startDate = curEnd;
-        }
-        const endDate = new Date(startDate.getTime());
-        endDate.setMonth(endDate.getMonth() + months);
-
-        const patch: Record<string, any> = {
-          plan_id: reqData.requested_plan_id || null,
-          plan_code: planCode,
-          status: 'active',
-          start_date: startDate.toISOString().split('T')[0],
-          end_date: endDate.toISOString().split('T')[0],
-          updated_at: new Date().toISOString(),
-        };
-
-        if (currentSub) {
-          await s.from('subscriptions').update(patch).eq('id', (currentSub as any).id);
-        } else {
-          await s.from('subscriptions').insert({
-            company_id: reqData.company_id,
-            ...patch,
-          });
-        }
-
-        // Audit trail
-        try {
-          await s.from('addon_grant_audit').insert({
-            company_id: reqData.company_id,
-            admin_id: __admin.adminId,
-            addon_type: 'plan_upgrade',
-            quantity: months,
-            months_granted: months,
-            previous_extra_users: 0,
-            previous_extra_branches: 0,
-            new_extra_users: 0,
-            new_extra_branches: 0,
-            note: `upgrade approved → ${planCode} (${reqData.duration_type})`,
-          });
-        } catch {}
-
-        // إشعار الشركة
-        try {
-          await s.from('company_messages').insert({
-            company_id: reqData.company_id,
-            subject: 'تمت الموافقة على طلب الترقية',
-            body: `تمت الموافقة على ترقيتك إلى باقة \"${planName}\" لمدة ${months === 12 ? 'سنة' : 'شهر'}. تنتهي الباقة في ${endDate.toISOString().split('T')[0]}. استمتع بالمميزات الجديدة!`,
-            type: 'upgrade',
-            status: 'open',
-          });
-        } catch {}
-      } catch (upgradeErr) {
-        console.error('Error upgrading subscription:', upgradeErr);
-        // لا نرجع خطأ لأن الطلب تم تحديثه بنجاح
+    // Plan activation and the request transition are a single locked database
+    // operation. The RPC recomputes the required amount from the selected plan
+    // and refuses manual approval without full payment proof.
+    const { data, error: reviewError } = await sb().rpc('review_upgrade_request', {
+      p_request_id: body.id,
+      p_admin_id: admin.adminId,
+      p_decision: body.status,
+      p_notes: body.admin_notes || null,
+    });
+    if (reviewError) {
+      const message = String(reviewError.message || '');
+      if (/not found/i.test(message)) return error('الطلب غير موجود', 404);
+      if (/already reviewed/i.test(message)) return error('تمت مراجعة هذا الطلب مسبقاً', 409);
+      if (/payment proof|full plan amount/i.test(message)) {
+        return error('لا يمكن تفعيل باقة مدفوعة دون إيصال صالح وإثبات سداد كامل', 409);
       }
+      if (/plan is unavailable/i.test(message)) return error('الباقة المطلوبة غير متاحة', 409);
+      throw reviewError;
     }
 
-    return success({ message: status === 'approved' ? 'تم قبول الطلب وترقية الاشتراك' : 'تم رفض الطلب' });
-  } catch (e: any) {
-    if (e.message === 'Unauthorized') return error('Unauthorized', 401);
-    console.error('Upgrade requests PUT error:', e);
-    return adminJsonError(e);
+    // The reviewed-request trigger writes the user-scoped notification in the
+    // same transaction as entitlement activation and the admin audit record.
+    return success({ result: data || {} });
+  } catch (err) {
+    return adminJsonError(err);
   }
 }
 
+/** Payment evidence and review history are immutable records, not deletable UI data. */
 export async function DELETE(req: NextRequest) {
   try {
-    const __admin = await requireAdmin(req);
-    const s = sb();
-    const id = req.nextUrl.searchParams.get('id');
-    if (!id) return error('id is required');
-
-    await s.from('upgrade_requests').delete().eq('id', id);
-    return success({ deleted: true });
-  } catch (e: any) {
-    return adminJsonError(e);
+    await requireAdmin(req);
+    return error('لا يمكن حذف طلبات الدفع. ارفض الطلب أو احتفظ به كسجل تدقيق.', 405);
+  } catch (err) {
+    return adminJsonError(err);
   }
 }

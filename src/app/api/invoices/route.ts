@@ -3,14 +3,13 @@ import { success, error, parseBody, requireModulePermission, handleApiError } fr
 import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
-import { getNextVoucherNumber } from '@/lib/numbering';
+import { isValidDate } from '@/lib/utils';
 
 const sb = () => getSupabase();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const INVOICE_STATUSES = new Set(['unpaid', 'partial', 'paid', 'cancelled']);
 
-/**
- * GET /api/invoices
- * جلب جميع الفواتير
- */
+/** GET /api/invoices - tenant-scoped invoice list. */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'invoices', 'read');
@@ -22,9 +21,13 @@ export async function GET(request: NextRequest) {
     const clientId = url.searchParams.get('client_id');
     const dateFrom = url.searchParams.get('from');
     const dateTo = url.searchParams.get('to');
+    if (status && !INVOICE_STATUSES.has(status)) return error('حالة الفاتورة غير صالحة');
+    if (clientId && !UUID_RE.test(clientId)) return error('معرّف العميل غير صالح');
+    if ((dateFrom && !isValidDate(dateFrom)) || (dateTo && !isValidDate(dateTo))
+      || (dateFrom && dateTo && dateFrom > dateTo)) return error('فترة الفواتير غير صالحة');
 
     let query = s.from('invoices')
-      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at, contacts(name)', { count: 'exact' })
+      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at', { count: 'exact' })
       .eq('company_id', auth.companyId)
       .is('deleted_at', null);
     if (status) query = query.eq('status', status);
@@ -36,45 +39,27 @@ export async function GET(request: NextRequest) {
     const { data, error: queryError, count } = await query
       .order('date', { ascending: false }).order('number', { ascending: false })
       .range(offset, offset + pageSize - 1);
+    if (queryError) throw queryError;
 
-    if (queryError) {
-      // Schema-drift resilience: if a column (e.g. deleted_at / zatca_qr /
-      // journal_entry_id) or the contacts embed is missing in the DB, PostgREST
-      // 500s the whole page. Retry with a guaranteed-safe minimal select and
-      // resolve client names in a separate query instead of locking the user out.
-      const em = `${queryError.message || ''} ${queryError.details || ''} ${queryError.hint || ''} ${queryError.code || ''}`;
-      const schemaDrift = /column|relationship|could not find|does not exist|PGRST|42P01|42703/i.test(em);
-      if (!schemaDrift) throw queryError;
-      console.error('[invoices] primary query failed (schema drift?), retrying minimal select:', em);
-
-      let fallback = s.from('invoices')
-        .select('id, number, contact_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, created_at', { count: 'exact' })
-        .eq('company_id', auth.companyId);
-      if (status) fallback = fallback.eq('status', status);
-      if (clientId) fallback = fallback.eq('contact_id', clientId);
-      if (dateFrom) fallback = fallback.gte('date', dateFrom);
-      if (dateTo) fallback = fallback.lte('date', dateTo);
-
-      const { data: fData, error: fErr, count: fCount } = await fallback
-        .order('date', { ascending: false }).order('number', { ascending: false })
-        .range(offset, offset + pageSize - 1);
-      if (fErr) throw fErr;
-
-      const contactIds = [...new Set((fData || []).map((i: any) => i.contact_id).filter(Boolean))] as string[];
-      const names: Record<string, string> = {};
-      if (contactIds.length > 0) {
-        const { data: cs } = await s.from('contacts').select('id, name').in('id', contactIds).eq('company_id', auth.companyId);
-        for (const c of cs || []) names[(c as any).id] = (c as any).name;
-      }
-      const invoices = (fData || []).map((i: any) => ({ ...i, client_name: names[i.contact_id] || '' }));
-      return success({ invoices, total: fCount || 0, page, pageSize, totalPages: Math.ceil((fCount || 0) / pageSize) || 1 });
+    const contactIds = [...new Set((data || []).map((invoice: any) => invoice.contact_id).filter(Boolean))] as string[];
+    const contactNames: Record<string, string> = {};
+    if (contactIds.length) {
+      const { data: contacts, error: contactsError } = await s.from('contacts')
+        .select('id, name').eq('company_id', auth.companyId).in('id', contactIds);
+      if (contactsError) throw contactsError;
+      for (const contact of contacts || []) contactNames[(contact as any).id] = (contact as any).name;
     }
-
-    const invoices = (data || []).map((i: any) => ({
-      ...i, client_name: i.contacts?.name || '',
+    const invoices = (data || []).map((invoice: any) => ({
+      ...invoice,
+      client_name: contactNames[invoice.contact_id] || '',
     }));
-
-    return success({ invoices, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) || 1 });
+    return success({
+      invoices,
+      total: count || 0,
+      page,
+      pageSize,
+      totalPages: Math.ceil((count || 0) / pageSize) || 1,
+    });
   } catch (err) {
     return handleApiError(err);
   }
@@ -111,7 +96,6 @@ export async function POST(request: NextRequest) {
     // استخلاص حقول التحصيل النقدي الفوري المسبق لتلافي تعطل الـ Zod Schema Strict
     const collectedAmount = Number(body.collected_amount || body.collectedAmount || 0);
     const bankSafeId = body.bank_safe_id || body.bankSafeId || null;
-    const paymentMethod = body.payment_method || body.paymentMethod || 'cash';
 
     const bodyToValidate = { ...body };
     delete bodyToValidate.collected_amount;
@@ -125,240 +109,72 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const { clientId, projectId, date, dueDate, items, vatRate, notes, vatEnabled } = parsed.data;
-    const year = date.substring(0, 4);
-
-    // TENANT CHECKS: client (and optional project) must belong to this company
-    const { data: contact } = await s.from('contacts').select('id')
-      .eq('id', clientId).eq('company_id', auth.companyId).maybeSingle();
-    if (!contact) return error('العميل غير موجود', 404);
-    if (projectId) {
-      const { data: project } = await s.from('projects').select('id')
-        .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
-      if (!project) return error('المشروع غير موجود', 404);
-    }
-
-    // ACCOUNTING INTEGRITY: all amounts recomputed server-side. Client-sent
-    // subtotal/vatAmount/total are ignored (UI hints only) — trusting them
-    // previously allowed VAT-understated invoices and forged ZATCA totals.
-    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-    const computedItems = items.map((it) => {
-      const gross = round2(it.quantity * it.unitPrice);
-      const discount = Math.min(round2(it.discount || 0), gross);
-      return { ...it, discount, total: round2(gross - discount) };
-    });
-    const subtotal = round2(computedItems.reduce((sum, it) => sum + it.total, 0));
-    const computedVat = vatEnabled === false ? 0 : round2(subtotal * vatRate);
-    const computedTotal = round2(subtotal + computedVat);
-
-    // توليد الرقم التسلسلي للفاتورة
-    let number: number;
-    try {
-      const { data: rpcData, error: rpcError } = await s.rpc('next_invoice_number', {
-        p_company_id: auth.companyId,
-        p_year: parseInt(year),
-      });
-      if (rpcError || rpcData == null) throw rpcError || new Error('RPC failed');
-      number = rpcData as number;
-    } catch {
-      // Fallback
-      const { data: seqExisting } = await s.from('invoice_sequences')
-        .select('last_number').eq('company_id', auth.companyId).eq('year', year).maybeSingle();
-      if (seqExisting) {
-        number = seqExisting.last_number + 1;
-        await s.from('invoice_sequences').update({ last_number: number }).eq('company_id', auth.companyId).eq('year', year);
-      } else {
-        number = 1;
-        await s.from('invoice_sequences').insert({ company_id: auth.companyId, year: parseInt(year), last_number: 1 });
-      }
-    }
-
-    // التحصيل الفوري جزء من العملية المالية نفسها، لذلك نرفض القيم غير
-    // المنتهية أو الزائدة ولا نقصّها بصمت (القص الصامت يضلل المستخدم ويترك
-    // فرقاً بين ما أدخله وما رُحّل فعلياً).
-    if (!Number.isFinite(collectedAmount) || collectedAmount < 0 || Math.abs(collectedAmount * 100 - Math.round(collectedAmount * 100)) > 1e-8) {
+    if (!Number.isFinite(collectedAmount) || collectedAmount < 0
+      || Math.abs(collectedAmount * 100 - Math.round(collectedAmount * 100)) > 1e-8) {
       return error('مبلغ التحصيل غير صالح');
     }
-    if (collectedAmount > computedTotal + 0.005) return error('مبلغ التحصيل لا يمكن أن يتجاوز إجمالي الفاتورة');
-    if (collectedAmount > 0 && !bankSafeId) return error('اختر الخزينة أو البنك للتحصيل الفوري');
-    const finalPaidAmount = collectedAmount;
-    const finalStatus = finalPaidAmount === 0 ? 'unpaid' : (finalPaidAmount >= computedTotal ? 'paid' : 'partial');
 
-    let invoiceId: string | null = null;
-    let journalEntryId: string | null = null;
-    let voucherReceiptId: string | null = null;
+    // Numbering, tenant checks, server-side totals, invoice/items, sales
+    // journal and optional immediate receipt/allocation commit together.
+    const { data: created, error: createError } = await s.rpc('create_sales_invoice_atomic', {
+      p_company_id: auth.companyId,
+      p_contact_id: clientId,
+      p_project_id: projectId || null,
+      p_date: date,
+      p_due_date: dueDate,
+      p_items: items,
+      p_vat_rate: vatRate,
+      p_vat_enabled: vatEnabled,
+      p_notes: notes || '',
+      p_collected_amount: collectedAmount,
+      p_bank_safe_id: bankSafeId,
+      p_user_id: auth.userId,
+    });
+    if (createError) throw createError;
+    const invoice = created as Record<string, any>;
 
-    // Pre-validate the collection bank/safe BEFORE creating anything —
-    // an invalid/foreign id must 400 here, not trigger a rollback later.
-    let collectionBankSafe: { id: string; account_id: string | null } | null = null;
-    if (finalPaidAmount > 0 && bankSafeId) {
-      const { data: bs } = await s.from('banks_safes')
-        .select('id, account_id')
-        .eq('id', bankSafeId).eq('company_id', auth.companyId).maybeSingle();
-      if (!bs) return error('الخزينة/البنك المحدد غير موجود');
-      if (!(bs as { account_id?: string | null }).account_id) return error('الخزينة/البنك غير مرتبط بحساب أستاذ صالح');
-      collectionBankSafe = bs as { id: string; account_id: string | null };
-    }
+    const { data: itemsRes, error: itemsError } = await s.from('invoice_items')
+      .select('id, description, quantity, unit_price, total')
+      .eq('invoice_id', invoice.id)
+      .eq('company_id', auth.companyId);
+    if (itemsError) throw itemsError;
 
+    // QR generation is a non-authoritative presentation artifact. Financial
+    // creation remains committed even when seller tax metadata is incomplete.
+    let zatcaQRData: string | null = null;
     try {
-      // 1. إنشاء الفاتورة
-      const { data: invoiceRes, error: invErr } = await s.from('invoices')
-        .insert({
-          company_id: auth.companyId, 
-          number, 
-          contact_id: clientId, 
-          project_id: projectId || null,
-          date, 
-          due_date: dueDate, 
-          subtotal, 
-          vat_rate: vatRate, 
-          vat_amount: computedVat,
-          total: computedTotal, 
-          paid_amount: 0,
-          status: 'unpaid', 
-          notes: notes || null, 
-          created_by: auth.userId,
-        })
-        .select('id, number, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes')
-        .single();
-        
-      if (invErr) throw invErr;
-      invoiceId = invoiceRes.id;
-
-      // 2. إدخال البنود (بقيم محسوبة خادمياً شاملة الخصم)
-      for (const item of computedItems) {
-        const { error: itemErr } = await s.from('invoice_items').insert({
-          company_id: auth.companyId,
-          invoice_id: invoiceId,
-          description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unitPrice,
-          total: item.total,
-        });
-        if (itemErr) throw itemErr;
-      }
-
-      // A zero-value invoice has no economic event and must not create a
-      // zero/zero journal entry (such lines are forbidden by the ledger).
-      // Non-zero invoices are always posted as full open items; collection is
-      // a separate receipt/allocation.
-      if (computedTotal > 0) {
-        const { postSalesInvoiceJournal } = await import('@/lib/invoice-accounting');
-        journalEntryId = await postSalesInvoiceJournal({
-          companyId: auth.companyId,
-          userId: auth.userId,
-          invoiceId,
-          invoiceNumber: number,
-          date,
-          contactId: clientId,
-          projectId: projectId || null,
-          subtotal,
-          vatAmount: computedVat,
-          total: computedTotal,
-        });
-      }
-
-      if (finalPaidAmount > 0 && bankSafeId && collectionBankSafe?.account_id) {
-        const { createJournalEntry } = await import('@/lib/journal-utils');
-        const { applyInvoiceAllocations, resolveAccountId } = await import('@/lib/voucher-utils');
-        const arId = await resolveAccountId(auth.companyId, '1130');
-        if (!arId) throw new Error('حساب الذمم 1130 غير موجود');
-        const nextVoucherNumber = await getNextVoucherNumber(auth.companyId, 'voucher_receipts');
-        const { data: recData, error: recErr } = await s.from('voucher_receipts').insert({
-          company_id: auth.companyId,
-          number: nextVoucherNumber,
-          date,
-          receipt_type: 'client',
-          contact_id: clientId,
-          amount: finalPaidAmount,
-          bank_safe_id: bankSafeId,
-          reason: `تحصيل فوري لفاتورة مبيعات رقم ${number}`,
-          created_by: auth.userId,
-          status: 'approved',
-        }).select('id').single();
-        if (recErr || !recData) throw recErr || new Error('فشل سند القبض');
-        voucherReceiptId = recData.id;
-
-        const { journalId, error: recJeErr } = await createJournalEntry(auth.companyId, {
-          date,
-          type: 'general',
-          description: `سند قبض رقم ${nextVoucherNumber}: تحصيل فاتورة ${number}`,
-          lines: [
-            { account_id: collectionBankSafe.account_id, debit: finalPaidAmount, credit: 0 },
-            { account_id: arId, debit: 0, credit: finalPaidAmount, contact_id: clientId },
-          ],
-          reference_type: 'voucher_receipt',
-          reference_id: recData.id,
-          created_by: auth.userId,
-        });
-        if (recJeErr || !journalId) throw recJeErr || new Error('فشل قيد التحصيل');
-        await s.from('voucher_receipts').update({ journal_entry_id: journalId }).eq('id', recData.id).eq('company_id', auth.companyId);
-        const { error: allocErr } = await applyInvoiceAllocations(
-          auth.companyId, 'receipt', recData.id, journalId, finalPaidAmount,
-          [{ invoice_id: invoiceId, amount: finalPaidAmount }], clientId
-        );
-        if (allocErr) throw new Error(allocErr);
-      }
-
-      const { data: itemsRes } = await s.from('invoice_items')
-        .select('id, description, quantity, unit_price, total').eq('invoice_id', invoiceId);
-
-      // ZATCA Phase 2: QR TLV Generation
-      let zatcaQRData: string | null = null;
-      try {
-        const { data: company } = await s.from('companies')
-          .select('name, tax_number')
-          .eq('id', auth.companyId)
-          .maybeSingle();
-        
-        const companyData = company as { name?: string; tax_number?: string } | null;
-        const sellerName = companyData?.name || '';
-        const vatNumber = companyData?.tax_number || '';
-        
-        if (sellerName && vatNumber && /^\d{15}$/.test(vatNumber)) {
-          const qrPayload = {
-            sellerName,
-            vatNumber,
-            timestamp: new Date(date).toISOString(),
-            invoiceTotal: parseFloat(String(computedTotal)),
-            vatTotal: parseFloat(String(computedVat)),
-          };
-          
-          const validation = validateInvoiceForZatca(qrPayload);
-          if (validation.valid) {
-            zatcaQRData = generateZatcaQRData(qrPayload);
-            await s.from('invoices').update({ zatca_qr: zatcaQRData }).eq('id', invoiceId).eq('company_id', auth.companyId);
-          }
+      const taxSnapshot = invoice.tax_snapshot as Record<string, any> | undefined;
+      const seller = taxSnapshot?.seller as Record<string, any> | undefined;
+      const sellerName = typeof seller?.name === 'string' ? seller.name.trim() : '';
+      const vatNumber = typeof seller?.vat_number === 'string' ? seller.vat_number.trim() : '';
+      const createdAt = new Date(String(invoice.created_at));
+      if (sellerName && /^\d{15}$/.test(vatNumber) && Number.isFinite(createdAt.getTime())) {
+        const qrPayload = {
+          sellerName,
+          vatNumber,
+          timestamp: `${date}T${createdAt.toISOString().slice(11, 19)}Z`,
+          invoiceTotal: Number(invoice.total),
+          vatTotal: Number(invoice.vat_amount || 0),
+        };
+        if (validateInvoiceForZatca(qrPayload).valid) {
+          zatcaQRData = generateZatcaQRData(qrPayload);
+          const { error: qrError } = await s.from('invoices')
+            .update({ zatca_qr: zatcaQRData })
+            .eq('id', invoice.id).eq('company_id', auth.companyId);
+          if (qrError) throw qrError;
         }
-      } catch (zatcaErr) {
-        console.warn('ZATCA QR generation bypassed:', zatcaErr);
       }
-
-      return success({ 
-        ...invoiceRes, 
-        items: itemsRes || [], 
-        journalEntryId, 
-        voucherReceiptId,
-        zatcaQRData 
-      }, 201);
-
-    } catch (txErr) {
-      // التراجع التلقائي الذري (Auto Rollback)
-      console.error('Invoice combined creation failed, rolling back:', txErr);
-      try {
-        if (voucherReceiptId) await s.from('voucher_receipts').delete().eq('id', voucherReceiptId).eq('company_id', auth.companyId);
-        if (journalEntryId) {
-          await s.from('journal_lines').delete().eq('journal_entry_id', journalEntryId);
-          await s.from('journal_entries').delete().eq('id', journalEntryId).eq('company_id', auth.companyId);
-        }
-        if (invoiceId) {
-          await s.from('invoice_items').delete().eq('invoice_id', invoiceId);
-          await s.from('invoices').delete().eq('id', invoiceId).eq('company_id', auth.companyId);
-        }
-      } catch (rollbackErr) {
-        console.error('Rollback failed:', rollbackErr);
-      }
-      throw txErr;
+    } catch (zatcaErr) {
+      console.warn('ZATCA QR generation bypassed:', zatcaErr);
     }
+
+    return success({
+      ...invoice,
+      items: itemsRes || [],
+      journalEntryId: invoice.journal_entry_id,
+      voucherReceiptId: invoice.voucher_receipt_id,
+      zatcaQRData,
+    }, 201);
   } catch (err) {
     return handleApiError(err);
   }

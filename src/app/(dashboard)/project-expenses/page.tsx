@@ -72,7 +72,7 @@ export default function ProjectExpensesPage() {
   useEffect(() => { fetchData(); }, [filterProject]);
 
   const handleSave = async () => {
-    if (!form.project_id || !form.description || !form.amount || !form.date) {
+    if (!editingItem && (!form.project_id || !form.description || !form.amount || !form.date)) {
       setSaveError('المشروع، الوصف، المبلغ، والتاريخ مطلوبة');
       return;
     }
@@ -83,7 +83,10 @@ export default function ProjectExpensesPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(editingItem ? { notes: form.notes || null } : {
+          ...form,
+          contact_id: form.contact_id || null,
+        }),
       });
       const json = await res.json();
       if (json.success) {
@@ -120,7 +123,7 @@ export default function ProjectExpensesPage() {
       const json = await res.json();
       if (json.success) {
         fetchData();
-        toast.success('تم حذف المصروف');
+        toast.success('تم إلغاء المصروف وعكس أثره المالي');
       } else {
         alert(json.message || 'فشل الحذف');
       }
@@ -204,6 +207,7 @@ export default function ProjectExpensesPage() {
               label="المشروع"
               value={form.project_id}
               onChange={(v) => setForm({ ...form, project_id: v })}
+              disabled={!!editingItem}
               options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]}
               className="col-span-2"
             />
@@ -211,18 +215,21 @@ export default function ProjectExpensesPage() {
               label="نوع المصروف"
               value={form.expense_type}
               onChange={(v) => setForm({ ...form, expense_type: v })}
+              disabled={!!editingItem}
               options={Object.entries(EXPENSE_TYPES).map(([key, val]) => ({ value: key, label: val.label }))}
             />
             <Input
               label="التاريخ"
               type="date"
               value={form.date}
+              disabled={!!editingItem}
               onChange={(e) => setForm({ ...form, date: e.target.value })}
             />
             <Input
               label="الوصف"
               className="col-span-2"
               value={form.description}
+              disabled={!!editingItem}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               placeholder="وصف المصروف"
             />
@@ -230,12 +237,14 @@ export default function ProjectExpensesPage() {
               label="المبلغ"
               type="number"
               value={form.amount}
+              disabled={!!editingItem}
               onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })}
             />
             <Select
               label="الطرف (اختياري)"
               value={form.contact_id}
               onChange={(v) => setForm({ ...form, contact_id: v })}
+              disabled={!!editingItem}
               options={[{ value: '', label: 'بدون' }, ...contacts.map((c: any) => ({ value: c.id, label: c.name }))]}
             />
           </div>
@@ -248,6 +257,7 @@ export default function ProjectExpensesPage() {
           <Checkbox
             label="تطبيق ضريبة مدخلات (15%)"
             checked={form.tax_enabled}
+            disabled={!!editingItem}
             onChange={(checked: boolean) => setForm({ ...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0 })}
           />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}

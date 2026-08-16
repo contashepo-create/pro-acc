@@ -63,7 +63,12 @@ export function serverError(err: unknown) {
 }
 
 export class AuthError extends Error {
-  constructor(message: string) { super(message); this.name = 'AuthError'; }
+  status: number;
+  constructor(message: string, status = 401) {
+    super(message);
+    this.name = 'AuthError';
+    this.status = status;
+  }
 }
 
 const sb = () => getSupabase();
@@ -90,21 +95,19 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
 
   if (userErr || !user) throw new AuthError('المستخدم غير موجود');
   const u = user;
-  if (!u.is_active) throw new AuthError('المستخدم غير نشط');
+  if (!u.is_active) throw new AuthError('المستخدم غير نشط', 403);
 
   // SECURITY: Reject stale tokens (issued before logout / password change).
   const storedVersion = Number(u.token_version) || 0;
   if (payload.ver !== storedVersion) throw new AuthError('غير مصرح به');
 
-  // Check company is active
-  try {
-    const { data: company } = await s.from('companies').select('is_active').eq('id', u.company_id).single();
-    if (company && (company as Record<string, any>).is_active === false) {
-      throw new AuthError('الشركة غير نشطة. تواصل مع مدير النظام');
-    }
-  } catch (e) {
-    if (e instanceof AuthError) throw e;
-    // ignore if company check fails
+  // Company state is part of authentication, not optional metadata. A lookup
+  // outage must never reactivate a disabled/deleted tenant.
+  const { data: company, error: companyErr } = await s.from('companies')
+    .select('is_active').eq('id', u.company_id).single();
+  if (companyErr || !company) throw new AuthError('تعذر التحقق من الشركة', 503);
+  if ((company as Record<string, any>).is_active !== true) {
+    throw new AuthError('الشركة غير نشطة. تواصل مع مدير النظام', 403);
   }
 
   // Subscription guard: enforce plan state + module gating unless caller
@@ -122,7 +125,7 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
       // closed until the subscription source can be verified.
       console.error('Subscription guard check failed:', e);
       if (process.env.NODE_ENV === 'production' && !['GET', 'HEAD', 'OPTIONS'].includes((request.method || 'GET').toUpperCase())) {
-        throw new AuthError('تعذر التحقق من حالة الاشتراك. حاول لاحقاً');
+        throw new AuthError('تعذر التحقق من حالة الاشتراك. حاول لاحقاً', 503);
       }
     }
   } else if (options.checkSubscription) {
@@ -132,7 +135,7 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
       const { getCompanySubscription } = await import('@/lib/subscription');
       const sub = await getCompanySubscription(u.company_id);
       if (sub && sub.is_expired) {
-        throw new AuthError('انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك');
+        throw new AuthError('انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك', 403);
       }
     } catch (e) {
       if (e instanceof AuthError) throw e;
@@ -164,7 +167,8 @@ export async function requireRole(
   const auth = await requireApiAuth(request);
   if (!allowedRoles.includes(auth.role)) {
     throw new AuthError(
-      `ليس لديك صلاحية لتنفيذ هذا الإجراء. الصلاحيات المطلوبة: ${allowedRoles.join(' أو ')}. دورك الحالي: ${auth.role}`
+      `ليس لديك صلاحية لتنفيذ هذا الإجراء. الصلاحيات المطلوبة: ${allowedRoles.join(' أو ')}. دورك الحالي: ${auth.role}`,
+      403
     );
   }
   return auth;
@@ -206,7 +210,8 @@ export async function requireModulePermission(
 
   if (!allowed) {
     throw new AuthError(
-      `ليس لديك صلاحية "${action}" على "${module}". تواصل مع مدير النظام.`
+      `ليس لديك صلاحية "${action}" على "${module}". تواصل مع مدير النظام.`,
+      403
     );
   }
 
@@ -226,7 +231,7 @@ export async function requireAdminAuth(request: Request): Promise<{ userId: stri
 }
 
 export function handleApiError(err: unknown) {
-  if (err instanceof AuthError) return error(err.message, 401);
+  if (err instanceof AuthError) return error(err.message, err.status);
   if (err instanceof ValidationFailure) return validationError(err.errors ?? err.message);
   if (err instanceof RateLimitExceeded) {
     const res = error('عدد كبير جداً من الطلبات، حاول لاحقاً', 429);
