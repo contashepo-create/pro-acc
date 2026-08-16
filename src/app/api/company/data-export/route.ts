@@ -202,14 +202,31 @@ async function buildCompanyDump(companyId: string): Promise<Record<string, any[]
   const s = sb();
   const out: Record<string, any[]> = {};
   for (const table of EXPORT_TABLES) {
-    try {
-      // Cheap safety: only export company-scoped tables.
-      const { data } = await s.from(table).select('*').eq('company_id', companyId).limit(10000);
-      out[table] = (data || []) as any[];
-    } catch (e) {
-      // Table may not exist in the current schema — skip.
-      out[table] = [];
+    // A data-portability export must be complete. Previously every table was
+    // capped at 10,000 rows and ANY error became an empty array, so a churning
+    // customer could be handed a silently truncated copy of their own data and
+    // never know. Missing tables are still tolerated (the schema evolves), but
+    // a real read failure now fails the export so it is retried/reported.
+    const rows: any[] = [];
+    const pageSize = 1000;
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error: pageError } = await s.from(table)
+        .select('*')
+        .eq('company_id', companyId)
+        .order('id', { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (pageError) {
+        // 42P01 = undefined_table: the table genuinely does not exist here.
+        const missingTable = pageError.code === '42P01'
+          || /does not exist|Could not find/i.test(pageError.message || '');
+        if (missingTable) { rows.length = 0; break; }
+        throw new Error(`تعذر تصدير الجدول ${table}: ${pageError.message}`);
+      }
+      const page = (data || []) as any[];
+      rows.push(...page);
+      if (page.length < pageSize) break;
     }
+    out[table] = rows;
   }
   return out;
 }

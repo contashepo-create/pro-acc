@@ -38,14 +38,36 @@ export async function GET(request: NextRequest) {
       data: {} as any
     };
 
-    // Fetch data for each table
+    // Fetch data for each table.
+    //
+    // A backup MUST be complete or it must fail. The previous implementation
+    // capped every table at 10,000 rows and swallowed any error into an empty
+    // array, so a company with more history — or a transient read failure —
+    // silently produced a truncated backup that still hashed correctly, passed
+    // restore verification, and then wiped the missing rows on restore.
     for (const table of tables) {
-      try {
-        const { data } = await s.from(table).select('*').eq('company_id', auth.companyId).limit(10000);
-        backupData.data[table] = data || [];
-      } catch {
-        backupData.data[table] = [];
+      const rows: unknown[] = [];
+      const pageSize = 1000;
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error: pageError } = await s.from(table)
+          .select('*')
+          .eq('company_id', auth.companyId)
+          .order('id', { ascending: true })
+          .range(offset, offset + pageSize - 1);
+        if (pageError) {
+          // Fail loudly: a partial export must never be presented as a backup.
+          throw new Error(`تعذر تصدير الجدول ${table}: ${pageError.message}`);
+        }
+        const page = data || [];
+        rows.push(...page);
+        if (page.length < pageSize) break;
+        // Hard ceiling to protect the serverless invocation. Exceeding it is an
+        // explicit error, never a silent truncation.
+        if (rows.length > 500_000) {
+          throw new Error(`حجم بيانات الجدول ${table} كبير جداً للتصدير المباشر. استخدم تصدير بيانات الشركة.`);
+        }
       }
+      backupData.data[table] = rows;
     }
 
     const jsonString = JSON.stringify(backupData, null, 2);

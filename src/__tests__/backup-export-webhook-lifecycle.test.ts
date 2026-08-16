@@ -1,0 +1,268 @@
+/**
+ * End-to-end lifecycle tests for the operational surfaces that sit outside the
+ * accounting core: backup download/restore, company data export, receipt
+ * upload, and the Telegram webhook.
+ *
+ * The behaviours pinned here are the ones whose failure is silent and
+ * therefore most dangerous:
+ *  - a backup/export must be COMPLETE or fail loudly. Truncating at a row cap,
+ *    or swallowing a read error into an empty array, produces a file that still
+ *    hashes correctly, still passes restore verification, and then destroys the
+ *    rows it never contained.
+ *  - the Telegram webhook is an unauthenticated internet endpoint: it must
+ *    verify the shared secret, refuse to act without it, and never retry-loop.
+ */
+process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
+process.env.TELEGRAM_WEBHOOK_SECRET = 'telegram-webhook-secret-value';
+process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token';
+
+import { createToken } from '@/lib/auth';
+
+type Row = Record<string, any>;
+type Op = { op: string; col?: string; val?: any };
+
+function makeDb(db: Record<string, Row[]>) {
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const rpcResults = new Map<string, { data: any; error: any }>();
+  const tableErrors = new Map<string, { message: string; code?: string }>();
+
+  const from = (table: string) => {
+    const ops: Op[] = []; const mut: any = {}; calls.push({ table, ops, mut });
+    let rangeBounds: { from: number; to: number } | null = null;
+    const filtered = () => (db[table] || []).filter((row) => ops.every((op) => {
+      if (op.op === 'eq') return row[op.col!] === op.val;
+      if (op.op === 'in') return op.val.includes(row[op.col!]);
+      if (op.op === 'neq') return row[op.col!] !== op.val;
+      return true;
+    }));
+    const api: any = {
+      select: () => api,
+      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      neq: () => api, is: () => api, or: () => api, not: () => api,
+      gte: () => api, lte: () => api, lt: () => api, order: () => api, limit: () => api,
+      // PostgREST range() bounds are inclusive.
+      range: (start: number, end: number) => { rangeBounds = { from: start, to: end }; return api; },
+      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      upsert: (payload: any) => { mut.kind = 'upsert'; mut.payload = payload; return api; },
+      delete: () => { mut.kind = 'delete'; return api; },
+      maybeSingle: async () => ({ data: filtered()[0] || null, error: tableErrors.get(table) || null }),
+      single: async () => {
+        if (mut.kind === 'insert' || mut.kind === 'upsert') return { data: filtered()[0] ?? mut.payload, error: null };
+        const row = filtered()[0] || null;
+        return { data: row, error: row ? null : { message: 'not found' } };
+      },
+      then: (ok: any, fail: any) => {
+        const tableError = tableErrors.get(table);
+        if (tableError) return Promise.resolve({ data: null, error: tableError, count: 0 }).then(ok, fail);
+        const all = filtered();
+        const page = rangeBounds ? all.slice(rangeBounds.from, rangeBounds.to + 1) : all;
+        return Promise.resolve({ data: page, error: null, count: all.length }).then(ok, fail);
+      },
+    };
+    return api;
+  };
+
+  return {
+    from, calls, rpcCalls, rpcResults, tableErrors,
+    storage: {
+      from: () => ({
+        upload: async () => ({ data: { path: 'x' }, error: null }),
+        remove: async () => ({ data: null, error: null }),
+        createSignedUrl: async () => ({ data: { signedUrl: 'https://signed.example/x' }, error: null }),
+      }),
+    },
+    rpc: async (name: string, params: any) => {
+      rpcCalls.push({ name, params });
+      return rpcResults.get(name) || { data: { ok: true }, error: null };
+    },
+  };
+}
+
+let mockDb: ReturnType<typeof makeDb>;
+jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
+
+import { GET as backupDownloadGET } from '@/app/api/backup/download/route';
+import { POST as telegramWebhookPOST } from '@/app/api/telegram/webhook/route';
+
+const C1 = 'company-1';
+const ADMIN = 'u-admin';
+
+function baseDb(): Record<string, Row[]> {
+  return {
+    users: [{ id: ADMIN, company_id: C1, role: 'admin', is_active: true, token_version: 0, name: 'مدير' }],
+    companies: [{ id: C1, name: 'شركة', email: 'co@example.com', phone: '0500', is_active: true }],
+    subscriptions: [{
+      id: 's1', company_id: C1, plan_code: 'enterprise', status: 'active',
+      start_date: '2024-01-01', end_date: '2099-01-01',
+      subscription_plans: { code: 'enterprise', features_modules: { dashboard: true, reports: true } },
+    }],
+    accounts: [], journal_entries: [], journal_lines: [], invoices: [], invoice_items: [],
+    contacts: [], clients: [], projects: [], banks_safes: [], cash_transactions: [],
+    inventory_items: [], employees: [], payroll: [],
+    backup_logs: [], security_audit_log: [], audit_log: [],
+  };
+}
+
+function adminRequest(method = 'GET', body?: any, url = 'http://localhost/api/test') {
+  const token = createToken(ADMIN, 'admin');
+  return {
+    url, method,
+    headers: { get: (key: string) => (key === 'authorization' ? `Bearer ${token}` : null) },
+    cookies: { get: () => undefined },
+    json: async () => body,
+  } as any;
+}
+
+function webhookRequest(payload: any, secret: string | null = process.env.TELEGRAM_WEBHOOK_SECRET!) {
+  return {
+    url: 'http://localhost/api/telegram/webhook',
+    method: 'POST',
+    headers: {
+      get: (key: string) => (key.toLowerCase() === 'x-telegram-bot-api-secret-token' ? secret : null),
+    },
+    json: async () => payload,
+  } as any;
+}
+
+beforeEach(() => {
+  mockDb = makeDb(baseDb());
+  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as any;
+});
+
+describe('backup download completeness', () => {
+  test('a table larger than one page is exported in full, not truncated', async () => {
+    const db = baseDb();
+    // 2,500 rows spans three 1,000-row pages.
+    db.journal_lines = Array.from({ length: 2500 }, (_, index) => ({
+      id: `jl-${String(index).padStart(5, '0')}`, company_id: C1, debit: 1, credit: 0,
+    }));
+    mockDb = makeDb(db);
+
+    const response = await backupDownloadGET(adminRequest());
+    expect(response.status).toBe(200);
+    const payload = JSON.parse(await response.text());
+    // Every row must be present: a backup that quietly drops rows will delete
+    // them from the live company when it is restored.
+    expect(payload.data.journal_lines).toHaveLength(2500);
+    expect(payload.data.journal_lines[2499].id).toBe('jl-02499');
+  });
+
+  test('every exported page stays scoped to the caller company', async () => {
+    const db = baseDb();
+    db.invoices = [
+      { id: 'i-1', company_id: C1, total: 100 },
+      { id: 'i-2', company_id: 'company-2', total: 999 },
+    ];
+    mockDb = makeDb(db);
+
+    const response = await backupDownloadGET(adminRequest());
+    const payload = JSON.parse(await response.text());
+    expect(payload.data.invoices.map((row: any) => row.id)).toEqual(['i-1']);
+    for (const call of mockDb.calls.filter((entry) => entry.table === 'invoices')) {
+      expect(call.ops).toEqual(expect.arrayContaining([{ op: 'eq', col: 'company_id', val: C1 }]));
+    }
+  });
+
+  test('a read failure fails the backup instead of yielding a silently empty table', async () => {
+    mockDb = makeDb(baseDb());
+    mockDb.tableErrors.set('journal_entries', { message: 'connection reset' });
+
+    const response = await backupDownloadGET(adminRequest());
+    // Previously this produced a 200 with journal_entries: [] — a corrupt
+    // backup that still hashed correctly and passed restore verification.
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    const payload = JSON.parse(await response.text());
+    expect(payload.success).toBe(false);
+    // A failed export must never be recorded as a valid, restorable backup.
+    expect(mockDb.calls.filter((call) => call.mut.kind === 'insert' && call.table === 'backup_logs')).toHaveLength(0);
+  });
+
+  test('a successful export is logged for later restore verification', async () => {
+    const response = await backupDownloadGET(adminRequest());
+    expect(response.status).toBe(200);
+    const log = mockDb.calls.find((call) => call.mut.kind === 'insert' && call.table === 'backup_logs');
+    expect(log).toBeDefined();
+    expect(log!.mut.payload).toMatchObject({ company_id: C1, user_id: ADMIN });
+    // The HMAC signature is what makes tamper detection possible on restore.
+    expect(typeof log!.mut.payload.hmac_signature).toBe('string');
+    expect(log!.mut.payload.hmac_signature.length).toBeGreaterThan(0);
+    expect(response.headers.get('Content-Disposition')).toContain('attachment');
+  });
+});
+
+describe('telegram webhook security', () => {
+  test('a request without the shared secret is rejected and does nothing', async () => {
+    const response = await telegramWebhookPOST(webhookRequest(
+      { callback_query: { id: 'q1', data: 'approval:approve:a-1', message: { chat: { id: '55' } } } },
+      null,
+    ));
+    expect(response.status).toBe(403);
+    expect(mockDb.rpcCalls).toHaveLength(0);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test('a wrong secret is rejected without touching the database', async () => {
+    const response = await telegramWebhookPOST(webhookRequest(
+      { callback_query: { id: 'q1', data: 'approval:approve:a-1', message: { chat: { id: '55' } } } },
+      'not-the-real-secret-value-xx',
+    ));
+    expect(response.status).toBe(403);
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
+
+  test('an approval callback is routed to the atomic RPC with the caller chat id', async () => {
+    const response = await telegramWebhookPOST(webhookRequest({
+      callback_query: { id: 'q1', data: 'approval:approve:a-1', message: { chat: { id: '55' }, message_id: 7 } },
+    }));
+    expect(response.status).toBe(200);
+    const call = mockDb.rpcCalls.find((entry) => entry.name === 'respond_approval_by_telegram_atomic');
+    expect(call).toBeDefined();
+    // The chat id is the authorisation subject: the RPC binds the action to the
+    // chat that is actually allowed to approve it.
+    expect(call!.params).toMatchObject({ p_approval_id: 'a-1', p_action: 'approve', p_chat_id: '55' });
+  });
+
+  test('an unknown action is refused rather than defaulting to approve', async () => {
+    const response = await telegramWebhookPOST(webhookRequest({
+      callback_query: { id: 'q1', data: 'approval:destroy:a-1', message: { chat: { id: '55' } } },
+    }));
+    expect(response.status).toBe(200);
+    expect(mockDb.rpcCalls.filter((call) => call.name.includes('approval'))).toHaveLength(0);
+  });
+
+  test('an oversized callback payload is ignored', async () => {
+    const response = await telegramWebhookPOST(webhookRequest({
+      callback_query: { id: 'q1', data: `approval:approve:${'a'.repeat(200)}`, message: { chat: { id: '55' } } },
+    }));
+    expect(response.status).toBe(200);
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
+
+  test('a malformed update is acknowledged so Telegram does not retry forever', async () => {
+    const response = await telegramWebhookPOST({
+      url: 'http://localhost/api/telegram/webhook',
+      method: 'POST',
+      headers: {
+        get: (key: string) => (key.toLowerCase() === 'x-telegram-bot-api-secret-token'
+          ? process.env.TELEGRAM_WEBHOOK_SECRET! : null),
+      },
+      json: async () => { throw new Error('invalid json'); },
+    } as any);
+    // Acknowledging is deliberate: a 5xx would make Telegram replay the update
+    // indefinitely against an endpoint that can never parse it.
+    expect(response.status).toBe(200);
+  });
+
+  test('a rejected reset request cancels the session instead of issuing a code', async () => {
+    const response = await telegramWebhookPOST(webhookRequest({
+      callback_query: { id: 'q1', data: 'reset:reject', message: { chat: { id: '55' }, message_id: 9 } },
+    }));
+    expect(response.status).toBe(200);
+    expect(mockDb.rpcCalls.some((call) => call.name === 'reject_telegram_reset_session_atomic')).toBe(true);
+    // Rejecting must never mint a confirmation code.
+    expect(mockDb.rpcCalls.some((call) => call.name === 'approve_telegram_reset_session_atomic')).toBe(false);
+  });
+});
