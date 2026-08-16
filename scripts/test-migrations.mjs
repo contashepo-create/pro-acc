@@ -1766,6 +1766,19 @@ async function smokeTenantIsolationUnderRls() {
     VALUES($1,9001,CURRENT_DATE,CURRENT_DATE,$3,100,0,0,0,0,100),
           ($2,9001,CURRENT_DATE,CURRENT_DATE,$4,200,0,0,0,0,200)`, [A, B, ca, cb]);
 
+  // No table carrying a company_id may be left with RLS switched off. 027
+  // enrolled tables from a hardcoded list, so 51 tables added afterwards were
+  // silently unprotected; discovering them from the catalogue is what keeps
+  // that from drifting again as new tenant tables are added.
+  const unprotected = await db.query(`
+    SELECT c.relname AS tbl FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname='public' AND c.relkind='r' AND NOT c.relrowsecurity
+      AND EXISTS (SELECT 1 FROM pg_attribute a
+                  WHERE a.attrelid=c.oid AND a.attname='company_id' AND NOT a.attisdropped)`);
+  assert.deepEqual(unprotected.rows.map((r) => r.tbl), [],
+    'every table with a company_id must have RLS enabled');
+
   // Every tenant table must use ONE policy shape. A second shape means a table
   // drifted away from 027 and is either leaking or dead.
   const shapes = await db.query(`

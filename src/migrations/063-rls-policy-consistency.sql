@@ -35,6 +35,14 @@
 --      combination a search_path hijack needs. Every other SECURITY DEFINER
 --      function in the schema already pins `search_path=public`.
 --
+--   4) 027 drove its enrolment loop from a hardcoded `tenant_tables[]` array,
+--      so it only ever covered the tables that existed when it was written.
+--      51 of the 130 tables that carry a `company_id` were added by later
+--      migrations and had RLS switched off altogether — no policy to get wrong,
+--      because the row filter was never armed. Part 4 below enrols the table
+--      set discovered from the catalogue rather than a literal list, so tenant
+--      tables added in future are covered automatically.
+--
 -- Idempotent and safe to re-run.
 -- ============================================================
 
@@ -89,26 +97,42 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------
--- 3) Guarantee the canonical isolation policy exists on every tenant table
---    that has RLS enabled, including any table (like `invoices`) whose only
---    policy was just dropped, and re-point 062's table at the 027 shape.
+-- 3+4) Enable RLS and install the canonical isolation policy on EVERY table that
+--    owns a `company_id`, not just the ones 027 happened to list.
+--
+--    027 drove its loop from a hardcoded `tenant_tables[]` array, so the 51
+--    tenant tables added by later migrations were never enrolled and still had
+--    RLS switched off entirely. Discovering the table set from the catalogue
+--    instead of a literal list is what stops that drift from recurring: any
+--    future table with a `company_id` is covered the moment this runs.
+--
+--    Enabling RLS here cannot lock the application out. No table in this schema
+--    grants SELECT/INSERT/UPDATE/DELETE to `anon` or `authenticated` (verified
+--    against the catalogue), the application connects through the service role,
+--    and both the service role and the table owner bypass RLS. For the roles
+--    that RLS does bind, this converts silent full access into tenant-scoped
+--    access — defence in depth behind the existing privilege layer.
 -- ------------------------------------------------------------
 DO $$
 DECLARE
   r RECORD;
 BEGIN
   FOR r IN
-    SELECT c.relname AS tbl, c.oid AS reloid
+    SELECT c.relname AS tbl, c.oid AS reloid, c.relrowsecurity AS rls_on
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public'
       AND c.relkind = 'r'
-      AND c.relrowsecurity
       AND EXISTS (
         SELECT 1 FROM pg_attribute a
         WHERE a.attrelid = c.oid AND a.attname = 'company_id' AND NOT a.attisdropped
       )
   LOOP
+    IF NOT r.rls_on THEN
+      EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', r.tbl);
+      RAISE NOTICE '063: enabled RLS on %', r.tbl;
+    END IF;
+
     -- Drop a stale isolation policy only when its expression is not already the
     -- canonical one, so re-runs do not churn healthy tables.
     IF EXISTS (
