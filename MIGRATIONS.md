@@ -30,6 +30,18 @@
 - `015-branding-and-features.sql` + `015-fix-schema-mismatches.sql`
 - `016-approval-system.sql` + `016-payment-portal-contracts.sql`
 
+## ⚠️ تعارض معروف: `company_telegram_configs` يُعرَّف مرتين (016 مقابل 020)
+- `016-approval-system.sql` (سطر ~99) ينشئ الجدول بـ **`company_id UUID PRIMARY KEY`** (بدون عمود `id`).
+- `020-telegram-system.sql` (سطر 5) ينشئه بـ **`id UUID PRIMARY KEY` + `UNIQUE(company_id)`**.
+- كلاهما `CREATE TABLE IF NOT EXISTS`، والمشغّل يطبّق 016 أولاً ⇒ **شكل 016 هو الساري فعلياً**
+  و`CREATE TABLE` في 020 لا يفعل شيئاً بصمت (فلا يوجد عمود `id` ولا `created_at` في الجدول الفعلي).
+- **هذا غير مكسور حالياً**: كل كود التطبيق (`src/lib/notifications.ts`،
+  `src/app/api/settings/telegram/route.ts`) وكل الـ RPCs اللاحقة (049، 056، 059)
+  تتعامل مع الجدول عبر `company_id` فقط، و049 يضيف `reset_session_data` بـ `ADD COLUMN IF NOT EXISTS`.
+- **عند كتابة أي كود جديد** يمس هذا الجدول: اعتمد شكل 016 (المفتاح `company_id`، لا تفترض وجود `id`).
+- التوحيد الفعلي (إضافة `id`/`created_at` أو إعادة بناء المفتاح) يتطلب ميجريشن مدروساً على بيانات
+  الإنتاج الحقيقية — لا تعِد تسمية أو تعدّل 016/020 نفسيهما (انظر قاعدة الأرقام المجمّدة أعلاه).
+
 ## الملفات المرجعية والأنظمة القديمة
 - `supabase-full-schema.sql` هو **لقطة مرجعية (dump)** للاطلاع فقط — ليس مصدر تغييرات.
 - الملفان القديمان `all-migrations.sql` و `supabase-apply-all-migrations.sql` **حُذفا**
