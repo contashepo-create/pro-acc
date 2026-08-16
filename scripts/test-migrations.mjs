@@ -1,22 +1,37 @@
-import { PGlite } from '@electric-sql/pglite';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createDriver } from './migration-drivers.mjs';
 
 const migrationsDir = path.resolve('src/migrations');
-const db = new PGlite();
+// MIGRATION_DRIVER=postgres runs this exact suite against a REAL PostgreSQL
+// server (genuine pgcrypto, real locking/concurrency) instead of in-process
+// PGlite, so "migrations apply cleanly from scratch" is proven on the engine
+// the product actually deploys to.
+const db = await createDriver();
 
 async function applyMigrations() {
-  // Supabase pre-creates these roles. PGlite does not ship pgcrypto, so the
-  // digest shim only lets the rest of the migration compile in this test; a
-  // deployed PostgreSQL/Supabase instance still executes CREATE EXTENSION.
+  // Supabase pre-creates these roles.
   await db.exec(`
     CREATE ROLE anon;
     CREATE ROLE authenticated;
     CREATE ROLE service_role;
-    CREATE FUNCTION digest(text,text) RETURNS bytea LANGUAGE sql IMMUTABLE
-      AS $$ SELECT decode(md5($1),'hex') $$;
+  `);
+  if (db.hasPgcrypto) {
+    // A real server runs the genuine extension, exactly like Supabase, so the
+    // migrations' own CREATE EXTENSION statements are left intact below.
+    await db.exec('CREATE EXTENSION IF NOT EXISTS pgcrypto;');
+  } else {
+    // PGlite does not ship pgcrypto, so the digest shim only lets the rest of
+    // the migration compile in this test; a deployed PostgreSQL/Supabase
+    // instance still executes CREATE EXTENSION.
+    await db.exec(`
+      CREATE FUNCTION digest(text,text) RETURNS bytea LANGUAGE sql IMMUTABLE
+        AS $$ SELECT decode(md5($1),'hex') $$;
+    `);
+  }
+  await db.exec(`
     CREATE TABLE _migrations(
       id SERIAL PRIMARY KEY, filename TEXT NOT NULL UNIQUE,
       applied_at TIMESTAMPTZ DEFAULT NOW()
@@ -31,8 +46,11 @@ async function applyMigrations() {
     let sql = fs.readFileSync(path.join(migrationsDir, filename), 'utf8')
       .replace(/^\s*BEGIN\s*;\s*$/gim, '')
       .replace(/^\s*COMMIT\s*;\s*$/gim, '')
-      .replace(/^CREATE EXTENSION IF NOT EXISTS pgcrypto;\s*$/gim, '')
       .trim();
+    if (!db.hasPgcrypto) {
+      // Only strip the extension when the engine genuinely cannot provide it.
+      sql = sql.replace(/^CREATE EXTENSION IF NOT EXISTS pgcrypto;\s*$/gim, '').trim();
+    }
     await db.exec('BEGIN');
     try {
       if (sql) await db.exec(sql);
@@ -1284,10 +1302,14 @@ async function smokeAtomicWriters(ids) {
   const activationHash=createHash('sha256').update(activationPlaintext).digest('hex');
   await db.query(`SELECT create_activation_code_batch_atomic($1,'start',1,$2,CURRENT_DATE+7,NULL,NULL,'runtime',$3::jsonb)`,
     [adminId,c2,JSON.stringify([activationHash])]);
-  // PGlite's test-only digest shim uses MD5 because pgcrypto is unavailable;
-  // production PostgreSQL keeps the SHA-256 value inserted above.
-  await db.query(`UPDATE activation_codes SET code_hash=$1 WHERE code_hash=$2`,
-    [createHash('md5').update(activationPlaintext).digest('hex'),activationHash]);
+  // PGlite's test-only digest shim uses MD5 because pgcrypto is unavailable,
+  // so the stored hash must be rewritten to match what the shim will compute.
+  // On a real PostgreSQL/Supabase server pgcrypto genuinely hashes SHA-256, so
+  // the value inserted above is already correct and must be left untouched.
+  if (!db.hasPgcrypto) {
+    await db.query(`UPDATE activation_codes SET code_hash=$1 WHERE code_hash=$2`,
+      [createHash('md5').update(activationPlaintext).digest('hex'),activationHash]);
+  }
   const activationResult=(await db.query(`SELECT redeem_activation_code($1,$2,$3) result`,[c2,u2,activationPlaintext])).rows[0].result;
   assert.equal(activationResult.type,'plan');
   assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND user_id=$2 AND action='redeem_activation_code'`,[c2,u2])).rows[0].count),1);

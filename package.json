@@ -13,6 +13,7 @@
     "test:regression": "jest --runInBand",
     "migrate": "npx tsx src/migrations/run.ts",
     "test:migrations": "node scripts/test-migrations.mjs",
+    "test:migrations:pg": "MIGRATION_DRIVER=postgres node scripts/test-migrations.mjs",
     "seed": "npx tsx scripts/seed.ts"
   },
   "dependencies": {
@@ -45,6 +46,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "embedded-postgres": "^18.4.0-beta.17",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.9",
     "jest": "^30.4.2",
