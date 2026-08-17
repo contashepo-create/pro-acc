@@ -73,6 +73,12 @@ import { PUT as receiptPUT, DELETE as receiptDELETE } from '@/app/api/vouchers/r
 import { POST as disbursementPOST, GET as disbursementGET } from '@/app/api/vouchers/disbursement/route';
 import { PUT as disbursementPUT, DELETE as disbursementDELETE } from '@/app/api/vouchers/disbursement/[id]/route';
 import { POST as bankPOST } from '@/app/api/banks/route';
+import { canBypassTelegramConfirmation } from '@/lib/permissions';
+import { checkApprovalThreshold, sendApprovalRequestNotification } from '@/lib/notifications';
+
+const mockCanBypass = jest.mocked(canBypassTelegramConfirmation);
+const mockCheckApprovalThreshold = jest.mocked(checkApprovalThreshold);
+const mockSendApprovalRequestNotification = jest.mocked(sendApprovalRequestNotification);
 
 const C1 = 'company-1';
 const USER = 'u1';
@@ -107,7 +113,12 @@ function request(body?: any, method = 'POST', url = 'http://localhost/api/test')
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);
 
-beforeEach(() => { mockDb = makeDb(baseDb()); });
+beforeEach(() => {
+  mockDb = makeDb(baseDb());
+  mockCanBypass.mockResolvedValue(true);
+  mockCheckApprovalThreshold.mockResolvedValue({ requiresApproval: false });
+  mockSendApprovalRequestNotification.mockResolvedValue(undefined);
+});
 
 describe('voucher atomic route boundaries', () => {
   test('receipt validates a required client contact before calling PostgreSQL', async () => {
@@ -135,6 +146,39 @@ describe('voucher atomic route boundaries', () => {
       p_amount: 125.5, p_request_approval: false,
     });
     expect(mockDb.calls.filter((call) => call.mut.kind)).toHaveLength(0);
+  });
+
+  test('additional user persists an unposted approval request when approval configuration is unavailable', async () => {
+    const db = baseDb();
+    db.users[0].role = 'accountant';
+    mockDb = makeDb(db);
+    mockDb.rpcResults.set('create_voucher_receipt_atomic', {
+      data: { id: 'vr-pending', status: 'pending', requires_approval: true, approval_id: 'approval-1' },
+      error: null,
+    });
+    mockCanBypass.mockResolvedValueOnce(false);
+    mockCheckApprovalThreshold.mockResolvedValueOnce({
+      requiresApproval: true,
+      configurationUnavailable: true,
+    });
+
+    const response = await receiptPOST(request({
+      date: '2026-08-01', receipt_type: 'client', contact_id: CONTACT,
+      amount: 125.5, bank_safe_id: SAFE, reason: 'تحصيل من عميل',
+    }));
+    const json = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(json.success).toBe(true);
+    expect(json.data).toMatchObject({
+      requiresApproval: true, blocked: true,
+      transactionId: 'vr-pending', approvalId: 'approval-1',
+    });
+    expect(json.data.message).toMatch(/تم حفظ طلب الاعتماد/);
+    expect(rpc('create_voucher_receipt_atomic')!.params).toMatchObject({
+      p_company_id: C1, p_user_id: USER, p_request_approval: true,
+    });
+    expect(mockSendApprovalRequestNotification).not.toHaveBeenCalled();
   });
 
   test('employee advance disbursement requires an employee before its RPC', async () => {
