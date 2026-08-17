@@ -10,7 +10,10 @@
  *    hashes correctly, still passes restore verification, and then destroys the
  *    rows it never contained.
  *  - the Telegram webhook is an unauthenticated internet endpoint: it must
- *    verify the shared secret, refuse to act without it, and never retry-loop.
+ *    verify the shared secret whenever one is configured and reject a
+ *    present-but-mismatched header, while still processing updates from bots
+ *    registered before the secret-token scheme (no header at all) so that
+ *    inline approval buttons never die silently for legacy deployments.
  */
 import { randomBytes } from 'crypto';
 
@@ -199,14 +202,45 @@ describe('backup download completeness', () => {
 });
 
 describe('telegram webhook security', () => {
-  test('a request without the shared secret is rejected and does nothing', async () => {
+  test('an update without the secret header is still processed for legacy webhook registrations', async () => {
+    // A bot registered before the secret-token scheme sends no header; the
+    // button press must work instead of dying silently.
     const response = await telegramWebhookPOST(webhookRequest(
-      { callback_query: { id: 'q1', data: 'approval:approve:a-1', message: { chat: { id: '55' } } } },
+      { callback_query: { id: 'q1', data: 'approval:approve:a-1', message: { chat: { id: '55' }, message_id: 7 } } },
       null,
     ));
-    expect(response.status).toBe(403);
-    expect(mockDb.rpcCalls).toHaveLength(0);
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    const call = mockDb.rpcCalls.find((entry) => entry.name === 'respond_approval_by_telegram_atomic');
+    expect(call).toBeDefined();
+    expect(call!.params).toMatchObject({ p_approval_id: 'a-1', p_action: 'approve', p_chat_id: '55' });
+  });
+
+  test('when no secret is configured the webhook accepts updates and warns instead of killing the bot', async () => {
+    const configured = process.env.TELEGRAM_WEBHOOK_SECRET;
+    delete process.env.TELEGRAM_WEBHOOK_SECRET;
+    try {
+      const response = await telegramWebhookPOST(webhookRequest(
+        { callback_query: { id: 'q1', data: 'approval:approve:a-1', message: { chat: { id: '55' } } } },
+        null,
+      ));
+      expect(response.status).toBe(200);
+      const call = mockDb.rpcCalls.find((entry) => entry.name === 'respond_approval_by_telegram_atomic');
+      expect(call).toBeDefined();
+    } finally {
+      process.env.TELEGRAM_WEBHOOK_SECRET = configured;
+    }
+  });
+
+  test('a bot registered on the legacy callback URL processes approvals through the same handler', async () => {
+    const { POST: legacyCallbackPOST } = await import('@/app/api/telegram/callback/route');
+    const response = await legacyCallbackPOST(webhookRequest(
+      { callback_query: { id: 'q1', data: 'approval:approve:a-1', message: { chat: { id: '55' }, message_id: 7 } } },
+      null,
+    ));
+    expect(response.status).toBe(200);
+    const call = mockDb.rpcCalls.find((entry) => entry.name === 'respond_approval_by_telegram_atomic');
+    expect(call).toBeDefined();
+    expect(call!.params).toMatchObject({ p_approval_id: 'a-1', p_action: 'approve', p_chat_id: '55' });
   });
 
   test('a wrong secret is rejected without touching the database', async () => {

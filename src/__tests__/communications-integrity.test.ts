@@ -50,7 +50,7 @@ describe('atomic communication routes and database guards', () => {
     expect(webhook).not.toContain('requesterId');
   });
 
-  it('keeps sensitive writes behind RPCs and disables the unprotected legacy callback', () => {
+  it('keeps sensitive writes behind RPCs and routes the legacy callback URL through the protected webhook handler', () => {
     const files = [
       'src/app/api/approvals/route.ts', 'src/app/api/messages/route.ts',
       'src/app/api/messages/[id]/route.ts', 'src/app/api/push-notifications/route.ts',
@@ -61,7 +61,12 @@ describe('atomic communication routes and database guards', () => {
       const source = read(file);
       expect(source).not.toMatch(/\.insert\(|\.upsert\(|\.delete\(\)/);
     }
-    expect(read('src/app/api/telegram/callback/route.ts')).toContain('status: 410');
+    // The legacy endpoint must delegate to the same protected handler, not
+    // answer 410: bots still registered against that URL would silently drop
+    // every approval-button press.
+    const legacy = read('src/app/api/telegram/callback/route.ts');
+    expect(legacy).toContain("export { POST } from '../webhook/route'");
+    expect(legacy).not.toContain('status: 410');
   });
 
   it('enforces unique chat binding, row locks, soft archive, and direct-write guards', () => {
