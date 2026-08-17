@@ -4,7 +4,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { hydratePartyNames } from '@/lib/voucher-utils';
 import { receiptVoucherCreateSchema } from '@/lib/validation';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
-import { checkApprovalThreshold, sendApprovalRequestNotification } from '@/lib/notifications';
+import { checkApprovalThreshold, sendApprovalRequestNotification, type ApprovalThresholdResult } from '@/lib/notifications';
 
 const sb = () => getSupabase();
 
@@ -111,7 +111,7 @@ export async function POST(request: NextRequest) {
     const { date, receipt_type, contact_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
 
     const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
-    const threshold = canBypass
+    const threshold: ApprovalThresholdResult = canBypass
       ? { requiresApproval: false }
       : await checkApprovalThreshold(auth.companyId, amount, 'voucher_receipt', auth.userId);
 
@@ -141,15 +141,21 @@ export async function POST(request: NextRequest) {
     if (createErr) throw createErr;
     const voucher = data as Record<string, any>;
     if (voucher.requires_approval) {
-      let notificationSent = true;
-      try {
-        await sendApprovalRequestNotification(
-          auth.companyId, amount, 'voucher_receipt', voucher.id,
-          auth.userId, voucher.approval_id,
-        );
-      } catch (notifyErr) {
-        notificationSent = false;
-        console.error('Receipt approval persisted but Telegram delivery failed:', notifyErr);
+      // If the policy lookup itself was unavailable, do not immediately repeat
+      // the same failing lookup inside Telegram delivery. The pending voucher
+      // is already safely persisted and remains unposted until approval.
+      let notificationSent = false;
+      if (!threshold.configurationUnavailable) {
+        notificationSent = true;
+        try {
+          await sendApprovalRequestNotification(
+            auth.companyId, amount, 'voucher_receipt', voucher.id,
+            auth.userId, voucher.approval_id,
+          );
+        } catch (notifyErr) {
+          notificationSent = false;
+          console.error('Receipt approval persisted but Telegram delivery failed:', notifyErr);
+        }
       }
       return success({
         requiresApproval: true,

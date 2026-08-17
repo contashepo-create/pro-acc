@@ -12,7 +12,7 @@
 
 ## قواعد إضافة ميجريشن جديد
 1. أنشئ ملفاً جديداً داخل `src/migrations/` باسم `NNN-وصف-قصير.sql` حيث `NNN` هو
-   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `064`).
+   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `065`).
    لا تعتمد على الرقم المكتوب هنا — اقرأه من القرص حتى لا يتقادم:
    ```bash
    ls src/migrations/*.sql | sed 's#.*/##' | cut -d- -f1 | sort -n | tail -1
@@ -77,3 +77,11 @@ every materialized view (`mv_trial_balance` was readable cross-tenant — MVs
 bypass RLS), converts `tenant_company_id()` to SECURITY INVOKER, and revokes
 API-role EXECUTE on the out-of-repo `rls_auto_enable()` if present. See
 `docs/SUPABASE-DEPLOYMENT.md` §3.5 for how to read the linter report itself.
+
+### 065-repair-additional-user-voucher-approvals.sql
+Repairs the schema prerequisites used only when an additional user enters the
+voucher approval path: canonical Telegram approval columns, the per-user bypass
+flag, the unified approval-request columns, and a nullable `approver_id` until
+the decision is actually made. This keeps voucher creation compatible with
+historical/partially-applied schemas while approval authorization remains
+validated at decision time.

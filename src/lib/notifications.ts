@@ -6,20 +6,23 @@ interface TelegramConfig {
   company_id: string;
   chat_id: string;
   is_enabled: boolean;
-  notify_invoices: boolean;
-  notify_cash_transactions: boolean;
-  notify_user_logins: boolean;
   approvals_enabled: boolean;
   approval_threshold: number;
 }
 
+/**
+ * Read only the Telegram fields needed by the approval/notification runtime.
+ * Older installations may not have every optional notify_* preference. A
+ * missing unrelated preference must not prevent an additional user from
+ * recording a voucher.
+ */
 export async function getTelegramConfig(
   companyId: string,
 ): Promise<TelegramConfig | null> {
   const { data, error } = await sb()
     .from("company_telegram_configs")
     .select(
-      "company_id,chat_id,is_enabled,notify_invoices,notify_cash_transactions,notify_user_logins,approvals_enabled,approval_threshold",
+      "company_id,chat_id,is_enabled,approvals_enabled,approval_threshold",
     )
     .eq("company_id", companyId)
     .maybeSingle();
@@ -322,16 +325,37 @@ function getTransactionTypeName(type: string): string {
   return names[type] || type;
 }
 
+export interface ApprovalThresholdResult {
+  requiresApproval: boolean;
+  /** The policy could not be read, so the operation was held for approval. */
+  configurationUnavailable?: boolean;
+}
+
 export async function checkApprovalThreshold(
   companyId: string,
   amount: number,
   _transactionType: string,
   _userId: string,
-): Promise<{ requiresApproval: boolean }> {
-  const config = await getTelegramConfig(companyId);
-  if (!config || !config.is_enabled || !config.approvals_enabled) {
-    return { requiresApproval: false };
+): Promise<ApprovalThresholdResult> {
+  // Kept in the signature for audit context/API compatibility.
+  void _transactionType;
+  void _userId;
+  try {
+    const config = await getTelegramConfig(companyId);
+    if (!config || !config.is_enabled || !config.approvals_enabled) {
+      return { requiresApproval: false };
+    }
+    const threshold = Number(config.approval_threshold) || 0;
+    return { requiresApproval: threshold > 0 && amount > threshold };
+  } catch (cause) {
+    // A non-admin voucher creator reaches this lookup while the sole admin can
+    // bypass it. Throwing here therefore produced the misleading production
+    // response "حدث خطأ في الخادم" only for additional users. Fail closed
+    // instead: persist a pending voucher without posting the ledger, then let
+    // an admin approve it from the approvals screen once configuration is
+    // available. This preserves the financial control without losing the
+    // user's transaction.
+    console.error("Approval configuration lookup failed; holding transaction for approval:", cause);
+    return { requiresApproval: true, configurationUnavailable: true };
   }
-  const threshold = config.approval_threshold || 0;
-  return { requiresApproval: threshold > 0 && amount > threshold };
 }

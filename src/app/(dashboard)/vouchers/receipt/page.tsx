@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -35,6 +35,31 @@ export default function ReceiptPage() {
     reason: '',
   });
 
+  const fetchData = useCallback(async (showSkeleton = true) => {
+    try {
+      if (showSkeleton) setLoading(true);
+      setError('');
+      const [recRes, bankRes, cliRes] = await Promise.all([
+        fetch('/api/vouchers/receipt'),
+        fetch('/api/banks'),
+        fetch('/api/clients'),
+      ]);
+      const [recJson, bankJson, cliJson] = await Promise.all([
+        recRes.json(),
+        bankRes.json(),
+        cliRes.json(),
+      ]);
+      if (recJson.success) setReceipts(recJson.data?.receipts || []);
+      else setError(recJson.message || 'فشل');
+      if (bankJson.success) setBanks(bankJson.data?.banks || []);
+      if (cliJson.success) setClients(cliJson.data?.clients || []);
+    } catch {
+      setError('فشل تحميل البيانات');
+    } finally {
+      if (showSkeleton) setLoading(false);
+    }
+  }, []);
+
   const handleSave = async () => {
     if (!form.bank_safe_id) {
       setSaveError('يجب اختيار الخزينة/البنك');
@@ -68,9 +93,15 @@ export default function ReceiptPage() {
           amount: 0,
           reason: '',
         });
-        window.location.reload();
+        if (json.data?.requiresApproval) {
+          toast.warning(json.data.message || 'تم حفظ السند وهو بانتظار الاعتماد');
+        } else {
+          toast.success(editingReceipt ? 'تم تعديل سند القبض' : 'تم تسجيل سند القبض بنجاح');
+        }
+        await fetchData(false);
       } else {
-        setSaveError(json.message || 'فشل الحفظ');
+        const reference = json.errorId ? ` (مرجع الخطأ: ${json.errorId})` : '';
+        setSaveError(`${json.message || 'فشل الحفظ'}${reference}`);
       }
     } catch (e: any) {
       setSaveError('خطأ في الاتصال بالخادم');
@@ -110,31 +141,8 @@ export default function ReceiptPage() {
   };
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const [recRes, bankRes, cliRes] = await Promise.all([
-          fetch('/api/vouchers/receipt'),
-          fetch('/api/banks'),
-          fetch('/api/clients'),
-        ]);
-        const [recJson, bankJson, cliJson] = await Promise.all([
-          recRes.json(),
-          bankRes.json(),
-          cliRes.json(),
-        ]);
-        if (recJson.success) setReceipts(recJson.data?.receipts || []);
-        else setError(recJson.message || 'فشل');
-        if (bankJson.success) setBanks(bankJson.data?.banks || []);
-        if (cliJson.success) setClients(cliJson.data?.clients || []);
-      } catch {
-        setError('فشل تحميل البيانات');
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [fetchData]);
 
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'success' | 'info' | 'accent'; label: string }> = {
