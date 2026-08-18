@@ -23,7 +23,9 @@ import { randomBytes } from 'crypto';
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 process.env.TELEGRAM_WEBHOOK_SECRET = randomBytes(24).toString('hex');
 process.env.TELEGRAM_BOT_TOKEN = randomBytes(16).toString('hex');
+process.env.BACKUP_SECRET = randomBytes(32).toString('hex');
 
+import { createHmac } from 'crypto';
 import { createToken } from '@/lib/auth';
 
 type Row = Record<string, any>;
@@ -93,6 +95,8 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET as backupDownloadGET } from '@/app/api/backup/download/route';
+import { POST as backupUploadPOST } from '@/app/api/backup/upload/route';
+import { POST as backupValidatePOST } from '@/app/api/backup/validate/route';
 import { POST as telegramWebhookPOST } from '@/app/api/telegram/webhook/route';
 
 const C1 = 'company-1';
@@ -198,6 +202,176 @@ describe('backup download completeness', () => {
     expect(typeof log!.mut.payload.hmac_signature).toBe('string');
     expect(log!.mut.payload.hmac_signature.length).toBeGreaterThan(0);
     expect(response.headers.get('Content-Disposition')).toContain('attachment');
+  });
+});
+
+/** A request whose JSON body is read via .text() (as the backup routes do). */
+function backupUploadRequest(payload: unknown, path = '/api/backup/upload') {
+  const token = createToken(ADMIN, 'admin');
+  return {
+    url: `http://localhost${path}`,
+    method: 'POST',
+    headers: {
+      get: (key: string) => (
+        key === 'authorization' ? `Bearer ${token}`
+          : key === 'x-forwarded-for' ? '1.2.3.4'
+            : null
+      ),
+    },
+    cookies: { get: () => undefined },
+    text: async () => JSON.stringify(payload),
+  } as any;
+}
+
+/** Build a backup file exactly like the download endpoint produces it. */
+function makeSignedBackupFile(overrides?: { data?: Record<string, any>; metadata?: Record<string, any> }) {
+  const backupData = {
+    metadata: {
+      company_id: C1,
+      company_name: 'شركة',
+      email: 'co@example.com',
+      phone: '0500',
+      exported_at: new Date().toISOString(),
+      version: '1.0',
+      format: 'json',
+      ...(overrides?.metadata || {}),
+    },
+    data: {
+      accounts: [{ id: '99999999-8888-4777-8666-555555555555', company_id: C1, code: '1110', name: 'نقدية' }],
+      ...(overrides?.data || {}),
+    },
+  };
+  const json = JSON.stringify(backupData, null, 2);
+  const hmac = createHmac('sha256', process.env.BACKUP_SECRET!).update(json).digest('hex');
+  return { backupData, hmac, fileHash: hmac.substring(0, 16) };
+}
+
+/** Seed the provenance log so the file counts as a genuine system export. */
+function seedBackupLog(hmac: string) {
+  mockDb.calls.length = 0;
+  mockDb = makeDb({
+    ...baseDb(),
+    backup_logs: [{ id: 'bl-1', company_id: C1, hmac_signature: hmac }],
+  });
+}
+
+describe('company backup restore safety', () => {
+  test('the dry-run endpoint validates a genuine backup without writing anything', async () => {
+    const file = makeSignedBackupFile();
+    seedBackupLog(file.hmac);
+    const response = await backupValidatePOST(backupUploadRequest(
+      { backupData: file.backupData, fileHash: file.fileHash },
+      '/api/backup/validate',
+    ));
+    expect(response.status).toBe(200);
+    const payload = JSON.parse(await response.text());
+    expect(payload.data.valid).toBe(true);
+    expect(payload.data.summary.totalRows).toBe(1);
+    // Dry-run must NEVER reach the restore RPC.
+    expect(mockDb.rpcCalls.some((call) => call.name === 'restore_company_backup_atomic')).toBe(false);
+  });
+
+  test('the dry-run rejects a tampered file', async () => {
+    const file = makeSignedBackupFile();
+    seedBackupLog(file.hmac);
+    const tampered = JSON.parse(JSON.stringify(file.backupData));
+    tampered.data.accounts[0].name = 'معدل';
+    const response = await backupValidatePOST(backupUploadRequest(
+      { backupData: tampered, fileHash: file.fileHash },
+      '/api/backup/validate',
+    ));
+    expect(response.status).toBe(400);
+  });
+
+  test('the dry-run rejects a file whose HMAC was never logged by the system', async () => {
+    const file = makeSignedBackupFile();
+    // No backup_logs row — a foreign/crafted file can never pass even with a
+    // self-consistent signature.
+    const response = await backupValidatePOST(backupUploadRequest(
+      { backupData: file.backupData, fileHash: file.fileHash },
+      '/api/backup/validate',
+    ));
+    expect(response.status).toBe(400);
+  });
+
+  test('the dry-run rejects a file containing another company\'s rows', async () => {
+    const file = makeSignedBackupFile({
+      data: { employees: [{ id: '88888888-7777-4666-8555-444444444444', company_id: 'company-2', name: 'غريب' }] },
+    });
+    seedBackupLog(file.hmac);
+    const response = await backupValidatePOST(backupUploadRequest(
+      { backupData: file.backupData, fileHash: file.fileHash },
+      '/api/backup/validate',
+    ));
+    // Structural violations are reported in the dry-run report (200), never
+    // applied — the apply endpoint would hard-reject the same file.
+    expect(response.status).toBe(200);
+    const payload = JSON.parse(await response.text());
+    expect(payload.data.valid).toBe(false);
+    expect(payload.data.issues.some((issue: any) => issue.code === 'CROSS_COMPANY')).toBe(true);
+  });
+
+  test('the dry-run rejects a file for another company', async () => {
+    const file = makeSignedBackupFile({ metadata: { company_id: 'company-2' } });
+    seedBackupLog(file.hmac);
+    const response = await backupValidatePOST(backupUploadRequest(
+      { backupData: file.backupData, fileHash: file.fileHash },
+      '/api/backup/validate',
+    ));
+    expect(response.status).toBe(403);
+  });
+
+  test('a genuine backup restores through the atomic RPC scoped to this company', async () => {
+    const file = makeSignedBackupFile();
+    seedBackupLog(file.hmac);
+    const response = await backupUploadPOST(backupUploadRequest({
+      backupData: file.backupData, fileHash: file.fileHash,
+    }));
+    expect(response.status).toBe(200);
+    const restoreCall = mockDb.rpcCalls.find((call) => call.name === 'restore_company_backup_atomic');
+    expect(restoreCall).toBeDefined();
+    expect(restoreCall!.params.p_company_id).toBe(C1);
+    expect(restoreCall!.params.p_hmac_signature).toBe(file.hmac);
+  });
+
+  test('the restore refuses to touch data before the RPC when a foreign row is present', async () => {
+    const file = makeSignedBackupFile({
+      data: { contacts: [{ id: '77777777-6666-4555-8444-333333333333', company_id: 'company-2' }] },
+    });
+    seedBackupLog(file.hmac);
+    const response = await backupUploadPOST(backupUploadRequest({
+      backupData: file.backupData, fileHash: file.fileHash,
+    }));
+    expect(response.status).toBe(400);
+    expect(mockDb.rpcCalls.some((call) => call.name === 'restore_company_backup_atomic')).toBe(false);
+  });
+
+  test('the restore rejects malformed row ids before reaching the database', async () => {
+    const file = makeSignedBackupFile({
+      data: { accounts: [{ id: "x' OR '1'='1", company_id: C1, code: '1110', name: 'حقن' }] },
+    });
+    seedBackupLog(file.hmac);
+    const response = await backupUploadPOST(backupUploadRequest({
+      backupData: file.backupData, fileHash: file.fileHash,
+    }));
+    expect(response.status).toBe(400);
+    expect(mockDb.rpcCalls.some((call) => call.name === 'restore_company_backup_atomic')).toBe(false);
+  });
+
+  test('the restore is admin-only', async () => {
+    const file = makeSignedBackupFile();
+    seedBackupLog(file.hmac);
+    const nonAdmin = createToken('u-other', 'accountant');
+    const request = {
+      url: 'http://localhost/api/backup/upload',
+      method: 'POST',
+      headers: { get: (key: string) => (key === 'authorization' ? `Bearer ${nonAdmin}` : null) },
+      cookies: { get: () => undefined },
+      text: async () => JSON.stringify({ backupData: file.backupData, fileHash: file.fileHash }),
+    } as any;
+    const response = await backupUploadPOST(request);
+    expect(response.status).toBe(401);
+    expect(mockDb.rpcCalls).toHaveLength(0);
   });
 });
 

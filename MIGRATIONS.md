@@ -12,7 +12,7 @@
 
 ## قواعد إضافة ميجريشن جديد
 1. أنشئ ملفاً جديداً داخل `src/migrations/` باسم `NNN-وصف-قصير.sql` حيث `NNN` هو
-   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `065`).
+   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `066`).
    لا تعتمد على الرقم المكتوب هنا — اقرأه من القرص حتى لا يتقادم:
    ```bash
    ls src/migrations/*.sql | sed 's#.*/##' | cut -d- -f1 | sort -n | tail -1
@@ -85,3 +85,12 @@ flag, the unified approval-request columns, and a nullable `approver_id` until
 the decision is actually made. This keeps voucher creation compatible with
 historical/partially-applied schemas while approval authorization remains
 validated at decision time.
+
+### 066-global-backup-journal.sql
+Adds the platform-level `global_backup_journal` table used by the scheduled
+whole-database developer backup (`scripts/global-backup.ts`, driven by
+`.github/workflows/global-backup.yml`): one row per dump with its size, SHA-256,
+storage path and Telegram message id, so the retention policy can delete old
+artifacts from storage AND from the Telegram chat, keeping only the last N
+copies. The table has no `company_id` by design (it journals the whole
+database); tenant routes never touch it.
