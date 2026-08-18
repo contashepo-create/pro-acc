@@ -100,7 +100,12 @@ Telegram message, and the journal row).
    (append `?sslmode=require`), `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID`,
    `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
 2. Apply migration 066 (`npm run migrate` or the migration runner).
-3. The workflow runs automatically every 6 hours; `workflow_dispatch` allows manual runs.
+3. Add `.github/workflows/global-backup.yml` to the repository (the file ships
+   ready in the repo root of the project's working copy; if your git credential
+   cannot push workflow files, paste it via GitHub web: repo → Actions → New
+   workflow → set up a workflow yourself). Scheduled workflows run from the
+   default branch — merge to main first.
+4. The workflow runs automatically every 6 hours; `workflow_dispatch` allows manual runs.
 
 ### Restore a global backup
 ```bash
