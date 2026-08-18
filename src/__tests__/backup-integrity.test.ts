@@ -110,6 +110,7 @@ function authedAs(userId: string, role: string, body?: any, method = 'GET') {
     headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
     json: async () => body,
+    text: async () => JSON.stringify(body),
   } as any;
 }
 const insertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === t);
@@ -174,7 +175,7 @@ describe('backup upload — admin-only + anti-tamper + tenant', () => {
     const db = baseDb();
     const backupData = {
       metadata: { company_id: C1, email: 'co@x.com' },
-      data: { accounts: [{ id: 'a1', company_id: C1, code: '1130', name: 'العملاء' }] },
+      data: { accounts: [{ id: '99999999-8888-4777-8666-555555555555', company_id: C1, code: '1130', name: 'العملاء' }] },
     };
     db.backup_logs.push({ id: 'bl-1', company_id: C1, hmac_signature: sign(backupData) });
     mockDb = makeDb(db);
@@ -199,8 +200,8 @@ describe('backup upload — admin-only + anti-tamper + tenant', () => {
     const backupData = {
       metadata: { company_id: C1, email: 'co@x.com' },
       data: { accounts: [
-        { id: 'a1', company_id: C1, code: '1130' },
-        { id: 'aX', company_id: C2, code: '9999' }, // foreign
+        { id: '99999999-8888-4777-8666-555555555555', company_id: C1, code: '1130' },
+        { id: '88888888-7777-4666-8555-444444444444', company_id: C2, code: '9999' }, // foreign
       ] },
     };
     db.backup_logs.push({ id: 'bl-1', company_id: C1, hmac_signature: sign(backupData) });

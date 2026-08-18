@@ -63,10 +63,17 @@ export default function SetupPage() {
 
     setLoading(true);
     try {
-      const res = await fetch('/api/setup', {
+      const res = await fetch('/api/auth/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ company, admin }),
+        body: JSON.stringify({
+          company: {
+            name: company.name,
+            commercialRegistration: company.commercial_registration,
+            taxNumber: company.tax_number,
+          },
+          user: { name: admin.name, email: admin.email, password: admin.password },
+        }),
       });
 
       const body = await res.json();

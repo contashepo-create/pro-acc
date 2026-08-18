@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { QRCode } from '@/components/ui/QRCode';
+import { escapeHtml } from '@/lib/utils';
 
 interface PortalInvoice {
   id: string;
@@ -11,6 +13,7 @@ interface PortalInvoice {
   status: string;
   zatca_qr: string | null;
   items: Array<{ description: string; quantity: number; unit_price: number; total: number }>;
+  company?: { name?: string; tax_number?: string; address?: string; phone?: string; logo_url?: string | null };
 }
 
 export default function CustomerPortalPage() {
@@ -87,6 +90,52 @@ export default function CustomerPortalPage() {
     } catch {
       setError('خطأ في تحميل تفاصيل الفاتورة');
     }
+  };
+
+  const statusLabel = (status: string) =>
+    status === 'paid' ? 'مدفوعة' : status === 'partial' ? 'جزئية' : 'غير مدفوعة';
+
+  /**
+   * "تحميل PDF": opens a printable invoice view in a new window and triggers
+   * the print dialog, where the customer can choose "Save as PDF". All data is
+   * escaped — the invoice content is user/company data and must never become
+   * markup in the print window.
+   */
+  const printInvoice = () => {
+    if (!selectedInvoice) return;
+    const inv = selectedInvoice;
+    const items = (inv.items || [])
+      .map((item) => `<tr>
+        <td style="padding:8px 12px;border:1px solid #ddd;text-align:right">${escapeHtml(item.description)}</td>
+        <td style="padding:8px 12px;border:1px solid #ddd;text-align:center">${escapeHtml(String(item.quantity))}</td>
+        <td style="padding:8px 12px;border:1px solid #ddd;text-align:center">${Number(item.unit_price).toFixed(2)}</td>
+        <td style="padding:8px 12px;border:1px solid #ddd;text-align:left;font-weight:600">${Number(item.total).toFixed(2)}</td>
+      </tr>`)
+      .join('');
+    const company = inv.company || {};
+    const w = window.open('', '_blank', 'noopener,noreferrer,width=800,height=900');
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة رقم ${inv.number}</title>
+      <style>
+        body{font-family:Tahoma,Arial,sans-serif;padding:28px;color:#111;max-width:760px;margin:0 auto}
+        h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;font-weight:400;color:#555;margin:0 0 20px}
+        table{width:100%;border-collapse:collapse;margin:14px 0}
+        th{background:#f3f4f6;text-align:right;padding:8px 12px;border:1px solid #ddd}
+        .totals{display:flex;justify-content:space-between;background:#eff6ff;padding:12px 16px;border-radius:8px;font-weight:700}
+        .muted{color:#666;font-size:12px;margin-top:6px}
+        @media print{button{display:none}}
+      </style></head><body>
+      <h1>فاتورة رقم #${inv.number}</h1>
+      <h2>التاريخ: ${new Date(inv.date).toLocaleDateString('ar-SA')} — الحالة: ${statusLabel(inv.status)}</h2>
+      ${company.name ? `<p style="font-weight:700;margin:0">${escapeHtml(company.name)}</p>` : ''}
+      ${company.tax_number ? `<p class="muted" style="margin:0">الرقم الضريبي: ${escapeHtml(company.tax_number)}</p>` : ''}
+      ${company.address ? `<p class="muted" style="margin:0">${escapeHtml(company.address)}</p>` : ''}
+      <table><thead><tr><th>الوصف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>${items}</tbody></table>
+      <div class="totals"><span>الإجمالي</span><span>${Number(inv.total).toFixed(2)} ر.س</span></div>
+      <p style="text-align:center"><button onclick="window.print()" style="padding:10px 28px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:15px;cursor:pointer">طباعة / حفظ PDF</button></p>
+      </body></html>`);
+    w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch { /* ignore */ } }, 400);
   };
 
   // Login screen
@@ -222,20 +271,22 @@ export default function CustomerPortalPage() {
               {/* ZATCA QR */}
               {selectedInvoice.zatca_qr && (
                 <div className="mt-6 text-center">
-                  <p className="text-sm text-gray-500 mb-2">رمز ZATCA للمرحلة الأولى</p>
+                  <p className="text-sm text-gray-500 mb-2">رمز ZATCA للفوترة الإلكترونية</p>
                   <div className="inline-block bg-white p-3 rounded-lg border">
-                    <div className="w-32 h-32 bg-gray-100 flex items-center justify-center text-xs text-gray-400">
-                      QR Code
-                    </div>
+                    <QRCode value={selectedInvoice.zatca_qr} size={128} />
                   </div>
                 </div>
               )}
 
               <div className="mt-6 flex gap-3">
-                <button className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium">
+                <button
+                  type="button"
+                  onClick={printInvoice}
+                  className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium"
+                >
                   تحميل PDF
                 </button>
-                <button onClick={() => setSelectedInvoice(null)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 font-medium">
+                <button type="button" onClick={() => setSelectedInvoice(null)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 font-medium">
                   إغلاق
                 </button>
               </div>

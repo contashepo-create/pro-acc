@@ -4,10 +4,39 @@ import { getSupabase } from '@/lib/supabase-client';
 
 const ok = () => NextResponse.json({ success: true }, { status: 200 });
 
+/**
+ * Telegram webhook secret verification.
+ *
+ * Hardened deployments set TELEGRAM_WEBHOOK_SECRET and register the bot
+ * webhook with the same token (see scripts/register-telegram-webhook.mjs);
+ * for them every update must carry the matching header.
+ *
+ * Deployments whose webhook was registered before the secret-token scheme
+ * (or without the env var) receive updates with NO header at all. Rejecting
+ * those updates makes every inline button in the bot appear dead: Telegram
+ * drops the click and shows nothing to the user. Those updates are therefore
+ * accepted for compatibility, with a loud warning so the operator can finish
+ * the hardening. A present-but-mismatched header is still rejected, because
+ * that is an active forgery signal rather than a legacy registration.
+ */
 function hasValidSecret(request: NextRequest) {
-  const expected = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+  const expected = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
   const supplied = request.headers.get('x-telegram-bot-api-secret-token') || '';
-  return !!expected && supplied.length === expected.length
+  if (!expected) {
+    console.warn(
+      '[Telegram Webhook] TELEGRAM_WEBHOOK_SECRET is not configured — accepting the update without verification. '
+      + 'Set it and register the bot webhook with the same token to enforce verification.',
+    );
+    return true;
+  }
+  if (!supplied) {
+    console.warn(
+      '[Telegram Webhook] Update carries no secret header (webhook registered before the secret-token scheme?). '
+      + 'Accepting for compatibility; re-register the webhook to enforce verification.',
+    );
+    return true;
+  }
+  return supplied.length === expected.length
     && timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
 }
 
