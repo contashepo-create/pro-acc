@@ -15,6 +15,14 @@
  *     directly or by delegating to a company-scoped RPC.
  *  4. No route silently truncates a full-table read with a huge .limit().
  *  5. Reports validate dates and pagination instead of coercing junk.
+ *  6. Statement-level isolation: every statement in a tenant route that reads
+ *     a tenant table mentions the company scope. The server Supabase client
+ *     uses the service_role key, which BYPASSES RLS, so a missing explicit
+ *     filter is a live cross-company read — not a defence-in-depth gap.
+ *  7. Every RPC call from a tenant route binds the company from the session
+ *     (p_company_id); the atomic SQL functions re-check it server-side.
+ *  8. Every direct write (update/delete/upsert) in a tenant route mentions
+ *     the company scope in the same statement.
  */
 import fs from 'fs';
 import path from 'path';
@@ -100,10 +108,11 @@ describe('API surface: tenant isolation', () => {
 
   test('company_id is never taken from client-controlled input', () => {
     // `body.company_id` / `searchParams.get('company_id')` is the classic IDOR
-    // primitive: it lets a caller name someone else's tenant.
+    // primitive: it lets a caller name someone else's tenant. Check both the
+    // snake_case and camelCase spellings so a rename cannot slip past.
     const offenders = routes.filter((route) => {
       if (isAdminRoute(route.name)) return false;
-      return /body\.company_id|body\?\.company_id|searchParams\.get\(['"]company_id['"]\)/.test(route.src);
+      return /body\.company_id|body\?\.company_id|searchParams\.get\(\s*['"]company_id['"]\s*\)|body\.companyId|body\?\.companyId|searchParams\.get\(\s*['"]companyId['"]\s*\)|params\.companyId|payload\.companyId|input\.companyId/.test(route.src);
     }).map((route) => route.name);
     expect(offenders).toEqual([]);
   });
@@ -134,6 +143,133 @@ describe('API surface: tenant isolation', () => {
       .map((route) => route.name);
     expect(offenders).toEqual([]);
     expect(tenantRoutes.length).toBeGreaterThan(100);
+  });
+});
+
+describe('API surface: statement-level tenant isolation', () => {
+  /** Platform-admin routes operate across tenants by design. */
+  const isAdminRoute = (name: string) => name.startsWith('admin/');
+  const tenantRoutes = routes.filter((route) => (
+    !isAdminRoute(route.name) && !(route.name in PUBLIC_ROUTES)
+  ));
+
+  /** Tables that genuinely carry no company_id column (platform-wide catalogs). */
+  const GLOBAL_TABLES = new Set([
+    'subscription_plans', 'payment_methods', 'app_settings', 'activation_codes',
+    'login_attempts', 'password_reset_tokens', 'admin_audit_log', 'admin_users',
+    'admin_sessions', 'visitor_logs', 'visitor_stats', 'advertisements',
+    'ad_views', 'ad_clicks', 'ad_notifications', 'support_tickets',
+    'upgrade_requests', 'addon_requests', 'telegram_test_runs',
+    'backup_logs', 'cron_jobs',
+  ]);
+
+  /**
+   * Statement-level exceptions verified safe by the manual isolation audit.
+   * Each entry documents WHY the statement is allowed to skip the company
+   * filter, so the exception cannot quietly rot into a real leak.
+   */
+  const STATEMENT_SCOPE_EXCEPTIONS: Record<string, { tables: string[]; reason: string }> = {
+    'auth/me': {
+      tables: ['users'],
+      reason: 'reads/updates only the session user\'s own row (id from the signed token)',
+    },
+    'company/users': {
+      tables: ['users'],
+      reason: 'insert payload is built in the preceding statement with company_id: auth.companyId',
+    },
+    'company/users/[id]': {
+      tables: ['users'],
+      reason: 'global email-uniqueness probe; emails are globally unique by design (migration 013)',
+    },
+    'complaints': {
+      tables: ['complaints'],
+      reason: 'public tracking lookup by unguessable UUID, rate-limited, returns no company-scoped fields',
+    },
+  };
+
+  test('every statement that reads a tenant table mentions the company scope', () => {
+    const offenders: string[] = [];
+    for (const route of tenantRoutes) {
+      const exceptions = STATEMENT_SCOPE_EXCEPTIONS[route.name];
+      const statements = route.src.split(/;(?=\s*\n)/);
+      for (const stmt of statements) {
+        for (const match of stmt.matchAll(/\.from\(\s*['"]([A-Za-z0-9_]+)['"]\s*\)/g)) {
+          const table = match[1];
+          const prefix = stmt.slice(0, match.index);
+          if (/\.storage\s*$/.test(prefix)) continue; // bucket path is company-foldered at the call site
+          if (GLOBAL_TABLES.has(table)) continue;
+          if (exceptions?.tables.includes(table)) continue;
+          if (/company_id|companyId/.test(stmt)) continue;
+          offenders.push(`${route.name} :: ${table}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+    // The invariant must actually be scanning the tenant surface.
+    expect(tenantRoutes.length).toBeGreaterThan(150);
+  });
+
+  /** Extract the balanced `{ ... }` params object that follows `.rpc('name', `. */
+  function rpcParamsSlice(src: string, startIndex: number): string {
+    const open = src.indexOf('{', startIndex);
+    if (open < 0) return '';
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') {
+        depth--;
+        if (depth === 0) return src.slice(open, i + 1);
+      }
+    }
+    return '';
+  }
+
+  test('every tenant-route RPC call binds the company from the session', () => {
+    const offenders: string[] = [];
+    for (const route of tenantRoutes) {
+      for (const match of route.src.matchAll(/\.rpc\(\s*['"]([A-Za-z0-9_]+)['"]\s*,/g)) {
+        const params = rpcParamsSlice(route.src, match.index + match[0].length);
+        // The value must come from the authenticated context, not merely the
+        // parameter being named p_company_id with an arbitrary value.
+        if (!/p_company_id\s*:\s*(auth\.companyId|ctx\.companyId|companyId|auth\.company_id)\b/.test(params)) {
+          offenders.push(`${route.name} :: ${match[1]}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test('every tenant-route direct write to a tenant table scopes it to the session company', () => {
+    const offenders: string[] = [];
+    for (const route of tenantRoutes) {
+      if (route.name === 'auth/me') continue; // self-update of the session user's own row
+      const statements = route.src.split(/;(?=\s*\n)/);
+      statements.forEach((stmt, index) => {
+        for (const write of stmt.matchAll(/\.(update|delete|upsert)\(/g)) {
+          // Only Supabase table writes (a `.from('table')` chain earlier in the
+          // same statement). Crypto `.update()` calls (HMAC/hash) have none.
+          if (!stmt.slice(0, write.index).includes('.from(')) continue;
+          // Include the preceding statement only to see payload builders
+          // (e.g. settings builds `updates` before the .upsert call).
+          const window = (statements[index - 1] || '') + stmt;
+          // The scoping value must be session-derived, not just a company_id key.
+          const sessionBound =
+            /company_id\s*:\s*(auth\.companyId|ctx\.companyId|companyId|auth\.company_id)\b/.test(window)
+            || /\.eq\(\s*['"]company_id['"]\s*,\s*(auth\.companyId|ctx\.companyId|companyId|auth\.company_id)\b/.test(window)
+            // A write addressed by the session company's own row id (e.g. the
+            // companies profile update) can only touch the caller's tenant.
+            || /\.eq\(\s*['"]id['"]\s*,\s*(auth\.companyId|ctx\.companyId|companyId)\b/.test(window)
+            // A row-attribute filter (e.g. .eq('company_id', exp.company_id)) is
+            // acceptable only when the same route fetches that table with a
+            // session-derived company scope (the row itself is already tenant-bound).
+            || (/\.eq\(\s*['"]company_id['"]\s*,\s*\w+\.company_id\b/.test(window)
+              && /\.eq\(\s*['"]company_id['"]\s*,\s*auth\.companyId/.test(route.src));
+          if (sessionBound) continue;
+          offenders.push(`${route.name} :: ${write[1]}`);
+        }
+      });
+    }
+    expect(offenders).toEqual([]);
   });
 });
 
