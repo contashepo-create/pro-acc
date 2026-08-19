@@ -8,7 +8,7 @@ import { isValidDate } from '@/lib/utils';
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TYPES = new Set(['add', 'issue', 'adjustment', 'transfer', 'return']);
-const COLUMNS = 'id, item_id, warehouse_id, to_warehouse_id, type, quantity, unit_price, total_value, balance_before, balance_after, reference_type, reference_id, project_id, notes, date, created_by, created_at, inventory_items!item_id(name, code), warehouses!warehouse_id(name)';
+const COLUMNS = 'id, number, item_id, warehouse_id, to_warehouse_id, type, quantity, unit_price, total_value, balance_before, balance_after, reference_type, reference_id, project_id, notes, date, created_by, created_at, inventory_items!item_id(name, code), warehouses!warehouse_id(name)';
 
 export async function GET(req: NextRequest) {
   try {

@@ -11,7 +11,7 @@ const updateSchema = z.object({
     .optional(),
   status: z.literal('completed').optional(),
 }).strict();
-const COLUMNS = 'id, bank_safe_id, date, closing_balance, system_balance, difference, status, created_by, completed_by, completed_at, created_at';
+const COLUMNS = 'id, number, bank_safe_id, date, closing_balance, system_balance, difference, status, created_by, completed_by, completed_at, created_at';
 const ITEM_COLUMNS = 'id, reconciliation_id, transaction_type, amount, date, is_cleared';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

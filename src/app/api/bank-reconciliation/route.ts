@@ -20,7 +20,7 @@ const reconciliationSchema = z.object({
     isCleared: z.boolean().optional(),
   }).strict()).max(1000, 'عدد بنود المطابقة يتجاوز الحد المسموح').optional().default([]),
 }).strict();
-const COLUMNS = 'id, bank_safe_id, date, closing_balance, system_balance, difference, status, created_by, completed_by, completed_at, created_at, banks_safes!bank_safe_id(name)';
+const COLUMNS = 'id, number, bank_safe_id, date, closing_balance, system_balance, difference, status, created_by, completed_by, completed_at, created_at, banks_safes!bank_safe_id(name)';
 
 export async function GET(req: NextRequest) {
   try {

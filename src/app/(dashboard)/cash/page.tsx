@@ -15,6 +15,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function CashPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -192,6 +193,7 @@ export default function CashPage() {
   );
   
   const columns = [
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('cash_transaction', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
     { key: 'type', label: 'النوع', sortable: true, render: (row: any) => typeBadge(row.type) },
     { key: 'account_name', label: 'الحساب', sortable: true },

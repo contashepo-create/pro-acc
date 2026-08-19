@@ -16,6 +16,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function InventoryTransactionsPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -137,6 +138,7 @@ export default function InventoryTransactionsPage() {
   };
 
   const columns = [
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('inventory_transaction', row.number) },
     { key: 'item_name', label: 'الصنف', sortable: true },
     { key: 'warehouse_name', label: 'المستودع', sortable: true },
     { key: 'type', label: 'النوع', render: (row: any) => typeBadge(row.type) },

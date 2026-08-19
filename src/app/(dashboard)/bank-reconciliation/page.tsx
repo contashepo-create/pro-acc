@@ -13,6 +13,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 type ReconciliationItem = { transactionType: string; amount: string; date: string; isCleared: boolean };
 const emptyItem = (): ReconciliationItem => ({ transactionType: '', amount: '', date: '', isCleared: false });
@@ -119,6 +120,7 @@ export default function BankReconciliationPage() {
   };
 
   const columns = [
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('bank_reconciliation', row.number) },
     { key: 'bank_safe_name', label: 'البنك/الخزينة', sortable: true },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
     { key: 'closing_balance', label: 'الرصيد الختامي', sortable: true, render: (row: any) => formatCurrency(Number(row.closing_balance) || 0) },
