@@ -1,0 +1,45 @@
+# Global developer backup: full-database pg_dump → storage + Telegram,
+# retaining the last BACKUP_RETAIN copies (default 5).
+#
+# Schedule: every 6 hours. For HOURLY backups change the cron to:
+#   - cron: '0 * * * *'
+name: Global DB backup
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: global-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      BACKUP_RETAIN: '5'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Install PostgreSQL client tools (pg_dump / pg_restore)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Run global backup (dump → storage → Telegram → retain last 5)
+        run: npx tsx scripts/global-backup.ts
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -H 'Content-Type: application/json' \
+            -d "{\"chat_id\": \"$TELEGRAM_ADMIN_CHAT_ID\", \"text\": \"⚠️ فشل إنشاء النسخة الاحتياطية الشاملة لقاعدة البيانات — راجع سجل GitHub Actions\"}"
