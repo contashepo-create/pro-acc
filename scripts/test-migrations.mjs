@@ -1847,6 +1847,78 @@ async function smokeTenantIsolationUnderRls() {
   assert.equal(anonymous.rows.length, 0, 'a request without a company claim must see nothing');
 }
 
+/**
+ * Regression for migration 068: an additional (non-admin) user's voucher above
+ * the approval threshold must be answerable from the Telegram-bound chat even
+ * when company_telegram_configs.configured_by is NULL (legacy rows) or stale.
+ * Previously the decision RPC raised and the admin saw the generic "انتهى
+ * الطلب أو لا تملك صلاحية معالجته" message on every approve press.
+ */
+async function smokeTelegramApprovalActorFallback() {
+  const c = '81000000-0000-4000-8000-000000000001';
+  const admin = '81000000-0000-4000-8000-000000000002';
+  const clerk = '81000000-0000-4000-8000-000000000003';
+  const bank = '81000000-0000-4000-8000-000000000004';
+  const contact = '81000000-0000-4000-8000-000000000005';
+  const cashAccount = '81000000-0000-4000-8000-000000000006';
+  const payableAccount = '81000000-0000-4000-8000-000000000007';
+
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Telegram approval fallback')`, [c]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES
+    ($1,$2,'tg-admin@example.test','x','Admin','admin',TRUE),
+    ($3,$2,'tg-clerk@example.test','x','Clerk','accountant',TRUE)`, [admin, c, clerk]);
+  await db.query(`INSERT INTO contacts(id,company_id,name,type) VALUES($1,$2,'Supplier','supplier')`, [contact, c]);
+  await db.query(`INSERT INTO accounts(id,company_id,code,name,type,is_header) VALUES
+    ($1,$2,'1110','Cash','asset',FALSE),($3,$2,'2110','Payables','liability',FALSE)`, [cashAccount, c, payableAccount]);
+  await db.query(`INSERT INTO banks_safes(id,company_id,name,type,account_id,is_active) VALUES($1,$2,'Bank','bank',$3,TRUE)`, [bank, c, cashAccount]);
+  await db.query(`SELECT create_journal_entry($1,'2026-01-01','opening_balance','Opening',$2,$3::jsonb)`, [
+    c, admin, JSON.stringify([
+      { accountId: cashAccount, debit: 10000, credit: 0 },
+      { accountId: payableAccount, debit: 0, credit: 10000 },
+    ]),
+  ]);
+
+  // Enable approvals bound to chat '900'.
+  await db.query(`SELECT save_telegram_config_atomic($1,$2,$3::jsonb)`, [
+    c, admin, JSON.stringify({
+      chat_id: '900', is_enabled: true, notify_invoices: true,
+      notify_cash_transactions: true, notify_user_logins: true,
+      approvals_enabled: true, approval_threshold: 100,
+    }),
+  ]);
+
+  // Simulate a legacy configuration: configured_by is missing. The
+  // communication write guard requires the audited-function GUC.
+  await db.query(`DO $$
+    BEGIN
+      PERFORM set_config('app.communication_write_company', '${c}', TRUE);
+      UPDATE company_telegram_configs SET configured_by = NULL WHERE company_id = '${c}';
+    END $$;`);
+
+  // The additional user requests a disbursement above the threshold.
+  const pending = await db.query(
+    `SELECT create_voucher_disbursement_atomic($1,'2026-02-01','supplier',$2,NULL,250,$3,'legacy approval',$4::jsonb,TRUE,$5) result`,
+    [c, contact, bank, JSON.stringify([]), clerk],
+  );
+  const approvalId = pending.rows[0].result.approval_id;
+  assert.ok(approvalId);
+
+  // The bound chat answers "approve": the decision must succeed despite
+  // configured_by being NULL.
+  const decision = await db.query(`SELECT respond_approval_by_telegram_atomic($1,'approve','900','') result`, [approvalId]);
+  assert.equal(decision.rows[0].result.status, 'approved');
+  assert.ok(decision.rows[0].result.journal_entry_id);
+  assert.equal((await db.query(`SELECT status FROM voucher_disbursements WHERE id=$1`, [pending.rows[0].result.id])).rows[0].status, 'approved');
+  assert.equal((await db.query(`SELECT status FROM approval_requests WHERE id=$1`, [approvalId])).rows[0].status, 'approved');
+
+  // A chat that is not the bound chat must still be rejected.
+  const pending2 = await db.query(
+    `SELECT create_voucher_disbursement_atomic($1,'2026-02-02','supplier',$2,NULL,120,$3,'wrong chat',$4::jsonb,TRUE,$5) result`,
+    [c, contact, bank, JSON.stringify([]), clerk],
+  );
+  await assert.rejects(() => db.query(`SELECT respond_approval_by_telegram_atomic($1,'approve','901','')`, [pending2.rows[0].result.approval_id]));
+}
+
 try {
   await applyMigrations();
   await smokeInitialSetup();
@@ -1861,6 +1933,7 @@ try {
   await smokeCriticalPath();
   await smokeRealConcurrency();
   await smokeTenantIsolationUnderRls();
+  await smokeTelegramApprovalActorFallback();
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
   await db.close();

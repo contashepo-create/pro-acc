@@ -6,6 +6,8 @@ import { Button } from './Button';
 import { Modal } from './Modal';
 import { Badge } from './Badge';
 import { RecordViewModal } from './RecordViewModal';
+import { toast } from './Toast';
+import { openPrintWindow } from '@/lib/print';
 import { escapeHtml } from '@/lib/utils';
 
 interface ActionButtonsProps {
@@ -27,13 +29,17 @@ function defaultPrint(item: any) {
     .filter(([k, v]) => !skip.has(k) && v != null && typeof v !== 'object')
     .map(([k, v]) => `<tr><th style="text-align:right;padding:6px 12px;border-bottom:1px solid #eee">${escapeHtml(k)}</th><td style="padding:6px 12px;border-bottom:1px solid #eee;direction:ltr;unicode-bidi:isolate">${escapeHtml(String(v))}</td></tr>`)
     .join('');
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=800,height=900');
-  if (!w) return;
-  w.document.write(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>طباعة</title>
+  const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>طباعة</title>
     <style>body{font-family:Tahoma,Arial,sans-serif;padding:24px;color:#111}h1{font-size:18px}table{width:100%;border-collapse:collapse}@media print{button{display:none}}</style>
-    </head><body><h1>عرض السجل</h1><table>${rows}</table><p style="margin-top:24px"><button onclick="window.print()">طباعة</button></p></body></html>`);
-  w.document.close();
-  setTimeout(() => { try { w.focus(); w.print(); } catch { /* ignore */ } }, 250);
+    </head><body><h1>عرض السجل</h1><table>${rows}</table><p style="margin-top:24px"><button onclick="window.print()">طباعة</button></p></body></html>`;
+  const result = openPrintWindow(html);
+  if (!result.ok) {
+    toast.error(
+      result.blocked
+        ? 'منع المتصفح فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.'
+        : 'تعذر فتح نافذة الطباعة.',
+    );
+  }
 }
 
 export function ActionButtons({

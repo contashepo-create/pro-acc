@@ -137,7 +137,22 @@ export async function POST(request: NextRequest) {
             p_transaction_id: legacyEntityId, p_chat_id: chatId,
           });
       if (result.error) {
-        await answerCallback(token, callbackId, 'انتهى الطلب أو لا تملك صلاحية معالجته', true); return ok();
+        // Surface the real reason the decision was rejected instead of the
+        // generic "request ended / no permission" message, which masked
+        // diagnosable states such as a missing active admin or a stale
+        // Telegram configuration. Telegram caps alert text at 200 chars.
+        const detail =
+          typeof (result.error as { message?: unknown } | null)?.message === 'string'
+            ? String((result.error as { message: string }).message).trim().slice(0, 180)
+            : '';
+        console.error('[Telegram Webhook] approval decision failed:', result.error);
+        await answerCallback(
+          token,
+          callbackId,
+          detail || 'انتهى الطلب أو لا تملك صلاحية معالجته',
+          true,
+        );
+        return ok();
       }
       await answerCallback(token, callbackId, approvalAction === 'approve' ? 'تم اعتماد الطلب ✅' : 'تم رفض الطلب ❌');
       await editMessage(token, chatId, messageId, approvalAction === 'approve'

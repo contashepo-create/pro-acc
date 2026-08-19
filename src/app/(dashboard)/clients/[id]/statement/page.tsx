@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { ArrowRight, Printer, FileDown, AlertTriangle, Eye, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { printCurrentPage } from '@/lib/print';
 
 export default function ClientStatementPage() {
   const params = useParams();
@@ -33,7 +34,9 @@ export default function ClientStatementPage() {
     fetchData();
   }, [params.id, page]);
 
-  const handlePrint = () => window.print();
+  const handlePrint = () => {
+    void printCurrentPage();
+  };
 
   const openReport = (entry: any) => {
     setReportEntry(entry);
