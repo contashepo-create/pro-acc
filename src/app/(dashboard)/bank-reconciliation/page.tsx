@@ -147,6 +147,9 @@ export default function BankReconciliationPage() {
       <PageHeader title="تسوية البنوك" description="مطابقة كشوف الحساب البنكي مع القيود المحاسبية"
         actions={<Button onClick={() => { setSaveError(''); setShowModal(true); }} leftIcon={<Plus size={18} />}>تسوية جديدة</Button>} />
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>}
+      <div className="rounded-xl border border-info/30 bg-info/10 p-4 text-sm text-text-secondary">
+        <strong className="text-text-primary">كيف تعمل المطابقة؟</strong> تُحفظ المطابقة أولاً بحالة «معلقة» وتظهر في الجدول أدناه. قارن رصيد كشف البنك برصيد النظام وأضف البنود المعلّقة عند الحاجة. عندما تصبح الفروقات صفراً يظهر زر «إغلاق المطابقة»؛ الإغلاق يثبت المطابقة ولا ينشئ حركة نقدية أو قيداً جديداً تلقائياً.
+      </div>
       {reconciliations.length === 0 ? (
         <EmptyState title="لا توجد تسويات" actionLabel="تسوية جديدة" onAction={() => setShowModal(true)} />
       ) : <DataTable columns={columns} data={reconciliations} searchable searchKeys={['bank_safe_name']} />}

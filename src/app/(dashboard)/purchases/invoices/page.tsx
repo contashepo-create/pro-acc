@@ -17,6 +17,7 @@ import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 interface PurchaseItem {
   description: string;
@@ -91,6 +92,29 @@ export default function PurchaseInvoicesPage() {
       ...form,
       items: form.items.map((it: PurchaseItem, i: number) => (i === index ? { ...it, ...patch } : it)),
     });
+  };
+
+  const applyPurchaseOrder = (orderId: string) => {
+    if (!orderId) {
+      setForm({ ...form, purchase_order_id: '' });
+      return;
+    }
+    const order = orders.find((candidate: any) => candidate.id === orderId);
+    if (!order) {
+      setForm({ ...form, purchase_order_id: orderId });
+      return;
+    }
+    setForm({
+      ...form,
+      purchase_order_id: orderId,
+      supplier_id: order.supplier_id || form.supplier_id,
+      items: (order.items || []).map((item: any) => ({
+        description: item.description || '',
+        quantity: Math.max(0, Number(item.quantity) - Number(item.received_quantity || 0)) || Number(item.quantity) || 1,
+        unit_price: Number(item.unit_price) || 0,
+      })),
+    });
+    setSaveError('');
   };
 
   const validateItems = (): string => {
@@ -184,7 +208,7 @@ export default function PurchaseInvoicesPage() {
   };
 
   const columns = [
-    { key: 'invoice_number', label: 'الرقم', sortable: true },
+    { key: 'invoice_number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('purchase_invoice', row.number || row.invoice_number) },
     { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
     { key: 'supplier_name', label: 'المورد', sortable: true },
     { key: 'total', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total) },
@@ -246,11 +270,17 @@ export default function PurchaseInvoicesPage() {
             )}
             {!isEdit && (
               <>
-                <Select label="أمر الشراء (اختياري)" value={form.purchase_order_id} onChange={(v) => setForm({ ...form, purchase_order_id: v })} options={[{ value: '', label: 'بدون' }, ...orders.map((o: any) => ({ value: o.id, label: `#${o.po_number}` }))]} />
+                <Select label="أمر الشراء (اختياري)" value={form.purchase_order_id} onChange={applyPurchaseOrder} options={[{ value: '', label: 'بدون' }, ...orders.filter((order: any) => order.status === 'received').map((o: any) => ({ value: o.id, label: `${formatDocumentNumber('purchase_order', o.number || o.po_number)} — ${o.supplier_name || ''}` }))]} />
                 <Input label="نسبة الضريبة %" type="number" min={0} max={100} value={form.tax_percent} onChange={(e) => setForm({ ...form, tax_percent: Number(e.target.value) })} />
               </>
             )}
           </div>
+
+          {!isEdit && orders.some((order: any) => order.status !== 'received' && order.status !== 'cancelled') && (
+            <div className="rounded-lg border border-info/30 bg-info/10 p-3 text-xs text-text-secondary">
+              لا تظهر هنا إلا أوامر الشراء المستلمة بالكامل. نفّذ «استلام البضاعة» من شاشة أوامر الشراء أولاً؛ عندها تُحدّث كميات المخزون، ثم اختر الأمر هنا لترحيل فاتورة المورد وإغلاق حساب البضاعة المستلمة غير المفوترة.
+            </div>
+          )}
 
           {!isEdit && (
             <div className="space-y-2">
@@ -308,7 +338,7 @@ export default function PurchaseInvoicesPage() {
       <RecordViewModal
         isOpen={!!viewingInvoice}
         onClose={() => setViewingInvoice(null)}
-        title={viewingInvoice ? `فاتورة مشتريات رقم #${viewingInvoice.invoice_number}` : 'معاينة فاتورة الشراء'}
+        title={viewingInvoice ? `فاتورة مشتريات رقم ${formatDocumentNumber('purchase_invoice', viewingInvoice.number || viewingInvoice.invoice_number)}` : 'معاينة فاتورة الشراء'}
         record={viewingInvoice}
         extra={viewingInvoice?.items?.length ? (
           <div className="border border-border rounded-xl overflow-x-auto mt-3">

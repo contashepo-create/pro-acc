@@ -15,6 +15,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function CreditNotesPage() {
   const [creditNotes, setCreditNotes] = useState<any[]>([]);
@@ -93,7 +94,7 @@ export default function CreditNotesPage() {
   const subtotal = form.items.reduce((s: number, it: any) => s + (it.quantity * it.unit_price || 0), 0);
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('credit_note', row.number) },
     { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date), sortable: true },
     { key: 'contact_name', label: 'العميل', sortable: true },
     { key: 'reason', label: 'السبب' },

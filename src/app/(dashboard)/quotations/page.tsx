@@ -19,6 +19,7 @@ import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency, escapeHtml } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
 import { openPrintWindow } from '@/lib/print';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function QuotationsPage() {
   const [quotations, setQuotations] = useState<any[]>([]);
@@ -245,7 +246,7 @@ export default function QuotationsPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('quotation', row.number) },
     { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true },
     { key: 'total', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total) },

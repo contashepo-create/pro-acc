@@ -264,11 +264,11 @@ export default function CashPage() {
             />
             <Input label="المبلغ" type="number" value={form.amount} disabled={!!editingTransaction} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
             <Select
-              label="الحساب"
+              label="الحساب المقابل (إيراد/مصروف)"
               value={form.account_id}
               disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, account_id: v})}
-              options={[{ value: '', label: 'اختر حساباً' }, ...accounts.map((a: any) => ({ value: a.id, label: `${a.code} - ${a.name}` }))]}
+              options={[{ value: '', label: 'اختر حساب الإيراد أو المصروف' }, ...accounts.filter((account: any) => account.id !== banks.find((bank: any) => bank.id === form.bank_safe_id)?.account_id).map((a: any) => ({ value: a.id, label: `${a.code} - ${a.name}` }))]}
             />
             <Select
               label="الخزينة/البنك"

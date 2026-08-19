@@ -91,6 +91,10 @@ export async function POST(request: NextRequest) {
     const message = String(postError?.message || '');
     if (message.includes('غير موجود') || message.includes('غير صالحة أو بلا حساب')) return error(message, 404);
     if (message.includes('الرصيد غير كاف')) return error(message, 409);
+    if (message.includes('الحساب المقابل غير صالح')) {
+      return error('الحساب المقابل يجب أن يكون حساب إيراد أو مصروف مختلفاً عن حساب البنك/الخزينة المختار.', 422);
+    }
+    if (message.includes('بيانات الحركة النقدية غير صالحة') || message.includes('تصنيف الحركة غير صالح')) return error(message, 422);
     if (postError) throw postError;
     return success(data, 201);
   } catch (err) {
