@@ -173,7 +173,7 @@ function invoiceBody(overrides: any = {}) {
 }
 
 function insertsOf(table: string) {
-  return mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === table);
+  return mockDb.calls.filter((c: any) => c.mut.kind === 'insert' && c.table === table);
 }
 
 // ---------------------------------------------------------------------------

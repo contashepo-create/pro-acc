@@ -42,6 +42,11 @@ describe('next.config.ts environment configuration resilience', () => {
     const csp = headers[0].headers.find((h: any) => h.key === 'Content-Security-Policy');
 
     expect(csp).toBeDefined();
-    expect(csp.value).toContain('https://myproject.supabase.co');
+    // Hardening: connect-src no longer ships the Supabase origin (the
+    // browser never calls it directly — all traffic goes through same-origin
+    // route handlers) and never ships a bare 'https:' wildcard.
+    expect(csp.value).not.toContain('https://myproject.supabase.co');
+    expect(csp.value).toContain("connect-src 'self' https://api.moyasar.com;");
+    expect(csp.value).not.toContain("https://api.moyasar.com https:");
   });
 });

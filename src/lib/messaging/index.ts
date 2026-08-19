@@ -175,6 +175,16 @@ export function renderTemplate(template: string, variables: Record<string, strin
   return result;
 }
 
+/** Escape user-controlled text before it is embedded in email HTML. */
+function escapeHtmlText(value: string): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /**
  * Send a message through any channel
  */
@@ -198,10 +208,14 @@ export async function sendMessage(req: SendMessageRequest): Promise<{
     }
 
     case 'email': {
+      // The body is rendered from templates with user-controlled variables
+      // (customer names, amounts, …). Escape it before it is treated as HTML
+      // by the mailer, and preserve line breaks.
+      const safeBody = escapeHtmlText(body).replace(/\r?\n/g, '<br>');
       const result = await sendEmail({
         to: req.to,
         subject: subject || 'إشعار من نظام المحاسبة',
-        body,
+        body: safeBody,
         attachments: req.attachments,
       });
       return {
@@ -212,7 +226,10 @@ export async function sendMessage(req: SendMessageRequest): Promise<{
     }
 
     case 'telegram': {
-      const result = await sendTelegram(req.to, body);
+      // Templates carry no intentional markup; escape everything so a
+      // malicious customer name cannot inject Telegram HTML tags.
+      const { escapeTelegramHtml: escapeTelegram } = await import('@/lib/telegram');
+      const result = await sendTelegram(req.to, escapeTelegram(body));
       return { sent: result.sent, channel: 'telegram' };
     }
 

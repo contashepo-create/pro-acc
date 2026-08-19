@@ -19,7 +19,7 @@ export async function sendTelegramCode(code: string): Promise<boolean> {
     return false;
   }
 
-  const message = `🔐 رمز التحقق للوحة المطور:\n\n<code>${escapeTelegram(code)}</code>\n\nصلاحية الرمز: 5 دقائق`;
+  const message = `🔐 رمز التحقق للوحة المطور:\n\n<code>${escapeTelegramHtml(code)}</code>\n\nصلاحية الرمز: 5 دقائق`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
@@ -90,8 +90,13 @@ export async function sendTelegramMessage(chatId: string, message: string): Prom
   }
 }
 
-function escapeTelegram(text: string): string {
-  return text
+/**
+ * Escape user-controlled text before embedding it in Telegram HTML
+ * (parse_mode: HTML). Without this, a customer name like `<b>` or an invoice
+ * reason containing `<i>` injects markup into the message the owner reads.
+ */
+export function escapeTelegramHtml(text: string): string {
+  return String(text ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');

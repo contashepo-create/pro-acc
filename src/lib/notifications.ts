@@ -1,5 +1,6 @@
 /** Tenant-scoped Telegram notifications and approval delivery. */
 import { getSupabase } from "@/lib/supabase-client";
+import { escapeTelegramHtml } from "@/lib/telegram";
 
 const sb = () => getSupabase();
 interface TelegramConfig {
@@ -157,7 +158,7 @@ async function sendApprovalNotification(
       body: JSON.stringify({
         chat_id: config.chat_id,
         parse_mode: "HTML",
-        text: `🔔 <b>طلب اعتماد جديد</b>\n\n📋 <b>النوع:</b> ${getTransactionTypeName(transactionType)}\n💰 <b>المبلغ:</b> ${amount.toFixed(2)}\n👤 <b>المستخدم:</b> ${user.name || user.email}\n🆔 <b>العملية:</b> ${transactionId.slice(0, 8)}…`,
+        text: `🔔 <b>طلب اعتماد جديد</b>\n\n📋 <b>النوع:</b> ${getTransactionTypeName(transactionType)}\n💰 <b>المبلغ:</b> ${amount.toFixed(2)}\n👤 <b>المستخدم:</b> ${escapeTelegramHtml(String(user.name || user.email || ''))}\n🆔 <b>العملية:</b> ${transactionId.slice(0, 8)}…`,
         reply_markup: {
           inline_keyboard: [
             [
@@ -293,10 +294,10 @@ export async function sendTransactionNotification(
 ${typeLabel}
 
 💰 <b>المبلغ:</b> ${details.amount.toFixed(2)} ر.س
-📋 <b>البيان:</b> ${details.reason}
-🏦 <b>البنك/الخزينة:</b> ${details.bankName || "غير محدد"}
-📅 <b>التاريخ:</b> ${details.date}
-👤 <b>المستخدم:</b> ${details.userName || "غير معروف"}
+📋 <b>البيان:</b> ${escapeTelegramHtml(details.reason)}
+🏦 <b>البنك/الخزينة:</b> ${escapeTelegramHtml(details.bankName || "غير محدد")}
+📅 <b>التاريخ:</b> ${escapeTelegramHtml(details.date)}
+👤 <b>المستخدم:</b> ${escapeTelegramHtml(details.userName || "غير معروف")}
   `.trim();
 
   const result = await sendTelegramNotification(companyId, message);

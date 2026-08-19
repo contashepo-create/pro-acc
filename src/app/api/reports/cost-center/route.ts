@@ -25,8 +25,8 @@ export async function GET(request: NextRequest) {
         revenue, expenses, profit, profit_margin: revenue ? (profit / revenue) * 100 : 0,
       };
     });
-    const totalRevenue = costCenters.reduce((sum, row) => sum + row.revenue, 0);
-    const totalExpenses = costCenters.reduce((sum, row) => sum + row.expenses, 0);
+    const totalRevenue = costCenters.reduce((sum: number, row: { revenue: number }) => sum + row.revenue, 0);
+    const totalExpenses = costCenters.reduce((sum: number, row: { expenses: number }) => sum + row.expenses, 0);
     const totalProfit = totalRevenue - totalExpenses;
     return success({
       cost_centers: costCenters, available: true,

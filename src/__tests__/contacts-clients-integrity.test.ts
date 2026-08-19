@@ -200,7 +200,7 @@ describe('tenant-scoped reads', () => {
     const response = await clientsGET(authedRequest());
     const clients = (await response.json()).data.clients;
     expect(clients.find((row: Row) => row.id === CLIENT).balance).toBe(125);
-    expect(mockDb.rpcCalls.filter((call) => call.name === 'get_contact_balance_batch')).toHaveLength(1);
+    expect(mockDb.rpcCalls.filter((call: any) => call.name === 'get_contact_balance_batch')).toHaveLength(1);
   });
 
   test('client detail, statement, update and deactivate reject a foreign-tenant id', async () => {
@@ -242,7 +242,7 @@ describe('atomic contact mutations', () => {
         p_opening_amount: 1000, p_opening_type: 'debit',
       },
     }]);
-    expect(mockDb.calls.find((call) => call.mut.kind && call.table === 'contacts')).toBeUndefined();
+    expect(mockDb.calls.find((call: any) => call.mut.kind && call.table === 'contacts')).toBeUndefined();
   });
 
   test('update uses one audited RPC and never creates a duplicate control account', async () => {
@@ -252,7 +252,7 @@ describe('atomic contact mutations', () => {
       name: 'update_contact_atomic',
       params: { p_company_id: C1, p_contact_id: CLIENT, p_patch: { name: 'اسم محدّث' }, p_user_id: 'u1' },
     });
-    expect(mockDb.calls.find((call) => call.table === 'accounts')).toBeUndefined();
+    expect(mockDb.calls.find((call: any) => call.table === 'accounts')).toBeUndefined();
   });
 
   test('DELETE soft-deactivates even when history exists and performs no hard delete', async () => {
@@ -263,7 +263,7 @@ describe('atomic contact mutations', () => {
     const response = await contactDELETE(authedRequest(undefined, 'DELETE'), paramsOf(CLIENT));
     expect(response.status).toBe(200);
     expect(mockDb.rpcCalls[0].name).toBe('deactivate_contact_atomic');
-    expect(mockDb.calls.some((call) => call.mut.kind === 'delete')).toBe(false);
+    expect(mockDb.calls.some((call: any) => call.mut.kind === 'delete')).toBe(false);
   });
 
   test('rejects invalid input before any RPC', async () => {

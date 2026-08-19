@@ -6,6 +6,16 @@ import { createHash } from 'crypto';
 export async function POST(request: NextRequest) {
   try {
     const { token } = await parseBody<{ token?: unknown }>(request);
+
+    // Throttle verification attempts per IP (the token space is 256-bit, but
+    // a loud 429 keeps abuse visible and cheap to stop).
+    const { hitRateLimit } = await import('@/lib/memory-rate-limit');
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const limited = hitRateLimit(`verify-email:${ip}`, { max: 20, windowMs: 10 * 60 * 1000 });
+    if (!limited.allowed) {
+      return error('محاولات كثيرة جداً. حاول لاحقاً', 429);
+    }
+
     if (typeof token !== 'string' || token.length !== 64 || !/^[a-f0-9]+$/i.test(token)) {
       return error('رمز التحقق غير صالح أو منتهي الصلاحية', 400);
     }

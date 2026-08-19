@@ -56,14 +56,20 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const s = sb();
 
-    // Save settings key-value pairs (operational preferences — manager+)
+    // Save settings key-value pairs (operational preferences — manager+).
+    // RESERVED KEYS: financial-compliance values (vat_rate) are managed
+    // exclusively through body.company by an admin, so nobody can drift the
+    // settings-table copy away from the authoritative companies.vat_rate.
+    const RESERVED_SETTING_KEYS = new Set(['vat_rate']);
     if (body.settings && typeof body.settings === 'object') {
-      const updates = Object.entries(body.settings).map(([key, value]) => ({
-        company_id: auth.companyId,
-        key,
-        value: typeof value === 'object' ? JSON.stringify(value) : String(value),
-        updated_at: new Date().toISOString(),
-      }));
+      const updates = Object.entries(body.settings)
+        .filter(([key]) => !RESERVED_SETTING_KEYS.has(key))
+        .map(([key, value]) => ({
+          company_id: auth.companyId,
+          key,
+          value: typeof value === 'object' ? JSON.stringify(value) : String(value),
+          updated_at: new Date().toISOString(),
+        }));
 
       if (updates.length > 0) {
         // A swallowed failure here returned {updated:true} while nothing was
@@ -116,10 +122,15 @@ export async function PUT(request: NextRequest) {
       // (تُخزَّن ككسر لأن فواتير المبيعات تضرب بها: subtotal × vat_rate)
       if (body.company.vat_rate !== undefined) {
         const v = Number(body.company.vat_rate);
-        if (!isFinite(v) || v < 0 || v > 1) {
+        if (!Number.isFinite(v) || v < 0 || v > 1) {
           return error('نسبة الضريبة غير صالحة — يجب أن تكون كسراً بين 0 و 1 (مثلاً 0.15 لـ 15%)', 400);
         }
         companyUpdate.vat_rate = v;
+        // Keep the settings-table copy in sync with the authoritative column.
+        await s.from('settings').upsert({
+          company_id: auth.companyId, key: 'vat_rate', value: String(v),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'company_id,key' });
       }
 
       if (Object.keys(companyUpdate).length > 0) {

@@ -38,13 +38,13 @@ export async function GET(request: NextRequest) {
     const previousTo = previousToDate.toISOString().slice(0, 10);
 
     const [summary, previous, salesResult, purchasesResult] = await Promise.all([
-      loadSummary(auth.companyId, periodFrom, periodTo),
+      loadSummary(auth.companyId, periodFrom!, periodTo!),
       loadSummary(auth.companyId, previousFrom, previousTo),
       s.from('invoices').select('id, number, date, subtotal, vat_amount, total, status', { count: 'exact' })
-        .eq('company_id', auth.companyId).gte('date', periodFrom).lte('date', periodTo)
+        .eq('company_id', auth.companyId).gte('date', periodFrom || '').lte('date', periodTo || '')
         .neq('status', 'cancelled').is('deleted_at', null).order('date').range(0, 499),
       s.from('purchase_invoices').select('id, number, date, subtotal, tax_amount, total, status', { count: 'exact' })
-        .eq('company_id', auth.companyId).gte('date', periodFrom).lte('date', periodTo)
+        .eq('company_id', auth.companyId).gte('date', periodFrom!).lte('date', periodTo!)
         .neq('status', 'cancelled').order('date').range(0, 499),
     ]);
     if (salesResult.error) throw salesResult.error;

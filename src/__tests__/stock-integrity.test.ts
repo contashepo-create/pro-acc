@@ -33,7 +33,12 @@ function makeDb(db: Record<string, Row[]>) {
     };
     return api;
   };
-  const instance: any = { from, calls, rpcCalls };
+  const instance = { from, calls, rpcCalls } as {
+    from: (table: string) => any;
+    calls: typeof calls;
+    rpcCalls: Array<{ name: string; params: any }>;
+    [key: string]: any;
+  };
   instance.rpc = async (name: string, params: any) => {
     rpcCalls.push({ name, params });
     if (name === 'post_inventory_movement_atomic') {

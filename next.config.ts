@@ -1,24 +1,5 @@
 import type { NextConfig } from "next";
 
-function getSupabaseOrigin(): string {
-  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  if (!rawUrl) return "";
-  const cleaned = rawUrl.replace(/^\uFEFF/, "").trim();
-  if (!cleaned) return "";
-
-  try {
-    const formattedUrl =
-      cleaned.startsWith("http://") || cleaned.startsWith("https://")
-        ? cleaned
-        : `https://${cleaned}`;
-    return new URL(formattedUrl).origin;
-  } catch {
-    return "";
-  }
-}
-
-const supabaseOrigin = getSupabaseOrigin();
-
 const isDev = process.env.NODE_ENV !== "production";
 
 const securityHeaders = [
@@ -44,7 +25,10 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data: https:",
-      `connect-src ${["'self'", supabaseOrigin, "https://api.moyasar.com", "https:"].filter(Boolean).join(" ")}`,
+      // The browser never talks to Supabase/Moyasar directly (all API calls
+      // go through same-origin route handlers; the anonymous Supabase client
+      // is unused on the client). No wildcard 'https:' source is shipped.
+      `connect-src ${["'self'", "https://api.moyasar.com"].filter(Boolean).join(" ")}`,
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'",

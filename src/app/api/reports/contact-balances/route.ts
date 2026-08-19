@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
         balance_type: closing >= 0 ? 'مدين' : 'دائن',
       };
     });
-    const totals = contacts.reduce((acc, row) => ({
+    const totals = contacts.reduce((acc: Record<string, number>, row: Record<string, number>) => ({
       opening: acc.opening + row.opening_balance,
       debit: acc.debit + row.period_debit,
       credit: acc.credit + row.period_credit,

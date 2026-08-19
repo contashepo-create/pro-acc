@@ -1,23 +1,18 @@
 import type { Metadata, Viewport } from 'next';
-import { IBM_Plex_Sans_Arabic, Plus_Jakarta_Sans } from 'next/font/google';
+// Self-hosted fonts (no build-time dependency on Google Fonts, better
+// privacy for visitors — no request leaves the origin).
+import '@fontsource/ibm-plex-sans-arabic/400.css';
+import '@fontsource/ibm-plex-sans-arabic/500.css';
+import '@fontsource/ibm-plex-sans-arabic/600.css';
+import '@fontsource/ibm-plex-sans-arabic/700.css';
+import '@fontsource/plus-jakarta-sans/400.css';
+import '@fontsource/plus-jakarta-sans/500.css';
+import '@fontsource/plus-jakarta-sans/600.css';
+import '@fontsource/plus-jakarta-sans/700.css';
 import Providers from '@/components/Providers';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
 import { VisitorTracker } from '@/components/VisitorTracker';
 import './globals.css';
-
-const ibmPlexSansArabic = IBM_Plex_Sans_Arabic({
-  subsets: ['arabic'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-ibm-plex-sans-arabic',
-  display: 'swap',
-});
-
-const plusJakartaSans = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-plus-jakarta-sans',
-  display: 'swap',
-});
 
 export const metadata: Metadata = {
   title: 'برو أكاوننت - نظام محاسبة المقاولات',
@@ -52,7 +47,7 @@ export default function RootLayout({
     <html
       lang="ar"
       dir="rtl"
-      className={`${ibmPlexSansArabic.variable} ${plusJakartaSans.variable} h-full antialiased`}
+      className={`font-ibm-plex-sans-arabic font-plus-jakarta-sans h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">

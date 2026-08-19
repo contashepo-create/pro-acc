@@ -3,6 +3,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { requireAdmin, handleApiError } from '@/lib/api-helpers';
 import { createHmac } from 'crypto';
 import { getBackupSecret } from '@/lib/backup-integrity';
+import { recordsToCsv } from '@/lib/csv-export';
 
 const sb = () => getSupabase();
 
@@ -105,12 +106,14 @@ export async function GET(request: NextRequest) {
         }
       });
     } else if (format === 'csv') {
-      // Simple CSV export of invoices for example
-      const csv = convertToCSV(backupData.data.invoices || []);
+      // Simple CSV export of invoices, hardened against spreadsheet formula
+      // injection (see @/lib/csv-export).
+      const csv = recordsToCsv((backupData.data.invoices || []) as Record<string, unknown>[]);
       return new Response(csv, {
         headers: {
-          'Content-Type': 'text/csv',
+          'Content-Type': 'text/csv; charset=utf-8',
           'Content-Disposition': `attachment; filename="invoices-${auth.companyId}-${Date.now()}.csv"`,
+          'X-Content-Type-Options': 'nosniff',
           'X-Backup-Hash': fileHash,
         }
       });
@@ -127,11 +130,4 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     return handleApiError(err) ;
   }
-}
-
-function convertToCSV(data: any[]): string {
-  if (!data.length) return '';
-  const headers = Object.keys(data[0]).join(',');
-  const rows = data.map(row => Object.values(row).map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
-  return [headers, ...rows].join('\n');
 }
