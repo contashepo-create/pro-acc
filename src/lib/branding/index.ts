@@ -1,3 +1,5 @@
+import { escapeHtml } from '@/lib/utils';
+
 /**
  * White-Label / Multi-Brand System
  * 
@@ -123,12 +125,18 @@ export const INVOICE_TEMPLATES = {
  */
 export function generateInvoiceHeader(branding: CompanyBranding): string {
   const template = INVOICE_TEMPLATES[branding.invoiceTemplate];
+  const safeColor = (value: string, fallback: string) => /^#[0-9a-f]{3,8}$/i.test(value) ? value : fallback;
+  const primaryColor = safeColor(branding.primaryColor, DEFAULT_BRANDING.primaryColor);
+  const secondaryColor = safeColor(branding.secondaryColor, DEFAULT_BRANDING.secondaryColor);
+  const companyName = escapeHtml(branding.companyName);
+  const footerText = escapeHtml(branding.footerText);
+  const logoUrl = branding.logoUrl ? escapeHtml(branding.logoUrl) : null;
   
   let html = `<div class="invoice-header" style="
     ${template.headerStyle === 'gradient'
-      ? `background: linear-gradient(135deg, ${branding.primaryColor}, ${branding.secondaryColor});`
+      ? `background: linear-gradient(135deg, ${primaryColor}, ${secondaryColor});`
       : template.headerStyle === 'solid'
-        ? `background: ${branding.primaryColor};`
+        ? `background: ${primaryColor};`
         : ''
     }
     color: white;
@@ -141,14 +149,14 @@ export function generateInvoiceHeader(branding: CompanyBranding): string {
   ">`;
 
   // Logo
-  if (template.showLogo && branding.logoUrl) {
-    html += `<img src="${branding.logoUrl}" alt="${branding.companyName}" style="max-height: 60px;" />`;
+  if (template.showLogo && logoUrl) {
+    html += `<img src="${logoUrl}" alt="${companyName}" style="max-height: 60px;" />`;
   }
 
   // Company name
   html += `<div>
-    <h1 style="font-size: 24px; margin: 0; ${template.headerStyle === 'none' ? 'color: #1f2937' : ''}">${branding.companyName}</h1>
-    ${branding.footerText ? `<p style="opacity: 0.8; margin: 4px 0 0; font-size: 12px;">${branding.footerText}</p>` : ''}
+    <h1 style="font-size: 24px; margin: 0; ${template.headerStyle === 'none' ? 'color: #1f2937' : ''}">${companyName}</h1>
+    ${footerText ? `<p style="opacity: 0.8; margin: 4px 0 0; font-size: 12px;">${footerText}</p>` : ''}
   </div>`;
 
   html += `</div>`;
