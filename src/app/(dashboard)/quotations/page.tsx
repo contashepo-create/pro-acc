@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, ArrowRightCircle } from 'lucide-react';
+import { Plus, Printer } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -16,8 +16,9 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate, formatCurrency, escapeHtml } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
+import { openPrintWindow } from '@/lib/print';
 
 export default function QuotationsPage() {
   const [quotations, setQuotations] = useState<any[]>([]);
@@ -29,15 +30,7 @@ export default function QuotationsPage() {
   const [viewingQuotation, setViewingQuotation] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [showConvertModal, setShowConvertModal] = useState(false);
-  const [convertingQuotation, setConvertingQuotation] = useState<any>(null);
-  const [convertForm, setConvertForm] = useState<any>({
-    name: '',
-    start_date: new Date().toISOString().split('T')[0],
-    end_date: '',
-  });
-  const [converting, setConverting] = useState(false);
-  const [convertError, setConvertError] = useState('');
+  const [company, setCompany] = useState<any>(null);
   const [form, setForm] = useState<any>({
     date: new Date().toISOString().split('T')[0],
     contact_id: '',
@@ -52,17 +45,20 @@ export default function QuotationsPage() {
     try {
       setLoading(true);
       setError('');
-      const [quotRes, cliRes] = await Promise.all([
+      const [quotRes, cliRes, setRes] = await Promise.all([
         fetch('/api/quotations'),
         fetch('/api/clients'),
+        fetch('/api/settings'),
       ]);
-      const [quotJson, cliJson] = await Promise.all([
+      const [quotJson, cliJson, setJson] = await Promise.all([
         quotRes.json(),
         cliRes.json(),
+        setRes.json(),
       ]);
       if (quotJson.success) setQuotations(quotJson.data?.quotations || []);
       else setError(quotJson.message || 'فشل');
       if (cliJson.success) setClients(cliJson.data?.clients || []);
+      if (setJson.success && setJson.data?.company) setCompany(setJson.data.company);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -70,15 +66,19 @@ export default function QuotationsPage() {
 
   const handleSave = async () => {
     if (!form.contact_id) { setSaveError('يجب اختيار عميل'); return; }
+    const validItems = (form.items || []).filter((it: any) => String(it.description || '').trim() !== '');
+    if (validItems.length === 0) { setSaveError('يجب إضافة بند واحد على الأقل بعرض السعر'); return; }
     setSaving(true); setSaveError('');
     try {
       const url = editingQuotation ? `/api/quotations/${editingQuotation.id}` : '/api/quotations';
       const method = editingQuotation ? 'PUT' : 'POST';
-      
+      const payload = { ...form, items: validItems, tax_rate: form.tax_enabled ? Number(form.tax_rate || 0.15) : 0 };
+      delete (payload as any).tax_enabled;
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (json.success) {
@@ -140,38 +140,96 @@ export default function QuotationsPage() {
     }
   };
 
-  const openConvertModal = (quotation: any) => {
-    setConvertingQuotation(quotation);
-    setConvertForm({
-      name: `مشروع - ${quotation.contact_name || 'عرض ' + quotation.number}`,
-      start_date: new Date().toISOString().split('T')[0],
-      end_date: '',
-    });
-    setConvertError('');
-    setShowConvertModal(true);
-  };
-
-  const handleConvert = async () => {
-    if (!convertingQuotation) return;
-    if (!convertForm.name || !convertForm.start_date) {
-      setConvertError('اسم المشروع وتاريخ البدء مطلوبان');
-      return;
+  // طباعة عرض السعر بشكل احترافي كفاتورة، بعنوان "عرض سعر" في الأعلى.
+  const printQuotation = async (quotation: any) => {
+    let items = quotation.items;
+    if (!items || !items.length) {
+      try {
+        const res = await fetch(`/api/quotations/${quotation.id}`);
+        const json = await res.json();
+        if (json.success) items = json.data.items;
+      } catch { /* ignore */ }
     }
-    setConverting(true); setConvertError('');
-    try {
-      const res = await fetch(`/api/quotations/${convertingQuotation.id}/convert`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(convertForm),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setShowConvertModal(false);
-        setConvertingQuotation(null);
-        toast.success('تم تحويل العرض إلى مشروع بنجاح');
-        fetchData();
-      } else setConvertError(json.message || 'فشل التحويل');
-    } catch (e: any) { setConvertError('خطأ في الاتصال'); } finally { setConverting(false); }
+    const itemsHtml = (items || [])
+      .map((it: any) => `<tr>
+        <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:right">${escapeHtml(String(it.description || ''))}</td>
+        <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.quantity || 0)}</td>
+        <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.unit_price || 0).toFixed(2)}</td>
+        <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:left;white-space:nowrap;font-weight:700">${Number(it.total || 0).toFixed(2)}</td>
+      </tr>`)
+      .join('');
+    const subtotal = Number(quotation.subtotal || 0);
+    const taxAmount = Number(quotation.tax_amount || 0);
+    const total = Number(quotation.total || 0);
+    const companyName = escapeHtml(String(company?.name || ''));
+    const companyTax = escapeHtml(String(company?.tax_number || ''));
+    const companyPhone = escapeHtml(String(company?.phone || ''));
+    const clientName = escapeHtml(String(quotation.contact_name || ''));
+    const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>عرض سعر رقم ${quotation.number}</title>
+      <style>
+        body{font-family:Tahoma,Arial,sans-serif;color:#0f172a;padding:0;margin:0;background:#fff}
+        .page{max-width:820px;margin:0 auto;padding:32px}
+        .doc{border:1px solid #e2e8f0;border-radius:14px;overflow:hidden}
+        .bar{height:6px;background:linear-gradient(90deg,#2563eb,#4f46e5)}
+        .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:22px 26px;border-bottom:1px solid #e2e8f0}
+        .title{font-size:22px;font-weight:800;color:#1d4ed8;margin:0}
+        .subtitle{font-size:12px;color:#64748b;margin:2px 0 0}
+        .num{background:#eff6ff;color:#1d4ed8;font-weight:700;font-size:14px;padding:6px 12px;border-radius:8px;display:inline-block;margin-top:10px}
+        .meta{font-size:12px;color:#334155;line-height:1.9;text-align:left}
+        .section{padding:16px 26px;border-bottom:1px solid #e2e8f0}
+        .section h3{font-size:13px;font-weight:800;color:#334155;margin:0 0 8px}
+        table{width:100%;border-collapse:collapse}
+        th{background:#f1f5f9;color:#334155;font-size:12px;padding:9px 10px;border:1px solid #d8dee9;text-align:right}
+        td{font-size:12px;color:#0f172a}
+        .totals{display:flex;flex-direction:column;gap:6px;align-items:flex-end;padding:6px 0}
+        .totals .row{display:flex;justify-content:space-between;width:300px;font-size:13px;color:#334155}
+        .grand{display:flex;justify-content:space-between;width:300px;font-size:16px;font-weight:800;color:#1d4ed8;border-top:2px solid #0f172a;padding-top:8px;margin-top:4px}
+        .footer{text-align:center;font-size:11px;color:#94a3b8;padding:14px}
+        .muted{color:#64748b;font-size:12px}
+        @media print{button{display:none}.page{padding:0}.doc{border:none;border-radius:0}}
+      </style></head><body>
+      <div class="page"><div class="doc">
+        <div class="bar"></div>
+        <div class="head">
+          <div>
+            <h1 class="title">عرض سعر</h1>
+            <p class="subtitle">Quotation — غير ملزم بالدفع</p>
+            <span class="num">رقم العرض: ${quotation.number}</span>
+          </div>
+          <div class="meta">
+            ${companyName ? `<div style="font-weight:800;font-size:14px;color:#0f172a">${companyName}</div>` : ''}
+            ${companyTax ? `<div>الرقم الضريبي: ${companyTax}</div>` : ''}
+            ${companyPhone ? `<div>الهاتف: ${companyPhone}</div>` : ''}
+          </div>
+        </div>
+        <div class="section">
+          <div style="display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap">
+            <div><h3>العميل</h3><div style="font-weight:700;color:#0f172a">${clientName || '—'}</div></div>
+            <div><h3>التاريخ</h3><div>${formatDate(quotation.date)}</div></div>
+            ${quotation.valid_until ? `<div><h3>صالح حتى</h3><div>${formatDate(quotation.valid_until)}</div></div>` : ''}
+          </div>
+        </div>
+        <div class="section">
+          <table>
+            <thead><tr><th style="width:46%">البيان / الوصف</th><th>الكمية</th><th>سعر الوحدة</th><th style="text-align:left">الإجمالي</th></tr></thead>
+            <tbody>${itemsHtml || '<tr><td colspan="4" style="text-align:center;color:#94a3b8">لا توجد بنود</td></tr>'}</tbody>
+          </table>
+          <div class="totals">
+            <div class="row"><span>المجموع الفرعي (قبل الضريبة)</span><span>${subtotal.toFixed(2)}</span></div>
+            ${taxAmount > 0 ? `<div class="row"><span>ضريبة القيمة المضافة</span><span>${taxAmount.toFixed(2)}</span></div>` : ''}
+            <div class="grand"><span>الإجمالي شامل الضريبة</span><span>${total.toFixed(2)}</span></div>
+          </div>
+        </div>
+        ${quotation.notes ? `<div class="section"><h3>ملاحظات</h3><p class="muted" style="margin:0;line-height:1.8">${escapeHtml(String(quotation.notes))}</p></div>` : ''}
+        ${quotation.terms ? `<div class="section"><h3>الشروط</h3><p class="muted" style="margin:0;line-height:1.8">${escapeHtml(String(quotation.terms))}</p></div>` : ''}
+        <div class="footer">تم إنشاء هذا العرض إلكترونياً بواسطة ${companyName || 'النظام المحاسبي'} — سارٍ حتى ${quotation.valid_until ? formatDate(quotation.valid_until) : 'تاريخ لاحق'}</div>
+      </div></div>
+      <p style="text-align:center"><button onclick="window.print()" style="padding:10px 28px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:15px;cursor:pointer">طباعة / حفظ PDF</button></p>
+      </body></html>`;
+    const result = openPrintWindow(html);
+    if (!result.ok) {
+      toast.error(result.blocked ? 'منع المتصفح فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة ثم أعد المحاولة.' : 'تعذر فتح نافذة الطباعة.');
+    }
   };
 
   const statusBadge = (status: string) => {
@@ -197,16 +255,14 @@ export default function QuotationsPage() {
       label: 'إجراءات',
       render: (row: any) => (
         <div className="flex items-center gap-2">
-          {row.status === 'accepted' && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => openConvertModal(row)}
-              title="تحويل إلى مشروع"
-            >
-              <ArrowRightCircle size={16} className="text-green-600" />
-            </Button>
-          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => printQuotation(row)}
+            title="طباعة عرض السعر"
+          >
+            <Printer size={16} className="text-blue-600" />
+          </Button>
           <ActionButtons
             item={row}
             onView={async () => {
@@ -267,38 +323,19 @@ export default function QuotationsPage() {
         </div>
       </Modal>
 
-      <Modal
-        isOpen={showConvertModal}
-        onClose={() => { setShowConvertModal(false); setConvertingQuotation(null); }}
-        title="تحويل عرض سعر إلى مشروع"
-        size="md"
-        footer={
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => { setShowConvertModal(false); setConvertingQuotation(null); }}>إلغاء</Button>
-            <Button onClick={handleConvert} disabled={converting}>{converting ? 'جاري التحويل...' : 'تحويل إلى مشروع'}</Button>
-          </div>
-        }
-      >
-        <div className="space-y-4">
-          <div className="bg-info/10 border border-info/20 rounded-lg p-3 text-sm text-text-secondary">
-            سيتم إنشاء مشروع جديد ونسخ بنود العرض كبنود كمية (BOQ) وإنشاء فاتورة تلقائية مرتبطة بالمشروع.
-          </div>
-          <div className="grid grid-cols-1 gap-4">
-            <Input label="اسم المشروع" value={convertForm.name} onChange={(e) => setConvertForm({ ...convertForm, name: e.target.value })} />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="تاريخ البدء" type="date" value={convertForm.start_date} onChange={(e) => setConvertForm({ ...convertForm, start_date: e.target.value })} />
-              <Input label="تاريخ الانتهاء (اختياري)" type="date" value={convertForm.end_date} onChange={(e) => setConvertForm({ ...convertForm, end_date: e.target.value })} />
-            </div>
-          </div>
-          {convertError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{convertError}</div>}
-        </div>
-      </Modal>
       {/* Quotation Preview Modal */}
       <RecordViewModal
         isOpen={!!viewingQuotation}
         onClose={() => setViewingQuotation(null)}
         title={viewingQuotation ? `عرض سعر رقم #${viewingQuotation.number}` : 'معاينة عرض السعر'}
         record={viewingQuotation}
+        footer={
+          viewingQuotation ? (
+            <Button variant="secondary" size="sm" leftIcon={<Printer size={16} />} onClick={() => printQuotation(viewingQuotation)}>
+              طباعة / PDF
+            </Button>
+          ) : undefined
+        }
         extra={viewingQuotation?.items?.length ? (
           <div className="border border-border rounded-xl overflow-x-auto mt-3">
             <div className="bg-bg-secondary p-2.5 font-bold text-xs border-b border-border">بنود عرض السعر</div>

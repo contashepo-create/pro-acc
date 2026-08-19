@@ -72,6 +72,8 @@ async function smokeInitialSetup() {
   const created=await db.query(`SELECT setup_initial_company('Bootstrap','','','setup@example.test','Owner','hash',$1::jsonb) result`,[JSON.stringify(accounts)]);
   assert.ok(created.rows[0].result.company.id);
   const setupUser=created.rows[0].result.user.id;
+  // 069: every new company is bootstrapped with an open fiscal year.
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM fiscal_years WHERE company_id=$1`,[created.rows[0].result.company.id])).rows[0].count),1);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM users WHERE email='setup@example.test' AND email_verified=TRUE`)).rows[0].count),1);
   await assert.rejects(()=>db.query(`SELECT setup_initial_company('Another','','','other@example.test','Owner','hash',$1::jsonb)`,[JSON.stringify(accounts)]));
 
@@ -765,9 +767,9 @@ async function smokeRealConcurrency() {
 async function smokeAtomicWriters(ids) {
   const { company: c, user: u, employee: e, bank: b, contact, project, accounts: a } = ids;
 
-  const fiscalYear='60000000-0000-4000-8000-000000000001';
-  await db.query(`INSERT INTO fiscal_years(id,company_id,name,start_date,end_date,status)
-    VALUES($1,$2,'January 2026','2026-01-01','2026-01-31','open')`,[fiscalYear,c]);
+  // The company got its open fiscal year from the 069 bootstrap trigger.
+  const fiscalYear=(await db.query(`SELECT id FROM fiscal_years WHERE company_id=$1 ORDER BY start_date LIMIT 1`,[c])).rows[0].id;
+  assert.ok(fiscalYear);
   await db.query(`SELECT create_journal_entry($1,'2026-01-15','general','January revenue',$2,$3::jsonb)`,[
     c,u,JSON.stringify([{accountId:a['1000'],debit:100,credit:0},{accountId:a['4100'],debit:0,credit:100}]),
   ]);
@@ -776,13 +778,18 @@ async function smokeAtomicWriters(ids) {
     db.query(`SELECT close_fiscal_year_atomic($1,$2,$3) result`,[c,fiscalYear,u]),
   ]);
   assert.equal(closeRace.filter((r)=>r.rows[0].result.already_processed===false).length,1);
-  assert.equal(Number(closeRace.find((r)=>r.rows[0].result.already_processed===false).rows[0].result.netIncome),100);
+  // The bootstrap year spans the whole 2026 calendar, so net income includes
+  // every 2026 posting made by earlier smoke tests (inventory, etc.) — assert
+  // it is a real number rather than a fragile exact value.
+  assert.ok(Number.isFinite(Number(closeRace.find((r)=>r.rows[0].result.already_processed===false).rows[0].result.netIncome)));
   assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='fiscal_year_closing' AND reference_id=$2`,[c,fiscalYear])).rows[0].count),1);
   const reopened=(await db.query(`SELECT reopen_fiscal_year_atomic($1,$2,$3) result`,[c,fiscalYear,u])).rows[0].result;
   assert.equal(reopened.status,'open');
   assert.equal(Number(reopened.reversedClosingEntries),1);
   await db.query(`SELECT close_fiscal_year_atomic($1,$2,$3)`,[c,fiscalYear,u]);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='fiscal_year_closing' AND reference_id=$2`,[c,fiscalYear])).rows[0].count),2);
+  // Leave the year open again so the rest of the smoke tests can post.
+  await db.query(`SELECT reopen_fiscal_year_atomic($1,$2,$3)`,[c,fiscalYear,u]);
 
   const reversible=(await db.query(`SELECT create_journal_entry($1,'2026-02-01','general','Reversible',$2,$3::jsonb) result`,[
     c,u,JSON.stringify([{accountId:a['5100'],debit:20,credit:0},{accountId:a['1000'],debit:0,credit:20}]),
@@ -1919,6 +1926,55 @@ async function smokeTelegramApprovalActorFallback() {
   await assert.rejects(() => db.query(`SELECT respond_approval_by_telegram_atomic($1,'approve','901','')`, [pending2.rows[0].result.approval_id]));
 }
 
+/**
+ * Migration 069 fiscal-year controls: one open year per company, and ledger
+ * postings must fall inside an open fiscal year.
+ */
+async function smokeFiscalYearControls() {
+  const c = '82000000-0000-4000-8000-000000000001';
+  const u = '82000000-0000-4000-8000-000000000002';
+  const cash = '82000000-0000-4000-8000-000000000003';
+  const revenue = '82000000-0000-4000-8000-000000000004';
+  const retained = '82000000-0000-4000-8000-000000000005';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Fiscal control tenant')`, [c]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES($1,$2,'fiscal@example.test','x','Fiscal admin','admin',TRUE)`, [u, c]);
+  await db.query(`INSERT INTO accounts(id,company_id,code,name,type,is_header) VALUES
+    ($1,$2,'1000','Cash','asset',FALSE),
+    ($3,$2,'4100','Revenue','revenue',FALSE),
+    ($4,$2,'3200','Retained earnings','equity',FALSE)`, [cash, c, revenue, retained]);
+
+  // The bootstrap trigger created exactly one open fiscal year.
+  const boot = (await db.query(`SELECT id,status FROM fiscal_years WHERE company_id=$1`, [c])).rows[0];
+  assert.equal(boot.status, 'open');
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM fiscal_years WHERE company_id=$1 AND status='open'`, [c])).rows[0].count), 1);
+
+  // A second open year is rejected, as is any overlapping period.
+  await assert.rejects(() => db.query(`SELECT create_fiscal_year_atomic($1,'Second open','2026-06-01','2026-06-30',$2)`, [c, u]));
+  await assert.rejects(() => db.query(`SELECT create_fiscal_year_atomic($1,'Overlapping','2026-06-01','2027-06-30',$2)`, [c, u]));
+
+  // A posting outside the open year is rejected.
+  await assert.rejects(() => db.query(`SELECT create_journal_entry($1,'2027-03-01','general','outside year',$2,$3::jsonb)`, [
+    c, u, JSON.stringify([{ accountId: cash, debit: 1, credit: 0 }, { accountId: revenue, debit: 0, credit: 1 }]),
+  ]));
+
+  // A posting inside the open year succeeds.
+  await db.query(`SELECT create_journal_entry($1,'2026-05-01','general','inside year',$2,$3::jsonb)`, [
+    c, u, JSON.stringify([{ accountId: cash, debit: 10, credit: 0 }, { accountId: revenue, debit: 0, credit: 10 }]),
+  ]);
+
+  // Closing the year blocks further postings inside it.
+  await db.query(`SELECT close_fiscal_year_atomic($1,$2,$3)`, [c, boot.id, u]);
+  await assert.rejects(() => db.query(`SELECT create_journal_entry($1,'2026-06-01','general','into closed year',$2,$3::jsonb)`, [
+    c, u, JSON.stringify([{ accountId: cash, debit: 1, credit: 0 }, { accountId: revenue, debit: 0, credit: 1 }]),
+  ]));
+
+  // A new open year can now be created...
+  const next = (await db.query(`SELECT create_fiscal_year_atomic($1,'السنة المالية 2027','2027-01-01','2027-12-31',$2) result`, [c, u])).rows[0].result;
+  assert.equal(next.status, 'open');
+  // ...but reopening the closed year while another is open is rejected.
+  await assert.rejects(() => db.query(`SELECT reopen_fiscal_year_atomic($1,$2,$3)`, [c, boot.id, u]));
+}
+
 try {
   await applyMigrations();
   await smokeInitialSetup();
@@ -1934,6 +1990,7 @@ try {
   await smokeRealConcurrency();
   await smokeTenantIsolationUnderRls();
   await smokeTelegramApprovalActorFallback();
+  await smokeFiscalYearControls();
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
   await db.close();

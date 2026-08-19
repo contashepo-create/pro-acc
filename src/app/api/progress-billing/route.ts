@@ -4,7 +4,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { deliveryDate, deliveryUuid, progressBillingCreateSchema } from '@/lib/project-delivery-validation';
 
 const CLAIM_COLUMNS = `id,project_id,claim_number,date,description,gross_amount,retention_rate,retention_amount,
-  net_amount,tax_rate,tax_amount,total_amount,status,is_final,created_at,updated_at,projects(name)`;
+  net_amount,tax_rate,tax_amount,status,is_final,created_at,updated_at,projects(name)`;
 
 export async function GET(req: NextRequest) {
   try {
@@ -25,7 +25,12 @@ export async function GET(req: NextRequest) {
     const offset = (page - 1) * pageSize;
     const { data, error: queryError, count } = await query.order('date', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const claims = (data || []).map((row: any) => ({ ...row, project_name: row.projects?.name || null, projects: undefined }));
+    const claims = (data || []).map((row: any) => ({
+      ...row,
+      project_name: row.projects?.name || null,
+      projects: undefined,
+      total_amount: Number(row.net_amount || 0) + Number(row.tax_amount || 0),
+    }));
     return success({ claims, progressBilling: claims, total: count || 0, page, pageSize });
   } catch (cause) {
     return handleApiError(cause);

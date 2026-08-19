@@ -215,12 +215,14 @@ export function RecordViewModal({
   title,
   record,
   extra,
+  footer,
 }: {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
   record: Record<string, any> | null;
   extra?: ReactNode;
+  footer?: ReactNode;
 }) {
   if (!record) return null;
   const entries = Object.entries(record).filter(([k, v]) => {
@@ -243,7 +245,9 @@ export function RecordViewModal({
         </div>
       }
       size="lg"
-      footer={<Button variant="ghost" onClick={onClose}>إغلاق المعاينة</Button>}
+      footer={
+        footer ?? <Button variant="ghost" onClick={onClose}>إغلاق المعاينة</Button>
+      }
     >
       <div className="space-y-4">
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3">
