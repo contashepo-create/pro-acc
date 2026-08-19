@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  Plus, Lock, FileText, CheckCircle, Trash2, Edit3, Loader2, DollarSign, 
-  Layers, Calculator, ShieldCheck, Send, Key, ChevronDown, Landmark, ChevronLeft, ChevronRight
+  Plus, Lock, FileText, Trash2, Loader2, Layers, ShieldCheck,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -12,21 +11,18 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
-import { Checkbox } from '@/components/ui/Checkbox';
 import { Badge } from '@/components/ui/Badge';
-import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
-import { useSidebarStore } from '@/store/sidebar-store';
-import { useAuthStore } from '@/store/auth-store';
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
+  const [quotations, setQuotations] = useState<any[]>([]); // عروض الأسعار المقبولة للاستيراد
   const [banks, setBanks] = useState<any[]>([]); // جلب البنوك لغايات سند القبض الفوري
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -50,7 +46,6 @@ export default function ProjectsPage() {
     contract_value: 0,
     description: '',
     location: '',
-    auto_invoice: false, // التوليد التلقائي للفاتورة
   });
 
   // شاشات إغلاق المشروع
@@ -81,20 +76,23 @@ export default function ProjectsPage() {
     try {
       setLoading(true);
       setError('');
-      const [projRes, cliRes, bankRes] = await Promise.all([
+      const [projRes, cliRes, bankRes, quotRes] = await Promise.all([
         fetch('/api/projects'),
         fetch('/api/clients'),
         fetch('/api/banks'), // جلب البنوك والخزائن للتحصيل الفوري
+        fetch('/api/quotations?status=accepted'),
       ]);
-      const [projJson, cliJson, bankJson] = await Promise.all([
+      const [projJson, cliJson, bankJson, quotJson] = await Promise.all([
         projRes.json(),
         cliRes.json(),
         bankRes.json(),
+        quotRes.json(),
       ]);
       if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || []);
       else setError(projJson.message || 'فشل تحميل المشاريع');
       if (cliJson.success) setClients(cliJson.data?.clients || []);
       if (bankJson.success) setBanks(bankJson.data?.banks || []);
+      if (quotJson.success) setQuotations(quotJson.data?.quotations || []);
     } catch (err) {
       setError('فشل تحميل البيانات - خطأ في الاتصال بالخادم');
       console.error('Failed to fetch project data:', err);
@@ -121,7 +119,6 @@ export default function ProjectsPage() {
       contract_value: 0,
       description: '',
       location: '',
-      auto_invoice: false,
     });
     setSaveError('');
     setShowModal(true);
@@ -130,6 +127,45 @@ export default function ProjectsPage() {
   // إضافة سطر بند جديد لجدول كميات المشروع
   const addBoqRow = () => {
     setBoqItems([...boqItems, { description: '', unit: 'متر', quantity: 1, unit_price: 0, total: 0 }]);
+  };
+
+  // استيراد بنود عرض سعر مقبول كبنود كميات للمشروع — تُستورد قيمة البند
+  // الصافية (بدون ضريبة القيمة المضافة التي تظهر فقط في إجماليات العرض).
+  const importFromQuotation = async (quotationId: string) => {
+    if (!quotationId) return;
+    try {
+      const res = await fetch(`/api/quotations/${quotationId}`);
+      const json = await res.json();
+      if (!json.success) {
+        toast.error(json.message || 'تعذر استيراد عرض السعر');
+        return;
+      }
+      const d = json.data;
+      const items = (d.items || []).map((it: any) => ({
+        description: String(it.description || '').trim(),
+        unit: String(it.unit || 'وحدة').trim(),
+        quantity: Number(it.quantity) || 1,
+        unit_price: Number(it.unit_price) || 0,
+        total: (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
+      }));
+      if (items.length === 0) {
+        toast.error('عرض السعر المحدد لا يحتوي على بنود');
+        return;
+      }
+      const sum = items.reduce((s: number, it: any) => s + (it.total || 0), 0);
+      setBoqItems(items);
+      setForm((prev: any) => ({
+        ...prev,
+        // إجمالي العقد = صافي البنود بدون ضريبة
+        contract_value: sum,
+        // ربط العميل تلقائياً من العرض إن لم يكن محدداً
+        client_id: prev.client_id || d.contact_id || '',
+      }));
+      toast.success(`تم استيراد ${items.length} بند من عرض السعر بقيمة صافية ${sum.toLocaleString('en')}`);
+    } catch (e) {
+      console.error('Failed to import quotation:', e);
+      toast.error('تعذر استيراد عرض السعر');
+    }
   };
 
   // حذف سطر بند من جدول الكميات
@@ -190,7 +226,7 @@ export default function ProjectsPage() {
       });
       const json = await res.json();
       if (json.success) {
-        toast.success(editingProject ? 'تم تعديل المشروع بنجاح' : 'تم إنشاء المشروع وبنود الكميات وتوليد الفاتورة بنجاح! 🎉');
+        toast.success(editingProject ? 'تم تعديل المشروع بنجاح' : 'تم إنشاء المشروع وبنود الكميات بنجاح');
         setShowModal(false);
         setEditingProject(null);
         setBoqItems([{ description: '', unit: 'متر', quantity: 1, unit_price: 0, total: 0 }]);
@@ -202,7 +238,6 @@ export default function ProjectsPage() {
           contract_value: 0,
           description: '',
           location: '',
-          auto_invoice: false,
         });
         fetchData();
       } else {
@@ -230,7 +265,6 @@ export default function ProjectsPage() {
           contract_value: d.contract_value || 0,
           description: d.description || '',
           location: d.location || '',
-          auto_invoice: false,
         });
         setBoqItems((d.boq_items || []).length
           ? d.boq_items
@@ -464,97 +498,154 @@ export default function ProjectsPage() {
       <Modal
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditingProject(null); }}
-        title={editingProject ? `تعديل مشروع: ${editingProject.name}` : '🏗️ إضافة مشروع جديد مدمج بجدول كميات (BOQ)'}
+        title={editingProject ? `تعديل مشروع: ${editingProject.name}` : 'إضافة مشروع جديد'}
         size="full"
         footer={
           <div className="flex gap-2 w-full justify-between items-center">
-            <div className="text-xs text-text-muted font-bold">
-              إجمالي قيمة العقد: <span className="text-accent text-sm">{formatCurrency(form.contract_value)}</span>
+            <div className="text-sm text-text-muted">
+              إجمالي قيمة العقد (بدون ضريبة):
+              <span className="font-mono font-bold text-accent text-base mr-2">{formatCurrency(form.contract_value)}</span>
             </div>
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => { setShowModal(false); setEditingProject(null); }}>إلغاء</Button>
-              <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ والترحيل...' : 'حفظ المشروع والبنود'}</Button>
+              <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ المشروع'}</Button>
             </div>
           </div>
         }
       >
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input label="اسم المشروع المحاسبي *" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} className="col-span-2" placeholder="مثال: مشروع مجمع الفلل السكني" />
-            <Select
-              label="العميل المفوتر *"
-              value={form.client_id}
-              onChange={(v) => setForm({...form, client_id: v})}
-              options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]}
-              className="col-span-2"
+        <div className="space-y-6">
+          {/* البيانات الأساسية */}
+          <section className="rounded-2xl border border-border bg-bg-card p-5">
+            <h4 className="text-sm font-bold text-text-primary mb-4 flex items-center gap-2">
+              <span className="w-1.5 h-5 rounded-full bg-accent" /> البيانات الأساسية للمشروع
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Input
+                label="اسم المشروع *"
+                value={form.name}
+                onChange={(e) => setForm({...form, name: e.target.value})}
+                className="md:col-span-2"
+                placeholder="مثال: مشروع مجمع الفلل السكني"
+              />
+              <Select
+                label="العميل (مرجعي فقط — لا يؤثر على رصيده)"
+                value={form.client_id}
+                onChange={(v) => setForm({...form, client_id: v})}
+                options={[{ value: '', label: 'اختر عميلاً (اختياري)' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]}
+                className="md:col-span-2"
+              />
+              <Input label="تاريخ البدء *" type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} />
+              <Input label="تاريخ الانتهاء المتوقع" type="date" value={form.end_date} onChange={(e) => setForm({...form, end_date: e.target.value})} />
+              <Input label="الموقع" value={form.location} onChange={(e) => setForm({...form, location: e.target.value})} placeholder="مثال: الرياض - الياسمين" />
+              <div className="rounded-xl bg-bg-secondary px-4 py-2.5 flex items-center justify-between">
+                <span className="text-sm text-text-muted">قيمة العقد (تُحتسب تلقائياً من البنود)</span>
+                <span className="font-mono font-bold text-accent text-lg">{formatCurrency(form.contract_value)}</span>
+              </div>
+            </div>
+            <Textarea
+              label="وصف المشروع"
+              value={form.description}
+              onChange={(e) => setForm({...form, description: e.target.value})}
+              placeholder="وصف مختصر لنطاق الأعمال والملاحظات..."
+              className="mt-4"
             />
-            <Input label="تاريخ البدء" type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} />
-            <Input label="تاريخ الانتهاء المتوقع" type="date" value={form.end_date} onChange={(e) => setForm({...form, end_date: e.target.value})} />
-            <Input label="الموقع / اللوكيشن" value={form.location} onChange={(e) => setForm({...form, location: e.target.value})} placeholder="مثال: الرياض - الياسمين" />
-            <Input label="قيمة العقد الكلية" type="number" disabled value={form.contract_value} className="bg-bg-secondary font-mono font-bold text-accent" />
-            <Checkbox label="توليد فاتورة مبيعات تلقائية مطابقة لكامل البنود مسبقاً 🧾" checked={form.auto_invoice} onChange={(checked: boolean) => setForm({...form, auto_invoice: checked})} className="col-span-2 text-accent font-semibold" />
-          </div>
+          </section>
 
-          {/* جدول الكميات التفاعلي المدمج (BOQ items nested inside project form) */}
-          <div className="pt-4 border-t border-border">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-bold text-text-primary flex items-center gap-1.5">
-                <Layers size={16} className="text-accent" />
-                تأسيس بنود جدول الكميات والمواصفات (BOQ)
+          {/* استيراد من عرض سعر + جدول الكميات */}
+          <section className="rounded-2xl border border-border bg-bg-card p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h4 className="text-sm font-bold text-text-primary flex items-center gap-2">
+                <span className="w-1.5 h-5 rounded-full bg-accent" /> بنود جدول الكميات (BOQ)
               </h4>
-              <Button type="button" size="sm" variant="outline" onClick={addBoqRow}>
-                <Plus size={14} className="ml-1" /> إضافة بند كميات
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {!editingProject && quotations.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Select
+                      label=""
+                      value=""
+                      onChange={(v) => { if (v) importFromQuotation(v); }}
+                      options={[
+                        { value: '', label: 'استيراد من عرض سعر مقبول...' },
+                        ...quotations.map((q: any) => ({ value: q.id, label: `عرض #${q.number} — ${q.contact_name || ''}` })),
+                      ]}
+                      className="w-64"
+                    />
+                  </div>
+                )}
+                <Button type="button" size="sm" variant="outline" onClick={addBoqRow}>
+                  <Plus size={14} className="ml-1" /> إضافة بند
+                </Button>
+              </div>
             </div>
 
-            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+            {/* رأس الجدول */}
+            <div className="hidden md:grid grid-cols-[2.5rem_1fr_6rem_7rem_9rem_9rem_2.5rem] gap-2 px-3 pb-2 text-[11px] font-bold text-text-muted">
+              <span className="text-center">#</span>
+              <span>البيان / وصف الأعمال</span>
+              <span className="text-center">الوحدة</span>
+              <span className="text-center">الكمية</span>
+              <span className="text-center">سعر الوحدة</span>
+              <span className="text-left">الإجمالي</span>
+              <span></span>
+            </div>
+
+            <div className="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
               {boqItems.map((item, idx) => (
-                <div key={idx} className="flex items-center gap-2 p-2 rounded-xl bg-bg-secondary border border-border">
-                  <span className="text-xs font-mono font-bold text-text-muted">{idx + 1}</span>
-                  <input 
-                    type="text" 
-                    placeholder="البيان (وصف أعمال البند)" 
-                    value={item.description} 
+                <div
+                  key={idx}
+                  className="grid grid-cols-1 md:grid-cols-[2.5rem_1fr_6rem_7rem_9rem_9rem_2.5rem] gap-2 items-center p-2 rounded-xl bg-bg-secondary border border-border"
+                >
+                  <span className="hidden md:block text-center text-xs font-mono font-bold text-text-muted">{idx + 1}</span>
+                  <div className="md:col-start-1 md:hidden text-xs font-mono text-text-muted">بند {idx + 1}</div>
+                  <input
+                    type="text"
+                    placeholder="وصف أعمال البند (مثال: أعمال الحفر والردم)"
+                    value={item.description}
                     onChange={(e) => handleBoqItemChange(idx, 'description', e.target.value)}
-                    className="input-base !py-1 text-xs flex-1"
+                    className="input-base !py-2 text-sm"
                   />
-                  <input 
-                    type="text" 
-                    placeholder="الوحدة" 
-                    value={item.unit} 
-                    onChange={(e) => handleBoqItemChange(idx, 'unit', e.target.value)}
-                    className="input-base !py-1 text-xs w-20 text-center"
-                  />
-                  <input 
-                    type="number" 
-                    placeholder="الكمية" 
-                    value={item.quantity} 
-                    onChange={(e) => handleBoqItemChange(idx, 'quantity', e.target.value)}
-                    className="input-base !py-1 text-xs w-20 text-center font-mono"
-                  />
-                  <input 
-                    type="number" 
-                    placeholder="سعر الوحدة" 
-                    value={item.unit_price} 
-                    onChange={(e) => handleBoqItemChange(idx, 'unit_price', e.target.value)}
-                    className="input-base !py-1 text-xs w-24 text-center font-mono"
-                  />
-                  <div className="w-24 text-left font-mono font-bold text-xs text-slate-800 pr-2">
-                    {formatCurrency(item.total)}
+                  <div className="grid grid-cols-4 md:contents gap-2">
+                    <input
+                      type="text"
+                      placeholder="الوحدة"
+                      value={item.unit}
+                      onChange={(e) => handleBoqItemChange(idx, 'unit', e.target.value)}
+                      className="input-base !py-2 text-sm text-center"
+                    />
+                    <input
+                      type="number"
+                      placeholder="الكمية"
+                      value={item.quantity}
+                      onChange={(e) => handleBoqItemChange(idx, 'quantity', e.target.value)}
+                      className="input-base !py-2 text-sm text-center font-mono"
+                    />
+                    <input
+                      type="number"
+                      placeholder="سعر الوحدة"
+                      value={item.unit_price}
+                      onChange={(e) => handleBoqItemChange(idx, 'unit_price', e.target.value)}
+                      className="input-base !py-2 text-sm text-center font-mono"
+                    />
+                    <div className="flex items-center justify-end md:justify-start font-mono font-bold text-sm text-text-primary">
+                      {formatCurrency(item.total)}
+                    </div>
                   </div>
-                  {boqItems.length > 1 && (
-                    <button 
-                      onClick={() => removeBoqRow(idx)}
-                      className="p-1 rounded text-red-500 hover:bg-red-50"
-                      type="button"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  )}
+                  <div className="flex items-center justify-end">
+                    {boqItems.length > 1 && (
+                      <button
+                        onClick={() => removeBoqRow(idx)}
+                        className="p-2 rounded-lg text-danger hover:bg-danger/10"
+                        type="button"
+                        aria-label="حذف البند"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
-          </div>
+          </section>
 
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

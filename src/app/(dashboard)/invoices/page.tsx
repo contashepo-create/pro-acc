@@ -72,7 +72,7 @@ export default function InvoicesPage() {
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
       if (cliJson.success) setClients(cliJson.data?.clients || []);
-      if (projJson.success) setProjects(projJson.data?.projects || []);
+      if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -182,6 +182,43 @@ export default function InvoicesPage() {
     } catch { toast.error('خطأ في الاتصال بالخادم'); }
   };
 
+  // اختيار مشروع: تستمد الفاتورة بنودها من جدول كميات المشروع (صافي بدون
+  // ضريبة) مع إضافة الضريبة فوقها، وتُرتبط بالعميل تلقائياً، مع بقاء كل
+  // البنود قابلة للتعديل.
+  const handleProjectChange = async (projectId: string) => {
+    setForm((prev: any) => ({ ...prev, project_id: projectId }));
+    if (!projectId) return;
+    try {
+      const res = await fetch(`/api/projects/${projectId}`);
+      const json = await res.json();
+      if (!json.success) {
+        toast.error(json.message || 'تعذر تحميل بيانات المشروع');
+        return;
+      }
+      const d = json.data;
+      const boq = (d.boq_items || []).map((it: any) => ({
+        description: String(it.description || '').trim(),
+        quantity: Number(it.quantity) || 1,
+        unitPrice: Number(it.unit_price) || 0,
+        discount: 0,
+        total: (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
+        item_type: 'service',
+        unit: String(it.unit || 'وحدة').trim(),
+        save_to_inventory: false,
+      }));
+      setForm((prev: any) => ({
+        ...prev,
+        project_id: projectId,
+        client_id: prev.client_id || d.client_id || '',
+        items: boq.length ? boq : [{ ...emptyItem }],
+      }));
+      if (boq.length) toast.success(`تم استيراد ${boq.length} بند من المشروع — أضف الضريبة حسب الحاجة`);
+    } catch (e) {
+      console.error('Failed to load project items:', e);
+      toast.error('تعذر تحميل بنود المشروع');
+    }
+  };
+
   const addItem = () => setForm({ ...form, items: [...form.items, { ...emptyItem }] });
 
   const removeItem = (index: number) => {
@@ -282,9 +319,9 @@ export default function InvoicesPage() {
                     options={[{ value: '', label: '— اختر العميل —' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]}
                   />
                   <Select
-                    label="المشروع (اختياري)"
+                    label="المشروع (اختياري — تستمد البنود منه)"
                     value={form.project_id}
-                    onChange={(v) => setForm({ ...form, project_id: v })}
+                    onChange={handleProjectChange}
                     options={[{ value: '', label: '— بدون مشروع —' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]}
                   />
                 </div>

@@ -49,11 +49,12 @@ export async function PUT(
     const s = sb();
     const body = await parseBody(req);
 
-    const allowed=new Set(['date','contact_id','valid_until','status','notes','terms','items','tax_rate','discount_amount']);
+    const allowed=new Set(['date','contact_id','valid_until','status','notes','terms','items','tax_rate','discount_amount','tax_enabled']);
     if (Object.keys(body).some((key)=>!allowed.has(key))) return error('يتضمن الطلب حقولاً غير قابلة للتعديل');
     if (body.items!==undefined && (!Array.isArray(body.items) || body.items.length<1 || body.items.length>1000)) return error('بنود عرض السعر غير صالحة');
     const payload={...body};
     delete (payload as any).items;
+    delete (payload as any).tax_enabled; // حقل واجهة فقط — لا يُمرَّر إلى RPC
     const { data: updated, error: rpcErr } = await s.rpc('update_draft_quotation', {
       p_company_id:auth.companyId,
       p_quotation_id:id,

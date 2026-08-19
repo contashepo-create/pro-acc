@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { QRCode } from '@/components/ui/QRCode';
+import { toast } from '@/components/ui/Toast';
+import { openPrintWindow } from '@/lib/print';
 import { escapeHtml } from '@/lib/utils';
 
 interface PortalInvoice {
@@ -113,9 +115,7 @@ export default function CustomerPortalPage() {
       </tr>`)
       .join('');
     const company = inv.company || {};
-    const w = window.open('', '_blank', 'noopener,noreferrer,width=800,height=900');
-    if (!w) return;
-    w.document.write(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة رقم ${inv.number}</title>
+    const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة رقم ${inv.number}</title>
       <style>
         body{font-family:Tahoma,Arial,sans-serif;padding:28px;color:#111;max-width:760px;margin:0 auto}
         h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;font-weight:400;color:#555;margin:0 0 20px}
@@ -133,9 +133,15 @@ export default function CustomerPortalPage() {
       <table><thead><tr><th>الوصف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>${items}</tbody></table>
       <div class="totals"><span>الإجمالي</span><span>${Number(inv.total).toFixed(2)} ر.س</span></div>
       <p style="text-align:center"><button onclick="window.print()" style="padding:10px 28px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:15px;cursor:pointer">طباعة / حفظ PDF</button></p>
-      </body></html>`);
-    w.document.close();
-    setTimeout(() => { try { w.focus(); w.print(); } catch { /* ignore */ } }, 400);
+      </body></html>`;
+    const result = openPrintWindow(html);
+    if (!result.ok) {
+      toast.error(
+        result.blocked
+          ? 'منع المتصفح فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة ثم أعد المحاولة.'
+          : 'تعذر فتح نافذة الطباعة.',
+      );
+    }
   };
 
   // Login screen

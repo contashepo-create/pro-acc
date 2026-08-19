@@ -11,6 +11,7 @@ import { formatDate } from '@/lib/utils';
 
 export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -20,7 +21,10 @@ export default function NotificationsPage() {
       setError('');
       const res = await fetch('/api/notifications');
       const json = await res.json();
-      if (json.success) setNotifications(json.data?.notifications || []);
+      if (json.success) {
+        setNotifications(json.data?.notifications || []);
+        setUnreadCount(json.data?.unreadCount || 0);
+      }
       else setError(json.message || 'فشل');
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
@@ -32,7 +36,7 @@ export default function NotificationsPage() {
       const res = await fetch(`/api/notifications/${notification.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_read: true }),
+        body: JSON.stringify({ isRead: true }),
       });
       const json = await res.json();
       if (json.success) {
@@ -65,7 +69,16 @@ export default function NotificationsPage() {
       warning: { variant: 'warning', label: 'تحذير' },
       success: { variant: 'success', label: 'نجاح' },
       error: { variant: 'danger', label: 'خطأ' },
-      approval: { variant: 'accent', label: 'موافقة' },
+      approval_request: { variant: 'accent', label: 'طلب موافقة' },
+      approval_response: { variant: 'accent', label: 'قرار موافقة' },
+      approval_approved: { variant: 'success', label: 'تم الاعتماد' },
+      approval_rejected: { variant: 'danger', label: 'تم الرفض' },
+      subscription: { variant: 'info', label: 'اشتراك' },
+      upgrade: { variant: 'accent', label: 'ترقية' },
+      addon_granted: { variant: 'success', label: 'إضافة مفعّلة' },
+      push: { variant: 'info', label: 'تنبيه' },
+      support_update: { variant: 'info', label: 'دعم فني' },
+      closing: { variant: 'warning', label: 'إقفال' },
     };
     const m = map[type] || { variant: 'info', label: type };
     return <Badge variant={m.variant}>{m.label}</Badge>;
@@ -98,8 +111,6 @@ export default function NotificationsPage() {
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
-
-  const unreadCount = notifications.filter(n => !n.is_read).length;
 
   return (
     <div className="space-y-6">

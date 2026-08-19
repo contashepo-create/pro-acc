@@ -43,7 +43,11 @@ export async function PUT(
 
     const { data: updated, error: updErr } = await s.from('fiscal_years')
       .update(updateData).eq('id', id).eq('company_id', auth.companyId).select('*').single();
-    if (updErr) throw updErr;
+    if (updErr) {
+      const message = String((updErr as { message?: string }).message || '');
+      if (/تتداخل/.test(message)) return error(message, 409);
+      throw updErr;
+    }
 
     return success(updated);
   } catch (err) {
@@ -64,6 +68,7 @@ export async function DELETE(
       .select('id, status').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return notFound();
     if ((existing as any).status === 'closed') return error('لا يمكن حذف سنة مالية مقفلة');
+    if ((existing as any).status === 'open') return error('لا يمكن حذف سنة مالية مفتوحة — يجب إقفالها أولاً', 409);
 
     const { error: delErr } = await s.from('fiscal_years').delete().eq('id', id).eq('company_id', auth.companyId);
     if (delErr) throw delErr;

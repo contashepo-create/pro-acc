@@ -108,12 +108,25 @@ export default function FiscalPage() {
     },
   ];
 
+  const openYear = fiscalYears.find((y: any) => y.status === 'open');
+
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
 
   return (
     <div className="space-y-6">
       <PageHeader title="السنوات المالية" description="إدارة الفترات المالية" actions={<Button onClick={() => { setEditingYear(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة سنة مالية</Button>} />
+
+      <div className="rounded-2xl border p-4 text-sm space-y-1" style={{ background: 'var(--color-bg-card)', borderColor: 'var(--color-border)' }}>
+        <div className="flex items-center gap-2 font-bold" style={{ color: 'var(--color-text-primary)' }}>
+          <Badge variant={openYear ? 'success' : 'warning'}>{openYear ? 'السنة المالية الحالية' : 'لا توجد سنة مفتوحة'}</Badge>
+          {openYear && <span>{openYear.name} ({formatDate(openYear.start_date)} — {formatDate(openYear.end_date)})</span>}
+        </div>
+        <p style={{ color: 'var(--color-text-muted)' }}>
+          لا يمكن فتح أكثر من سنة مالية واحدة في الوقت نفسه، ولا يُسمح بالترحيل إلى تواريخ خارج السنة المفتوحة أو داخل سنة مقفلة. عند إنشاء شركة جديدة تُنشأ سنة مالية للعام الحالي تلقائياً.
+        </p>
+      </div>
+
       {fiscalYears.length === 0 ? <EmptyState title="لا توجد سنوات مالية" actionLabel="إضافة سنة مالية" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={fiscalYears} searchable searchKeys={['name']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingYear(null); }} title={editingYear ? 'تعديل سنة مالية' : 'إضافة سنة مالية'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingYear(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">

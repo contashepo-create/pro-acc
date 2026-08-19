@@ -13,6 +13,52 @@ const HIDDEN = new Set([
   'journal_entry_id', 'password', 'password_hash', 'token', 'items', 'lines', 'boq_items',
 ]);
 
+/**
+ * Embedded relation objects (e.g. `contacts: { name }`, `banks_safes: { name }`,
+ * `journal_entries: { number }`) are promoted to readable flat fields so a
+ * preview shows "العميل: شركة الأمل" instead of the raw foreign-key UUID.
+ */
+const RELATION_FIELDS: Record<string, { field: string; value?: string }> = {
+  contacts: { field: 'contact_name', value: 'name' },
+  banks_safes: { field: 'bank_name', value: 'name' },
+  projects: { field: 'project_name', value: 'name' },
+  employees: { field: 'employee_name', value: 'name' },
+  accounts: { field: 'account_name', value: 'name' },
+  users: { field: 'user_name', value: 'name' },
+  warehouses: { field: 'warehouse_name', value: 'name' },
+  companies: { field: 'company_name', value: 'name' },
+  clients: { field: 'client_name', value: 'name' },
+  suppliers: { field: 'supplier_name', value: 'name' },
+  categories: { field: 'category_name', value: 'name' },
+  currencies: { field: 'currency_name', value: 'name' },
+  journal_entries: { field: 'journal_number', value: 'number' },
+};
+
+/**
+ * Normalize a record for display: promote embedded relation objects into
+ * readable `*_name` fields and drop raw foreign-key UUID columns (`*_id`)
+ * which are meaningless to a reviewer. Exported for regression testing.
+ */
+export function buildRecordEntries(record: Record<string, any>): Array<[string, unknown]> {
+  const firstPass: Array<[string, unknown]> = [];
+  for (const [k, v] of Object.entries(record)) {
+    if (typeof v === 'object' && v !== null && !Array.isArray(v)) continue;
+    if (HIDDEN.has(k)) continue;
+    if (v == null || v === '') continue;
+    if (/_id$/.test(k)) continue; // raw foreign-key UUID
+    firstPass.push([k, v]);
+  }
+  const explicitNames = new Set(firstPass.map(([k]) => k));
+  for (const [k, v] of Object.entries(record)) {
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) continue;
+    const mapping = RELATION_FIELDS[k];
+    if (!mapping || explicitNames.has(mapping.field)) continue;
+    const value = (v as Record<string, unknown>)[mapping.value ?? 'name'];
+    if (value != null && value !== '') firstPass.push([mapping.field, value]);
+  }
+  return firstPass;
+}
+
 const LABELS: Record<string, string> = {
   number: 'الرقم',
   po_number: 'رقم أمر الشراء',
@@ -49,6 +95,11 @@ const LABELS: Record<string, string> = {
   project_name: 'المشروع',
   employee_name: 'الموظف',
   bank_name: 'الخزينة / البنك',
+  user_name: 'المستخدم',
+  company_name: 'الشركة',
+  category_name: 'التصنيف',
+  currency_name: 'العملة',
+  journal_number: 'رقم القيد',
   bank_safe_name: 'الخزينة / البنك',
   account_code: 'رمز الحساب',
   account_name: 'اسم الحساب',
@@ -215,20 +266,17 @@ export function RecordViewModal({
   title,
   record,
   extra,
+  footer,
 }: {
   isOpen: boolean;
   onClose: () => void;
   title?: string;
   record: Record<string, any> | null;
   extra?: ReactNode;
+  footer?: ReactNode;
 }) {
   if (!record) return null;
-  const entries = Object.entries(record).filter(([k, v]) => {
-    if (HIDDEN.has(k)) return false;
-    if (v == null || v === '') return false;
-    if (typeof v === 'object' && !Array.isArray(v)) return false;
-    return true;
-  });
+  const entries = buildRecordEntries(record);
 
   const displayTitle = title || (record.name ? `معاينة: ${record.name}` : record.number ? `معاينة سجل رقم #${record.number}` : 'معاينة تفاصيل السجل');
 
@@ -243,7 +291,9 @@ export function RecordViewModal({
         </div>
       }
       size="lg"
-      footer={<Button variant="ghost" onClick={onClose}>إغلاق المعاينة</Button>}
+      footer={
+        footer ?? <Button variant="ghost" onClick={onClose}>إغلاق المعاينة</Button>
+      }
     >
       <div className="space-y-4">
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3">

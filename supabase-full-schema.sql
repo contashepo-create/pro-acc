@@ -77,6 +77,8 @@
 --   065-repair-additional-user-voucher-approvals.sql
 --   066-global-backup-journal.sql
 --   067-audit-hardening-fixes.sql
+--   068-telegram-approval-actor-fallback.sql
+--   069-fiscal-year-controls.sql
 -- ============================================================================
 
 
@@ -18789,4 +18791,252 @@ $$;
 
 REVOKE ALL ON FUNCTION public.create_journal_entry(UUID, DATE, TEXT, TEXT, UUID, JSONB) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.create_journal_entry(UUID, DATE, TEXT, TEXT, UUID, JSONB) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 068-telegram-approval-actor-fallback.sql
+-- ----------------------------------------------------------------------------
+
+-- 068 - Telegram approval decisions: robust approver resolution.
+--
+-- Vouchers (and other financial operations) created by an additional
+-- (non-admin) user above the approval threshold are answered from the
+-- Telegram-bound chat. The decision RPC resolved the approver exclusively
+-- through company_telegram_configs.configured_by, which:
+--   * did not exist before migration 059, so legacy rows hold NULL,
+--   * goes stale when the configuring admin is deactivated or downgraded.
+-- In both cases the admin who owns the bound chat received the request, but
+-- pressing "موافق ✅" failed with the generic "انتهى الطلب أو لا تملك صلاحية
+-- معالجته" error even when answered within seconds.
+--
+-- Fix in two parts:
+--   1. Backfill configured_by from the company's active admin for every
+--      enabled configuration whose current value is missing or stale.
+--   2. Make the decision RPC resolve the actor from the bound chat itself and
+--      fall back to an active admin instead of hard-failing. The bound chat is
+--      the authorization factor (only that chat receives the buttons); the
+--      resolved admin is recorded for the audit trail.
+
+-- 1) Backfill configured_by for enabled configurations. The communication
+--    write guard requires the audited-function GUC, so we set it per tenant.
+DO $$
+DECLARE
+  cfg RECORD;
+BEGIN
+  FOR cfg IN
+    SELECT DISTINCT c.company_id
+    FROM company_telegram_configs c
+    WHERE c.is_enabled = TRUE
+      AND NULLIF(BTRIM(c.chat_id), '') IS NOT NULL
+      AND (
+        c.configured_by IS NULL
+        OR NOT EXISTS (
+          SELECT 1
+          FROM users u2
+          WHERE u2.id = c.configured_by
+            AND u2.company_id = c.company_id
+            AND u2.is_active = TRUE
+            AND u2.role = 'admin'
+        )
+      )
+  LOOP
+    PERFORM set_config('app.communication_write_company', cfg.company_id::TEXT, TRUE);
+    UPDATE company_telegram_configs c
+    SET configured_by = (
+          SELECT u.id
+          FROM users u
+          WHERE u.company_id = cfg.company_id AND u.is_active = TRUE AND u.role = 'admin'
+          ORDER BY u.created_at, u.id
+          LIMIT 1
+        ),
+        updated_at = NOW()
+    WHERE c.company_id = cfg.company_id;
+  END LOOP;
+END;
+$$;
+
+-- 2) Robust approver resolution in the Telegram decision RPC.
+CREATE OR REPLACE FUNCTION public.respond_approval_by_telegram_atomic(
+  p_approval_id UUID,p_action TEXT,p_chat_id TEXT,p_comments TEXT DEFAULT ''
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_request approval_requests%ROWTYPE;
+  v_config company_telegram_configs%ROWTYPE;
+  v_actor UUID;
+  v_type TEXT;
+  v_result JSONB;
+BEGIN
+  IF p_action NOT IN('approve','reject') OR LENGTH(COALESCE(p_comments,''))>2000 OR NULLIF(p_chat_id,'') IS NULL
+  THEN RAISE EXCEPTION 'قرار الاعتماد غير صالح'; END IF;
+
+  SELECT * INTO v_request FROM approval_requests WHERE id=p_approval_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'طلب الاعتماد غير موجود'; END IF;
+
+  SELECT * INTO v_config FROM company_telegram_configs
+  WHERE company_id=v_request.company_id AND is_enabled=TRUE AND approvals_enabled=TRUE AND chat_id=p_chat_id
+  FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'حساب تيليجرام غير مخول بالاعتماد'; END IF;
+
+  -- The bound chat is the authorization factor (only it receives the buttons).
+  -- configured_by can be NULL on legacy rows or stale after an admin change, so
+  -- resolve the actor from the bound chat and fall back to an active admin
+  -- instead of rejecting a legitimate approval from the bound chat.
+  v_actor := v_config.configured_by;
+  IF v_actor IS NULL OR NOT EXISTS(
+    SELECT 1 FROM users WHERE id=v_actor AND company_id=v_request.company_id AND is_active=TRUE AND role='admin'
+  ) THEN
+    SELECT id INTO v_actor FROM users
+    WHERE company_id=v_request.company_id AND is_active=TRUE AND role='admin'
+    ORDER BY created_at, id LIMIT 1;
+  END IF;
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'لا يوجد مدير نشط لاعتماد الطلب'; END IF;
+
+  v_type:=COALESCE(v_request.entity_type,v_request.transaction_type);
+  IF v_type='voucher_disbursement' THEN
+    v_result:=respond_voucher_disbursement_approval(v_request.company_id,p_approval_id,p_action,v_actor,p_chat_id,p_comments);
+  ELSIF v_type='voucher_receipt' THEN
+    v_result:=respond_voucher_receipt_approval(v_request.company_id,p_approval_id,p_action,v_actor,p_chat_id,p_comments);
+  ELSE
+    v_result:=respond_approval_request_atomic(v_request.company_id,p_approval_id,p_action,v_actor,p_comments)
+      ||jsonb_build_object('approver_chat_id',p_chat_id);
+    UPDATE approval_requests SET approver_chat_id=p_chat_id WHERE id=p_approval_id;
+  END IF;
+  RETURN v_result||jsonb_build_object('company_id',v_request.company_id,'requester_id',v_request.requester_id,'entity_type',v_type);
+END;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 069-fiscal-year-controls.sql
+-- ----------------------------------------------------------------------------
+
+-- 069 - Fiscal-year controls: one open year, and ledger postings must fall
+-- within an open fiscal year.
+--
+-- Answering three accounting controls that were previously missing:
+--   1. Every company now has an open fiscal year from the moment it is created
+--      (bootstrap trigger) and any legacy company without one is backfilled.
+--   2. Ledger postings dated inside a closed year, or outside every open year,
+--      are rejected (closing/reversing system entries are exempt).
+--   3. A company can never hold two open fiscal years at once.
+
+-- 1) Backfill: any existing company that has no fiscal years at all gets the
+--    current calendar year as its open fiscal year.
+DO $$
+DECLARE v_year INTEGER := EXTRACT(YEAR FROM CURRENT_DATE)::INTEGER;
+BEGIN
+  INSERT INTO fiscal_years(company_id, name, start_date, end_date, status)
+  SELECT c.id, 'السنة المالية ' || v_year,
+         make_date(v_year, 1, 1), make_date(v_year, 12, 31), 'open'
+  FROM companies c
+  WHERE NOT EXISTS (SELECT 1 FROM fiscal_years fy WHERE fy.company_id = c.id)
+  ON CONFLICT DO NOTHING;
+END;
+$$;
+
+-- 2) Hard invariant: only ONE open fiscal year per company.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_year_single_open
+  ON fiscal_years(company_id) WHERE status = 'open';
+
+-- 3) Bootstrap new companies with the current calendar year as their open
+--    fiscal year. Covers registration, first-run setup, and any other path
+--    that inserts a company row.
+CREATE OR REPLACE FUNCTION public.bootstrap_company_fiscal_year()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_year INTEGER := EXTRACT(YEAR FROM CURRENT_DATE)::INTEGER;
+BEGIN
+  INSERT INTO fiscal_years(company_id, name, start_date, end_date, status)
+  VALUES (NEW.id, 'السنة المالية ' || v_year, make_date(v_year,1,1), make_date(v_year,12,31), 'open')
+  ON CONFLICT (company_id, name) DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_company_fiscal_year_bootstrap ON companies;
+CREATE TRIGGER trg_company_fiscal_year_bootstrap AFTER INSERT ON companies
+  FOR EACH ROW EXECUTE FUNCTION public.bootstrap_company_fiscal_year();
+
+-- 4) DB-enforced non-overlap of fiscal periods. Covers BOTH creation and the
+--    edit path (a later date change can silently create an overlap otherwise).
+CREATE OR REPLACE FUNCTION public.guard_fiscal_year_no_overlap()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path=public AS $$
+BEGIN
+  IF EXISTS(SELECT 1 FROM fiscal_years
+    WHERE company_id=NEW.company_id AND id IS DISTINCT FROM NEW.id
+      AND start_date<=NEW.end_date AND end_date>=NEW.start_date)
+  THEN RAISE EXCEPTION 'الفترة المالية تتداخل مع فترة موجودة';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_guard_fiscal_year_no_overlap ON fiscal_years;
+CREATE TRIGGER trg_guard_fiscal_year_no_overlap
+  BEFORE INSERT OR UPDATE OF start_date,end_date,company_id ON fiscal_years
+  FOR EACH ROW EXECUTE FUNCTION public.guard_fiscal_year_no_overlap();
+
+-- 5) Clear error when a transition would open a second fiscal year (e.g. the
+--    reopen path). The unique index above is the hard backstop.
+CREATE OR REPLACE FUNCTION public.guard_single_open_fiscal_year()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path=public AS $$
+BEGIN
+  IF NEW.status='open' AND OLD.status<>'open' AND EXISTS(
+    SELECT 1 FROM fiscal_years
+    WHERE company_id=NEW.company_id AND status='open' AND id<>NEW.id
+  ) THEN
+    RAISE EXCEPTION 'لا يمكن فتح أكثر من سنة مالية واحدة في نفس الوقت';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_guard_single_open_fiscal_year ON fiscal_years;
+CREATE TRIGGER trg_guard_single_open_fiscal_year BEFORE UPDATE OF status ON fiscal_years
+  FOR EACH ROW EXECUTE FUNCTION public.guard_single_open_fiscal_year();
+
+-- 6) Strict posting guard. An entry dated inside a CLOSED year is rejected,
+--    and once a company has fiscal years, an entry dated outside every OPEN
+--    year is rejected. Closing/reversing entries are system entries and are
+--    exempt from the guard.
+CREATE OR REPLACE FUNCTION public.enforce_open_fiscal_year()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+  -- Serialize every ledger write with fiscal close/reopen for this tenant.
+  PERFORM pg_advisory_xact_lock(hashtextextended('fiscal-ledger:'||NEW.company_id::TEXT,0));
+  IF NEW.type IN ('closing','reversing') THEN RETURN NEW; END IF;
+  IF EXISTS (SELECT 1 FROM fiscal_years WHERE company_id=NEW.company_id AND status='closed'
+    AND NEW.date BETWEEN start_date AND end_date) THEN
+    RAISE EXCEPTION 'لا يمكن الترحيل إلى سنة مالية مقفلة';
+  END IF;
+  IF EXISTS (SELECT 1 FROM fiscal_years WHERE company_id=NEW.company_id)
+    AND NOT EXISTS (SELECT 1 FROM fiscal_years WHERE company_id=NEW.company_id AND status='open'
+      AND NEW.date BETWEEN start_date AND end_date) THEN
+    RAISE EXCEPTION 'لا توجد سنة مالية مفتوحة تغطي تاريخ العملية';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- 7) Atomic fiscal-year creation: validates dates, blocks date overlaps and a
+--    second open year, and records an audit entry (the app previously checked
+--    overlaps with a racy read-then-write).
+CREATE OR REPLACE FUNCTION public.create_fiscal_year_atomic(
+  p_company_id UUID, p_name TEXT, p_start_date DATE, p_end_date DATE, p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_year fiscal_years%ROWTYPE;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  IF NULLIF(BTRIM(p_name),'') IS NULL OR LENGTH(p_name)>200 OR p_start_date IS NULL OR p_end_date IS NULL
+    OR p_end_date < p_start_date THEN RAISE EXCEPTION 'بيانات السنة المالية غير صالحة'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('fiscal-year:'||p_company_id::TEXT,0));
+  IF EXISTS(SELECT 1 FROM fiscal_years WHERE company_id=p_company_id
+    AND start_date<=p_end_date AND end_date>=p_start_date)
+  THEN RAISE EXCEPTION 'الفترة المالية تتداخل مع فترة موجودة'; END IF;
+  IF EXISTS(SELECT 1 FROM fiscal_years WHERE company_id=p_company_id AND status='open')
+  THEN RAISE EXCEPTION 'لا يمكن فتح أكثر من سنة مالية واحدة في نفس الوقت'; END IF;
+  INSERT INTO fiscal_years(company_id,name,start_date,end_date,status)
+  VALUES(p_company_id,BTRIM(p_name),p_start_date,p_end_date,'open') RETURNING * INTO v_year;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','fiscal_year',v_year.id,to_jsonb(v_year));
+  RETURN to_jsonb(v_year);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.create_fiscal_year_atomic(UUID,TEXT,DATE,DATE,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_fiscal_year_atomic(UUID,TEXT,DATE,DATE,UUID) TO service_role;
 

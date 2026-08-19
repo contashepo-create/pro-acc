@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Eye, XCircle, MessageSquare } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Badge } from '@/components/ui/Badge';
@@ -9,17 +10,19 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
-import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 import { formatDate } from '@/lib/utils';
+import { toast } from '@/components/ui/Toast';
 
 export default function ComplaintsPage() {
   const [complaints, setComplaints] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<any>(null);
-  const [form, setForm] = useState<any>({ subject: '', body: '', status: 'pending' });
+  const [previewing, setPreviewing] = useState<any>(null);
+  const [form, setForm] = useState<any>({ subject: '', body: '', close: false });
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const fetchData = async () => {
     try {
@@ -36,22 +39,46 @@ export default function ComplaintsPage() {
 
   const handleEdit = (complaint: any) => {
     setEditing(complaint);
-    setForm({ subject: complaint.subject || '', body: complaint.body || '', status: complaint.status || 'pending' });
+    setForm({ subject: complaint.subject || '', body: complaint.body || '', close: false });
+    setSaveError('');
   };
 
   const handleSave = async () => {
     if (!editing) return;
+    const isPending = editing.status === 'pending';
+    const patch: any = {};
+    if (isPending) {
+      patch.subject = form.subject;
+      patch.body = form.body;
+    }
+    if (form.close) patch.status = 'closed';
+
+    if (Object.keys(patch).length === 0) {
+      setSaveError('لا توجد تغييرات — التعديل مسموح فقط للشكاوى قيد الانتظار، أو اختر إغلاق الشكوى');
+      return;
+    }
+
     setSaving(true);
+    setSaveError('');
     try {
       const res = await fetch(`/api/complaints/${editing.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject: form.subject, body: form.body, ...(form.status === 'closed' ? { status: 'closed' } : {}) }),
+        body: JSON.stringify(patch),
       });
       const json = await res.json();
-      if (json.success) { setEditing(null); fetchData(); }
-      else alert(json.message || 'فشل الحفظ');
-    } catch { alert('خطأ في الاتصال بالخادم'); } finally { setSaving(false); }
+      if (json.success) {
+        setEditing(null);
+        toast.success(form.close ? 'تم إغلاق الشكوى' : 'تم حفظ التعديلات');
+        fetchData();
+      } else {
+        setSaveError(json.message || 'فشل الحفظ');
+      }
+    } catch {
+      setSaveError('خطأ في الاتصال بالخادم');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (complaint: any) => {
@@ -59,12 +86,13 @@ export default function ComplaintsPage() {
       const res = await fetch(`/api/complaints/${complaint.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
+        toast.success('تم حذف الشكوى');
         fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        toast.error(json.message || 'فشل الحذف');
       }
     } catch {
-      alert('خطأ في الاتصال بالخادم');
+      toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
@@ -98,11 +126,18 @@ export default function ComplaintsPage() {
       key: 'actions',
       label: 'إجراءات',
       render: (row: any) => (
-        <ActionButtons
-          item={row}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-        />
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={() => setPreviewing(row)} title="معاينة الشكوى">
+            <Eye size={16} className="text-blue-600" />
+          </Button>
+          <ActionButtons
+            item={row}
+            showView={false}
+            showPrint={false}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+          />
+        </div>
       ),
     },
   ];
@@ -119,29 +154,101 @@ export default function ComplaintsPage() {
         <DataTable columns={columns} data={complaints} searchable searchKeys={['subject', 'user_name']} />
       )}
 
+      {/* معاينة الشكوى */}
+      <Modal
+        isOpen={!!previewing}
+        onClose={() => setPreviewing(null)}
+        title={previewing ? 'معاينة الشكوى' : ''}
+        size="lg"
+        footer={<div className="flex gap-2 justify-between items-center">
+          <div className="flex items-center gap-2 text-sm text-text-muted">{previewing && statusBadge(previewing.status)}</div>
+          <Button variant="ghost" onClick={() => setPreviewing(null)}>إغلاق</Button>
+        </div>}
+      >
+        {previewing && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              {typeBadge(previewing.type)}
+              <span className="text-xs text-text-muted">بتاريخ {formatDate(previewing.created_at)}</span>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-text-primary mb-1">الموضوع</p>
+              <p className="text-text-primary">{previewing.subject}</p>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-text-primary mb-1">نص الشكوى / الاقتراح</p>
+              <div className="rounded-xl bg-bg-secondary/50 border border-border p-3 text-sm text-text-secondary whitespace-pre-wrap leading-relaxed">
+                {previewing.body}
+              </div>
+            </div>
+            {previewing.admin_reply && (
+              <div>
+                <p className="text-sm font-bold text-text-primary mb-1 flex items-center gap-1.5">
+                  <MessageSquare size={14} className="text-accent" /> رد الإدارة
+                </p>
+                <div className="rounded-xl bg-accent/5 border border-accent/20 p-3 text-sm text-text-secondary whitespace-pre-wrap leading-relaxed">
+                  {previewing.admin_reply}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* تعديل الشكوى */}
       <Modal
         isOpen={!!editing}
         onClose={() => setEditing(null)}
         title={editing ? `تعديل: ${editing.subject}` : ''}
-        footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setEditing(null)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}
+        footer={
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => setEditing(null)}>إلغاء</Button>
+            <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button>
+          </div>
+        }
       >
-        <div className="space-y-3">
-          <Input label="الموضوع" value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
-          <Textarea label="النص" value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
-          <Select label="الحالة" value={form.status} onChange={(v) => setForm({ ...form, status: v })}
-            options={[
-              { value: 'pending', label: 'قيد الانتظار' },
-              { value: 'read', label: 'مقروءة' },
-              { value: 'replied', label: 'تم الرد' },
-              { value: 'closed', label: 'مغلقة' },
-            ]} />
-          {editing?.admin_reply && (
-            <div className="rounded-lg bg-bg-secondary/50 border border-border p-3 text-xs">
-              <p className="font-bold text-text-primary mb-1">رد الإدارة:</p>
-              <p className="text-text-secondary whitespace-pre-wrap">{editing.admin_reply}</p>
+        {editing && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-text-muted">الحالة الحالية:</span>
+              {statusBadge(editing.status)}
+              {editing.status !== 'pending' && (
+                <span className="text-xs text-text-muted">(لا يمكن تعديل النص بعد أن عالجتها الإدارة)</span>
+              )}
             </div>
-          )}
-        </div>
+            <Input
+              label="الموضوع"
+              value={form.subject}
+              disabled={editing.status !== 'pending'}
+              onChange={(e) => setForm({ ...form, subject: e.target.value })}
+            />
+            <Textarea
+              label="النص"
+              value={form.body}
+              disabled={editing.status !== 'pending'}
+              onChange={(e) => setForm({ ...form, body: e.target.value })}
+            />
+            {editing.admin_reply && (
+              <div className="rounded-lg bg-bg-secondary/50 border border-border p-3 text-xs">
+                <p className="font-bold text-text-primary mb-1">رد الإدارة:</p>
+                <p className="text-text-secondary whitespace-pre-wrap">{editing.admin_reply}</p>
+              </div>
+            )}
+            {editing.status !== 'closed' && (
+              <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-danger/20 bg-danger/5 p-3 text-sm text-text-primary">
+                <input
+                  type="checkbox"
+                  checked={form.close}
+                  onChange={(e) => setForm({ ...form, close: e.target.checked })}
+                  className="w-4 h-4 accent-danger"
+                />
+                <XCircle size={16} className="text-danger" />
+                إغلاق الشكوى (لن تظهر ضمن القائمة النشطة)
+              </label>
+            )}
+            {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+          </div>
+        )}
       </Modal>
     </div>
   );

@@ -12,6 +12,7 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { printCurrentPage } from '@/lib/print';
 import { 
   INVOICE_TEMPLATES, 
   getTemplateConfig, 
@@ -220,14 +221,15 @@ export default function InvoiceViewPage() {
     if (loading || !invoice) return;
     const url = new URL(window.location.href);
     if (url.searchParams.get('print') === '1') {
-      const t = setTimeout(() => window.print(), 400);
       url.searchParams.delete('print');
       window.history.replaceState({}, '', url.toString());
-      return () => clearTimeout(t);
+      void printCurrentPage();
     }
   }, [loading, invoice]);
 
-  const handlePrint = () => window.print();
+  const handlePrint = () => {
+    void printCurrentPage();
+  };
 
   // Save current view preferences permanently to company settings
   const handleSaveAsDefaultSettings = async () => {

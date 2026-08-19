@@ -9,12 +9,29 @@ const NOTIFICATION_COLUMNS = 'id,user_id,type,title,message,link,entity_type,ent
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'notifications', 'read');
-    const limit = Math.min(100, Math.max(1, Number(request.nextUrl.searchParams.get('limit')) || 50));
-    const { data, error: queryError } = await getSupabase().from('notifications').select(NOTIFICATION_COLUMNS)
-      .eq('company_id', auth.companyId).or(`user_id.is.null,user_id.eq.${auth.userId}`)
-      .order('created_at', { ascending: false }).limit(limit);
+    const url = new URL(request.url);
+    const unreadOnly = url.searchParams.get('unread_only') === 'true';
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+
+    // Accurate unread count for the header badge, independent of the list limit.
+    const { count: unreadCount, error: countError } = await getSupabase().from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', auth.companyId)
+      .or(`user_id.is.null,user_id.eq.${auth.userId}`)
+      .eq('is_read', false);
+    if (countError) throw countError;
+
+    let query = getSupabase().from('notifications').select(NOTIFICATION_COLUMNS)
+      .eq('company_id', auth.companyId)
+      .or(`user_id.is.null,user_id.eq.${auth.userId}`);
+    if (unreadOnly) query = query.eq('is_read', false);
+    const { data, error: queryError } = await query.order('created_at', { ascending: false }).limit(limit);
     if (queryError) throw queryError;
-    return success(data || []);
+
+    // Shape: { notifications, unreadCount } — the page and header badge both
+    // consume this (previously the route returned a bare array while the page
+    // read `data.notifications`, so the page was always empty).
+    return success({ notifications: data || [], unreadCount: unreadCount || 0 });
   } catch (cause) {
     return handleApiError(cause);
   }

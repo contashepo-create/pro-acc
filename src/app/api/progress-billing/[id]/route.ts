@@ -5,10 +5,14 @@ import { deliveryUuid, progressBillingUpdateSchema } from '@/lib/project-deliver
 
 async function findClaim(companyId: string, id: string) {
   const { data, error: queryError } = await getSupabase().from('progress_billing')
-    .select('id,project_id,claim_number,date,description,gross_amount,retention_rate,retention_amount,net_amount,tax_rate,tax_amount,total_amount,status,is_final,created_at,updated_at,projects(name)')
+    .select('id,project_id,claim_number,date,description,gross_amount,retention_rate,retention_amount,net_amount,tax_rate,tax_amount,status,is_final,created_at,updated_at,projects(name)')
     .eq('id', id).eq('company_id', companyId).maybeSingle();
   if (queryError) throw queryError;
-  return data;
+  if (!data) return null;
+  return {
+    ...data,
+    total_amount: Number(data.net_amount || 0) + Number(data.tax_amount || 0),
+  };
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
