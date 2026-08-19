@@ -10,7 +10,8 @@
  *   DATABASE_URL              (required) Postgres connection, e.g.
  *                             postgresql://...:5432/postgres?sslmode=require
  *   TELEGRAM_BOT_TOKEN        (required) the bot that receives the dump
- *   TELEGRAM_ADMIN_CHAT_ID    (required) the developer's chat id
+ *   TELEGRAM_ADMIN_CHAT_ID    (required) one or more chat ids, comma-separated
+ *                             (e.g. "123456,654321") — every copy goes to all
  *   NEXT_PUBLIC_SUPABASE_URL  storage project (fallback SUPABASE_URL)
  *   SUPABASE_SERVICE_ROLE_KEY storage service key (used only for storage)
  *   BACKUP_RETAIN             copies to keep, oldest pruned first (default 5)
@@ -46,7 +47,11 @@ function fail(message: string): never {
 async function main() {
   const databaseUrl = env('DATABASE_URL');
   const botToken = env('TELEGRAM_BOT_TOKEN');
-  const chatId = env('TELEGRAM_ADMIN_CHAT_ID');
+  // يدعم أكثر من مستقبل: افصل المعرفات بفاصلة "123456,654321" — تُرسل كل نسخة للجميع
+  const chatIds = env('TELEGRAM_ADMIN_CHAT_ID')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
   const supabaseUrl = env('NEXT_PUBLIC_SUPABASE_URL') || env('SUPABASE_URL');
   const supabaseKey = env('SUPABASE_SERVICE_ROLE_KEY');
   const retain = Math.max(1, parseInt(env('BACKUP_RETAIN', '5'), 10) || 5);
@@ -54,7 +59,7 @@ async function main() {
 
   if (!databaseUrl) fail('DATABASE_URL is not set');
   if (!botToken) fail('TELEGRAM_BOT_TOKEN is not set');
-  if (!chatId) fail('TELEGRAM_ADMIN_CHAT_ID is not set');
+  if (chatIds.length === 0) fail('TELEGRAM_ADMIN_CHAT_ID is not set');
 
   // ---------- 1. pg_dump the whole database (all tenants) ----------
   const filename = backupFilename();
@@ -110,7 +115,7 @@ async function main() {
     console.warn('[3/6] storage not configured; retention will prune the Telegram chat only');
   }
 
-  // ---------- 4. Telegram delivery ----------
+  // ---------- 4. Telegram delivery (one copy to EVERY configured chat) ----------
   const caption = `🗄 <b>نسخة احتياطية شاملة لقاعدة البيانات</b>\n`
     + `📦 <code>${filename}</code>\n`
     + `📏 الحجم: ${(size / 1024 / 1024).toFixed(2)} MB\n`
@@ -118,32 +123,36 @@ async function main() {
     + `👥 الشركات: ${counts[0].companies} · المستخدمون: ${counts[0].users}\n`
     + `📒 القيود: ${counts[0].journal_entries} · الأسطر: ${counts[0].journal_lines}`;
 
-  let telegramMessageId: string | null = null;
+  const deliveredTo: Array<{ chat_id: string; message_id: string }> = [];
   if (size <= maxFileMb * 1024 * 1024) {
-    const form = new FormData();
-    form.append('chat_id', chatId);
-    form.append('document', new Blob([await readFile(dumpPath)]), filename);
-    form.append('caption', caption);
-    form.append('parse_mode', 'HTML');
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
-      method: 'POST', body: form, signal: AbortSignal.timeout(300_000),
-    });
-    const body = await response.json() as any;
-    if (!response.ok || !body.ok) throw new Error(`Telegram sendDocument failed: ${JSON.stringify(body)}`);
-    telegramMessageId = String(body.result?.message_id ?? '');
-    console.log(`[4/6] sent to Telegram (message ${telegramMessageId})`);
+    for (const chatId of chatIds) {
+      const form = new FormData();
+      form.append('chat_id', chatId);
+      form.append('document', new Blob([await readFile(dumpPath)]), filename);
+      form.append('caption', caption);
+      form.append('parse_mode', 'HTML');
+      const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+        method: 'POST', body: form, signal: AbortSignal.timeout(300_000),
+      });
+      const body = await response.json() as any;
+      if (!response.ok || !body.ok) throw new Error(`Telegram sendDocument failed for chat ${chatId}: ${JSON.stringify(body)}`);
+      deliveredTo.push({ chat_id: chatId, message_id: String(body.result?.message_id ?? '') });
+    }
+    console.log(`[4/6] sent to Telegram chats: ${chatIds.join(', ')}`);
   } else {
-    const message = `${caption}\n\n⚠️ الملف أكبر من حد تيليجرام (${maxFileMb} MB)؛ متاح في التخزين: <code>${storagePath || 'غير متاح'}</code>\n`
-      + `للاسترجاع: <code>npx tsx scripts/restore-global-backup.ts</code>`;
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' }),
-    });
-    const body = await response.json() as any;
-    if (!response.ok || !body.ok) throw new Error(`Telegram sendMessage failed: ${JSON.stringify(body)}`);
-    telegramMessageId = String(body.result?.message_id ?? '');
+    for (const chatId of chatIds) {
+      const message = `${caption}\n\n⚠️ الملف أكبر من حد تيليجرام (${maxFileMb} MB)؛ متاح في التخزين: <code>${storagePath || 'غير متاح'}</code>\n`
+        + `للاسترجاع: <code>npx tsx scripts/restore-global-backup.ts</code>`;
+      const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' }),
+      });
+      const body = await response.json() as any;
+      if (!response.ok || !body.ok) throw new Error(`Telegram sendMessage failed for chat ${chatId}: ${JSON.stringify(body)}`);
+      deliveredTo.push({ chat_id: chatId, message_id: String(body.result?.message_id ?? '') });
+    }
     console.log(`[4/6] dump too large for Telegram (${(size / 1024 / 1024).toFixed(2)} MB) — metadata sent`);
   }
 
@@ -151,13 +160,14 @@ async function main() {
   await pool.query(
     `INSERT INTO global_backup_journal(filename, size_bytes, sha256, storage_path, telegram_message_id, extra)
      VALUES($1,$2,$3,$4,$5,$6)`,
-    [filename, size, sha256, storagePath, telegramMessageId, JSON.stringify(counts[0])],
+    [filename, size, sha256, storagePath, deliveredTo[0]?.message_id ?? null,
+      JSON.stringify({ ...counts[0], delivered_to: deliveredTo })],
   );
 
   // ---------- 6. Retention: keep the last N copies only ----------
   const { rows: entries } = await pool.query<BackupJournalEntry>(
     `SELECT id, filename, size_bytes AS "sizeBytes", sha256, created_at AS "createdAt",
-            storage_path AS "storagePath", telegram_message_id AS "telegramMessageId"
+            storage_path AS "storagePath", telegram_message_id AS "telegramMessageId", extra
      FROM global_backup_journal ORDER BY created_at ASC, id ASC`,
   );
   const { prune } = planRetention(entries, retain);
@@ -169,11 +179,13 @@ async function main() {
     if (old.storagePath && supabase) {
       await supabase.storage.from('global-db-backups').remove([old.storagePath.split('/').pop()!]).catch(() => undefined);
     }
-    if (old.telegramMessageId) {
+    const delivered = (((old as unknown) as { extra?: { delivered_to?: Array<{ chat_id: string; message_id: string }> } })
+      .extra?.delivered_to || []);
+    for (const d of delivered) {
       await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(15_000),
-        body: JSON.stringify({ chat_id: chatId, message_id: Number(old.telegramMessageId) }),
+        body: JSON.stringify({ chat_id: d.chat_id, message_id: Number(d.message_id) }),
       }).catch(() => undefined);
     }
     await pool.query('DELETE FROM global_backup_journal WHERE id=$1', [old.id]);
