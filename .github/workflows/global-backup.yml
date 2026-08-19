@@ -33,8 +33,15 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
-      - name: Install PostgreSQL client tools (pg_dump / pg_restore)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Install PostgreSQL 17 client tools (match the Supabase server version)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17
       - name: Run global backup (dump → storage → Telegram → retain last 5)
         run: npx tsx scripts/global-backup.ts
       - name: Notify on failure
