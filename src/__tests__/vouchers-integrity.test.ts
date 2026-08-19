@@ -46,12 +46,18 @@ function makeDb(db: Record<string, Row[]>) {
     };
     return api;
   };
-  const client: any = {
+  const client = {
     from, calls, rpcCalls, rpcResults,
     rpc: async (name: string, params: any) => {
       rpcCalls.push({ name, params });
       return rpcResults.get(name) || { data: { id: `${name}-id`, status: 'posted' }, error: null };
     },
+  } as {
+    from: (table: string) => any;
+    calls: typeof calls;
+    rpcCalls: Array<{ name: string; params: any }>;
+    rpcResults: Map<string, unknown>;
+    rpc: (name: string, params: any) => Promise<any>;
   };
   return client;
 }

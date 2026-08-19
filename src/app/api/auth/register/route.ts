@@ -147,13 +147,21 @@ export async function POST(request: NextRequest) {
     const s = sb();
 
     // Registration rate limiting is a security control and therefore fails
-    // closed if its backing store is unavailable.
-    const { checkRateLimit } = await import('@/lib/rate-limit');
+    // closed if its backing store is unavailable. Two independent counters:
+    //  - checkRateLimit (login_attempts) guards credential spraying;
+    //  - checkRegistrationRateLimit (registration_attempts) guards
+    //    account-farming / mass tenant creation.
+    const { checkRateLimit, checkRegistrationRateLimit, recordRegistrationAttempt } = await import('@/lib/rate-limit');
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
     const rateLimit = await checkRateLimit(email.toLowerCase(), ip);
     if (!rateLimit.allowed) {
       return error(`عدد محاولات التسجيل كبير. حاول بعد ${rateLimit.remainingMinutes} دقائق`, 429);
     }
+    const registrationLimit = await checkRegistrationRateLimit(email.toLowerCase(), ip);
+    if (!registrationLimit.allowed) {
+      return error(`تم تسجيل محاولات كثيرة من هذا المصدر. حاول بعد ${registrationLimit.remainingMinutes} دقائق`, 429);
+    }
+    await recordRegistrationAttempt(email.toLowerCase(), ip);
 
     // Check email duplication (case-insensitive)
     const { data: existing, error: existingErr } = await s.from('users').select('id').ilike('email', email.toLowerCase()).limit(1);

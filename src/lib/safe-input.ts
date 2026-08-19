@@ -47,17 +47,99 @@ export function trustedReceiptReference(value: unknown, companyId: string): stri
   }
 }
 
+/**
+ * Detect payloads that indicate the file is really a web page or an
+ * executable wearing an image/PDF header. Scanned in a bounded ASCII window so
+ * a genuine binary file cannot trigger it accidentally.
+ */
+const WEB_OR_EXE_SIGNATURES: readonly RegExp[] = [
+  /<\s*script[\s/>]/i,
+  /<\s*html[\s>]/i,
+  /<!doctype\s+html/i,
+  /<\s*iframe[\s/>]/i,
+  /<\s*svg[\s/>][\s\S]{0,200}onload\s*=/i,
+  /onerror\s*=/i,
+  /javascript\s*:/i,
+  /<\?php/i,
+];
+
+function looksLikeWebOrExecutable(buffer: Buffer): boolean {
+  if (buffer.length >= 2 && buffer[0] === 0x4d && buffer[1] === 0x5a) return true; // MZ (PE/EXE)
+  if (buffer.length >= 4) {
+    const head = buffer.subarray(0, 4).toString('latin1');
+    if (head === '7z\u00bc\u00af' || head === 'PK\u0003\u0004' || head === 'Rar!') return true;
+  }
+  // Only the leading 1KB is inspected: binary image/PDF content lives later.
+  const window = buffer.subarray(0, Math.min(buffer.length, 1024)).toString('latin1');
+  return WEB_OR_EXE_SIGNATURES.some((re) => re.test(window));
+}
+
+/**
+ * Strict JPEG structure check: SOI (FF D8), then at least one syntactically
+ * valid marker chain containing a Start-Of-Frame segment within the first
+ * 4KB. HTML payloads that merely begin with FF D8 FF (classic polyglots) have
+ * no valid marker structure and are rejected.
+ */
+function isPlausibleJpeg(buffer: Buffer): boolean {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return false;
+  let pos = 2;
+  let sawSof = false;
+  const limit = Math.min(buffer.length, 4096);
+  while (pos + 4 <= limit) {
+    if (buffer[pos] !== 0xff) return sawSof; // entropy-coded data reached → structure consumed
+    const marker = buffer[pos + 1];
+    // 0xFF, 0x00 (stuffed) and standalone markers D0–D7 carry no length.
+    if (marker === 0xff || marker === 0x00) { pos += 1; continue; }
+    if (marker === 0xd9) return sawSof; // EOI before scan window end
+    if (marker === 0x01) return false; // TEM is never valid in a standalone file
+    if (marker >= 0xd0 && marker <= 0xd7) { pos += 2; continue; }
+    // SOF markers: C0–CF excluding C4 (DHT), C8 (JPG) and CC (DAC).
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      sawSof = true;
+    }
+    const len = buffer.readUInt16BE(pos + 2);
+    if (len < 2) return false; // corrupt length
+    pos += 2 + len;
+  }
+  return sawSof;
+}
+
+/**
+ * Uploaded-file content verification (defense against "poisoned" files).
+ *
+ * The MIME type is caller-controlled, so this checks the actual byte
+ * signature AND structural plausibility, and rejects files whose leading
+ * bytes expose web/executable payloads — a polyglot can no longer smuggle an
+ * HTML/JS payload inside an allowed extension:
+ *  - JPEG: FF D8 + valid marker chain incl. a SOF segment in the first 4KB.
+ *  - PNG: exact 8-byte signature + IHDR chunk at offset 12.
+ *  - PDF: "%PDF-" header at offset 0 (up to 4 leading bytes tolerated) plus
+ *    "%%EOF" trailer in the last 1KB.
+ */
 export function hasAllowedMagicBytes(buffer: Buffer, mime: string): boolean {
+  if (!buffer || buffer.length === 0) return false;
+  if (looksLikeWebOrExecutable(buffer)) return false;
+
   if (mime === 'image/jpeg' || mime === 'image/jpg') {
-    return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    return isPlausibleJpeg(buffer);
   }
   if (mime === 'image/png') {
-    return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    if (buffer.length < 16) return false;
+    const signatureOk = buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    if (!signatureOk) return false;
+    // bytes 12..15 must be the ASCII "IHDR" chunk type
+    return buffer.subarray(12, 16).toString('latin1') === 'IHDR';
   }
   if (mime === 'application/pdf') {
-    // PDF header may legally appear after a short binary comment/prefix. Keep
-    // the search bounded so arbitrary files containing "%PDF" do not pass.
-    return buffer.subarray(0, Math.min(buffer.length, 1024)).includes(Buffer.from('%PDF-'));
+    // Header must appear essentially at the start of the file, not anywhere
+    // inside the first 1KB (that was the polyglot window).
+    const head = buffer.subarray(0, Math.min(buffer.length, 8)).toString('latin1');
+    if (!head.includes('%PDF-')) return false;
+    const headerOffset = head.indexOf('%PDF-');
+    if (headerOffset > 4) return false;
+    // Trailer: a real PDF ends with the EOF marker.
+    const tail = buffer.subarray(Math.max(0, buffer.length - 1024)).toString('latin1');
+    return tail.includes('%%EOF');
   }
   return false;
 }

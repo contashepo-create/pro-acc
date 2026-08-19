@@ -1,43 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHash, randomInt, timingSafeEqual } from 'crypto';
+import { createHash, randomInt } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
+import { verifyWebhookSecret } from '@/lib/webhook-guard';
+import { escapeTelegramHtml } from '@/lib/telegram';
 
 const ok = () => NextResponse.json({ success: true }, { status: 200 });
 
 /**
- * Telegram webhook secret verification.
- *
- * Hardened deployments set TELEGRAM_WEBHOOK_SECRET and register the bot
- * webhook with the same token (see scripts/register-telegram-webhook.mjs);
- * for them every update must carry the matching header.
- *
- * Deployments whose webhook was registered before the secret-token scheme
- * (or without the env var) receive updates with NO header at all. Rejecting
- * those updates makes every inline button in the bot appear dead: Telegram
- * drops the click and shows nothing to the user. Those updates are therefore
- * accepted for compatibility, with a loud warning so the operator can finish
- * the hardening. A present-but-mismatched header is still rejected, because
- * that is an active forgery signal rather than a legacy registration.
+ * Telegram webhook secret verification (fail-closed in production).
+ * See @/lib/webhook-guard for the full policy; production rejects unsigned
+ * or unconfigured webhook traffic outright.
  */
 function hasValidSecret(request: NextRequest) {
-  const expected = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
-  const supplied = request.headers.get('x-telegram-bot-api-secret-token') || '';
-  if (!expected) {
-    console.warn(
-      '[Telegram Webhook] TELEGRAM_WEBHOOK_SECRET is not configured — accepting the update without verification. '
-      + 'Set it and register the bot webhook with the same token to enforce verification.',
-    );
-    return true;
+  const expected = process.env.TELEGRAM_WEBHOOK_SECRET || null;
+  const supplied = request.headers.get('x-telegram-bot-api-secret-token') || null;
+  const result = verifyWebhookSecret(supplied, expected, process.env.NODE_ENV === 'production');
+  if (!result.ok) {
+    console.warn(`[Telegram Webhook] ${result.reason}`);
+    return false;
   }
-  if (!supplied) {
-    console.warn(
-      '[Telegram Webhook] Update carries no secret header (webhook registered before the secret-token scheme?). '
-      + 'Accepting for compatibility; re-register the webhook to enforce verification.',
-    );
-    return true;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn(`[Telegram Webhook] ${result.reason}`);
   }
-  return supplied.length === expected.length
-    && timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+  return true;
 }
 
 export async function POST(request: NextRequest) {
@@ -51,7 +36,7 @@ export async function POST(request: NextRequest) {
       if (chatId && (text === '/start' || text === 'start') && token) {
         await telegramCall(token, 'sendMessage', {
           chat_id: chatId, parse_mode: 'HTML',
-          text: `🤖 <b>مرحباً بك في بوت برو أكاونت</b>\n\nمعرّف الدردشة الخاص بك:\n<code>${chatId}</code>`,
+          text: `🤖 <b>مرحباً بك في بوت برو أكاونت</b>\n\nمعرّف الدردشة الخاص بك:\n<code>${escapeTelegramHtml(chatId)}</code>`,
         });
       }
       return ok();

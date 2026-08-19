@@ -79,8 +79,13 @@ function schemaFieldNames(schema: z.ZodType): string[] {
 
 function interesting(fieldName: string, schema: z.ZodType): boolean {
   const typeName = zodTypeName(schema);
+  // Only genuine numeric fields (incl. coerced numbers) are money targets;
+  // string fields whose NAME matches money words are false positives.
   if (typeName === 'number') return true;
-  if (/amount|total|price|cost|balance|salary|debit|credit|quantity|rate|fee|tax|vat|discount|paid|value|limit|price|money|stock|budget|threshold|hours|days|qty|advance|penalty|paid_amount/i.test(fieldName)) return true;
+  if (typeName === 'coerce') {
+    const inner = (schema as any)?._zod?.def?.innerType;
+    return zodTypeName(inner) === 'number';
+  }
   return false;
 }
 
@@ -210,26 +215,40 @@ if (safeInput.trustedReceiptReference(`${companyId}/receipt-1.pdf`, companyId) !
   finding('HIGH', 'helper/trustedReceiptReference', 'rejected valid company object path');
 }
 
-// hasAllowedMagicBytes — positive & negative & polyglot attempts
+// hasAllowedMagicBytes — positive & negative & polyglot attempts.
+// Positive samples are structurally VALID files (the hardened checker
+// requires structure, not just a prefix).
 const magic = safeInput.hasAllowedMagicBytes;
-if (!magic(Buffer.from([0xff, 0xd8, 0xff, 0xe0]), 'image/jpeg')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real JPEG magic');
-if (!magic(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/png')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real PNG magic');
-if (!magic(Buffer.from('%PDF-1.7'), 'application/pdf')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real PDF magic');
+const validJpeg = Buffer.concat([
+  Buffer.from([0xff, 0xd8]),
+  Buffer.from([0xff, 0xe0, 0x00, 0x10]), Buffer.from('JFIF\u0000', 'latin1'), Buffer.from([0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]),
+  Buffer.from([0xff, 0xc0, 0x00, 0x0b]), Buffer.from([0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00]),
+  Buffer.from([0xff, 0xd9]),
+]);
+const validPng = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from([0x00, 0x00, 0x00, 0x0d]), Buffer.from('IHDR'),
+  Buffer.from([0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00]),
+]);
+const validPdf = Buffer.concat([Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<</Size 1>>\nstartxref\n0\n'), Buffer.from('%%EOF')]);
+if (!magic(validJpeg, 'image/jpeg')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real JPEG structure');
+if (!magic(validPng, 'image/png')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real PNG structure');
+if (!magic(validPdf, 'application/pdf')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real PDF structure');
 if (magic(Buffer.from('MZ\u0090\u0000exe'), 'application/pdf')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'accepted EXE as PDF');
 if (magic(Buffer.from('<html><script>alert(1)</script></html>'), 'application/pdf')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'accepted HTML as PDF');
 // polyglot: HTML payload with %PDF- header inside first 1KB
 const polyglotPdf = Buffer.concat([Buffer.from('<!--'), Buffer.from('%PDF-1.7'), Buffer.from('--><script>alert(1)</script>'), Buffer.alloc(500, 0x41)]);
 if (magic(polyglotPdf, 'application/pdf')) {
-  finding('MEDIUM', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML+JS file with "%PDF-" bytes inside first 1KB passes PDF validation');
+  finding('HIGH', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML+JS file with "%PDF-" bytes inside first 1KB passes PDF validation');
 }
 // polyglot: HTML with FF D8 FF prefix passes JPEG check
 const polyglotJpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from('<html><script>alert(1)</script>')]);
 if (magic(polyglotJpg, 'image/jpeg')) {
-  finding('MEDIUM', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML+JS file starting with FF D8 FF passes JPEG validation');
+  finding('HIGH', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML+JS file starting with FF D8 FF passes JPEG validation');
 }
-// PNG is strict — verify
-const polyglotPng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('<script>alert(1)</script>')]);
-if (magic(polyglotPng, 'image/png')) finding('INFO', 'helper/hasAllowedMagicBytes', 'HTML appended after valid PNG header passes (content-type is set to image/png so browser will not execute it)');
+// polyglot: PNG header followed by HTML payload
+const polyglotPng = Buffer.concat([validPng, Buffer.from('<script>alert(1)</script>')]);
+if (magic(polyglotPng, 'image/png')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML after PNG header passes validation');
 
 // generateUBLInvoice — XML injection resistance
 const ublBase: any = {

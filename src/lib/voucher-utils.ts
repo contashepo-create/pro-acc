@@ -198,7 +198,7 @@ export async function revertInvoiceAllocations(
     .eq(linkVoucherCol, voucherId);
 
   for (const link of links || []) {
-    const invoiceId = link[linkInvoiceCol];
+    const invoiceId = (link as Record<string, any>)[linkInvoiceCol];
     const { data: invoice } = await s.from(invoiceTable)
       .select('id, total, paid_amount, status')
       .eq('id', invoiceId)

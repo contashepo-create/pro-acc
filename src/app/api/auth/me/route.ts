@@ -118,8 +118,70 @@ export async function PUT(request: NextRequest) {
     // تحديث بيانات الملف الشخصي (الاسم والبريد)
     const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (typeof body.name === 'string' && body.name.trim()) update.name = body.name.trim();
+
+    let emailChanged = false;
+    let newEmail = '';
     if (typeof body.email === 'string' && body.email.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim())) {
-      update.email = body.email.trim().toLowerCase();
+      newEmail = body.email.trim().toLowerCase();
+      if (newEmail !== String(u.email || '').toLowerCase()) {
+        // Changing the login email is an identity change: the new address
+        // must be proven before it can be used to sign in (anti-hijack).
+        const { data: emailExists } = await s.from('users')
+          .select('id').ilike('email', newEmail).limit(1);
+        if (emailExists && emailExists.length > 0 && String((emailExists[0] as Record<string, any>).id) !== u.id) {
+          return error('هذا البريد الإلكتروني مستخدم بالفعل من حساب آخر', 409);
+        }
+        emailChanged = true;
+      }
+    }
+
+    if (emailChanged) {
+      const { randomBytes, createHash } = await import('crypto');
+      const rawToken = randomBytes(32).toString('hex');
+      const tokenHash = createHash('sha256').update(rawToken).digest('hex');
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+      update.email = newEmail;
+      update.email_verified = false;
+      update.email_verification_token = tokenHash;
+      update.email_verification_expires = expiresAt;
+
+      const configuredUrl = (process.env.NEXT_PUBLIC_APP_URL || '').trim();
+      const appUrl = configuredUrl ? new URL(configuredUrl) : new URL(request.url);
+      const verifyUrl = `${appUrl.origin}/verify-email?token=${rawToken}`;
+
+      const { sendVerificationEmail } = await import('@/lib/email');
+      const sent = await sendVerificationEmail(newEmail, verifyUrl);
+      if (!sent && process.env.NODE_ENV === 'production') {
+        // Fail closed: never persist an unverifiable login email.
+        return error('تعذر إرسال رابط التأكيد إلى البريد الجديد. لم يتم تغيير البريد الإلكتروني.', 503);
+      }
+
+      const { error: updErr } = await s.from('users')
+        .update(update)
+        .eq('id', u.id);
+      if (updErr) {
+        console.error('[auth/me PUT] failed to update profile (email change)', updErr);
+        throw updErr;
+      }
+      const { data: updated, error: readErr } = await s.from('users')
+        .select('id, name, email, role, is_active')
+        .eq('id', u.id)
+        .single();
+      if (readErr || !updated) throw readErr || new Error('تعذر قراءة الملف الشخصي بعد التحديث');
+      const uu = updated as Record<string, any>;
+      const safeUser = { id: uu.id, name: uu.name, email: uu.email, role: uu.role, isActive: uu.is_active };
+
+      return NextResponse.json(
+        {
+          success: true,
+          message: 'تم تحديث البريد الإلكتروني. راجع صندوق الوارد لتأكيد العنوان الجديد قبل تسجيل الدخول التالي.',
+          user: safeUser,
+          verificationPending: true,
+          ...(sent ? {} : { devVerificationUrl: verifyUrl }),
+        },
+        { status: 200, headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, private' } }
+      );
     }
 
     const { data: updated, error: updErr } = await s.from('users')

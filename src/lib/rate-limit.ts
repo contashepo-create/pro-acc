@@ -165,3 +165,52 @@ export async function markPasswordResetRequest(
     console.error('Failed to update password-reset request status:', err);
   }
 }
+
+/**
+ * Registration rate limit: per (email OR IP) inside the window, backed by the
+ * dedicated `registration_attempts` table so repeated sign-ups from one
+ * source are actually throttled (bot/account-farming defense on top of the
+ * Turnstile check).
+ */
+export async function checkRegistrationRateLimit(
+  email: string,
+  ipAddress: string,
+  opts: { maxAttempts?: number; windowMinutes?: number } = {}
+): Promise<{ allowed: boolean; remainingMinutes: number }> {
+  const s = sb();
+  const maxAttempts = opts.maxAttempts ?? 5;
+  const windowMinutes = opts.windowMinutes ?? 60;
+  const since = new Date(Date.now() - windowMinutes * 60000).toISOString();
+  const safeIp = sanitizeIpAddress(ipAddress);
+  const safeEmail = sanitizeEmailForFilter(email);
+
+  const { data, error } = await s.from('registration_attempts')
+    .select('created_at')
+    .or(`email.eq.${safeEmail},ip_address.eq.${safeIp}`)
+    .gte('created_at', since)
+    .order('created_at');
+
+  if (error) {
+    console.error('Registration rate limit check error:', error);
+    throw error;
+  }
+
+  const count = (data || []).length;
+  if (count >= maxAttempts) {
+    const oldest = data?.[0]?.created_at;
+    const elapsedMs = oldest ? Date.now() - new Date(oldest).getTime() : 0;
+    const remainingMs = windowMinutes * 60000 - elapsedMs;
+    const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+    return { allowed: false, remainingMinutes };
+  }
+
+  return { allowed: true, remainingMinutes: 0 };
+}
+
+/** Record a registration attempt so the throttle above has rows to count. */
+export async function recordRegistrationAttempt(email: string, ipAddress: string): Promise<void> {
+  const safeIp = sanitizeIpAddress(ipAddress);
+  const { error } = await sb().from('registration_attempts')
+    .insert({ email: email.toLowerCase().trim(), ip_address: safeIp });
+  if (error) throw error;
+}

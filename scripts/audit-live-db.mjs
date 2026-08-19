@@ -152,6 +152,10 @@ try { await db.query(`SELECT consume_email_verification_token($1)`, ['a'.repeat(
 record('verify-email: token consumed once', true, firstOk);
 record('verify-email: replay rejected', true, !secondOk);
 
+// ============ registration rate-limit store ============
+const regTable = await db.query(`SELECT to_regclass('public.registration_attempts') AS t`);
+record('registration_attempts table exists (registration rate-limit store)', 'registration_attempts', String(regTable.rows[0]?.t || ''));
+
 // ============ tenant isolation through RPC snapshot ============
 const snapA = await db.query(`SELECT get_assistant_company_snapshot($1::uuid) s`, [coARealId]);
 const snapB = await db.query(`SELECT get_assistant_company_snapshot($1::uuid) s`, [CO_B]);

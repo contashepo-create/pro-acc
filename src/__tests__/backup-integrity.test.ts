@@ -113,8 +113,8 @@ function authedAs(userId: string, role: string, body?: any, method = 'GET') {
     text: async () => JSON.stringify(body),
   } as any;
 }
-const insertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === t);
-const upsertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'upsert' && c.table === t);
+const insertsOf = (t: string) => mockDb.calls.filter((c: any) => c.mut.kind === 'insert' && c.table === t);
+const upsertsOf = (t: string) => mockDb.calls.filter((c: any) => c.mut.kind === 'upsert' && c.table === t);
 
 function sign(backupData: any) {
   const json = JSON.stringify(backupData, null, 2);
@@ -136,8 +136,8 @@ describe('backup download — admin-only', () => {
     const res = await backupDownloadGET(authedAs('u-admin', 'admin', undefined, 'GET'));
     expect(res.status).toBe(200);
     // only this company's data is exported (tenant scoping on each table query)
-    const accountsQuery = mockDb.calls.find((c) => c.table === 'accounts');
-    expect(accountsQuery!.ops.some((o) => o.op === 'eq' && o.col === 'company_id' && o.val === C1)).toBe(true);
+    const accountsQuery = mockDb.calls.find((c: any) => c.table === 'accounts');
+    expect(accountsQuery!.ops.some((o: any) => o.op === 'eq' && o.col === 'company_id' && o.val === C1)).toBe(true);
     expect(insertsOf('backup_logs').length).toBeGreaterThan(0);
     expect(insertsOf('security_audit_log').length).toBeGreaterThan(0);
   });

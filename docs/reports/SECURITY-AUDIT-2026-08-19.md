@@ -204,18 +204,27 @@ if (mime === 'image/jpeg' || mime === 'image/jpg')
 
 ---
 
-## 7. التوصيات (مرتبة بالأولوية)
+## 7. التوصيات (مرتبة بالأولوية) — حالة التنفيذ
 
-1. **تقوية فحص Magic Bytes** في `hasAllowedMagicBytes` (PDF: رأس+ذيل بنيوي، JPEG: فحص بنية، رفض أي أثر HTML في أول 512 بايت) + `Content-Disposition: attachment` عند تنزيل المرفقات.
-2. **إلزام `TELEGRAM_WEBHOOK_SECRET` في الإنتاج** (fail-closed مثل بقية الأسرار) وإعادة تسجيل الـ webhook بالرمز.
-3. **تعطيل صيغ CSV** ببادئة `'` في `convertToCSV`.
-4. **تجديد/حذف `supabase-full-schema.sql`** وتحديث تعليمات README للترحيل (npm run migrate أو الملفات الكاملة 000–071).
-5. **ربط `vatRate` بإعدادات الشركة** لغير المدير أو إخضاعه للاعتماد.
-6. **حدود قصوى/دنيا** للحقول الرقمية المذكورة (يُفضّل إنشاء `money` helper مشترك بحد `NUMERIC(15,2)`).
-7. تهريب متغيرات القوالب قبل إرسالها بصبغة HTML (تيليجرام/بريد).
-8. متابعة خطة nonce-based CSP وإزالة `unsafe-inline`، وتضييق `connect-src`.
-9. إكمال خطة `strict: true` التدريجية.
-10. إضافة اختبارات انحدار دائمة تعتمد سكربتات الفحص المرفقة (`scripts/audit-fuzz.mts`, `scripts/audit-live-db.mjs`) في CI.
+> ✅ **نُفّذت جميع البنود** في نفس الجلسة (2026-08-19). التفاصيل الكاملة في
+> [`docs/reports/FIXES-APPLIED-2026-08-19.md`](./FIXES-APPLIED-2026-08-19.md).
+
+1. ✅ **تقوية فحص Magic Bytes** — بنية JPEG/PNG/PDF صارمة + رفض تواقيع الويب/التنفيذي + `Content-Disposition: attachment` مع streaming بدل redirect.
+2. ✅ **إلزام `TELEGRAM_WEBHOOK_SECRET` في الإنتاج** — fail-closed عبر `src/lib/webhook-guard.ts`.
+3. ✅ **تعطيل صيغ CSV** — `src/lib/csv-export.ts` مع اختبارات.
+4. ✅ **إعادة توليد `supabase-full-schema.sql`** آلياً من السلسلة المرجعية + تحديث README/MIGRATIONS.
+5. ✅ **ربط `vatRate` بإعدادات الشركة** لغير المدير + حجز مفتاح `vat_rate` في الإعدادات.
+6. ✅ **حدود قصوى/دنيا** — مساعدا `moneyAmount()`/`quantityAmount()` مطبّقان على كل الحقول المالية.
+7. ✅ **تهريب HTML** في تيليجرام والبريد والرسائل.
+8. ✅ **تضييق CSP** — حذف `connect-src https:` وأصل Supabase غير المستخدم.
+9. ✅ **`strict: true` مكتمل** — 0 أخطاء TypeScript والبناء الإنتاجي يمر.
+10. ✅ **اختبارات انحدار دائمة** — `audit:fuzz` و`audit:db` و`schema:generate` في package.json + ملف `audit-hardening-regression.test.ts` (27 اختباراً).
+
+إصلاحات إضافية طُبّقت بعد التقرير الأصلي:
+- ✅ تغيير البريد الإلكتروني يتطلب إعادة تحقق (منع انتحال الهوية) مع fail-closed.
+- ✅ تحديد معدل تسجيل مخصص عبر جدول `registration_attempts` (هجرة 067).
+- ✅ إزالة اعتماد البناء على Google Fonts (خطوط مستضافة ذاتياً).
+- ✅ فحص UUID صارم لمسار تحميل التصدير (منع حقن ترويسات).
 
 ---
 
@@ -223,7 +232,8 @@ if (mime === 'image/jpeg' || mime === 'image/jpg')
 
 | الملف | الاستخدام |
 |---|---|
-| `scripts/audit-fuzz.mts` | Fuzzing مخططات Zod والدوال الأمنية: `npx tsx scripts/audit-fuzz.mts` |
-| `scripts/audit-live-db.mjs` | هجوم حي على RPCs على PostgreSQL حقيقي: `MIGRATION_DRIVER=postgres node scripts/audit-live-db.mjs` |
+| `scripts/audit-fuzz.mts` | Fuzzing مخططات Zod والدوال الأمنية: `npm run audit:fuzz` |
+| `scripts/audit-live-db.mjs` | هجوم حي على RPCs على PostgreSQL حقيقي: `npm run audit:db` |
+| `scripts/generate-full-schema.mjs` | إعادة توليد المخطط الكامل: `npm run schema:generate` |
 
 **الخلاصة:** لا توجد ثغرات حرجة أو عالية. يوجد 2 نتائج متوسطة و4 منخفضة وعدة ملاحظات تحسين — كلها قابلة للمعالجة بجهد صغير. المعمارية الأمنية والمحاسبية (RPCs ذرّية + Triggers + عزل الشركات + إبطال الرموز + CSRF مركزي) سليمة ومنفذة بمستوى احترافي.

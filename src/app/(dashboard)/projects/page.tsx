@@ -156,8 +156,8 @@ export default function ProjectsPage() {
     setBoqItems(updated);
 
     // تحديث إجمالي قيمة العقد تلقائياً في فورم المشروع الرئيسي
-    const sum = updated.reduce((s, item) => s + (item.total || 0), 0);
-    setForm(prev => ({ ...prev, contract_value: sum }));
+    const sum = updated.reduce((s: number, item: { total?: number }) => s + (item.total || 0), 0);
+    setForm((prev: Record<string, unknown>) => ({ ...prev, contract_value: sum }));
   };
 
   const handleSave = async () => {

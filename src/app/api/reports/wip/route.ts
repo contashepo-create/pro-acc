@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Totals
-    const totals = rows.reduce((acc, r) => {
+    const totals = rows.reduce((acc: Record<string, number>, r: Record<string, number>) => {
       acc.contract += r.contract_amount;
       acc.costs += r.costs_incurred;
       acc.billed += r.billed_to_date;

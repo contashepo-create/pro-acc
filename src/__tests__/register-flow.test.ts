@@ -38,6 +38,8 @@ jest.mock('@/lib/default-accounts', () => ({
 
 jest.mock('@/lib/rate-limit', () => ({
   checkRateLimit: jest.fn(async () => ({ allowed: true, remainingMinutes: 0 })),
+  checkRegistrationRateLimit: jest.fn(async () => ({ allowed: true, remainingMinutes: 0 })),
+  recordRegistrationAttempt: jest.fn(async () => {}),
   sanitizeEmailForFilter: (e: string) => e,
   sanitizeIpAddress: (i: string) => i,
 }));

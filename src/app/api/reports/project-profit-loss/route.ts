@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
         revenue, costs, profit, profit_margin: revenue ? (profit / revenue) * 100 : 0, status: project.status,
       };
     });
-    const totals = result.reduce((acc, project) => ({
+    const totals = result.reduce((acc: Record<string, number>, project: Record<string, number>) => ({
       total_contract_value: acc.total_contract_value + project.contract_value,
       total_billed: acc.total_billed + project.billed_amount,
       total_revenue: acc.total_revenue + project.revenue,

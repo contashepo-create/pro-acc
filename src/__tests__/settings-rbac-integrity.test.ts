@@ -144,8 +144,8 @@ function authedAs(userId: string, role: string, body?: any, method = 'PUT') {
 const urlOf = (qs = '') => `http://localhost/api/test${qs}`;
 const withUrl = (req: any, qs = '') => ({ ...req, url: urlOf(qs) });
 const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
-const updatesOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'update' && c.table === t);
-const insertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === t);
+const updatesOf = (t: string) => mockDb.calls.filter((c: any) => c.mut.kind === 'update' && c.table === t);
+const insertsOf = (t: string) => mockDb.calls.filter((c: any) => c.mut.kind === 'insert' && c.table === t);
 
 // ---------------------------------------------------------------------------
 

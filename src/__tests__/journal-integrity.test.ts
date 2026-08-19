@@ -78,7 +78,12 @@ function makeDb(db: Record<string, Row[]>) {
     return api;
   };
 
-  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
+  const db_ = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> } as {
+    from: (table: string) => any;
+    calls: typeof calls;
+    rpcCalls: Array<{ name: string; params: any }>;
+    [key: string]: any;
+  };
   db_.rpcImpl = async (_name: string, _params: any) => ({
     data: null,
     error: { message: `Could not find the function ${_name}` },

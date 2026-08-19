@@ -114,6 +114,34 @@ export async function POST(request: NextRequest) {
       return error('مبلغ التحصيل غير صالح');
     }
 
+    // TAX CONTROL: the VAT rate is a tax-compliance setting, not a free-form
+    // field. Only the company admin may override it; everyone else must use
+    // the company's configured rate (or 0 for zero-rated invoices such as
+    // exports). This closes the "any invoice creator can issue 0%/odd-rate
+    // invoices" loophole flagged in the security audit.
+    if (auth.role !== 'admin' && vatEnabled !== false) {
+      try {
+        const { data: companyRow } = await s.from('companies')
+          .select('vat_rate').eq('id', auth.companyId).maybeSingle();
+        const companyVatRate = Number((companyRow as Record<string, any> | null)?.vat_rate);
+        const configured = Number.isFinite(companyVatRate) && companyVatRate > 0 && companyVatRate <= 1
+          ? companyVatRate : 0.15;
+        const allowedRates = [0, configured];
+        if (!allowedRates.includes(vatRate)) {
+          return error(
+            `نسبة الضريبة يجب أن تطابق إعدادات الشركة (${(configured * 100).toFixed(0)}%) أو 0% للفواتير المعفاة. تواصل مع مدير النظام لتغيير النسبة.`,
+            403
+          );
+        }
+      } catch (e) {
+        // Fail closed on unreadable company settings in production.
+        if (process.env.NODE_ENV === 'production') {
+          console.error('[invoices] could not verify company VAT rate:', e);
+          return error('تعذر التحقق من إعدادات الضريبة. حاول لاحقاً', 503);
+        }
+      }
+    }
+
     // Numbering, tenant checks, server-side totals, invoice/items, sales
     // journal and optional immediate receipt/allocation commit together.
     const { data: created, error: createError } = await s.rpc('create_sales_invoice_atomic', {

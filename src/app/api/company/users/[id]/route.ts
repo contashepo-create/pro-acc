@@ -68,6 +68,8 @@ export async function PUT(
     }
 
     if (body.name !== undefined) updateData.name = body.name.trim();
+    let emailChanged = false;
+    let newEmailForVerify = '';
     if (body.email !== undefined) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
         return error('صيغة البريد الإلكتروني غير صحيحة');
@@ -84,6 +86,12 @@ export async function PUT(
         }
       }
       updateData.email = newEmail;
+      // Changing a login email is an identity change: the new address must be
+      // proven (same anti-hijack policy as the self-service profile route).
+      if (newEmail !== String((target as Record<string, any>).email || '').toLowerCase()) {
+        emailChanged = true;
+        newEmailForVerify = newEmail;
+      }
     }
     
     if (body.role !== undefined) {
@@ -123,6 +131,27 @@ export async function PUT(
       return error('لا توجد بيانات للتحديث');
     }
 
+    // Send the verification link BEFORE persisting the new email so an
+    // undeliverable address is never stored as a login credential. The raw
+    // token is never persisted — only its SHA-256 hash lands in the row.
+    if (emailChanged) {
+      const { randomBytes, createHash } = await import('crypto');
+      const rawToken = randomBytes(32).toString('hex');
+      updateData.email_verified = false;
+      updateData.email_verification_token = createHash('sha256').update(rawToken).digest('hex');
+      updateData.email_verification_expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+      const configuredUrl = (process.env.NEXT_PUBLIC_APP_URL || '').trim();
+      const appUrl = configuredUrl ? new URL(configuredUrl) : new URL(request.url);
+      const verifyUrl = `${appUrl.origin}/verify-email?token=${rawToken}`;
+
+      const { sendVerificationEmail } = await import('@/lib/email');
+      const sent = await sendVerificationEmail(newEmailForVerify, verifyUrl);
+      if (!sent && process.env.NODE_ENV === 'production') {
+        return error('تعذر إرسال رابط التأكيد إلى البريد الجديد. لم يتم تغيير البريد الإلكتروني.', 503);
+      }
+    }
+
     const { data: updated, error: updateError } = await s
       .from('users')
       .update(updateData)
@@ -146,7 +175,7 @@ export async function PUT(
       });
     } catch {}
 
-    return success(updated);
+    return success({ ...(updated as Record<string, unknown>), verificationPending: emailChanged });
   } catch (err) {
     return handleApiError(err);
   }

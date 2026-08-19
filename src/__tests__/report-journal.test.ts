@@ -46,11 +46,11 @@ function fakeSupabase(tables: Record<string, any[]>) {
           return query;
         },
         gte: (column: string, value: unknown) => {
-          rows = rows.filter((row) => row[column] >= value);
+          rows = rows.filter((row) => row[column] >= (value as number));
           return query;
         },
         lte: (column: string, value: unknown) => {
-          rows = rows.filter((row) => row[column] <= value);
+          rows = rows.filter((row) => row[column] <= (value as number));
           return query;
         },
         order: () => query,

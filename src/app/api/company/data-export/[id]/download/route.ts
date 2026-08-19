@@ -21,6 +21,11 @@ export async function GET(
     const auth = await requireApiAuth(req, { skipModuleGuard: true });
     if (auth.role !== 'admin') return error('تحميل تصدير الشركة متاح لمدير الشركة فقط', 403);
     const { id } = await params;
+    // The id is interpolated into a Content-Disposition filename — a strict
+    // UUID check prevents header injection.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      return error('معرف التصدير غير صالح', 400);
+    }
     const s = sb();
 
     const { data: exp, error: err } = await s.from('company_data_exports')
@@ -48,7 +53,28 @@ export async function GET(
         .from('company-exports')
         .createSignedUrl(objectPath, 60);
       if (signError || !signed?.signedUrl) return error('تعذر إنشاء رابط تحميل آمن', 503);
-      return NextResponse.redirect(signed.signedUrl, { status: 303 });
+
+      // Stream the object instead of redirecting so the signed URL never
+      // reaches the browser (same hardening as contract documents).
+      let fileResponse: globalThis.Response;
+      try {
+        fileResponse = await fetch(signed.signedUrl, { signal: AbortSignal.timeout(30_000) });
+      } catch {
+        return error('تعذر جلب ملف التصدير', 503);
+      }
+      if (!fileResponse.ok || !fileResponse.body) {
+        return error('تعذر جلب ملف التصدير', 502);
+      }
+      return new NextResponse(fileResponse.body, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="pro-acc-export-${id}.json"`,
+          'Content-Length': fileResponse.headers.get('content-length') || '',
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
     }
 
     // One-release compatibility for exports generated before migration 049.
