@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate } from '@/lib/utils';
+import { publishUnreadNotificationCount } from '@/lib/notification-events';
 
 export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -22,8 +23,10 @@ export default function NotificationsPage() {
       const res = await fetch('/api/notifications');
       const json = await res.json();
       if (json.success) {
+        const nextUnreadCount = json.data?.unreadCount || 0;
         setNotifications(json.data?.notifications || []);
-        setUnreadCount(json.data?.unreadCount || 0);
+        setUnreadCount(nextUnreadCount);
+        publishUnreadNotificationCount(nextUnreadCount);
       }
       else setError(json.message || 'فشل');
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
@@ -40,7 +43,12 @@ export default function NotificationsPage() {
       });
       const json = await res.json();
       if (json.success) {
-        fetchData();
+        const nextUnreadCount = notification.is_read ? unreadCount : Math.max(0, unreadCount - 1);
+        setNotifications((current) => current.map((item) =>
+          item.id === notification.id ? { ...item, ...json.data, is_read: true } : item
+        ));
+        setUnreadCount(nextUnreadCount);
+        publishUnreadNotificationCount(nextUnreadCount);
       } else {
         alert(json.message || 'فشل التحديث');
       }
@@ -49,12 +57,42 @@ export default function NotificationsPage() {
     }
   };
 
+  const handleMarkAllAsRead = async () => {
+    const unread = notifications.filter((notification) => !notification.is_read);
+    try {
+      const results = await Promise.all(unread.map(async (notification) => {
+        const response = await fetch(`/api/notifications/${notification.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isRead: true }),
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.success) throw new Error(payload.message || 'فشل التحديث');
+        return notification.id;
+      }));
+      const updatedIds = new Set(results);
+      setNotifications((current) => current.map((item) =>
+        updatedIds.has(item.id) ? { ...item, is_read: true, read_at: new Date().toISOString() } : item
+      ));
+      setUnreadCount(0);
+      publishUnreadNotificationCount(0);
+    } catch (cause) {
+      // Some requests may have succeeded. Reload once to show the authoritative
+      // server count instead of leaving either badge with stale information.
+      await fetchData();
+      alert(cause instanceof Error ? cause.message : 'خطأ في الاتصال بالخادم');
+    }
+  };
+
   const handleDelete = async (notification: any) => {
     try {
       const res = await fetch(`/api/notifications/${notification.id}`, { method: 'DELETE' });
       const json = await res.json();
       if (json.success) {
-        fetchData();
+        const nextUnreadCount = notification.is_read ? unreadCount : Math.max(0, unreadCount - 1);
+        setNotifications((current) => current.filter((item) => item.id !== notification.id));
+        setUnreadCount(nextUnreadCount);
+        publishUnreadNotificationCount(nextUnreadCount);
       } else {
         alert(json.message || 'فشل الحذف');
       }
@@ -119,7 +157,7 @@ export default function NotificationsPage() {
         description={`لديك ${unreadCount} إشعار غير مقروء`}
         actions={
           unreadCount > 0 && (
-            <Button onClick={() => notifications.forEach(n => !n.is_read && handleMarkAsRead(n))}>
+            <Button onClick={handleMarkAllAsRead}>
               تحديد الكل كمقروء
             </Button>
           )

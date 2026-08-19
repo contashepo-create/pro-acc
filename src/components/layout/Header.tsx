@@ -10,6 +10,7 @@ import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { useSidebarStore } from '@/store/sidebar-store';
 import { toast } from '@/components/ui/Toast';
+import { NOTIFICATIONS_UPDATED_EVENT, readUnreadNotificationCount } from '@/lib/notification-events';
 
 interface HeaderProps {
   title?: string;
@@ -43,9 +44,19 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
       }
     };
 
+    const handleNotificationsUpdated = (event: Event) => {
+      const unreadCount = readUnreadNotificationCount(event);
+      if (unreadCount !== null) setNotificationCount(unreadCount);
+      else void fetchNotificationCount();
+    };
+
     fetchNotificationCount();
+    window.addEventListener(NOTIFICATIONS_UPDATED_EVENT, handleNotificationsUpdated);
     const interval = setInterval(fetchNotificationCount, 60000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener(NOTIFICATIONS_UPDATED_EVENT, handleNotificationsUpdated);
+    };
   }, []);
 
   // Update time and date
