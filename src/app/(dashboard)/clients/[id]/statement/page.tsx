@@ -177,12 +177,19 @@ export default function ClientStatementPage() {
                           }`}>{entryTypeLabel[entry.type] || entry.type}</span>
                         </td>
                         <td className="py-2 px-3 text-sm text-gray-900">
-                          <button onClick={() => toggleRow(entry.id)} className="flex items-center gap-1 text-right">
-                            {entry.description}
-                            {isExpanded ? <ChevronUp size={12} className="text-gray-400" /> : <ChevronDown size={12} className="text-gray-400" />}
-                          </button>
+                          <span
+                            className="flex items-center gap-1 text-right cursor-pointer"
+                            onClick={() => toggleRow(entry.id)}
+                            role="button"
+                            tabIndex={0}
+                          >
+                            <span>{entry.description}</span>
+                            <span className="no-print">
+                              {isExpanded ? <ChevronUp size={12} className="text-gray-400" /> : <ChevronDown size={12} className="text-gray-400" />}
+                            </span>
+                          </span>
                           {isExpanded && (
-                            <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-500 space-y-1">
+                            <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-500 space-y-1 no-print">
                               <p>رقم القيد: {entry.entry_number}</p>
                               <p>المرجع: {entry.reference_id || '—'}</p>
                               {entry.created_by_name && <p>أعدّها: {entry.created_by_name}</p>}
@@ -289,8 +296,26 @@ export default function ClientStatementPage() {
         @media print {
           body { background: white !important; }
           .no-print { display: none !important; }
-          .print-container { padding: 0 !important; max-width: none !important; }
-          @page { margin: 1cm; size: A4; }
+          .print-container { padding: 0 !important; max-width: none !important; margin: 0 !important; }
+          .print-container > div {
+            box-shadow: none !important;
+            border-radius: 0 !important;
+            border: none !important;
+            overflow: visible !important;
+          }
+          .print-container * {
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          /* تثبيت رأس الجدول على كل صفحة ومنع انقسام الصفوف/البطاقات */
+          thead { display: table-header-group; }
+          tfoot { display: table-footer-group; }
+          .print-container tr { break-inside: avoid; page-break-inside: avoid; }
+          .print-container .grid { break-inside: avoid; page-break-inside: avoid; }
+          .print-container td, .print-container th {
+            border: 1px solid #d1d5db !important;
+          }
+          @page { margin: 1.2cm; size: A4; }
         }
       `}</style>
     </div>

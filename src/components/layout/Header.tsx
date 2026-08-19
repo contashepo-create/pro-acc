@@ -36,7 +36,7 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
         const res = await fetch('/api/notifications?unread_only=true');
         const data = await res.json();
         if (data.success) {
-          setNotificationCount(data.data?.length || 0);
+          setNotificationCount(data.data?.unreadCount || 0);
         }
       } catch (error) {
         console.error('Failed to fetch notification count:', error);
