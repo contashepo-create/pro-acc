@@ -43,7 +43,11 @@ export async function PUT(
 
     const { data: updated, error: updErr } = await s.from('fiscal_years')
       .update(updateData).eq('id', id).eq('company_id', auth.companyId).select('*').single();
-    if (updErr) throw updErr;
+    if (updErr) {
+      const message = String((updErr as { message?: string }).message || '');
+      if (/تتداخل/.test(message)) return error(message, 409);
+      throw updErr;
+    }
 
     return success(updated);
   } catch (err) {

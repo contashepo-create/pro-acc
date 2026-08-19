@@ -820,6 +820,11 @@ async function smokeAtomicWriters(ids) {
   assert.equal(Number(progressClaim.retention_amount),3);
   assert.equal((await db.query(`SELECT cancel_progress_billing_atomic($1,$2,$3) result`,[c,progressClaim.id,u])).rows[0].result.status,'cancelled');
   const editableProject=(await db.query(`SELECT create_project_atomic($1,'Editable',$2,20,'2026-02-01',NULL,'active','','','[]'::jsonb,FALSE,$3) result`,[c,contact,u])).rows[0].result;
+  // Project creation with auto_invoice=FALSE must NOT create an invoice or
+  // touch the client balance — a project is a reference, only invoices move
+  // the ledger (the app UI no longer sends auto_invoice at all).
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM invoices WHERE company_id=$1 AND project_id=$2`,[c,editableProject.id])).rows[0].count),0);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='invoice' AND reference_id IN (SELECT id FROM invoices WHERE company_id=$1 AND project_id=$2)`,[c,editableProject.id])).rows[0].count),0);
   await db.query(`SELECT update_project_atomic($1,$2,$3::jsonb,$4::jsonb,$5)`,[
     c,editableProject.id,JSON.stringify({name:'Edited',contract_value:30}),JSON.stringify([{description:'Line',unit:'u',quantity:3,unit_price:10}]),u,
   ]);
@@ -1973,6 +1978,9 @@ async function smokeFiscalYearControls() {
   assert.equal(next.status, 'open');
   // ...but reopening the closed year while another is open is rejected.
   await assert.rejects(() => db.query(`SELECT reopen_fiscal_year_atomic($1,$2,$3)`, [c, boot.id, u]));
+  // Editing a year's dates into an overlap is rejected at the DB level too.
+  await assert.rejects(() => db.query(`UPDATE fiscal_years SET start_date='2026-06-01' WHERE id=$1`, [next.id]));
+  assert.equal((await db.query(`SELECT start_date FROM fiscal_years WHERE id=$1`, [next.id])).rows[0].start_date.toISOString().slice(0, 10), '2027-01-01');
 }
 
 try {

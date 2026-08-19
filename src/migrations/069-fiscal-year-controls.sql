@@ -43,7 +43,25 @@ DROP TRIGGER IF EXISTS trg_company_fiscal_year_bootstrap ON companies;
 CREATE TRIGGER trg_company_fiscal_year_bootstrap AFTER INSERT ON companies
   FOR EACH ROW EXECUTE FUNCTION public.bootstrap_company_fiscal_year();
 
--- 4) Clear error when a transition would open a second fiscal year (e.g. the
+-- 4) DB-enforced non-overlap of fiscal periods. Covers BOTH creation and the
+--    edit path (a later date change can silently create an overlap otherwise).
+CREATE OR REPLACE FUNCTION public.guard_fiscal_year_no_overlap()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path=public AS $$
+BEGIN
+  IF EXISTS(SELECT 1 FROM fiscal_years
+    WHERE company_id=NEW.company_id AND id IS DISTINCT FROM NEW.id
+      AND start_date<=NEW.end_date AND end_date>=NEW.start_date)
+  THEN RAISE EXCEPTION 'الفترة المالية تتداخل مع فترة موجودة';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_guard_fiscal_year_no_overlap ON fiscal_years;
+CREATE TRIGGER trg_guard_fiscal_year_no_overlap
+  BEFORE INSERT OR UPDATE OF start_date,end_date,company_id ON fiscal_years
+  FOR EACH ROW EXECUTE FUNCTION public.guard_fiscal_year_no_overlap();
+
+-- 5) Clear error when a transition would open a second fiscal year (e.g. the
 --    reopen path). The unique index above is the hard backstop.
 CREATE OR REPLACE FUNCTION public.guard_single_open_fiscal_year()
 RETURNS TRIGGER LANGUAGE plpgsql SET search_path=public AS $$
@@ -61,7 +79,7 @@ DROP TRIGGER IF EXISTS trg_guard_single_open_fiscal_year ON fiscal_years;
 CREATE TRIGGER trg_guard_single_open_fiscal_year BEFORE UPDATE OF status ON fiscal_years
   FOR EACH ROW EXECUTE FUNCTION public.guard_single_open_fiscal_year();
 
--- 5) Strict posting guard. An entry dated inside a CLOSED year is rejected,
+-- 6) Strict posting guard. An entry dated inside a CLOSED year is rejected,
 --    and once a company has fiscal years, an entry dated outside every OPEN
 --    year is rejected. Closing/reversing entries are system entries and are
 --    exempt from the guard.
@@ -84,7 +102,7 @@ BEGIN
 END;
 $$;
 
--- 6) Atomic fiscal-year creation: validates dates, blocks date overlaps and a
+-- 7) Atomic fiscal-year creation: validates dates, blocks date overlaps and a
 --    second open year, and records an audit entry (the app previously checked
 --    overlaps with a racy read-then-write).
 CREATE OR REPLACE FUNCTION public.create_fiscal_year_atomic(
