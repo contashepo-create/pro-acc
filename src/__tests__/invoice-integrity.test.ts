@@ -136,6 +136,10 @@ function baseDb() {
       } },
     }],
 journal_sequences: [] as Row[],
+    fiscal_years: [{
+      id: 'fy-2026', company_id: C1, name: 'السنة المالية 2026',
+      start_date: '2026-01-01', end_date: '2026-12-31', status: 'open',
+    }],
     voucher_receipts: [] as Row[],
     invoices: [] as Row[],
     invoice_items: [] as Row[],
@@ -181,6 +185,32 @@ function insertsOf(table: string) {
 describe('POST /api/invoices — atomic financial boundary', () => {
   beforeEach(() => {
     mockDb = makeDb(baseDb());
+  });
+
+  test('returns the fiscal-year reason instead of a generic server error', async () => {
+    const response = await invoicesPOST(authedRequest(invoiceBody({
+      date: '2027-01-10', dueDate: '2027-01-20',
+    })));
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.message).toContain('خارج نطاق السنة المالية المفتوحة');
+    expect(payload.message).toContain('2026-01-01 إلى 2026-12-31');
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
+
+  test('returns a clear reason when the covering fiscal year is closed', async () => {
+    (mockDb as any).calls.length = 0;
+    const fiscalYear = (baseDb().fiscal_years as Row[])[0];
+    fiscalYear.status = 'closed';
+    mockDb = makeDb({ ...baseDb(), fiscal_years: [fiscalYear] });
+
+    const response = await invoicesPOST(authedRequest(invoiceBody()));
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload.message).toContain('السنة المالية «السنة المالية 2026» مقفلة');
+    expect(mockDb.rpcCalls).toHaveLength(0);
   });
 
   test('passes trusted tenant/user context and source items to one transaction RPC', async () => {

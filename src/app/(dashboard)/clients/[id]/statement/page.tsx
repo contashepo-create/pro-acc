@@ -6,6 +6,7 @@ import { ArrowRight, Printer, FileDown, AlertTriangle, Eye, ChevronDown, Chevron
 import { Button } from '@/components/ui/Button';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { printCurrentPage } from '@/lib/print';
+import { getClientBalanceMeaning } from '@/lib/contact-balance';
 
 export default function ClientStatementPage() {
   const params = useParams();
@@ -74,7 +75,10 @@ export default function ClientStatementPage() {
     invoice: 'فاتورة',
     progress_billing: 'فاتورة مرحلية',
     voucher_receipt: 'سند قبض',
+    voucher_receipt_reversal: 'عكس سند قبض',
     voucher_disbursement: 'سند صرف',
+    voucher_disbursement_reversal: 'عكس سند صرف',
+    invoice_reversal: 'عكس فاتورة',
     project_expense: 'مصروف مشروع',
     project_closure: 'إقفال مشروع',
     quotation_conversion: 'تحويل عرض',
@@ -90,6 +94,7 @@ export default function ClientStatementPage() {
   const { client, entries, balance, total_debit, total_credit, pagination } = data;
   const totalEntries = pagination?.total ?? entries.length;
   const totalPages = Math.max(1, pagination?.totalPages ?? 1);
+  const closingBalanceMeaning = getClientBalanceMeaning(balance);
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-bg-secondary">
@@ -141,7 +146,9 @@ export default function ClientStatementPage() {
             <div className={`border rounded-xl p-4 text-center ${balance >= 0 ? 'bg-blue-50 border-blue-200' : 'bg-orange-50 border-orange-200'}`}>
               <p className="text-xs text-gray-500 mb-1">الرصيد الحالي</p>
               <p className={`text-xl font-bold ${balance >= 0 ? 'text-blue-700' : 'text-orange-700'}`}>{formatCurrency(Math.abs(balance))}</p>
-              <p className="text-xs text-gray-400">{balance >= 0 ? 'مدين (له)' : 'دائن (عليه)'}</p>
+              <p className="text-xs text-gray-500 font-semibold">
+                {closingBalanceMeaning.label}
+              </p>
             </div>
           </div>
 
@@ -198,7 +205,12 @@ export default function ClientStatementPage() {
                         </td>
                         <td className="py-2 px-3 text-sm text-center font-medium text-green-700">{entry.debit > 0 ? formatCurrency(entry.debit) : '—'}</td>
                         <td className="py-2 px-3 text-sm text-center font-medium text-red-700">{entry.credit > 0 ? formatCurrency(entry.credit) : '—'}</td>
-                        <td className="py-2 px-3 text-sm text-center font-bold text-gray-900">{formatCurrency(Math.abs(entry.balance))}</td>
+                        <td className="py-2 px-3 text-sm text-center font-bold text-gray-900">
+                          <div>{formatCurrency(Math.abs(entry.balance))}</div>
+                          <div className="text-[10px] font-medium text-gray-500">
+                            {getClientBalanceMeaning(entry.balance).shortLabel}
+                          </div>
+                        </td>
                         <td className="py-2 px-3 text-center no-print">
                           <div className="flex items-center justify-center gap-1">
                             {entry.reference_id && (
@@ -226,7 +238,12 @@ export default function ClientStatementPage() {
                     <td colSpan={3} className="py-3 px-3 text-right text-gray-800">الإجمالي</td>
                     <td className="py-3 px-3 text-center text-green-700">{formatCurrency(total_debit)}</td>
                     <td className="py-3 px-3 text-center text-red-700">{formatCurrency(total_credit)}</td>
-                    <td className="py-3 px-3 text-center text-gray-900">{formatCurrency(Math.abs(balance))}</td>
+                    <td className="py-3 px-3 text-center text-gray-900">
+                      <div>{formatCurrency(Math.abs(balance))}</div>
+                      <div className="text-[10px] font-medium text-gray-600">
+                        {closingBalanceMeaning.shortLabel}
+                      </div>
+                    </td>
                     <td className="no-print"></td>
                   </tr>
                 </tfoot>

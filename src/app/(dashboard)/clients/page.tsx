@@ -294,7 +294,7 @@ export default function ClientsPage() {
               {!editingClient ? <>
                 <Input label="الرصيد الافتتاحي" type="number" value={form.opening_balance} onChange={(e) => setForm({ ...form, opening_balance: parseFloat(e.target.value) || 0 })} />
                 <Select label="نوع الرصيد الافتتاحي" value={form.opening_balance_type} onChange={(v) => setForm({ ...form, opening_balance_type: v })}
-                  options={[{ value: 'debit', label: 'مدين (له)' }, { value: 'credit', label: 'دائن (عليه)' }]} />
+                  options={[{ value: 'debit', label: 'مدين (مستحق على العميل)' }, { value: 'credit', label: 'دائن (رصيد لصالح العميل)' }]} />
               </> : (
                 <p className="sm:col-span-2 text-sm text-text-muted">
                   لا يمكن تعديل الرصيد الافتتاحي بعد إنشاء العميل؛ استخدم قيد تسوية معتمد عند الحاجة.

@@ -71,6 +71,16 @@ export class AuthError extends Error {
   }
 }
 
+/** A safe, user-facing accounting/business rule violation (not a server fault). */
+export class BusinessRuleError extends Error {
+  status: number;
+  constructor(message: string, status = 409) {
+    super(message);
+    this.name = 'BusinessRuleError';
+    this.status = status;
+  }
+}
+
 const sb = () => getSupabase();
 
 export async function requireApiAuth(request: Request, options: { checkSubscription?: boolean; skipModuleGuard?: boolean } = {}): Promise<{ companyId: string; userId: string; role: string }> {
@@ -231,7 +241,22 @@ export async function requireAdminAuth(request: Request): Promise<{ userId: stri
 }
 
 export function handleApiError(err: unknown) {
-  if (err instanceof AuthError) return error(err.message, err.status);
+  if (err instanceof AuthError || err instanceof BusinessRuleError) return error(err.message, err.status);
+
+  // PostgreSQL is the final authority and may reject a posting after the
+  // route-level check (for example when a fiscal year closes concurrently).
+  // Translate only these allow-listed accounting rules; never expose arbitrary
+  // database/schema errors to production users.
+  const databaseMessage = err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string'
+    ? String((err as { message: string }).message)
+    : '';
+  if (/لا يمكن الترحيل إلى سنة مالية مقفلة|cannot post to a closed fiscal year/i.test(databaseMessage)) {
+    return error('لا يمكن تسجيل العملية لأن تاريخها يقع في سنة مالية مقفلة. أعد فتح السنة المالية أو اختر تاريخاً ضمن سنة مفتوحة.', 409);
+  }
+  if (/لا توجد سنة مالية مفتوحة تغطي تاريخ العملية/i.test(databaseMessage)) {
+    return error('تاريخ العملية خارج نطاق السنة المالية المفتوحة. أنشئ أو افتح سنة مالية تغطي هذا التاريخ ثم أعد المحاولة.', 409);
+  }
+
   if (err instanceof ValidationFailure) return validationError(err.errors ?? err.message);
   if (err instanceof RateLimitExceeded) {
     const res = error('عدد كبير جداً من الطلبات، حاول لاحقاً', 429);

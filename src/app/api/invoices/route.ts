@@ -4,6 +4,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
 import { isValidDate } from '@/lib/utils';
+import { assertOpenFiscalPeriod } from '@/lib/fiscal-guard';
 
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -113,6 +114,10 @@ export async function POST(request: NextRequest) {
       || Math.abs(collectedAmount * 100 - Math.round(collectedAmount * 100)) > 1e-8) {
       return error('مبلغ التحصيل غير صالح');
     }
+
+    // Return the actual accounting reason to the user instead of allowing the
+    // database trigger to surface as a generic production server error.
+    await assertOpenFiscalPeriod(auth.companyId, date);
 
     // TAX CONTROL: the VAT rate is a tax-compliance setting, not a free-form
     // field. Only the company admin may override it; everyone else must use
