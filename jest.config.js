@@ -26,10 +26,10 @@ module.exports = {
   // silently reduce the tested share of shared business functions.
   coverageThreshold: {
     global: {
-      statements: 94,
-      branches: 85,
+      statements: 95,
+      branches: 88,
       functions: 100,
-      lines: 96,
+      lines: 97,
     },
   },
 };
