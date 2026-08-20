@@ -923,8 +923,13 @@ async function smokeAtomicWriters(ids) {
   const atomicProject=(await db.query(`SELECT create_project_atomic($1,'Atomic project',$2,75,'2026-02-01',NULL,'active','','',$3::jsonb,TRUE,$4) result`,[
     c,contact,JSON.stringify([{description:'Project work',unit:'unit',quantity:1,unit_price:75}]),u,
   ])).rows[0].result;
-  assert.ok(atomicProject.invoice.id);
+  // A project is a reference: even when p_auto_invoice is passed TRUE, no
+  // invoice is created and no journal entry is posted (the app no longer
+  // sends auto_invoice at all). Only invoices move the client balance.
+  assert.equal(atomicProject.invoice,null);
   assert.equal(Number(atomicProject.boq_items_count),1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM invoices WHERE company_id=$1 AND project_id=$2`,[c,atomicProject.id])).rows[0].count),0);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='invoice' AND reference_id IN (SELECT id FROM invoices WHERE company_id=$1 AND project_id=$2)`,[c,atomicProject.id])).rows[0].count),0);
   const progressClaim=(await db.query(`SELECT create_progress_billing_atomic($1,$2,'2026-02-03','','Claim',30,0.1,0.15,FALSE,$3) result`,[c,atomicProject.id,u])).rows[0].result;
   assert.ok(progressClaim.journal_entry_id);
   assert.equal(Number(progressClaim.retention_amount),3);
@@ -1151,6 +1156,28 @@ async function smokeAtomicWriters(ids) {
   const updatedDisbursement=(await db.query(`SELECT update_voucher_disbursement_atomic($1,$2,NULL,NULL,FALSE,NULL,FALSE,40,NULL,'updated',$3) result`,[c,directVoucher.rows[0].result.id,u])).rows[0].result;
   assert.equal(Number(updatedDisbursement.amount),40);
   assert.equal((await db.query(`SELECT cancel_voucher_disbursement_atomic($1,$2,$3) result`,[c,directVoucher.rows[0].result.id,u])).rows[0].result.status,'cancelled');
+  // Supplier FIFO auto-settlement: an undirected disbursement settles the
+  // oldest open purchase invoices of the same supplier.
+  const fifoPo1='74000000-0000-4000-8000-000000000f01';
+  const fifoPo2='74000000-0000-4000-8000-000000000f02';
+  await db.query(`INSERT INTO purchase_invoices(id,company_id,number,date,supplier_id,total,paid_amount,status)
+    VALUES($1,$2,500,'2026-01-05',$3,100,0,'unpaid'),($4,$2,501,'2026-01-20',$3,200,0,'unpaid')`,[fifoPo1,c,contact,fifoPo2]);
+  const fifoDisp=(await db.query(`SELECT create_voucher_disbursement_atomic($1,'2026-02-03','supplier',$2,NULL,250,$3,'FIFO settle','[]'::jsonb,FALSE,$4,TRUE) result`,
+    [c,contact,b,u])).rows[0].result;
+  assert.equal(Number(fifoDisp.allocated_amount),250);
+  assert.equal((await db.query(`SELECT status FROM purchase_invoices WHERE id=$1`,[fifoPo1])).rows[0].status,'paid');
+  const fifoPo2row=(await db.query(`SELECT paid_amount,status FROM purchase_invoices WHERE id=$1`,[fifoPo2])).rows[0];
+  assert.equal(Number(fifoPo2row.paid_amount),150);
+  assert.equal(fifoPo2row.status,'partial');
+  // Client FIFO auto-settlement via an undirected receipt.
+  const fifoInv='74000000-0000-4000-8000-000000000f03';
+  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,900,'2026-01-05','2026-02-05',$3,120,0,0,120,0,'unpaid')`,[fifoInv,c,contact]);
+  const fifoReceipt=(await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-03','client',$2,120,$3,'FIFO receipt','[]'::jsonb,TRUE,FALSE,$4) result`,[c,contact,b,u])).rows[0].result;
+  assert.equal(Number(fifoReceipt.allocated_amount),120);
+  assert.equal((await db.query(`SELECT status FROM invoices WHERE id=$1`,[fifoInv])).rows[0].status,'paid');
+  await db.query(`SELECT cancel_voucher_disbursement_atomic($1,$2,$3)`,[c,fifoDisp.id,u]);
+  await db.query(`SELECT cancel_voucher_receipt_atomic($1,$2,$3)`,[c,fifoReceipt.id,u]);
+
   const salesInvoice='71000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,101,'2026-02-01','2026-03-01',$3,80,0,0,80,0,'unpaid')`,[salesInvoice,c,contact]);
   const receipt=await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','client',$2,80,$3,'receipt',$4::jsonb,FALSE,FALSE,$5) result`,

@@ -116,6 +116,18 @@ export async function POST(request: NextRequest) {
       ? { requiresApproval: false }
       : await checkApprovalThreshold(auth.companyId, amount, 'voucher_disbursement', auth.userId);
 
+    // An undirected payment to a supplier/subcontractor is applied to the
+    // oldest open purchase invoices by default (FIFO). Disable via the
+    // auto_allocate_disbursements_fifo setting = 'false'.
+    let autoFifo = true;
+    if ((!invoice_items || invoice_items.length === 0)
+        && (disbursement_type === 'supplier' || disbursement_type === 'subcontractor') && contact_id) {
+      const { data: setting, error: settingErr } = await s.from('settings')
+        .select('value').eq('company_id', auth.companyId).eq('key', 'auto_allocate_disbursements_fifo').maybeSingle();
+      if (settingErr) throw settingErr;
+      if (setting && ['false', '0', 'no'].includes(String(setting.value).toLowerCase())) autoFifo = false;
+    }
+
     // Voucher, number, pending approval/allocation intent OR direct journal and
     // invoice allocation are committed by one authoritative transaction.
     const { data, error: createErr } = await s.rpc('create_voucher_disbursement_atomic', {
@@ -130,6 +142,7 @@ export async function POST(request: NextRequest) {
       p_allocations: invoice_items || [],
       p_request_approval: threshold.requiresApproval,
       p_user_id: auth.userId,
+      p_auto_fifo: autoFifo,
     });
     if (createErr) throw createErr;
     const voucher = data as Record<string, any>;

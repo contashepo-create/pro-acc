@@ -115,12 +115,16 @@ export async function POST(request: NextRequest) {
       ? { requiresApproval: false }
       : await checkApprovalThreshold(auth.companyId, amount, 'voucher_receipt', auth.userId);
 
-    let autoFifo = false;
+    // A client receipt with no explicit invoice allocation is applied to the
+    // oldest open invoices by default (FIFO), so an undirected payment settles
+    // the client's outstanding invoices. Explicitly disable via the
+    // auto_allocate_receipts_fifo setting = 'false'.
+    let autoFifo = true;
     if ((!invoice_items || invoice_items.length === 0) && receipt_type === 'client' && contact_id) {
       const { data: setting, error: settingErr } = await s.from('settings')
         .select('value').eq('company_id', auth.companyId).eq('key', 'auto_allocate_receipts_fifo').maybeSingle();
       if (settingErr) throw settingErr;
-      autoFifo = !!setting && ['true', '1', 'yes'].includes(String(setting.value).toLowerCase());
+      if (setting && ['false', '0', 'no'].includes(String(setting.value).toLowerCase())) autoFifo = false;
     }
 
     // Numbering, voucher, journal, explicit/FIFO allocation, invoice states

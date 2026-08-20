@@ -264,7 +264,6 @@ export default function InvoicesPage() {
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true, render: (row: any) => row.contact_name || row.client_name || '—' },
     { key: 'total', label: 'الإجمالي', sortable: true, render: (row: any) => formatCurrency(row.total) },
-    { key: 'status', label: 'الحالة', sortable: true, render: (row: any) => statusBadge(row.status) },
     { key: 'paid_amount', label: 'المدفوع', render: (row: any) => formatCurrency(row.paid_amount) },
     { key: 'actions', label: '', render: (row: any) => (
       <div className="flex items-center gap-1">

@@ -85,14 +85,14 @@ describe('project atomic lifecycle boundary', () => {
     expect(mockDb.calls.filter((call) => call.mut.kind)).toHaveLength(0);
   });
 
-  test('BOQ normalization and optional invoice flag cross one atomic boundary', async () => {
+  test('BOQ normalization crosses one atomic boundary and never auto-invoices', async () => {
     const response = await projectPOST(request({
       name: 'مشروع', client_id: CLIENT, start_date: '2026-01-15', auto_invoice: true,
       items: [{ description: ' بند ', unit: 'م', quantity: 2, unit_price: 500 }],
     }));
     expect(response.status).toBe(201);
     expect(rpc('create_project_atomic')!.params).toMatchObject({
-      p_company_id: C1, p_client_id: CLIENT, p_contract_value: 1000, p_auto_invoice: true,
+      p_company_id: C1, p_client_id: CLIENT, p_contract_value: 1000, p_auto_invoice: false,
       p_items: [{ description: 'بند', unit: 'م', quantity: 2, unit_price: 500 }],
     });
   });

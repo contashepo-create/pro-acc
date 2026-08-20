@@ -82,6 +82,8 @@
 --   070-operational-document-numbers.sql
 --   071-project-costing-integrity.sql
 --   072-project-costing-allocation.sql
+--   073-project-no-auto-invoice.sql
+--   074-voucher-auto-settlement.sql
 -- ============================================================================
 
 
@@ -19471,4 +19473,201 @@ $$;
 
 REVOKE ALL ON FUNCTION public.create_salary_sheet(UUID,TEXT,INTEGER,INTEGER,DATE,JSONB) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.create_salary_sheet(UUID,TEXT,INTEGER,INTEGER,DATE,JSONB) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 073-project-no-auto-invoice.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- 073: Project is a reference record — it must never auto-create an invoice
+--
+-- Business rule (requested): creating a project must NOT create an invoice,
+-- must NOT post a journal entry, and must NOT affect the client's balance.
+-- The client link on the project is reference-only (for reviewing a client's
+-- projects). Invoices are created manually and can be derived from the
+-- project; only invoices move the client balance.
+--
+-- The previous create_project_atomic accepted p_auto_invoice and, when true,
+-- created a sales invoice (and effectively touched the client). We remove
+-- that path entirely while keeping the function signature stable so existing
+-- callers and the wrapper continue to work.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.create_project_atomic(
+  p_company_id UUID,p_name TEXT,p_client_id UUID,p_contract_value NUMERIC,
+  p_start_date DATE,p_end_date DATE,p_status TEXT,p_description TEXT,p_location TEXT,
+  p_items JSONB,p_auto_invoice BOOLEAN,p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_project projects%ROWTYPE;
+  v_client UUID:=p_client_id;
+  v_contact contacts%ROWTYPE;
+  v_item JSONB;
+  v_qty NUMERIC;
+  v_price NUMERIC;
+  v_items_total NUMERIC:=0;
+BEGIN
+  IF NULLIF(btrim(p_name),'') IS NULL OR length(p_name)>300 OR p_contract_value<=0
+    OR p_start_date IS NULL OR (p_end_date IS NOT NULL AND p_end_date<p_start_date)
+    OR p_status NOT IN ('active','on_hold') OR jsonb_typeof(p_items)<>'array'
+    OR jsonb_array_length(p_items)>1000 OR length(COALESCE(p_description,''))>5000
+    OR length(COALESCE(p_location,''))>1000
+  THEN RAISE EXCEPTION 'بيانات المشروع غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM set_config('app.project_write_company',p_company_id::TEXT,TRUE);
+
+  IF v_client IS NULL THEN
+    -- A project without a chosen client stays reference-only (no cash-customer
+    -- auto-creation, no invoice). The client link is optional for projects.
+    v_client:=NULL;
+  ELSIF NOT EXISTS(
+    SELECT 1 FROM contacts WHERE id=v_client AND company_id=p_company_id AND COALESCE(is_active,TRUE)
+  ) THEN RAISE EXCEPTION 'العميل غير موجود'; END IF;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    BEGIN v_qty:=(v_item->>'quantity')::NUMERIC; v_price:=(v_item->>'unit_price')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'بند جدول كميات غير صالح'; END;
+    IF NULLIF(btrim(v_item->>'description'),'') IS NULL OR v_qty<=0 OR v_price<0
+    THEN RAISE EXCEPTION 'بند جدول كميات غير صالح'; END IF;
+    v_items_total:=v_items_total+round(v_qty*v_price,2);
+  END LOOP;
+  IF jsonb_array_length(p_items)>0 AND abs(v_items_total-p_contract_value)>0.01 THEN
+    RAISE EXCEPTION 'قيمة العقد لا تطابق إجمالي جدول الكميات';
+  END IF;
+
+  INSERT INTO projects(
+    company_id,name,client_id,contract_value,start_date,end_date,status,
+    description,location,created_by
+  ) VALUES(
+    p_company_id,btrim(p_name),v_client,p_contract_value,p_start_date,p_end_date,
+    p_status,NULLIF(btrim(p_description),''),NULLIF(btrim(p_location),''),p_user_id
+  ) RETURNING * INTO v_project;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_qty:=(v_item->>'quantity')::NUMERIC; v_price:=(v_item->>'unit_price')::NUMERIC;
+    INSERT INTO boq_items(company_id,project_id,description,unit,quantity,unit_price,total)
+    VALUES(p_company_id,v_project.id,btrim(v_item->>'description'),COALESCE(NULLIF(btrim(v_item->>'unit'),''),'واحدة'),v_qty,v_price,round(v_qty*v_price,2));
+  END LOOP;
+
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','project',v_project.id,to_jsonb(v_project));
+  RETURN to_jsonb(v_project)||jsonb_build_object(
+    'invoice',NULL,
+    'boq_items_count',jsonb_array_length(p_items)
+  );
+END;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 074-voucher-auto-settlement.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- 074: Voucher auto-settlement — apply undirected payments/disbursements to
+-- the oldest open invoices.
+--
+-- Client receipts already supported FIFO (oldest unpaid invoice first) when
+-- no allocations were supplied. This adds the mirror for supplier/
+-- subcontractor DISBURSEMENTS so an undirected payment to a supplier settles
+-- his oldest purchase invoices, matching the user's requested behavior:
+-- "settle the oldest invoices from the balance/payments, same for supplier."
+-- ============================================================================
+
+DROP FUNCTION IF EXISTS public.create_voucher_disbursement_atomic(
+  UUID,DATE,TEXT,UUID,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID
+);
+
+CREATE OR REPLACE FUNCTION public.create_voucher_disbursement_atomic(
+ p_company_id UUID,p_date DATE,p_disbursement_type TEXT,p_contact_id UUID,p_employee_id UUID,p_amount NUMERIC,
+ p_bank_safe_id UUID,p_reason TEXT,p_allocations JSONB,p_request_approval BOOLEAN,p_user_id UUID,
+ p_auto_fifo BOOLEAN DEFAULT FALSE
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_bank banks_safes%ROWTYPE; v_voucher voucher_disbursements%ROWTYPE; v_number INTEGER; v_counterpart UUID;
+ v_journal JSONB; v_journal_id UUID; v_balance NUMERIC; v_item JSONB; v_invoice purchase_invoices%ROWTYPE;
+ v_alloc NUMERIC; v_alloc_total NUMERIC:=0; v_applied NUMERIC:=0; v_remaining NUMERIC; v_new_paid NUMERIC; v_approval approval_requests%ROWTYPE;
+BEGIN
+ IF p_date IS NULL OR p_disbursement_type NOT IN ('supplier','employee_advance','subcontractor','client_refund','other')
+  OR p_amount<=0 OR p_amount<>ROUND(p_amount,2) OR NULLIF(BTRIM(p_reason),'') IS NULL OR LENGTH(p_reason)>500
+  OR jsonb_typeof(p_allocations)<>'array' OR jsonb_array_length(p_allocations)>100 THEN RAISE EXCEPTION 'بيانات سند الصرف غير صالحة'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+ IF p_contact_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM contacts WHERE id=p_contact_id AND company_id=p_company_id) THEN RAISE EXCEPTION 'الطرف غير موجود'; END IF;
+ IF p_employee_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM employees WHERE id=p_employee_id AND company_id=p_company_id AND is_active=TRUE) THEN RAISE EXCEPTION 'الموظف غير موجود'; END IF;
+ SELECT * INTO v_bank FROM banks_safes WHERE id=p_bank_safe_id AND company_id=p_company_id AND is_active=TRUE FOR UPDATE;
+ IF NOT FOUND OR v_bank.account_id IS NULL THEN RAISE EXCEPTION 'البنك أو الخزينة غير موجود'; END IF;
+ SELECT id INTO v_counterpart FROM accounts WHERE company_id=p_company_id AND code=CASE p_disbursement_type
+  WHEN 'supplier' THEN '2110' WHEN 'employee_advance' THEN '1160' WHEN 'subcontractor' THEN '2150'
+  WHEN 'client_refund' THEN '1130' ELSE '5400' END AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+ IF v_counterpart IS NULL OR v_counterpart=v_bank.account_id THEN RAISE EXCEPTION 'الحساب المقابل غير صالح'; END IF;
+
+ FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+  BEGIN v_alloc:=(v_item->>'amount')::NUMERIC; EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'مبلغ التخصيص غير صالح'; END;
+  IF NULLIF(v_item->>'invoice_id','') IS NULL OR v_alloc<=0 OR v_alloc<>ROUND(v_alloc,2) THEN RAISE EXCEPTION 'بيانات تخصيص الفواتير غير صالحة'; END IF;
+  IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_allocations) x WHERE x->>'invoice_id'=v_item->>'invoice_id' GROUP BY x->>'invoice_id' HAVING COUNT(*)>1) THEN RAISE EXCEPTION 'تخصيص فاتورة مكرر'; END IF;
+  SELECT * INTO v_invoice FROM purchase_invoices WHERE id=(v_item->>'invoice_id')::UUID AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND OR v_invoice.status IN ('cancelled','paid') THEN RAISE EXCEPTION 'فاتورة الشراء غير صالحة للتخصيص'; END IF;
+  IF p_contact_id IS NOT NULL AND v_invoice.supplier_id<>p_contact_id THEN RAISE EXCEPTION 'الفاتورة لا تخص الطرف المحدد'; END IF;
+  IF v_invoice.paid_amount+v_alloc>v_invoice.total+0.005 THEN RAISE EXCEPTION 'التخصيص يتجاوز المتبقي على الفاتورة'; END IF;
+  v_alloc_total:=v_alloc_total+v_alloc;
+ END LOOP;
+ IF v_alloc_total>p_amount+0.005 THEN RAISE EXCEPTION 'مجموع التخصيصات يتجاوز مبلغ السند'; END IF;
+
+ v_number:=next_voucher_number(p_company_id,'voucher_disbursements');
+ INSERT INTO voucher_disbursements(company_id,number,date,disbursement_type,contact_id,employee_id,amount,bank_safe_id,reason,created_by,status)
+ VALUES(p_company_id,v_number,p_date,p_disbursement_type,p_contact_id,p_employee_id,p_amount,p_bank_safe_id,BTRIM(p_reason),p_user_id,
+  CASE WHEN p_request_approval THEN 'pending' ELSE 'approved' END) RETURNING * INTO v_voucher;
+
+ IF p_request_approval THEN
+  INSERT INTO approval_requests(company_id,transaction_type,transaction_id,entity_type,entity_id,amount,requester_id,status,message,description)
+  VALUES(p_company_id,'voucher_disbursement',v_voucher.id::TEXT,'voucher_disbursement',v_voucher.id,p_amount,p_user_id,'pending',BTRIM(p_reason),BTRIM(p_reason)) RETURNING * INTO v_approval;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+   INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+   VALUES(p_company_id,v_voucher.id,(v_item->>'invoice_id')::UUID,(v_item->>'amount')::NUMERIC,NULL);
+  END LOOP;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,p_user_id,'request_approval','voucher_disbursement',v_voucher.id,jsonb_build_object('approval_id',v_approval.id,'amount',p_amount));
+  RETURN to_jsonb(v_voucher)||jsonb_build_object('requires_approval',TRUE,'approval_id',v_approval.id);
+ END IF;
+
+ v_balance:=get_account_balance(p_company_id,v_bank.account_id,NULL,NULL);
+ IF v_balance+0.005<p_amount THEN RAISE EXCEPTION 'الرصيد غير كاف للصرف'; END IF;
+ v_journal:=create_journal_entry(p_company_id,p_date,'general','سند صرف رقم '||v_number||': '||BTRIM(p_reason),p_user_id,jsonb_build_array(
+  jsonb_build_object('accountId',v_counterpart,'debit',p_amount,'credit',0,'contactId',p_contact_id),
+  jsonb_build_object('accountId',v_bank.account_id,'debit',0,'credit',p_amount)));
+ v_journal_id:=(v_journal->>'id')::UUID;
+ UPDATE journal_entries SET reference_type='voucher_disbursement',reference_id=v_voucher.id WHERE id=v_journal_id AND company_id=p_company_id;
+ FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+  SELECT * INTO v_invoice FROM purchase_invoices WHERE id=(v_item->>'invoice_id')::UUID AND company_id=p_company_id FOR UPDATE;
+  v_alloc:=(v_item->>'amount')::NUMERIC; v_new_paid:=ROUND(v_invoice.paid_amount+v_alloc,2);
+  UPDATE purchase_invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_invoice.total-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+  INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+  VALUES(p_company_id,v_voucher.id,v_invoice.id,v_alloc,v_journal_id);
+  v_applied:=v_applied+v_alloc;
+ END LOOP;
+
+ -- Supplier / subcontractor FIFO: an undirected disbursement settles the
+ -- oldest open purchase invoices of the same supplier.
+ IF jsonb_array_length(p_allocations)=0 AND COALESCE(p_auto_fifo,FALSE)
+    AND p_disbursement_type IN ('supplier','subcontractor') AND p_contact_id IS NOT NULL THEN
+  v_remaining:=p_amount;
+  FOR v_invoice IN SELECT * FROM purchase_invoices
+   WHERE company_id=p_company_id AND supplier_id=p_contact_id AND status NOT IN ('cancelled','paid')
+   ORDER BY date,number FOR UPDATE LOOP
+   EXIT WHEN v_remaining<=0.005;
+   v_alloc:=LEAST(v_remaining,ROUND(v_invoice.total-v_invoice.paid_amount,2)); CONTINUE WHEN v_alloc<=0;
+   v_new_paid:=ROUND(v_invoice.paid_amount+v_alloc,2);
+   UPDATE purchase_invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_invoice.total-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+   INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+   VALUES(p_company_id,v_voucher.id,v_invoice.id,v_alloc,v_journal_id);
+   v_applied:=v_applied+v_alloc; v_remaining:=v_remaining-v_alloc;
+  END LOOP;
+ END IF;
+ UPDATE voucher_disbursements SET journal_entry_id=v_journal_id WHERE id=v_voucher.id RETURNING * INTO v_voucher;
+ INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,p_user_id,'post','voucher_disbursement',v_voucher.id,to_jsonb(v_voucher));
+ RETURN to_jsonb(v_voucher)||jsonb_build_object('requires_approval',FALSE,'allocated_amount',ROUND(v_applied,2),'unapplied_amount',ROUND(p_amount-v_applied,2));
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_voucher_disbursement_atomic(UUID,DATE,TEXT,UUID,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID,BOOLEAN) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_voucher_disbursement_atomic(UUID,DATE,TEXT,UUID,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID,BOOLEAN) TO service_role;
 

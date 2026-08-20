@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, FileText } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -122,7 +122,14 @@ export default function SuppliersPage() {
     { key: 'email', label: 'البريد', render: (r: any) => <span dir="ltr">{r.email || '—'}</span> },
     { key: 'tax_number', label: 'الرقم الضريبي' },
     { key: 'notes', label: 'ملاحظات' },
-    { key: 'actions', label: 'إجراءات', render: (r: any) => <ActionButtons item={r} onEdit={handleEdit} onDelete={handleDelete} onPrint={handlePrint} deleteMode="deactivate" /> },
+    { key: 'actions', label: 'إجراءات', render: (r: any) => (
+      <div className="flex items-center gap-1">
+        <a href={`/suppliers/${r.id}/statement`} target="_blank" rel="noopener noreferrer">
+          <Button variant="ghost" size="sm" title="كشف حساب"><FileText size={16} className="text-blue-600" /></Button>
+        </a>
+        <ActionButtons item={r} onEdit={handleEdit} onDelete={handleDelete} onPrint={handlePrint} deleteMode="deactivate" />
+      </div>
+    ) },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
