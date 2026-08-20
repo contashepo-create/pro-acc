@@ -19,7 +19,10 @@
     "seed": "npx tsx scripts/seed.ts",
     "audit:fuzz": "npx tsx scripts/audit-fuzz.mts",
     "audit:db": "MIGRATION_DRIVER=postgres node scripts/audit-live-db.mjs",
-    "schema:generate": "node scripts/generate-full-schema.mjs"
+    "schema:generate": "node scripts/generate-full-schema.mjs",
+    "test:db": "NODE_OPTIONS=\"--experimental-vm-modules\" jest --testMatch=\"**/*.db.test.ts\" --testPathIgnorePatterns=\"[]\" --verbose",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans-arabic": "^5.3.0",
@@ -44,7 +47,11 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.5",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.3.3",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.5",
     "@types/jest": "^30.0.0",
     "@types/jsbarcode": "^3.11.4",
     "@types/node": "^20.19.43",
@@ -57,6 +64,7 @@
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.9",
     "jest": "^30.4.2",
+    "jest-environment-jsdom": "^30.4.1",
     "tailwindcss": "^4.3.3",
     "ts-jest": "^29.4.11",
     "typescript": "^5.9.3"
