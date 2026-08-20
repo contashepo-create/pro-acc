@@ -260,10 +260,18 @@ export default function DashboardPage() {
 }
 
 function HeaderBlock() {
+  const today = typeof window !== 'undefined'
+    ? new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    : '';
   return (
-    <div>
-      <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>لوحة التحكم</h1>
-      <p className="text-sm mt-1" style={{ color: 'var(--color-text-secondary)' }}>نظرة عامة على أداء الشركة المالي والتشغيلي</p>
+    <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+      <div>
+        <h1 className="text-2xl font-extrabold tracking-tight" style={{ color: 'var(--color-text-primary)' }}>لوحة التحكم</h1>
+        <p className="text-sm mt-1" style={{ color: 'var(--color-text-secondary)' }}>نظرة عامة على أداء الشركة المالي والتشغيلي</p>
+      </div>
+      <div className="text-sm px-3 py-1.5 rounded-lg" style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text-muted)' }}>
+        {today}
+      </div>
     </div>
   );
 }
