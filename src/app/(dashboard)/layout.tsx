@@ -11,6 +11,8 @@ import { AdPopup } from '@/components/AdPopup';
 import { SubscriptionBanner } from '@/components/SubscriptionBanner';
 import { useAuthStore } from '@/store/auth-store';
 import { useSidebarStore } from '@/store/sidebar-store';
+import { useThemeStore } from '@/store/theme-store';
+import { sectionAccents } from '@/lib/themes';
 import { Loader2 } from 'lucide-react';
 
 export default function DashboardLayout({
@@ -22,6 +24,7 @@ export default function DashboardLayout({
   const router = useRouter();
   const { isAuthenticated, isLoading, checkSession } = useAuthStore();
   const { isCollapsed, mobileOpen, setMobileOpen } = useSidebarStore(); // FIXED: Read isCollapsed
+  const { setSectionAccent } = useThemeStore();
 
   // Check authentication status
   useEffect(() => {
@@ -39,6 +42,19 @@ export default function DashboardLayout({
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname, setMobileOpen]);
+
+  // Set the section accent colour for the active section so the sidebar
+  // active indicator + section bars use the section's own accent (projects =
+  // green, purchases = teal, reports = yellow, ...).
+  useEffect(() => {
+    const clean = pathname.replace(/^\//, '');
+    const section = clean.split('/')[0];
+    const accent = sectionAccents[section] || sectionAccents[''];
+    setSectionAccent(accent);
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.setProperty('--section-accent', accent);
+    }
+  }, [pathname, setSectionAccent]);
 
   // Show loading state while checking auth
   if (isLoading) {
