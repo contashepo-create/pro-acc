@@ -14,10 +14,11 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate, formatCurrency, escapeHtml } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { openPrintWindow } from '@/lib/print';
 
 interface PurchaseItem {
   description: string;
@@ -43,6 +44,7 @@ export default function PurchaseInvoicesPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<any>(null);
   const [viewingInvoice, setViewingInvoice] = useState<any>(null);
+  const [company, setCompany] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<any>({
@@ -61,20 +63,23 @@ export default function PurchaseInvoicesPage() {
     try {
       setLoading(true);
       setError('');
-      const [invRes, supRes, ordRes] = await Promise.all([
+      const [invRes, supRes, ordRes, setRes] = await Promise.all([
         fetch('/api/purchases/invoices'),
         fetch('/api/contacts?type=supplier'),
         fetch('/api/purchases/orders'),
+        fetch('/api/settings'),
       ]);
-      const [invJson, supJson, ordJson] = await Promise.all([
+      const [invJson, supJson, ordJson, setJson] = await Promise.all([
         invRes.json(),
         supRes.json(),
         ordRes.json(),
+        setRes.json(),
       ]);
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
       if (supJson.success) setSuppliers(supJson.data?.contacts || []);
       if (ordJson.success) setOrders(ordJson.data?.orders || []);
+      if (setJson.success && setJson.data?.company) setCompany(setJson.data.company);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -219,6 +224,91 @@ export default function PurchaseInvoicesPage() {
     }
   };
 
+  // طباعة فاتورة مشتريات احترافية كفاتورة.
+  const handlePrint = async (invoice: any) => {
+    let record: any = invoice;
+    try {
+      const res = await fetch(`/api/purchases/invoices/${invoice.id}`);
+      const json = await res.json();
+      if (json.success) record = json.data;
+    } catch { /* use row data */ }
+    const items = record.items || [];
+    const itemsHtml = items.map((it: any) => `<tr>
+      <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:right">${escapeHtml(String(it.description || ''))}</td>
+      <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.quantity || 0)}</td>
+      <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.unit_price || 0).toFixed(2)}</td>
+      <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:left;white-space:nowrap;font-weight:700">${Number(it.total || 0).toFixed(2)}</td>
+    </tr>`).join('');
+    const subtotal = Number(record.subtotal || 0);
+    const taxAmount = Number(record.tax_amount || 0);
+    const otherTotal = Number(record.other_expenses_total || 0);
+    const total = Number(record.total || 0);
+    const companyName = escapeHtml(String(company?.name || ''));
+    const companyTax = escapeHtml(String(company?.tax_number || ''));
+    const supplierName = escapeHtml(String(record.supplier_name || record.contacts?.name || record.supplier?.name || ''));
+    const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة شراء ${record.number || record.invoice_number}</title>
+      <style>
+        body{font-family:Tahoma,Arial,sans-serif;color:#0f172a;padding:0;margin:0;background:#fff}
+        .page{max-width:820px;margin:0 auto;padding:32px}
+        .doc{border:1px solid #e2e8f0;border-radius:14px;overflow:hidden}
+        .bar{height:6px;background:linear-gradient(90deg,#0f766e,#14b8a6)}
+        .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:22px 26px;border-bottom:1px solid #e2e8f0}
+        .title{font-size:22px;font-weight:800;color:#0f766e;margin:0}
+        .subtitle{font-size:12px;color:#64748b;margin:2px 0 0}
+        .num{background:#ecfdf5;color:#0f766e;font-weight:700;font-size:14px;padding:6px 12px;border-radius:8px;display:inline-block;margin-top:10px}
+        .meta{font-size:12px;color:#334155;line-height:1.9;text-align:left}
+        .section{padding:16px 26px;border-bottom:1px solid #e2e8f0}
+        .section h3{font-size:13px;font-weight:800;color:#334155;margin:0 0 8px}
+        table{width:100%;border-collapse:collapse}
+        th{background:#f1f5f9;color:#334155;font-size:12px;padding:9px 10px;border:1px solid #d8dee9;text-align:right}
+        td{font-size:12px;color:#0f172a}
+        .totals{display:flex;flex-direction:column;gap:6px;align-items:flex-end;padding:6px 0}
+        .totals .row{display:flex;justify-content:space-between;width:300px;font-size:13px;color:#334155}
+        .grand{display:flex;justify-content:space-between;width:300px;font-size:16px;font-weight:800;color:#0f766e;border-top:2px solid #0f172a;padding-top:8px;margin-top:4px}
+        .footer{text-align:center;font-size:11px;color:#94a3b8;padding:14px}
+        .muted{color:#64748b;font-size:12px}
+        @media print{button{display:none}.page{padding:0}.doc{border:none;border-radius:0}}
+      </style></head><body>
+      <div class="page"><div class="doc">
+        <div class="bar"></div>
+        <div class="head">
+          <div>
+            <h1 class="title">فاتورة مشتريات</h1>
+            <p class="subtitle">Purchase Invoice</p>
+            <span class="num">رقم الفاتورة: ${escapeHtml(String(record.number || record.invoice_number))}</span>
+          </div>
+          <div class="meta">
+            ${companyName ? `<div style="font-weight:800;font-size:14px;color:#0f172a">${companyName}</div>` : ''}
+            ${companyTax ? `<div>الرقم الضريبي: ${companyTax}</div>` : ''}
+          </div>
+        </div>
+        <div class="section">
+          <div style="display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap">
+            <div><h3>المورد</h3><div style="font-weight:700;color:#0f172a">${supplierName || '—'}</div></div>
+            <div><h3>التاريخ</h3><div>${formatDate(record.date)}</div></div>
+          </div>
+        </div>
+        <div class="section">
+          <table>
+            <thead><tr><th style="width:46%">البيان / الوصف</th><th>الكمية</th><th>سعر الوحدة</th><th style="text-align:left">الإجمالي</th></tr></thead>
+            <tbody>${itemsHtml || '<tr><td colspan="4" style="text-align:center;color:#94a3b8">لا توجد بنود</td></tr>'}</tbody>
+          </table>
+          <div class="totals">
+            <div class="row"><span>المجموع الفرعي (قيمة المورد)</span><span>${subtotal.toFixed(2)}</span></div>
+            ${taxAmount > 0 ? `<div class="row"><span>ضريبة القيمة المضافة</span><span>${taxAmount.toFixed(2)}</span></div>` : ''}
+            ${otherTotal > 0 ? `<div class="row"><span>مصاريف إضافية</span><span>${otherTotal.toFixed(2)}</span></div>` : ''}
+            <div class="grand"><span>الإجمالي</span><span>${total.toFixed(2)}</span></div>
+          </div>
+        </div>
+        ${record.notes ? `<div class="section"><h3>ملاحظات</h3><p class="muted" style="margin:0;line-height:1.8">${escapeHtml(String(record.notes))}</p></div>` : ''}
+        <div class="footer">تم إنشاء هذه الفاتورة إلكترونياً بواسطة ${companyName || 'النظام المحاسبي'}</div>
+      </div></div>
+      <p style="text-align:center"><button onclick="window.print()" style="padding:10px 28px;border-radius:8px;border:none;background:#0f766e;color:#fff;font-size:15px;cursor:pointer">طباعة / حفظ PDF</button></p>
+      </body></html>`;
+    const result = openPrintWindow(html);
+    if (!result.ok) toast.error(result.blocked ? 'منع المتصفح فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة.' : 'تعذر فتح نافذة الطباعة.');
+  };
+
   const columns = [
     { key: 'invoice_number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('purchase_invoice', row.number || row.invoice_number) },
     { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
@@ -237,6 +327,7 @@ export default function PurchaseInvoicesPage() {
       render: (row: any) => (
         <ActionButtons
           item={row}
+          onPrint={() => handlePrint(row)}
           onView={async () => {
             try {
               const res = await fetch(`/api/purchases/invoices/${row.id}`);
