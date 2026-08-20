@@ -955,6 +955,28 @@ async function smokeAtomicWriters(ids) {
   assert.equal(converted[0].rows[0].result.id,converted[1].rows[0].result.id);
   assert.equal((await db.query(`SELECT count(*)::int count FROM projects WHERE id=$1 AND company_id=$2`,[converted[0].rows[0].result.id,c])).rows[0].count,1);
 
+  // Purchase invoice with "other expenses" that are NOT owed to the supplier.
+  const otherExpenseInvoice=(await db.query(
+    `SELECT create_purchase_invoice_atomic($1,$2,NULL,NULL,NULL,TRUE,'2026-02-02',$3::jsonb,0,'other expense',$4,
+       $5::jsonb,$6) result`,
+    [c,contact,JSON.stringify([{description:'Goods',quantity:2,unit_price:100}]),u,
+     JSON.stringify([{description:'أجرة نقل',amount:50,account_code:'5100'},{description:'صيانة',amount:30,account_code:'5100'}]),a['1000']],
+  )).rows[0].result;
+  assert.equal(Number(otherExpenseInvoice.other_expenses_total),80);
+  // Supplier payable must equal only the items subtotal (200), not +80.
+  const otherExpenseInvRow=(await db.query(`SELECT total,other_expenses_total FROM purchase_invoices WHERE id=$1`,[otherExpenseInvoice.id])).rows[0];
+  assert.equal(Number(otherExpenseInvRow.total),200);
+  assert.equal(Number(otherExpenseInvRow.other_expenses_total),80);
+  // The other-expenses journal must balance and not touch the supplier AP.
+  const oeJournalId=otherExpenseInvoice.other_expenses_journal_entry_id;
+  const oeTotals=(await db.query(`SELECT COALESCE(sum(debit),0) d,COALESCE(sum(credit),0) c FROM journal_lines WHERE journal_entry_id=$1`,[oeJournalId])).rows[0];
+  assert.equal(Number(oeTotals.d),Number(oeTotals.c));
+  // Reject an invalid other-expense amount.
+  await assert.rejects(()=>db.query(
+    `SELECT create_purchase_invoice_atomic($1,$2,NULL,NULL,NULL,TRUE,'2026-02-02',$3::jsonb,0,'bad',$4,$5::jsonb,$6) result`,
+    [c,contact,JSON.stringify([{description:'Goods',quantity:1,unit_price:10}]),u,
+     JSON.stringify([{description:'x',amount:-5}]),b]));
+
   const machine=(await db.query(`SELECT create_fixed_asset($1,'Machine','A1','equipment','2026-02-01',500,5,'straight_line','','',$2,$3) result`, [c, b, u])).rows[0].result;
   const newBank=await db.query(`SELECT create_bank_safe($1,'New Bank','bank','123',500,$2) result`,[c,u]);
   assert.ok(newBank.rows[0].result.opening_journal_entry_id);

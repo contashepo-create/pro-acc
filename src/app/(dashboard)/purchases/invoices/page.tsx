@@ -53,6 +53,8 @@ export default function PurchaseInvoicesPage() {
     tax_percent: 15,
     status: 'unpaid',
     items: [{ ...emptyItem }],
+    other_expenses: [] as { description: string; amount: number }[],
+    payment_account_id: '',
   });
 
   const fetchData = async () => {
@@ -80,7 +82,15 @@ export default function PurchaseInvoicesPage() {
 
   const subtotal = form.items.reduce((s: number, it: PurchaseItem) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0);
   const taxAmount = subtotal * ((Number(form.tax_percent) || 0) / 100);
-  const grandTotal = subtotal + taxAmount;
+  const otherExpensesTotal = (form.other_expenses || []).reduce((s: number, o: any) => s + (Number(o.amount) || 0), 0);
+  const grandTotal = subtotal + taxAmount + otherExpensesTotal;
+  const addOtherExpense = () => setForm({ ...form, other_expenses: [...(form.other_expenses || []), { description: '', amount: 0 }] });
+  const updateOtherExpense = (i: number, patch: any) => {
+    const list = [...(form.other_expenses || [])];
+    list[i] = { ...list[i], ...patch };
+    setForm({ ...form, other_expenses: list });
+  };
+  const removeOtherExpense = (i: number) => setForm({ ...form, other_expenses: (form.other_expenses || []).filter((_: any, idx: number) => idx !== i) });
 
   const addItem = () => setForm({ ...form, items: [...form.items, { ...emptyItem }] });
   const removeItem = (index: number) => {
@@ -148,6 +158,8 @@ export default function PurchaseInvoicesPage() {
               quantity: Number(it.quantity),
               unit_price: Number(it.unit_price),
             })),
+            other_expenses: (form.other_expenses || []).filter((o: any) => String(o.description || '').trim() && Number(o.amount) > 0),
+            payment_account_id: form.payment_account_id || null,
           };
 
       const url = editingInvoice ? `/api/purchases/invoices/${editingInvoice.id}` : '/api/purchases/invoices';
@@ -323,12 +335,50 @@ export default function PurchaseInvoicesPage() {
                 </table>
               </div>
               <div className="flex flex-col items-end gap-1 text-sm border-t border-border pt-3">
-                <div>المجموع الفرعي: <span className="font-semibold">{formatCurrency(subtotal)}</span></div>
+                <div>المجموع الفرعي (قيمة المورد): <span className="font-semibold">{formatCurrency(subtotal)}</span></div>
                 <div>الضريبة ({form.tax_percent}%): <span className="font-semibold">{formatCurrency(taxAmount)}</span></div>
-                <div className="text-base">الإجمالي: <span className="font-bold">{formatCurrency(grandTotal)}</span></div>
+                {otherExpensesTotal > 0 && <div>مصاريف إضافية: <span className="font-semibold">{formatCurrency(otherExpensesTotal)}</span></div>}
+                <div className="text-base">إجمالي تكلفة الفاتورة: <span className="font-bold">{formatCurrency(grandTotal)}</span></div>
               </div>
             </div>
           )}
+
+          {/* مصاريف إضافية (لا تُضاف لرصيد المورد) */}
+          <div className="rounded-xl border border-border bg-bg-secondary p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-bold">مصاريف إضافية (نقل، وقود، إيجار، عمالة، صيانة...)</h4>
+              <Button type="button" size="sm" variant="outline" onClick={addOtherExpense}>إضافة مصروف</Button>
+            </div>
+            <p className="text-xs text-text-muted mb-3">
+              تُحمَّل على تكلفة الفاتورة وتزيد تكلفة البنود، لكنها <strong>لا تُضاف إلى رصيد المورد</strong>.
+            </p>
+            {(form.other_expenses || []).length === 0 ? (
+              <div className="text-xs text-text-muted py-2">لا توجد مصاريف إضافية.</div>
+            ) : (
+              <div className="space-y-2">
+                {(form.other_expenses || []).map((o: any, i: number) => (
+                  <div key={i} className="grid grid-cols-[1fr_8rem_2rem] gap-2 items-center">
+                    <input
+                      className="input-base !py-2 text-sm"
+                      placeholder="وصف المصروف (مثال: أجرة نقل)"
+                      value={o.description}
+                      onChange={(e) => updateOtherExpense(i, { description: e.target.value })}
+                    />
+                    <input
+                      className="input-base !py-2 text-sm text-center font-mono"
+                      type="number"
+                      placeholder="المبلغ"
+                      value={o.amount}
+                      onChange={(e) => updateOtherExpense(i, { amount: Number(e.target.value) })}
+                    />
+                    <button type="button" className="text-danger" onClick={() => removeOtherExpense(i)} aria-label="حذف">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="ملاحظات الفاتورة" />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
