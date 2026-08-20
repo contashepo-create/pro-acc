@@ -48,6 +48,8 @@ describe('notification configuration and balances', () => {
     rpc.mockResolvedValueOnce({ data: '125.50', error: null });
     await expect(getAccountBalance('a1', 'c1')).resolves.toBe(125.5);
     expect(rpc).toHaveBeenCalledWith('get_account_balance', { p_company_id: 'c1', p_account_id: 'a1', p_journal_type: null, p_as_of: null });
+    rpc.mockResolvedValueOnce({ data: null, error: null });
+    await expect(getAccountBalance('a1', 'c1')).resolves.toBe(0);
     rpc.mockResolvedValueOnce({ data: null, error: new Error('balance') });
     await expect(getAccountBalance('a1', 'c1')).rejects.toThrow('balance');
   });
@@ -59,6 +61,8 @@ describe('notification configuration and balances', () => {
     await expect(checkBankBalance('b1', 100, 'c1')).resolves.toMatchObject({ allowed: false, balance: 50, message: expect.stringContaining('الرصيد غير كافٍ') });
     rpc.mockResolvedValueOnce({ data: 150, error: null });
     await expect(checkBankBalance('b1', 100, 'c1')).resolves.toEqual({ allowed: true, balance: 150 });
+    bankResult = { data: { account_id: null, name: 'Unlinked' }, error: null };
+    await expect(checkBankBalance('b2', 1, 'c1')).resolves.toMatchObject({ allowed: false, balance: 0 });
   });
 });
 
@@ -73,6 +77,8 @@ describe('approval notifications', () => {
   });
 
   test('fails closed when approval creation or Telegram delivery fails', async () => {
+    rpc.mockResolvedValueOnce({ data: null, error: null });
+    await expect(requireApproval('c1', 101, 'voucher_receipt', 'u1', 'v1')).resolves.toMatchObject({ message: expect.stringContaining('تعذر إنشاء') });
     rpc.mockResolvedValueOnce({ data: null, error: new Error('rpc failed') });
     await expect(requireApproval('c1', 101, 'voucher_receipt', 'u1', 'v1')).resolves.toMatchObject({ requiresApproval: true, blocked: true, message: 'rpc failed' });
 
@@ -91,15 +97,20 @@ describe('approval notifications', () => {
     expect(body.reply_markup.inline_keyboard[0][0].callback_data).toBe('approval:approve:approval-1');
   });
 
-  test('explicit approval notification enforces enabled config and HTTP success', async () => {
+  test('explicit approval notification enforces config/requester and HTTP success', async () => {
     configResult = { data: null, error: null };
     await expect(sendApprovalRequestNotification('c1', 10, 'journal_entry', 'j1', 'u1', 'a1')).rejects.toThrow('not enabled');
     configResult = { data: enabledConfig, error: null };
+    userResult = { data: null, error: null };
+    await expect(sendApprovalRequestNotification('c1', 10, 'unknown_type', 'short', 'u1', 'a1')).rejects.toThrow('requester');
+    userResult = { data: { name: null, email: 'fallback@test.com' }, error: null };
     global.fetch = jest.fn(async () => new Response('denied', { status: 403 })) as any;
     await expect(sendApprovalRequestNotification('c1', 10, 'journal_entry', 'j1', 'u1', 'a1')).rejects.toThrow('403');
   });
 
   test('maps legacy approval response errors, approvals and rejections', async () => {
+    rpc.mockResolvedValueOnce({ data: null, error: {} });
+    await expect(handleApprovalResponse('approve', 'journal_entry', 'j1', 'untrusted', 'chat')).resolves.toMatchObject({ success: false, message: 'تعذر معالجة الاعتماد' });
     rpc.mockResolvedValueOnce({ data: null, error: { message: 'denied' } });
     await expect(handleApprovalResponse('approve', 'journal_entry', 'j1', 'untrusted', 'chat')).resolves.toEqual({ success: false, message: 'denied' });
     rpc.mockResolvedValueOnce({ data: { status: 'approved' }, error: null });
@@ -135,6 +146,10 @@ describe('general and transaction notifications', () => {
     const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
     expect(body.text).toContain('&lt;rent&gt;');
     expect(body.text).toContain('سند صرف');
+    configResult = { data: { ...enabledConfig, approval_threshold: 0 }, error: null };
+    global.fetch = jest.fn(async () => new Response('bad', { status: 500 })) as any;
+    await expect(sendTransactionNotification('c1', 'receipt', { amount: 1, reason: 'x', date: 'd' }))
+      .resolves.toMatchObject({ notified: false, message: 'فشل الإرسال: 500' });
   });
 
   test('checks approval thresholds and fails closed on configuration errors', async () => {

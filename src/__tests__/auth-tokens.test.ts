@@ -139,6 +139,17 @@ describe('token_version invalidation semantics', () => {
 });
 
 describe('Admin token (superadmin JWT)', () => {
+  test('development fallback signs admin JWTs with TOKEN_SECRET when admin secret is absent', () => {
+    const saved = process.env.ADMIN_TOKEN_SECRET;
+    const savedEnv = process.env.NODE_ENV;
+    delete process.env.ADMIN_TOKEN_SECRET;
+    (process.env as any).NODE_ENV = 'test';
+    const token = createAdminToken('fallback-admin', 0);
+    expect(verifyToken(token)?.role).toBe('superadmin');
+    process.env.ADMIN_TOKEN_SECRET = saved;
+    (process.env as any).NODE_ENV = savedEnv;
+  });
+
   test('accepts a valid superadmin admin_token (signed with ADMIN_TOKEN_SECRET)', () => {
     const t = createAdminToken('admin-1', 0);
     const payload = verifyAdminJwt(t);

@@ -47,6 +47,10 @@ describe('computeWip — percentage of completion', () => {
     expect(wip.costToComplete).toBe(0);
   });
 
+  test('clamps negative incurred costs and billings to zero', () => {
+    expect(computeWip({ contractAmount: 100, costsIncurred: -10, billedToDate: -5 })).toMatchObject({ percentComplete: 0, earnedRevenue: 0, overUnderBilled: 0, costToComplete: 100 });
+  });
+
   test('throws on negative contract amount', () => {
     expect(() => computeWip({ contractAmount: -1, costsIncurred: 0, billedToDate: 0 })).toThrow(RangeError);
   });

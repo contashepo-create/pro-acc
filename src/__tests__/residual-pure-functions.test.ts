@@ -1,4 +1,4 @@
-import { resolvePaymentAccountId, listCashBankAccountIds } from '@/lib/account-resolve';
+import { isHeaderAccount, isCashOrBankCode, resolvePaymentAccountId, listCashBankAccountIds } from '@/lib/account-resolve';
 import { getCountryConfig, getCountriesList, COUNTRIES } from '@/lib/countries';
 import { safeInternalPath, safeHttpsUrl } from '@/lib/safe-input';
 import { telegramConfigSchema, pushSubscriptionSchema, pushQueueSchema, complaintPatchSchema, adminComplaintPatchSchema, adminSupportPatchSchema } from '@/lib/communication-validation';
@@ -32,6 +32,16 @@ const UUID1 = '90000000-0000-4000-8000-000000000001';
 const UUID2 = '90000000-0000-4000-8000-000000000002';
 
 describe('remaining account and country helper functions', () => {
+  test('recognizes headers and every supported cash/bank code shape', () => {
+    expect(isHeaderAccount({ is_header: true })).toBe(true);
+    expect(isHeaderAccount({ children: [{}] })).toBe(true);
+    expect(isHeaderAccount({ code: '1000' })).toBe(true);
+    expect(isHeaderAccount({ code: '1111', children: [] })).toBe(false);
+    expect(isHeaderAccount({})).toBe(false);
+    for (const code of ['1110', '1120', '1110-0001', '1120-1', '0001-1110', '0001-1120', '11100001', '11200001']) expect(isCashOrBankCode(code)).toBe(true);
+    for (const code of [null, undefined, '', '1111', '1110001']) expect(isCashOrBankCode(code)).toBe(false);
+  });
+
   test('resolves preferred, active safe, account fallback and missing payment accounts', async () => {
     let db = dbFor({ banks_safes: [{ id: 'b1', company_id: 'c1', account_id: 'preferred', is_active: true, type: 'bank' }] });
     await expect(resolvePaymentAccountId(db, 'c1', 'b1')).resolves.toBe('preferred');
@@ -43,8 +53,12 @@ describe('remaining account and country helper functions', () => {
     ] });
     await expect(resolvePaymentAccountId(db, 'c1')).resolves.toBe('safe');
 
+    db = dbFor({ banks_safes: [{ id: 'b1', company_id: 'c1', account_id: null, is_active: true, type: 'safe' }, { company_id: 'c1', account_id: 'only-bank', is_active: true, type: 'bank' }] });
+    await expect(resolvePaymentAccountId(db, 'c1', 'missing')).resolves.toBe('only-bank');
     db = dbFor({ accounts: [{ id: 'cash-parent', company_id: 'c1', code: '1110' }] });
     await expect(resolvePaymentAccountId(db, 'c1')).resolves.toBe('cash-parent');
+    db = dbFor({ accounts: [{ id: 'bank-parent', company_id: 'c1', code: '1120' }] });
+    await expect(resolvePaymentAccountId(db, 'c1')).resolves.toBe('bank-parent');
     await expect(resolvePaymentAccountId(dbFor({}), 'c1')).resolves.toBeNull();
   });
 

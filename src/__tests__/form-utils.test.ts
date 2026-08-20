@@ -14,9 +14,12 @@ describe('toDateInput', () => {
     expect(toDateInput('2026-08-01 12:30:00')).toBe('2026-08-01');
   });
 
-  test('empty / null stay empty', () => {
+  test('empty/null/invalid stay empty and generic date strings normalize', () => {
     expect(toDateInput(null)).toBe('');
     expect(toDateInput('')).toBe('');
+    expect(toDateInput(undefined)).toBe('');
+    expect(toDateInput('not-a-date')).toBe('');
+    expect(toDateInput('August 20, 2026')).toBe('2026-08-20');
   });
 });
 
@@ -44,11 +47,15 @@ describe('unwrapData and form record helpers', () => {
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ json: async () => ({ success: true, data: { id: 1 } }) })
       .mockResolvedValueOnce({ json: async () => ({ success: false, message: 'غير موجود' }) })
+      .mockResolvedValueOnce({ json: async () => ({ success: false }) })
+      .mockResolvedValueOnce({ json: async () => ({ success: true, data: null }) })
       .mockRejectedValueOnce(new Error('network')) as any;
     await expect(fetchRecord('/api/x/1')).resolves.toEqual({ data: { id: 1 }, error: null });
     expect(global.fetch).toHaveBeenNthCalledWith(1, '/api/x/1', { credentials: 'same-origin' });
     await expect(fetchRecord('/api/x/2')).resolves.toEqual({ data: null, error: 'غير موجود' });
-    await expect(fetchRecord('/api/x/3')).resolves.toEqual({ data: null, error: 'خطأ في الاتصال بالخادم' });
+    await expect(fetchRecord('/api/x/3')).resolves.toEqual({ data: null, error: 'تعذر تحميل البيانات' });
+    await expect(fetchRecord('/api/x/4')).resolves.toEqual({ data: null, error: 'تعذر تحميل البيانات' });
+    await expect(fetchRecord('/api/x/5')).resolves.toEqual({ data: null, error: 'خطأ في الاتصال بالخادم' });
   });
 });
 

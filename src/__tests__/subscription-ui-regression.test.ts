@@ -76,6 +76,15 @@ describe('subscription payment-proof upload', () => {
 });
 
 describe('notification badge event', () => {
+  test('is safe server-side and rejects malformed event details', () => {
+    const originalWindow = (globalThis as any).window;
+    delete (globalThis as any).window;
+    expect(() => publishUnreadNotificationCount(2)).not.toThrow();
+    expect(readUnreadNotificationCount(new Event('x'))).toBeNull();
+    expect(readUnreadNotificationCount(new CustomEvent('x', { detail: { unreadCount: '3' } }))).toBeNull();
+    (globalThis as any).window = originalWindow;
+  });
+
   test('publishes a normalized unread count immediately', () => {
     const originalWindow = (globalThis as any).window;
     const listener = jest.fn();
@@ -85,8 +94,10 @@ describe('notification badge event', () => {
 
     try {
       publishUnreadNotificationCount(3.9);
-      expect(listener).toHaveBeenCalledTimes(1);
+      publishUnreadNotificationCount(-2);
+      expect(listener).toHaveBeenCalledTimes(2);
       expect(readUnreadNotificationCount(listener.mock.calls[0][0])).toBe(3);
+      expect(readUnreadNotificationCount(listener.mock.calls[1][0])).toBe(0);
     } finally {
       (globalThis as any).window = originalWindow;
     }

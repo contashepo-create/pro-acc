@@ -14,6 +14,19 @@ describe('pickContactFields', () => {
     expect(data?.tax_number).toBe('300000000000003');
   });
 
+  test('normalizes empty/non-string/numeric fields and ignores absent fields', () => {
+    expect(pickContactFields({ phone: '', category: 7, credit_limit: '12.5' }).data).toEqual({ phone: null, category: 7, credit_limit: 12.5 });
+    expect(pickContactFields({ credit_limit: 'bad' }).data?.credit_limit).toBe(0);
+    expect(pickContactFields({ unknown: 'x' }).data).toEqual({});
+    expect(pickContactFields({ name: ' A ' }).data?.name).toBe('A');
+  });
+
+  test('validates email only when a nonempty string is provided', () => {
+    expect(pickContactFields({ email: 'bad' }).error).toContain('البريد');
+    expect(pickContactFields({ email: '' }).error).toBeNull();
+    expect(pickContactFields({ email: 'a@b.com' }).error).toBeNull();
+  });
+
   test('rejects empty name when required', () => {
     const { error } = pickContactFields({ name: '  ' }, { requireName: true });
     expect(error).toBeTruthy();

@@ -12,6 +12,9 @@ describe('document number presentation', () => {
     expect(formatDocumentNumber('sales_invoice', 18)).toBe('INV-0018');
     expect(formatDocumentNumber('receipt_voucher', 3)).toBe('RV-0003');
     expect(formatDocumentNumber('progress_billing', 'PB-000014')).toBe('PB-000014');
+    expect(formatDocumentNumber('journal', null)).toBe('JE-0000');
+    expect(formatDocumentNumber('journal', 'je-0099')).toBe('JE-0099');
+    expect(formatDocumentNumber('custom', 2, 2)).toBe('CUSTOM-02');
   });
 });
 
