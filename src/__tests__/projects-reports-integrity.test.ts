@@ -24,7 +24,8 @@ function makeDb(db: Record<string, Row[]>) {
       eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
       in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
       neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      not: () => api, gte: () => api, lte: () => api, or: () => api,
+      not: () => api, gte: () => api, lte: () => api,
+      or: (expr: string) => { ops.push({ op: 'or', col: expr }); return api; },
       is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
       order: () => api, limit: () => api, range: () => api,
       insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
@@ -163,6 +164,32 @@ describe('project reads and costs', () => {
     expect(linesCall.ops).toEqual(expect.arrayContaining([
       { op: 'eq', col: 'project_id', val: PROJECT }, { op: 'eq', col: 'company_id', val: C1 },
     ]));
+    // The query must filter to POSTED, non-deleted journal entries so that
+    // drafts/reversed/deleted lines never inflate project cost totals.
+    expect(linesCall.ops).toEqual(expect.arrayContaining([
+      { op: 'or', col: 'journal_entries.status.eq.posted,journal_entries.reversed_by.not.is.null' },
+      { op: 'is', col: 'journal_entries.deleted_at', val: null },
+    ]));
+  });
+
+  test('cost report classifies expense lines into canonical categories', async () => {
+    mockDb = makeDb({ ...baseDb(),
+      projects: [{ id: PROJECT, company_id: C1 }],
+      journal_lines: [
+        { company_id: C1, project_id: PROJECT, debit: 40, credit: 0, accounts: { code: '5110', name: 'مواد', type: 'expense' } },
+        { company_id: C1, project_id: PROJECT, debit: 30, credit: 0, accounts: { code: '5120', name: 'عمالة', type: 'expense' } },
+        { company_id: C1, project_id: PROJECT, debit: 20, credit: 0, accounts: { code: '5130', name: 'باطن', type: 'expense' } },
+        { company_id: C1, project_id: PROJECT, debit: 10, credit: 0, accounts: { code: '5140', name: 'معدات', type: 'expense' } },
+      ],
+    });
+    const response = await projectCostsGET(request(undefined, 'GET', `http://localhost/api/projects/costs?projectId=${PROJECT}`));
+    const json = await response.json();
+    const byName = Object.fromEntries((json.data.categories || []).map((c: any) => [c.name, c.total]));
+    expect(byName['المواد']).toBe(40);
+    expect(byName['العمالة']).toBe(30);
+    expect(byName['مقاولو الباطن']).toBe(20);
+    expect(byName['المعدات']).toBe(10);
+    expect(json.data.grand_total).toBe(100);
   });
 
   test('cost report returns 404 for another tenant project before reading journal lines', async () => {

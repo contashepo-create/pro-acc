@@ -1,4 +1,4 @@
-import { allocateOverhead, sumAllocatedOverhead, validateOverheadRule, type OverheadAllocationRule } from '@/lib/project-overhead';
+import { allocateOverhead, sumAllocatedOverhead, validateOverheadRule, basisLabel, type OverheadAllocationRule } from '@/lib/project-overhead';
 
 describe('allocateOverhead', () => {
   const rules: OverheadAllocationRule[] = [
@@ -11,6 +11,15 @@ describe('allocateOverhead', () => {
     const result = allocateOverhead(costs, rules);
     // 0.10*300 + 0.20*100 = 30 + 20 = 50
     expect(result[0].allocatedOverhead).toBe(50);
+  });
+
+  test('direct_labor rules base only on labour, not total direct cost', () => {
+    const laborOnly: OverheadAllocationRule[] = [
+      { id: 'r', name: 'labor burden', allocationBasis: 'direct_labor', rate: 0.5, isActive: true },
+    ];
+    const result = allocateOverhead([{ projectId: 'p1', directCost: 1000, directLabor: 200 }], laborOnly);
+    // 0.5 * 200 = 100 (NOT 0.5 * 1000)
+    expect(result[0].allocatedOverhead).toBe(100);
   });
 
   test('ignores inactive rules', () => {
@@ -29,6 +38,23 @@ describe('allocateOverhead', () => {
     const result = allocateOverhead([{ projectId: 'p1', directCost: 33.33, directLabor: 0 }], rules);
     expect(result[0].allocatedOverhead).toBe(3.33);
   });
+
+  test('handles a zero rate (rate || 0 branch)', () => {
+    const zeroRate: OverheadAllocationRule[] = [
+      { id: 'r', name: 'z', allocationBasis: 'direct_cost', rate: 0, isActive: true },
+    ];
+    const result = allocateOverhead([{ projectId: 'p1', directCost: 1000, directLabor: 0 }], zeroRate);
+    expect(result[0].allocatedOverhead).toBe(0);
+  });
+
+  test('treats null/undefined rules and costs as empty', () => {
+    expect(allocateOverhead(null as any, null as any)).toEqual([]);
+    expect(allocateOverhead(undefined as any, undefined as any)).toEqual([]);
+    // No rules → zero allocation but per-project rows preserved.
+    const noRules = allocateOverhead([{ projectId: 'p1', directCost: 100, directLabor: 0 }], null as any);
+    expect(noRules).toHaveLength(1);
+    expect(noRules[0].allocatedOverhead).toBe(0);
+  });
 });
 
 describe('sumAllocatedOverhead', () => {
@@ -38,6 +64,20 @@ describe('sumAllocatedOverhead', () => {
       { projectId: 'b', directCost: 0, directLabor: 0, allocatedOverhead: 20.5 },
     ];
     expect(sumAllocatedOverhead(results)).toBe(30.5);
+  });
+
+  test('returns 0 for null/undefined/empty input and tolerates missing allocatedOverhead', () => {
+    expect(sumAllocatedOverhead(null as any)).toBe(0);
+    expect(sumAllocatedOverhead(undefined as any)).toBe(0);
+    expect(sumAllocatedOverhead([])).toBe(0);
+    expect(sumAllocatedOverhead([{ projectId: 'x' } as any])).toBe(0);
+  });
+});
+
+describe('basisLabel', () => {
+  test('returns the labour label for direct_labor and cost label otherwise', () => {
+    expect(basisLabel('direct_labor')).toBe('نسبة من تكلفة العمالة المباشرة');
+    expect(basisLabel('direct_cost')).toBe('نسبة من التكلفة المباشرة');
   });
 });
 
@@ -51,5 +91,20 @@ describe('validateOverheadRule', () => {
     expect(typeof validateOverheadRule({ rate: 1.5 })).toBe('string');
     expect(typeof validateOverheadRule({ allocation_basis: 'foo' })).toBe('string');
     expect(typeof validateOverheadRule({ name: '' })).toBe('string');
+  });
+
+  test('rejects a non-boolean is_active and an over-long name', () => {
+    expect(typeof validateOverheadRule({ is_active: 'yes' })).toBe('string');
+    expect(typeof validateOverheadRule({ name: 'x'.repeat(101) })).toBe('string');
+  });
+
+  test('accepts partial update payloads (no required fields)', () => {
+    expect(validateOverheadRule({ rate: 0.05 })).toEqual({ name: undefined, basis: undefined, rate: 0.05, active: undefined });
+    expect(validateOverheadRule({ is_active: false })).toEqual({ name: undefined, basis: undefined, rate: undefined, active: false });
+  });
+
+  test('rejects NaN rate and a rate with more than 4 decimals', () => {
+    expect(typeof validateOverheadRule({ rate: NaN })).toBe('string');
+    expect(typeof validateOverheadRule({ rate: 0.12345 })).toBe('string');
   });
 });
