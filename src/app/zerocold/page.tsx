@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Building2, Users, Database, Package, Key,
-  Activity, LogOut, Server,
+  Activity, Server,
   HardDrive, ShieldAlert, RefreshCw, Loader2, ChevronLeft,
   TrendingUp, Eye, MessageSquare, MessageSquareWarning, Megaphone,
   CheckCircle, XCircle
@@ -64,11 +64,6 @@ export default function ZerocoldDashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleLogout = async () => {
-    await fetch('/api/admin/logout', { method: 'POST' });
-    router.replace('/zerocold/login');
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen bg-bg-primary flex items-center justify-center">
@@ -126,7 +121,7 @@ export default function ZerocoldDashboardPage() {
   const planData = (data?.planDistribution || []).map((p) => ({ name: p.name, value: p.price || 0 }));
 
   return (
-    <div className="min-h-screen bg-bg-primary">
+    <div className="bg-bg-primary min-h-full">
       <div className="max-w-6xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
@@ -145,13 +140,6 @@ export default function ZerocoldDashboardPage() {
               title="تحديث"
             >
               <RefreshCw size={16} />
-            </button>
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-bg-card border border-border text-red-400/70 hover:text-red-400 hover:border-red-800/50 transition-all text-xs"
-            >
-              <LogOut size={14} />
-              تسجيل الخروج
             </button>
           </div>
         </div>

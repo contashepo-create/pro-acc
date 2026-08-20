@@ -27,6 +27,68 @@ const NAV_ITEMS = [
   { href: '/zerocold/visitors', label: 'الزوار', icon: Activity },
 ];
 
+function SidebarContent({ collapsed, pathname, onNavigate, onCollapseToggle }: {
+  collapsed: boolean;
+  pathname: string;
+  onNavigate: () => void;
+  onCollapseToggle: () => void;
+}) {
+  const isActive = (item: { href: string; exact?: boolean }) =>
+    item.exact ? pathname === item.href : pathname.startsWith(item.href);
+
+  return (
+    <div className="flex flex-col h-full bg-sidebar-bg text-text-primary">
+      {/* Brand */}
+      <div className="flex items-center h-14 px-4 border-b border-border shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center shrink-0">
+            <ShieldAlert className="w-4 h-4 text-white" />
+          </div>
+          {!collapsed && (
+            <span className="text-base font-bold text-text-primary whitespace-nowrap">
+              لوحة <span className="text-amber-400">المطور</span>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
+        {NAV_ITEMS.map((item) => {
+          const active = isActive(item);
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={onNavigate}
+              className={`flex items-center gap-3 px-3 h-10 rounded-lg text-sm transition-colors ${
+                active
+                  ? 'bg-amber-600/15 text-amber-400 border border-amber-700/30'
+                  : 'text-text-secondary hover:text-text-primary hover:bg-sidebar-hover'
+              }`}
+              title={collapsed ? item.label : undefined}
+            >
+              <item.icon size={18} className="shrink-0" />
+              {!collapsed && <span className="flex-1 text-right font-medium whitespace-nowrap">{item.label}</span>}
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Collapse toggle (desktop only) */}
+      <div className="hidden lg:flex items-center justify-center h-12 border-t border-border shrink-0 bg-sidebar-bg">
+        <button
+          onClick={() => onCollapseToggle()}
+          className="w-9 h-9 rounded-xl hover:bg-sidebar-hover flex items-center justify-center text-text-secondary hover:text-text-primary transition-colors"
+          title={collapsed ? 'توسيع القائمة' : 'طي القائمة'}
+        >
+          {collapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function ZerocoldLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -99,63 +161,6 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
     return null;
   }
 
-  const isActive = (item: { href: string; exact?: boolean }) => {
-    if (item.exact) return pathname === item.href;
-    return pathname.startsWith(item.href);
-  };
-
-  const SidebarContent = () => (
-    <div className="flex flex-col h-full bg-sidebar-bg text-text-primary">
-      {/* Brand */}
-      <div className="flex items-center h-14 px-4 border-b border-border shrink-0">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center shrink-0">
-            <ShieldAlert className="w-4 h-4 text-white" />
-          </div>
-          {!collapsed && (
-            <span className="text-base font-bold text-text-primary whitespace-nowrap">
-              لوحة <span className="text-amber-400">المطور</span>
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
-        {NAV_ITEMS.map((item) => {
-          const active = isActive(item);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setMobileOpen(false)}
-              className={`flex items-center gap-3 px-3 h-10 rounded-lg text-sm transition-colors ${
-                active
-                  ? 'bg-amber-600/15 text-amber-400 border border-amber-700/30'
-                  : 'text-text-secondary hover:text-text-primary hover:bg-sidebar-hover'
-              }`}
-              title={collapsed ? item.label : undefined}
-            >
-              <item.icon size={18} className="shrink-0" />
-              {!collapsed && <span className="flex-1 text-right font-medium whitespace-nowrap">{item.label}</span>}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* Collapse toggle (desktop only) */}
-      <div className="hidden lg:flex items-center justify-center h-12 border-t border-border shrink-0 bg-sidebar-bg">
-        <button
-          onClick={() => setCollapsed((c) => !c)}
-          className="w-9 h-9 rounded-xl hover:bg-sidebar-hover flex items-center justify-center text-text-secondary hover:text-text-primary transition-colors"
-          title={collapsed ? 'توسيع القائمة' : 'طي القائمة'}
-        >
-          {collapsed ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
-        </button>
-      </div>
-    </div>
-  );
-
   return (
     <div className="zerocold-shell min-h-screen bg-bg-primary flex overflow-hidden">
       {/* Desktop sidebar */}
@@ -163,7 +168,12 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
         className="hidden lg:flex flex-col h-screen bg-sidebar-bg border-l border-border transition-all duration-300 shrink-0"
         style={{ width: collapsed ? '70px' : '250px' }}
       >
-        <SidebarContent />
+        <SidebarContent
+          collapsed={collapsed}
+          pathname={pathname}
+          onNavigate={() => setMobileOpen(false)}
+          onCollapseToggle={() => setCollapsed((c) => !c)}
+        />
       </aside>
 
       {/* Mobile drawer */}
@@ -171,7 +181,12 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
           <div className="absolute right-0 top-0 bottom-0 w-64 bg-sidebar-bg border-l border-border z-10">
-            <SidebarContent />
+            <SidebarContent
+              collapsed={false}
+              pathname={pathname}
+              onNavigate={() => setMobileOpen(false)}
+              onCollapseToggle={() => setMobileOpen(false)}
+            />
           </div>
         </div>
       )}
