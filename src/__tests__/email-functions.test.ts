@@ -31,8 +31,11 @@ describe('email delivery functions', () => {
   });
 
   test('reports Brevo HTTP/network failures when SMTP is unavailable', async () => {
-    global.fetch = jest.fn(async () => new Response('denied', { status: 401 })) as any;
+    global.fetch = jest.fn(async () => ({ ok: false, status: 500, text: async () => { throw new Error('body read'); } })) as any;
     let module = await loadEmail({ BREVO_API_KEY: 'bad' });
+    await expect(module.sendEmail('to@test.com', 'S', 'H')).resolves.toBe(false);
+    global.fetch = jest.fn(async () => new Response('denied', { status: 401 })) as any;
+    module = await loadEmail({ BREVO_API_KEY: 'bad' });
     await expect(module.sendEmail('to@test.com', 'S', 'H')).resolves.toBe(false);
     global.fetch = jest.fn(async () => { throw new Error('network'); }) as any;
     module = await loadEmail({ BREVO_API_KEY: 'bad' });

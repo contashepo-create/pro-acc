@@ -1,7 +1,3 @@
-import { getSupabase } from '@/lib/supabase-client';
-
-const sb = () => getSupabase();
-
 /**
  * Usage limits for the new three-tier pricing model.
  * Kept as a standalone module so routes that are still on the older

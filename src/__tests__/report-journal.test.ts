@@ -1,5 +1,5 @@
 import {
-  loadReportAccounts, loadReportJournalEntries, resolveLineAccountId,
+  loadReportAccounts, loadReportJournalEntries, loadReportJournalLines, resolveLineAccountId,
 } from '@/lib/report-journal';
 
 describe('report line → account resolution', () => {
@@ -31,6 +31,11 @@ function fakeSupabase(tables: Record<string, any[]>) {
         eq: (column: string, value: unknown) => {
           filters.push(`eq:${column}:${value}`);
           rows = rows.filter((row) => row[column] === value);
+          return query;
+        },
+        in: (column: string, values: unknown[]) => {
+          filters.push(`in:${column}:${values.join(',')}`);
+          rows = rows.filter((row) => values.includes(row[column]));
           return query;
         },
         or: (expression: string) => {
@@ -74,6 +79,17 @@ describe('report loaders enforce posted history', () => {
     });
     const rows = await loadReportAccounts(db, 'c1');
     expect(rows.map((row) => row.id)).toEqual(['active', 'inactive']);
+  });
+
+  test('loads journal lines only for requested entry chunks', async () => {
+    const db = fakeSupabase({ journal_lines: [
+      { id: 'l1', company_id: 'c1', journal_entry_id: 'j1', debit: 10, credit: 0 },
+      { id: 'l2', company_id: 'c1', journal_entry_id: 'j2', debit: 0, credit: 10 },
+      { id: 'foreign', company_id: 'c2', journal_entry_id: 'j1', debit: 99, credit: 0 },
+    ] });
+    const lines = await loadReportJournalLines(db, 'c1', ['j1']);
+    expect(lines.map((line) => line.id)).toEqual(['l1']);
+    expect(await loadReportJournalLines(db, 'c1', [])).toEqual([]);
   });
 
   test('excludes drafts and deleted journals but keeps a reversed source beside its reversal', async () => {

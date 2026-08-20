@@ -61,6 +61,14 @@ describe('openPrintWindow', () => {
     expect(fakeWin.print).toHaveBeenCalled();
   });
 
+  it('waits for a loading print document and fires only once', () => {
+    const fakeWin = installFakeWindow();
+    fakeWin.document.readyState = 'loading';
+    fakeWin.addEventListener = (_event: string, callback: () => void) => { callback(); callback(); };
+    expect(openPrintWindow('<p>x</p>')).toEqual({ ok: true, blocked: false });
+    expect(fakeWin.print).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a blocked popup when window.open returns null', () => {
     installFakeWindow(() => null);
     expect(openPrintWindow('<h1>طباعة</h1>')).toEqual({ ok: false, blocked: true });
@@ -80,6 +88,25 @@ describe('printCurrentPage', () => {
   it('prints the current page after fonts and images are ready', async () => {
     const fakeWin = installFakeWindow();
     await printCurrentPage();
+    expect(fakeWin.print).toHaveBeenCalled();
+  });
+
+  it('waits for incomplete images through load, error and timeout callbacks', async () => {
+    const fakeWin = installFakeWindow();
+    const callbacks: Record<string, Array<() => void>> = { load: [], error: [] };
+    fakeWin.document.images = [
+      { complete: true, naturalWidth: 100, addEventListener: jest.fn() },
+      { complete: false, naturalWidth: 0, addEventListener: (event: string, cb: () => void) => callbacks[event].push(cb) },
+    ];
+    fakeWin.document.fonts = { ready: Promise.resolve() };
+    const pending = printCurrentPage();
+    // Let the fonts promise schedule waitForImages and register listeners.
+    await Promise.resolve();
+    await Promise.resolve();
+    // Both browser outcomes are idempotent because Promise resolution is one-shot.
+    callbacks.load.forEach((callback) => callback());
+    callbacks.error.forEach((callback) => callback());
+    await pending;
     expect(fakeWin.print).toHaveBeenCalled();
   });
 

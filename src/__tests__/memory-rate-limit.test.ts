@@ -29,6 +29,14 @@ describe('in-memory business-route rate limiter', () => {
     expect(hitRateLimit('u1', limit, 12_500).allowed).toBe(true);
   });
 
+  it('periodic sweep removes stale buckets', () => {
+    const limit = { windowMs: 1_000, max: 1 };
+    hitRateLimit('stale', limit, 1);
+    // More than the five-minute sweep interval: executes global bucket filter.
+    expect(hitRateLimit('fresh', limit, 400_000).allowed).toBe(true);
+    expect(hitRateLimit('stale', limit, 400_001).allowed).toBe(true);
+  });
+
   it('keys are isolated from each other', () => {
     const limit = { windowMs: 60_000, max: 1 };
     expect(hitRateLimit('user:a:w', limit, 1000).allowed).toBe(true);

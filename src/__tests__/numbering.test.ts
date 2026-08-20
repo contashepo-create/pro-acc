@@ -33,9 +33,17 @@ import {
   getNextQuotationNumber,
   getNextPurchaseInvoiceNumber,
   getNextPurchaseOrderNumber,
+  isUniqueViolation,
 } from '../lib/numbering';
 
 const TEST_COMPANY_ID = '12345678-1234-1234-1234-123456789abc';
+
+test('detects database unique violations safely', () => {
+  expect(isUniqueViolation({ code: '23505' })).toBe(true);
+  expect(isUniqueViolation({ message: 'duplicate key value violates unique constraint' })).toBe(true);
+  expect(isUniqueViolation(new Error('other'))).toBe(false);
+  expect(isUniqueViolation(null)).toBe(false);
+});
 
 describe('Invoice Numbering', () => {
   beforeEach(() => {

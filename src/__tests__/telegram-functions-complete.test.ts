@@ -32,6 +32,20 @@ describe('Telegram transport functions', () => {
     expect(body.parse_mode).toBe('HTML');
   });
 
+  test('aborts slow OTP delivery after ten seconds', async () => {
+    jest.useFakeTimers();
+    let resolveFetch!: (response: Response) => void;
+    global.fetch = jest.fn((_url: string, init: RequestInit) => new Promise<Response>((resolve) => { resolveFetch = resolve; expect(init.signal).toBeDefined(); })) as any;
+    const telegramModule = await loadTelegram('token', 'admin');
+    const pending = telegramModule.sendTelegramCode('123');
+    jest.advanceTimersByTime(10_000);
+    const signal = (global.fetch as jest.Mock).mock.calls[0][1].signal as AbortSignal;
+    expect(signal.aborted).toBe(true);
+    resolveFetch(new Response('{}', { status: 200 }));
+    await expect(pending).resolves.toBe(true);
+    jest.useRealTimers();
+  });
+
   test('returns false for HTTP and network failures', async () => {
     global.fetch = jest.fn(async () => new Response('denied', { status: 403 })) as any;
     let module = await loadTelegram('token', 'admin');

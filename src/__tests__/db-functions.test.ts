@@ -1,11 +1,14 @@
 const poolQuery = jest.fn();
 const connect = jest.fn();
 const end = jest.fn();
-const on = jest.fn();
-const Pool = jest.fn(() => ({ query: poolQuery, connect, end, on }));
+let capturedPoolErrorHandler: ((error: Error) => void) | undefined;
+const on = jest.fn((event: string, callback: (error: Error) => void) => { if (event === 'error') capturedPoolErrorHandler = callback; });
+let poolConfig: any;
+const Pool = jest.fn((config: any) => { poolConfig = config; return { query: poolQuery, connect, end, on }; });
+const lookup = jest.fn();
 
 jest.mock('pg', () => ({ Pool }));
-jest.mock('dns', () => ({ lookup: jest.fn() }));
+jest.mock('dns', () => ({ lookup }));
 
 import { query, transaction, getClient, endPool } from '@/lib/db';
 
@@ -20,6 +23,29 @@ describe('database pool helpers', () => {
     poolQuery.mockResolvedValueOnce({ rows: [{ id: 1 }], rowCount: 1 });
     await expect(query('select * from t where id=$1', [1])).resolves.toMatchObject({ rowCount: 1 });
     expect(poolQuery).toHaveBeenCalledWith('select * from t where id=$1', [1]);
+  });
+
+  test('custom DNS lookup handles resolver errors, empty results and the first address', async () => {
+    if (!poolConfig) {
+      poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await query('select 1');
+    }
+    lookup.mockImplementationOnce((_host: string, _opts: unknown, cb: (error: Error | null, addresses?: Array<{ address: string; family: number }>) => void) => cb(new Error('dns')));
+    const errorCallback = jest.fn();
+    poolConfig.lookup('db.test', {}, errorCallback);
+    expect(errorCallback.mock.calls[0][0]).toBeInstanceOf(Error);
+
+    lookup.mockImplementationOnce((_host: string, _opts: unknown, cb: (error: Error | null, addresses?: Array<{ address: string; family: number }>) => void) => cb(null, []));
+    const emptyCallback = jest.fn();
+    poolConfig.lookup('db.test', {}, emptyCallback);
+    expect(emptyCallback.mock.calls[0][0].message).toContain('No addresses');
+
+    lookup.mockImplementationOnce((_host: string, _opts: unknown, cb: (error: Error | null, addresses?: Array<{ address: string; family: number }>) => void) => cb(null, [{ address: '1.2.3.4', family: 4 }]));
+    const successCallback = jest.fn();
+    poolConfig.lookup('db.test', {}, successCallback);
+    expect(successCallback).toHaveBeenCalledWith(null, '1.2.3.4', 4);
+    expect(typeof capturedPoolErrorHandler).toBe('function');
+    capturedPoolErrorHandler!(new Error('pool'));
   });
 
   test('propagates query errors without leaking SQL in non-development logs', async () => {
