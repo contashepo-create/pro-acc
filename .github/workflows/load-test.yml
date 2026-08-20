@@ -12,8 +12,8 @@ on:
         description: 'Test duration (e.g., 2m, 5m)'
         required: false
         default: '2m'
-  schedule:
-    - cron: '0 2 * * *' # nightly at 02:00 UTC
+ # schedule:
+#    - cron: '0 2 * * *' # nightly at 02:00 UTC
 
 jobs:
   k6:
