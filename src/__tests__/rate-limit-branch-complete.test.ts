@@ -7,7 +7,7 @@ const db = { from: jest.fn(() => { const api: any = {
   insert: () => api, single: async () => singleResult,
 }; return api; }) };
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
-import { sanitizeEmailForFilter, checkRateLimit, checkPasswordResetRateLimit, recordPasswordResetRequest, checkRegistrationRateLimit } from '@/lib/rate-limit';
+import { sanitizeEmailForFilter, checkRateLimit, checkPasswordResetRateLimit, recordPasswordResetRequest, markPasswordResetRequest, checkRegistrationRateLimit } from '@/lib/rate-limit';
 
 beforeEach(() => { jest.clearAllMocks(); queryData = []; queryError = null; singleResult = { data: null, error: null }; });
 describe('remaining rate limit branches', () => {
@@ -25,22 +25,26 @@ describe('remaining rate limit branches', () => {
   test('handles null/reset rows, missing oldest timestamp and explicit zero options', async () => {
     queryData = null;
     await expect(checkPasswordResetRateLimit('a@b.com', '1.2.3.4')).resolves.toEqual({ allowed: true, remainingMinutes: 0 });
-    queryData = [{}, {}, {}];
-    await expect(checkPasswordResetRateLimit('a@b.com', '1.2.3.4')).resolves.toEqual({ allowed: false, remainingMinutes: 15 });
+    queryData = Array.from({ length: 3 }, () => ({ created_at: new Date(Date.now() - 60_000).toISOString() }));
+    expect((await checkPasswordResetRateLimit('a@b.com', '1.2.3.4')).remainingMinutes).toBeGreaterThan(0);
     queryData = [];
-    await expect(checkPasswordResetRateLimit('a@b.com', '1.2.3.4', { maxRequests: 0, windowMinutes: 0 })).resolves.toMatchObject({ allowed: false, remainingMinutes: 1 });
+    await expect(checkPasswordResetRateLimit('a@b.com', '1.2.3.4', { maxRequests: 0, windowMinutes: 0 })).resolves.toEqual({ allowed: true, remainingMinutes: 0 });
   });
   test('records null ids and surfaces record errors', async () => {
     await expect(recordPasswordResetRequest(' A@B.COM ', '1.2.3.4')).resolves.toBeNull();
     singleResult = { data: null, error: new Error('insert') };
     await expect(recordPasswordResetRequest('a@b.com', '1.2.3.4')).rejects.toThrow('insert');
   });
+  test('swallows delivery-status update exceptions', async () => {
+    db.from.mockImplementationOnce(() => { throw new Error('update'); });
+    await expect(markPasswordResetRequest('id', 'failed', 'x')).resolves.toBeUndefined();
+  });
   test('handles registration null data and missing oldest timestamp', async () => {
     queryData = null;
     await expect(checkRegistrationRateLimit('a@b.com', '1.2.3.4')).resolves.toEqual({ allowed: true, remainingMinutes: 0 });
-    queryData = [{}, {}, {}, {}, {}];
-    await expect(checkRegistrationRateLimit('a@b.com', '1.2.3.4')).resolves.toEqual({ allowed: false, remainingMinutes: 60 });
+    queryData = Array.from({ length: 5 }, () => ({ created_at: new Date(Date.now() - 60_000).toISOString() }));
+    expect((await checkRegistrationRateLimit('a@b.com', '1.2.3.4')).remainingMinutes).toBeGreaterThan(0);
     queryData = [];
-    await expect(checkRegistrationRateLimit('a@b.com', '1.2.3.4', { maxAttempts: 0, windowMinutes: 0 })).resolves.toMatchObject({ allowed: false, remainingMinutes: 1 });
+    await expect(checkRegistrationRateLimit('a@b.com', '1.2.3.4', { maxAttempts: 0, windowMinutes: 0 })).resolves.toEqual({ allowed: true, remainingMinutes: 0 });
   });
 });

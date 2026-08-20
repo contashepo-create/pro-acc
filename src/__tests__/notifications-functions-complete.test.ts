@@ -103,6 +103,9 @@ describe('approval notifications', () => {
     configResult = { data: enabledConfig, error: null };
     userResult = { data: null, error: null };
     await expect(sendApprovalRequestNotification('c1', 10, 'unknown_type', 'short', 'u1', 'a1')).rejects.toThrow('requester');
+    userResult = { data: { name: null, email: null }, error: null };
+    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as any;
+    await expect(sendApprovalRequestNotification('c1', 10, 'unknown_type', 'short', 'u1', 'a1')).resolves.toBeUndefined();
     userResult = { data: { name: null, email: 'fallback@test.com' }, error: null };
     global.fetch = jest.fn(async () => new Response('denied', { status: 403 })) as any;
     await expect(sendApprovalRequestNotification('c1', 10, 'journal_entry', 'j1', 'u1', 'a1')).rejects.toThrow('403');
@@ -116,6 +119,8 @@ describe('approval notifications', () => {
     rpc.mockResolvedValueOnce({ data: { status: 'approved' }, error: null });
     await expect(handleApprovalResponse('approve', 'journal_entry', 'j1', 'untrusted', 'chat')).resolves.toMatchObject({ success: true, message: expect.stringContaining('الاعتماد') });
     rpc.mockResolvedValueOnce({ data: { status: 'rejected' }, error: null });
+    await expect(handleApprovalResponse('reject', 'journal_entry', 'j1', 'untrusted', 'chat')).resolves.toMatchObject({ success: true, message: expect.stringContaining('الرفض') });
+    rpc.mockResolvedValueOnce({ data: null, error: null });
     await expect(handleApprovalResponse('reject', 'journal_entry', 'j1', 'untrusted', 'chat')).resolves.toMatchObject({ success: true, message: expect.stringContaining('الرفض') });
     expect(rpc).toHaveBeenLastCalledWith('respond_legacy_approval_by_telegram_atomic', expect.not.objectContaining({ requester: expect.anything() }));
   });
@@ -138,6 +143,10 @@ describe('general and transaction notifications', () => {
   });
 
   test('applies transaction thresholds and escapes transaction details', async () => {
+    configResult = { data: null, error: null };
+    await expect(sendTransactionNotification('c1', 'receipt', { amount: 1, reason: 'x', date: 'd' })).resolves.toEqual({ notified: false });
+    configResult = { data: { ...enabledConfig, is_enabled: false }, error: null };
+    await expect(sendTransactionNotification('c1', 'receipt', { amount: 1, reason: 'x', date: 'd' })).resolves.toEqual({ notified: false });
     configResult = { data: { ...enabledConfig, approval_threshold: 200 }, error: null };
     await expect(sendTransactionNotification('c1', 'receipt', { amount: 100, reason: 'x', date: '2026-08-20' })).resolves.toEqual({ notified: false });
     configResult = { data: enabledConfig, error: null };
@@ -155,6 +164,8 @@ describe('general and transaction notifications', () => {
   test('checks approval thresholds and fails closed on configuration errors', async () => {
     await expect(checkApprovalThreshold('c1', 101, 'voucher', 'u')).resolves.toEqual({ requiresApproval: true });
     await expect(checkApprovalThreshold('c1', 100, 'voucher', 'u')).resolves.toEqual({ requiresApproval: false });
+    configResult = { data: { ...enabledConfig, approval_threshold: 'bad' }, error: null };
+    await expect(checkApprovalThreshold('c1', 999, 'voucher', 'u')).resolves.toEqual({ requiresApproval: false });
     configResult = { data: { ...enabledConfig, approvals_enabled: false }, error: null };
     await expect(checkApprovalThreshold('c1', 999, 'voucher', 'u')).resolves.toEqual({ requiresApproval: false });
     configResult = { data: null, error: new Error('db') };

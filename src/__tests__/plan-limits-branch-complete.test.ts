@@ -30,6 +30,7 @@ describe('plan limit exhaustive branches', () => {
   test('returns null/no subscription and surfaces subscription errors', async () => {
     subscription = null;
     await expect(getCompanyPlanLimits('c1')).resolves.toBeNull();
+    await expect(checkPlanLimit('c1', 'users')).resolves.toEqual({ allowed: true, limit: null, current: 0 });
     subscriptionError = new Error('sub');
     await expect(getCompanyPlanLimits('c1')).rejects.toThrow('sub');
   });
@@ -49,6 +50,8 @@ describe('plan limit exhaustive branches', () => {
   test('defaults missing plan/subscription values safely', async () => {
     subscription = { plan_code: 'start', extra_users: null, extra_branches: null, extra_storage_gb: null, addons_json: null, subscription_plans: null };
     await expect(getCompanyPlanLimits('c1')).resolves.toMatchObject({ planCode: 'start', max_users: 1, max_storage_mb: 0, max_branches: 0, features_modules: {} });
+    subscription = { plan_code: null, extra_users: 0, extra_branches: 0, extra_storage_gb: 0, addons_json: {}, subscription_plans: { ...baseSub().subscription_plans, code: null } };
+    await expect(getCompanyPlanLimits('c1')).resolves.toMatchObject({ planCode: null });
   });
 
   test('allows unlimited/null resources and reports explicit supplied counts', async () => {

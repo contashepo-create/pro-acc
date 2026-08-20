@@ -14,6 +14,7 @@ beforeEach(() => jest.clearAllMocks());
 describe('getCompanyContext', () => {
   test('returns null without or with an invalid token', async () => {
     await expect(getCompanyContext(request())).resolves.toBeNull();
+    await expect(getCompanyContext({ headers: new Headers({ authorization: 'Basic x' }) } as any)).resolves.toBeNull();
     await expect(getCompanyContext(request('invalid'))).resolves.toBeNull();
   });
 
@@ -24,6 +25,9 @@ describe('getCompanyContext', () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining('JOIN companies'), ['u1']);
     query.mockResolvedValue({ rows: [{ company_id: 'c1', token_version: 2, role: 'manager' }] });
     await expect(getCompanyContext(request(undefined, token))).resolves.toMatchObject({ role: 'manager' });
+    const legacy = createToken('u1', 'admin', 0);
+    query.mockResolvedValue({ rows: [{ company_id: 'c1', token_version: null, role: 'admin' }] });
+    await expect(getCompanyContext(request(legacy))).resolves.toMatchObject({ role: 'admin' });
   });
 
   test('rejects missing users, stale versions and database failures', async () => {

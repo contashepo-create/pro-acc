@@ -88,6 +88,7 @@ describe('general utility functions', () => {
     expect(truncate('short', 10)).toBe('short');
     expect(truncate('a long phrase', 6)).toBe('a long...');
     expect(parseNumber('SAR -1,234.50')).toBe(-1234.5);
+    expect(parseNumber(42)).toBe(42);
     expect(parseNumber(Number.NaN)).toBe(0);
     expect(parseNumber(null)).toBe(0);
     expect(parseNumber('none')).toBe(0);
@@ -130,12 +131,14 @@ describe('bank statement parsers and matching', () => {
     expect(parseCSV('date|desc|amount|ref\n2026-01-01|Pay|12|R', { separator: '|', dateCol: 0, descriptionCol: 1, amountCol: 2, referenceCol: 3 })[0]).toMatchObject({ date: '2026-01-01', description: 'Pay', amount: 12, reference: 'R' });
     expect(parseCSV('x,y,z\na,-,desc', { hasHeader: true })).toEqual([]);
     expect(parseCSV('x,y,z\na,1,desc', { dateCol: 9, descriptionCol: 9, referenceCol: 9 })[0]).toMatchObject({ date: '', description: '', reference: undefined });
+    expect(parseCSV('x,y,z\na,1,desc', { amountCol: 9 })[0]).toMatchObject({ amount: 0, type: 'credit' });
     expect(parseMT940(':20:X\n:61:260820RC10,00\n:61:260821RD5,00')).toHaveLength(2);
     expect(parseBankStatement(ofx)[0].bankRef).toBe('abc-1');
     expect(parseBankStatement('<STMTTRN></STMTTRN>')).toHaveLength(1);
     expect(parseBankStatement(':20:X\n:61:260820C1,00')).toHaveLength(1);
     expect(parseBankStatement(':61:260820C1,00')).toHaveLength(1);
     expect(parseBankStatement(mt940, 'mt940')).toHaveLength(2);
+    expect(parseBankStatement(csv)).toHaveLength(2);
     expect(parseBankStatement(csv, 'csv')).toHaveLength(2);
     expect(parseBankStatement(csv, 'invalid' as any)).toEqual([]);
   });
@@ -160,6 +163,8 @@ describe('branding, localization, themes and gantt helpers', () => {
     maybeSingle.mockResolvedValueOnce({ data: { id: 'c1', name: 'Acme', logo_url: null, primary_color: '#000', invoice_template: 'classic' } });
     const loaded = await getCompanyBranding('c1');
     expect(loaded).toMatchObject({ companyId: 'c1', companyName: 'Acme', primaryColor: '#000', invoiceTemplate: 'classic', currencySymbol: 'ر.س' });
+    maybeSingle.mockResolvedValueOnce({ data: { id: 'empty', name: null, primary_color: null, invoice_template: null } });
+    await expect(getCompanyBranding('empty')).resolves.toMatchObject({ companyName: 'Unknown', primaryColor: '#2563eb', invoiceTemplate: 'modern' });
     maybeSingle.mockResolvedValueOnce({ data: null });
     await expect(getCompanyBranding('missing')).resolves.toMatchObject({ companyName: 'Unknown', companyId: 'missing' });
     maybeSingle.mockRejectedValueOnce(new Error('down'));

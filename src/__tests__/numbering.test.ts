@@ -65,6 +65,9 @@ describe('Invoice Numbering', () => {
   });
 
   test('falls back for resolved RPC errors/null and zero candidates', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: null });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: null }).mockResolvedValueOnce({ data: null });
+    expect(await getNextInvoiceNumber(TEST_COMPANY_ID, 2026)).toBe(1);
     mockRpc.mockResolvedValueOnce({ data: 99, error: { message: 'rpc' } });
     mockChain.maybeSingle.mockResolvedValueOnce({ data: { last_number: 4 } }).mockResolvedValueOnce({ data: { number: null } });
     expect(await getNextInvoiceNumber(TEST_COMPANY_ID, 2026)).toBe(5);
@@ -140,6 +143,12 @@ describe('Journal Numbering', () => {
   });
 
   test('falls back through resolved error/null, existing and missing journal sequence rows', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: null });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: null }).mockResolvedValueOnce({ data: null });
+    expect(await getNextJournalNumber(TEST_COMPANY_ID, 2026)).toBe(1);
+    mockRpc.mockResolvedValueOnce({ data: 0, error: null });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: { number: null } });
+    expect(await getNextJournalNumber(TEST_COMPANY_ID, 2026)).toBe(1);
     mockRpc.mockResolvedValueOnce({ data: 8, error: { message: 'rpc' } });
     mockChain.maybeSingle.mockResolvedValueOnce({ data: { last_number: 1 } }).mockResolvedValueOnce({ data: null });
     expect(await getNextJournalNumber(TEST_COMPANY_ID, 2026)).toBe(2);

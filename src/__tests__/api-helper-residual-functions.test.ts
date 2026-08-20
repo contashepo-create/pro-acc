@@ -67,6 +67,9 @@ describe('remaining API helper functions', () => {
     const saved = process.env.NODE_ENV; (process.env as any).NODE_ENV = 'production';
     assertSubscriptionAccess.mockRejectedValueOnce(new Error('guard down'));
     await expect(requireApiAuth(request('POST'), {})).rejects.toMatchObject({ status: 503 });
+    const noMethod = request('POST'); noMethod.method = '';
+    assertSubscriptionAccess.mockRejectedValueOnce(new Error('guard down'));
+    await expect(requireApiAuth(noMethod, {})).resolves.toMatchObject({ companyId: 'c1' });
     assertSubscriptionAccess.mockRejectedValueOnce(new Error('guard down'));
     await expect(requireApiAuth(request('GET'), {})).resolves.toMatchObject({ companyId: 'c1' });
     (process.env as any).NODE_ENV = saved;
@@ -86,8 +89,8 @@ describe('remaining API helper functions', () => {
     const schema = z.object({ name: z.string().min(2) });
     await expect(parseValidatedBody(request('POST', { name: 'ok' }), schema)).resolves.toEqual({ name: 'ok' });
     await expect(parseValidatedBody(request('POST', { name: '' }), schema)).rejects.toBeInstanceOf(ValidationFailure);
-    const customSchema = { safeParse: () => ({ success: false, error: 'plain-error' }) };
-    await expect(parseValidatedBody(request('POST', {}), customSchema)).rejects.toMatchObject({ errors: 'plain-error' });
+    const flattenSchema = { safeParse: () => ({ success: false, error: { flatten: () => ({ fieldErrors: { x: ['bad'] } }) } }) };
+    await expect(parseValidatedBody(request('POST', {}), flattenSchema)).rejects.toMatchObject({ errors: { x: ['bad'] } });
   });
 
   test('escapes HTML and enforces matching CSRF tokens', () => {
@@ -171,6 +174,7 @@ describe('remaining API helper functions', () => {
     expect(() => requireCsrf(unequal)).toThrow();
     expect(getPaginationParams(new URL('http://x?page=2&pageSize=999'))).toEqual({ page: 2, pageSize: 500 });
     expect(getPaginationParams('http://x?page=bad&pageSize=-1')).toEqual({ page: 1, pageSize: 1 });
+    expect(getPaginationParams('http://x?pageSize=0')).toEqual({ page: 1, pageSize: 50 });
     expect(getPaginationParams('http://x')).toEqual({ page: 1, pageSize: 50 });
     expect(getDateRangeParams(new URL('http://x?from=2026-01-01&to=2026-02-01'))).toEqual({ from: '2026-01-01', to: '2026-02-01' });
     expect(getDateRangeParams('http://x')).toEqual({ from: null, to: null });

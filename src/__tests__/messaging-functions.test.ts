@@ -56,6 +56,7 @@ describe('message templates and channel adapters', () => {
   test('dispatches WhatsApp, escaped email, escaped Telegram and unsupported channels', async () => {
     await expect(sendMessage({ channel: 'whatsapp', to: '+1', template: 'general_ar', variables: { message: 'Hi' } }))
       .resolves.toMatchObject({ sent: true, channel: 'whatsapp', url: expect.stringContaining('wa.me/1') });
+    await expect(sendMessage({ channel: 'whatsapp', to: '+1', template: 'invoice_overdue_ar' })).resolves.toMatchObject({ sent: true });
 
     mailer.mockResolvedValueOnce(true);
     await sendMessage({ channel: 'email', to: 'a@test.com', template: '<b>{{name}}</b>\nnext', variables: { name: '<Admin>' } });
@@ -90,6 +91,11 @@ describe('invoice reminder orchestration', () => {
       .mockResolvedValueOnce({ data: {}, error: null });
     await expect(sendInvoiceReminder('c', 'u', 'i')).resolves.toMatchObject({ sent: false, channel: 'email', customerName: 'العميل' });
     expect(rpc.mock.calls[1][1]).toMatchObject({ p_reminder_id: 'null', p_message_url: null, p_error: 'تعذر إرسال البريد الإلكتروني' });
+    mailer.mockResolvedValueOnce(false);
+    rpc.mockResolvedValueOnce({ data: { reminder_id: 'r2', channel: 'email', email: null, due_date: '' }, error: null }).mockResolvedValueOnce({ data: {}, error: null });
+    await expect(sendInvoiceReminder('c', 'u', 'i')).resolves.toMatchObject({ sent: false });
+    rpc.mockResolvedValueOnce({ data: { reminder_id: 'r3', channel: 'whatsapp', phone: null, due_date: '2026-01-01' }, error: null }).mockResolvedValueOnce({ data: {}, error: null });
+    await expect(sendInvoiceReminder('c', 'u', 'i')).resolves.toMatchObject({ sent: true, url: expect.stringContaining('wa.me/?') });
   });
 
   test('fails when reservation or finalization fails', async () => {

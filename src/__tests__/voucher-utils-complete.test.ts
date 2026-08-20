@@ -2,6 +2,7 @@ let rows: Record<string, any[]> = {};
 const rpc = jest.fn();
 let failUpdateTable: string | null = null;
 let failInsertTable: string | null = null;
+let nullTables = new Set<string>();
 
 function query(table: string) {
   const filters: Array<[string, string, any]> = [];
@@ -30,7 +31,7 @@ function query(table: string) {
       else if (mode === 'insert') rows[table] = [...(rows[table] || []), payload];
       if (mode === 'update') for (const target of matches()) Object.assign(target, payload);
       if (mode === 'delete') rows[table] = (rows[table] || []).filter((r) => !matches().includes(r));
-      return Promise.resolve({ data: matches(), error }).then(resolve, reject);
+      return Promise.resolve({ data: nullTables.has(table) ? null : matches(), error }).then(resolve, reject);
     },
   };
   return api;
@@ -43,7 +44,7 @@ import {
   revertInvoiceAllocations, allocateOldestUnpaidInvoices,
 } from '@/lib/voucher-utils';
 
-beforeEach(() => { rows = {}; failUpdateTable = null; failInsertTable = null; jest.clearAllMocks(); });
+beforeEach(() => { rows = {}; failUpdateTable = null; failInsertTable = null; nullTables = new Set(); jest.clearAllMocks(); });
 
 describe('voucher helper functions', () => {
   test('hydrates unique contact and employee names while preserving embedded names', async () => {
@@ -68,6 +69,14 @@ describe('voucher helper functions', () => {
     const missing = [{ contact_id: 'x', employee_id: 'y' }];
     await hydratePartyNames(db, 'co', missing, { contacts: true, employees: true });
     expect(missing[0]).toMatchObject({ contact_name: '', employee_name: '' });
+    const fallbackRows = [{ contact_id: 'c1', contacts: { name: '' }, employee_id: 'e1', employees: { name: '' } }, { contact_id: null, employee_id: null }];
+    rows.contacts = [{ id: 'c1', company_id: 'co', name: 'Mapped Client' }];
+    rows.employees = [{ id: 'e1', company_id: 'co', name: 'Mapped Employee' }];
+    await hydratePartyNames(db, 'co', fallbackRows, { contacts: true, employees: true });
+    expect(fallbackRows[0]).toMatchObject({ contact_name: 'Mapped Client', employee_name: 'Mapped Employee' });
+    const nullDataDb = { from: () => { const api: any = { select: () => api, eq: () => api, in: async () => ({ data: null }) }; return api; } };
+    await expect(hydratePartyNames(nullDataDb, 'co', [{ contact_id: 'x' }], { contacts: true })).resolves.toBeTruthy();
+    await expect(hydratePartyNames(nullDataDb, 'co', [{ employee_id: 'x' }], { employees: true })).resolves.toBeTruthy();
   });
 
   test('resolves account codes and posts reversal RPC outcomes', async () => {
@@ -116,7 +125,7 @@ describe('voucher helper functions', () => {
     await expect(applyInvoiceAllocations('co', 'receipt', 'v', null, 20, [{ invoice_id: 'i', amount: 20 }], null)).resolves.toEqual({ error: null, applied: 10 });
   });
 
-  test('rejects missing/cancelled/foreign/paid invoices', async () => {
+  test('rejects missing/cancelled/foreign/paid/zero-total invoices', async () => {
     await expect(applyInvoiceAllocations('co', 'receipt', 'v', null, 10, [{ invoice_id: 'x', amount: 10 }], 'c')).resolves.toMatchObject({ error: expect.stringContaining('غير موجودة') });
     rows.invoices = [{ id: 'x', company_id: 'co', contact_id: 'c', total: 10, paid_amount: 0, status: 'cancelled' }];
     await expect(applyInvoiceAllocations('co', 'receipt', 'v', null, 10, [{ invoice_id: 'x', amount: 10 }], 'c')).resolves.toMatchObject({ error: expect.stringContaining('ملغاة') });
@@ -124,6 +133,15 @@ describe('voucher helper functions', () => {
     await expect(applyInvoiceAllocations('co', 'receipt', 'v', null, 10, [{ invoice_id: 'x', amount: 10 }], 'c')).resolves.toMatchObject({ error: expect.stringContaining('نفس الطرف') });
     rows.invoices[0] = { ...rows.invoices[0], contact_id: 'c', paid_amount: 10 };
     await expect(applyInvoiceAllocations('co', 'receipt', 'v', null, 10, [{ invoice_id: 'x', amount: 10 }], 'c')).resolves.toMatchObject({ error: expect.stringContaining('بالكامل') });
+    rows.invoices[0] = { id: 'x', company_id: 'co', contact_id: 'c', total: undefined, paid_amount: undefined, status: 'unpaid' };
+    await expect(applyInvoiceAllocations('co', 'receipt', 'v', null, 10, [{ invoice_id: 'x', amount: 10 }], 'c')).resolves.toMatchObject({ error: expect.stringContaining('بالكامل') });
+  });
+
+  test('handles null allocation/FIFO query pages', async () => {
+    nullTables.add('receipt_invoice_items');
+    await expect(revertInvoiceAllocations('co', 'receipt', 'v')).resolves.toBeUndefined();
+    nullTables = new Set(['invoices']);
+    await expect(allocateOldestUnpaidInvoices('co', 'v', null, 10, 'c')).resolves.toEqual({ error: null, applied: 0 });
   });
 
   test('reverts links and recalculates unpaid/partial status while skipping cancelled', async () => {
@@ -142,18 +160,27 @@ describe('voucher helper functions', () => {
   });
 
   test('reverts disbursement links with partial remaining status and missing invoices', async () => {
-    rows.purchase_invoices = [{ id: 'p1', company_id: 'co', total: 100, paid_amount: 80, status: 'paid' }];
+    rows.purchase_invoices = [
+      { id: 'p1', company_id: 'co', total: 100, paid_amount: 80, status: 'paid' },
+      { id: 'p2', company_id: 'co', total: 50, paid_amount: 50, status: 'paid' },
+      { id: 'p3', company_id: 'co', total: undefined, paid_amount: undefined, status: 'unpaid' },
+    ];
     rows.disbursement_invoice_items = [
       { voucher_disbursement_id: 'd1', purchase_invoice_id: 'missing', amount: 1 },
       { voucher_disbursement_id: 'd1', purchase_invoice_id: 'p1', amount: 30 },
+      { voucher_disbursement_id: 'd1', purchase_invoice_id: 'p2', amount: 'bad' },
+      { voucher_disbursement_id: 'd1', purchase_invoice_id: 'p3', amount: undefined },
     ];
     await revertInvoiceAllocations('co', 'disbursement', 'd1');
     expect(rows.purchase_invoices[0]).toMatchObject({ paid_amount: 50, status: 'partial' });
+    expect(rows.purchase_invoices[1]).toMatchObject({ paid_amount: 50, status: 'paid' });
+    expect(rows.purchase_invoices[2]).toMatchObject({ paid_amount: 0, status: 'unpaid' });
     expect(rows.disbursement_invoice_items).toEqual([]);
   });
 
   test('builds FIFO allocations, skips fully due rows and handles no invoices', async () => {
     rows.invoices = [
+      { id: 'malformed', company_id: 'co', contact_id: 'c', status: 'unpaid', date: '2025-12-31', number: 0, total: undefined, paid_amount: undefined },
       { id: 'paidmath', company_id: 'co', contact_id: 'c', status: 'unpaid', date: '2026-01-01', number: 1, total: 10, paid_amount: 10 },
       { id: 'i1', company_id: 'co', contact_id: 'c', status: 'unpaid', date: '2026-01-02', number: 2, total: 30, paid_amount: 0 },
       { id: 'i2', company_id: 'co', contact_id: 'c', status: 'partial', date: '2026-01-03', number: 3, total: 50, paid_amount: 10 },

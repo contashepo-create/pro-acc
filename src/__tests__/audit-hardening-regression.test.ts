@@ -102,13 +102,18 @@ describe('hasAllowedMagicBytes — polyglot/poisoned-file defense', () => {
     expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 1]), 'image/jpeg')).toBe(false);
     expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xd0, 0xff, 0xd9]), 'image/jpeg')).toBe(false);
     expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xff, 0xff, 0xd9]), 'image/jpeg')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0, 0, 0, 0]), 'image/jpeg')).toBe(true);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xd9, 0, 0]), 'image/jpeg')).toBe(true);
   });
 
   it('rejects short/wrong PNGs, misplaced/incomplete PDFs and unsupported MIME', () => {
     expect(hasAllowedMagicBytes(Buffer.from([0x89, 0x50]), 'image/png')).toBe(false);
+    const wrongSignature = Buffer.concat([Buffer.alloc(8), Buffer.from([0, 0, 0, 1]), Buffer.from('IHDR')]);
+    expect(hasAllowedMagicBytes(wrongSignature, 'image/png')).toBe(false);
     const wrongPng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from([0, 0, 0, 1]), Buffer.from('IDAT')]);
     expect(hasAllowedMagicBytes(wrongPng, 'image/png')).toBe(false);
     expect(hasAllowedMagicBytes(Buffer.from('12345%PDF-1.4\n%%EOF'), 'application/pdf')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from('%PDX-1.4 plain'), 'application/pdf')).toBe(false);
     expect(hasAllowedMagicBytes(Buffer.from('%PDF-1.4 no trailer'), 'application/pdf')).toBe(false);
     expect(hasAllowedMagicBytes(realPng(), 'image/gif')).toBe(false);
   });

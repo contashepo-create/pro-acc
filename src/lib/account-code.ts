@@ -53,7 +53,7 @@ export function nextChildAccountCode(parentCode: string, existingCodes: string[]
       if (!Number.isNaN(n) && n > maxSuffix) maxSuffix = n;
     } else if (code.startsWith(parent) && code.length > parent.length && /^\d+$/.test(code.slice(parent.length))) {
       const n = parseInt(code.slice(parent.length), 10);
-      if (!Number.isNaN(n) && n > maxSuffix) maxSuffix = n;
+      if (n > maxSuffix) maxSuffix = n;
     } else if (code.endsWith(`-${parent}`)) {
       const n = parseInt(code.slice(0, code.length - parent.length - 1), 10);
       if (!Number.isNaN(n) && n > maxSuffix) maxSuffix = n;

@@ -8,7 +8,7 @@ import {
   bondUpdateSchema, ganttCreateSchema, ganttUpdateSchema, taskDependencyCreateSchema,
 } from '@/lib/relationship-validation';
 import { getQRCodeString, generateZatcaQRData, validateInvoiceForZatca, generateInvoiceHash } from '@/lib/zatca';
-import { disbursementVoucherCreateSchema, contactCreateSchema, dateRangeSchema } from '@/lib/validation';
+import { quantityAmount, receiptVoucherCreateSchema, disbursementVoucherCreateSchema, inventoryMovementSchema, contactCreateSchema, dateRangeSchema } from '@/lib/validation';
 import { boqCreateSchema, projectCreateSchema, projectExpenseCreateSchema, equipmentMaintenanceSchema } from '@/lib/project-delivery-validation';
 import { custodyExpenseSchema } from '@/lib/custody-validation';
 
@@ -38,6 +38,8 @@ describe('remaining account and country helper functions', () => {
     expect(isHeaderAccount({ children: [{}] })).toBe(true);
     expect(isHeaderAccount({ code: '1000' })).toBe(true);
     expect(isHeaderAccount({ code: '1111', children: [] })).toBe(false);
+    expect(isHeaderAccount({ code: null, children: null })).toBe(false);
+    expect(isHeaderAccount(null as any)).toBe(false);
     expect(isHeaderAccount({})).toBe(false);
     for (const code of ['1110', '1120', '1110-0001', '1120-1', '0001-1110', '0001-1120', '11100001', '11200001']) expect(isCashOrBankCode(code)).toBe(true);
     for (const code of [null, undefined, '', '1111', '1110001']) expect(isCashOrBankCode(code)).toBe(false);
@@ -61,6 +63,9 @@ describe('remaining account and country helper functions', () => {
     db = dbFor({ accounts: [{ id: 'bank-parent', company_id: 'c1', code: '1120' }] });
     await expect(resolvePaymentAccountId(db, 'c1')).resolves.toBe('bank-parent');
     await expect(resolvePaymentAccountId(dbFor({}), 'c1')).resolves.toBeNull();
+    const nullDb = { from: () => { const api: any = { select: () => api, eq: () => api, order: async () => ({ data: null }), maybeSingle: async () => ({ data: null }), then: (resolve: any) => resolve({ data: null }) }; return api; } };
+    await expect(resolvePaymentAccountId(nullDb, 'c1')).resolves.toBeNull();
+    await expect(listCashBankAccountIds(nullDb, 'c1')).resolves.toEqual([]);
   });
 
   test('lists unique cash/bank accounts from chart and registered safes', async () => {
@@ -142,6 +147,7 @@ describe('remaining relationship schema callbacks', () => {
   test('validates tender dates, updates and positive cost items', () => {
     const tender = { title: 'T', client_name: 'Client', submission_deadline: '2026-01-01', opening_date: '2026-01-02', contact_id: '' };
     expect(tenderCreateSchema.safeParse(tender).success).toBe(true);
+    expect(tenderCreateSchema.safeParse({ title: 'T', client_name: 'C', submission_deadline: '', opening_date: '' }).success).toBe(true);
     expect(tenderCreateSchema.safeParse({ ...tender, opening_date: '2025-12-31' }).success).toBe(false);
     expect(tenderUpdateSchema.safeParse({}).success).toBe(false);
     expect(tenderCostItemSchema.safeParse({ category: 'materials', amount: 1 }).success).toBe(true);
@@ -167,7 +173,12 @@ describe('remaining relationship schema callbacks', () => {
 });
 
 describe('remaining shared validation callbacks', () => {
-  test('executes voucher duplicate, birth-date, date-range and project-tax refinements', () => {
+  test('executes quantity, voucher party, duplicate, inventory and date refinements', () => {
+    expect(quantityAmount().safeParse(1.25).success).toBe(true);
+    const receiptBase = { date: '2026-08-20', receipt_type: 'client', amount: 1, bank_safe_id: UUID1, reason: 'x' };
+    expect(receiptVoucherCreateSchema.safeParse(receiptBase).success).toBe(false);
+    expect(receiptVoucherCreateSchema.safeParse({ ...receiptBase, contact_id: UUID2 }).success).toBe(true);
+    expect(receiptVoucherCreateSchema.safeParse({ ...receiptBase, receipt_type: 'general' }).success).toBe(true);
     const voucher = {
       date: '2026-08-20', disbursement_type: 'other', amount: 100,
       bank_safe_id: UUID1, reason: 'pay', invoice_items: [
@@ -175,7 +186,20 @@ describe('remaining shared validation callbacks', () => {
       ],
     };
     expect(disbursementVoucherCreateSchema.safeParse(voucher).success).toBe(false);
+    const disbursementBase = { date: '2026-08-20', disbursement_type: 'supplier', amount: 1, bank_safe_id: UUID1, reason: 'x' };
+    expect(disbursementVoucherCreateSchema.safeParse(disbursementBase).success).toBe(false);
+    expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, contact_id: UUID2 }).success).toBe(true);
+    expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, disbursement_type: 'employee_advance' }).success).toBe(false);
+    expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, disbursement_type: 'employee_advance', employee_id: UUID2 }).success).toBe(true);
+    const movement = { item_id: UUID1, warehouse_id: UUID2, type: 'add', quantity: 0 };
+    expect(inventoryMovementSchema.safeParse(movement).success).toBe(false);
+    expect(inventoryMovementSchema.safeParse({ ...movement, type: 'adjust' }).success).toBe(true);
+    expect(inventoryMovementSchema.safeParse({ ...movement, type: 'adjustment' }).success).toBe(true);
+    expect(inventoryMovementSchema.safeParse({ ...movement, type: 'transfer', quantity: 1 }).success).toBe(false);
+    expect(inventoryMovementSchema.safeParse({ ...movement, type: 'transfer', quantity: 1, to_warehouse_id: UUID1 }).success).toBe(true);
+    expect(contactCreateSchema.safeParse({ name: 'A', type: 'client', date_of_birth: 'bad' }).success).toBe(false);
     expect(contactCreateSchema.safeParse({ name: 'A', type: 'client', date_of_birth: '2026-02-30' }).success).toBe(false);
+    expect(contactCreateSchema.safeParse({ name: 'A', type: 'client', date_of_birth: '2026-99-99' }).success).toBe(false);
     expect(contactCreateSchema.safeParse({ name: 'A', type: 'client', date_of_birth: '' }).success).toBe(true);
     expect(dateRangeSchema.safeParse({ from: '2026-02-01', to: '2026-01-01' }).success).toBe(false);
     expect(projectExpenseCreateSchema.safeParse({ project_id: UUID1, expense_type: 'materials', description: 'x', amount: 10, date: '2026-08-20', tax_rate: 0.1234 }).success).toBe(true);

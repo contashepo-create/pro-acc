@@ -71,6 +71,11 @@ describe('database pool helpers', () => {
 
   test('enforces Supabase CA in production and configures development/verified TLS', async () => {
     await endPool();
+    delete process.env.DATABASE_URL;
+    poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await query('select no-url');
+    expect(Pool).toHaveBeenLastCalledWith(expect.objectContaining({ connectionString: '' }));
+    await endPool();
     process.env.DATABASE_URL = 'postgres://project.supabase.co/db';
     delete process.env.DATABASE_CA_CERT;
     (process.env as any).NODE_ENV = 'production';
@@ -94,6 +99,16 @@ describe('database pool helpers', () => {
     (process.env as any).NODE_ENV = 'development';
     await query('select slow');
     now.mockRestore();
+    await endPool();
+    const now2 = jest.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1500);
+    poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    (process.env as any).NODE_ENV = 'test';
+    await query('select hidden slow');
+    now2.mockRestore();
+    await endPool();
+    (process.env as any).NODE_ENV = 'development';
+    poolQuery.mockRejectedValueOnce(new Error('dev query'));
+    await expect(query('select secret')).rejects.toThrow('dev query');
   });
 
   test('exposes a client and closes/resets the pool', async () => {

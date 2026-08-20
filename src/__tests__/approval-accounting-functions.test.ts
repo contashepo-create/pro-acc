@@ -8,6 +8,7 @@ const createDefaultChartOfAccounts = jest.fn();
 
 let tableRows: Record<string, any[]> = {};
 let tableErrors: Record<string, Error> = {};
+let insertErrors: Record<string, Error> = {};
 const operations: Array<{ table: string; operation: string; payload?: any; filters: any[] }> = [];
 
 function makeQuery(table: string) {
@@ -36,6 +37,7 @@ function makeQuery(table: string) {
     single: async () => {
       operations.push({ table, operation, payload, filters: [...filters] });
       if (operation === 'insert') {
+        if (insertErrors[table]) return { data: null, error: insertErrors[table] };
         const row = { id: 'new-account', ...payload };
         tableRows[table] = [...(tableRows[table] || []), row];
         return { data: row, error: null };
@@ -70,6 +72,7 @@ beforeEach(() => {
   operations.length = 0;
   tableRows = {};
   tableErrors = {};
+  insertErrors = {};
 });
 
 describe('approval helpers', () => {
@@ -113,6 +116,14 @@ describe('createAutoAccount', () => {
 
   test('rejects invalid precision or missing parent without writing', async () => {
     await expect(createAutoAccount({ ...base, openingBalance: 1.001 })).resolves.toBeNull();
+    await expect(createAutoAccount(base)).resolves.toBeNull();
+  });
+
+  test('returns null when database access throws or account insertion fails', async () => {
+    db.from.mockImplementationOnce(() => { throw new Error('db'); });
+    await expect(createAutoAccount(base)).resolves.toBeNull();
+    tableRows.accounts = [{ id: 'parent', company_id: 'c1', code: '1130' }];
+    insertErrors.accounts = new Error('insert');
     await expect(createAutoAccount(base)).resolves.toBeNull();
   });
 
@@ -193,6 +204,8 @@ describe('sales invoice accounting helpers', () => {
 
   test('rejects missing header and rolls back when line insertion fails', async () => {
     tableRows.accounts = [{ id: 'ar', company_id: 'c1', code: '1130' }, { id: 'rev', company_id: 'c1', code: '4100' }];
+    insertJournalHeader.mockResolvedValueOnce({ data: null, error: null });
+    await expect(postSalesInvoiceJournal({ companyId: 'c1', userId: 'u1', invoiceId: 'i1', invoiceNumber: 1, date: '2026-08-20', contactId: 'c', subtotal: 10, vatAmount: 0, total: 10 })).rejects.toThrow('فشل قيد');
     insertJournalHeader.mockResolvedValueOnce({ data: null, error: new Error('header') });
     await expect(postSalesInvoiceJournal({ companyId: 'c1', userId: 'u1', invoiceId: 'i1', invoiceNumber: 1, date: '2026-08-20', contactId: 'c', subtotal: 10, vatAmount: 0, total: 10 }))
       .rejects.toThrow('header');

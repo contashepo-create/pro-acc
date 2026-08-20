@@ -101,6 +101,12 @@ describe('report loaders enforce posted history', () => {
     expect(await loadReportAccounts(legacy, 'c1')).toHaveLength(1001);
     const fatal = scriptedSupabase([{ data: null, error: new Error('fatal') }]);
     await expect(loadReportAccounts(fatal, 'c1')).rejects.toThrow('fatal');
+    await expect(loadReportAccounts(scriptedSupabase([{ data: null, error: {} }]), 'c1')).rejects.toEqual({});
+  });
+
+  test('paginates journal entry pages', async () => {
+    const thousand = Array.from({ length: 1000 }, (_, id) => ({ id: String(id) }));
+    await expect(loadReportJournalEntries(scriptedSupabase([{ data: thousand, error: null }, { data: [{ id: 'last' }], error: null }]), 'c1')).resolves.toHaveLength(1001);
   });
 
   test('falls back for legacy journal deletion column and surfaces fatal errors', async () => {
@@ -110,6 +116,7 @@ describe('report loaders enforce posted history', () => {
     ]);
     await expect(loadReportJournalEntries(legacy, 'c1', { from: '2026-01-01', to: '2026-12-31' })).resolves.toEqual([{ id: 'j1' }]);
     await expect(loadReportJournalEntries(scriptedSupabase([{ data: null, error: new Error('fatal') }]), 'c1')).rejects.toThrow('fatal');
+    await expect(loadReportJournalEntries(scriptedSupabase([{ data: null, error: {} }]), 'c1')).rejects.toEqual({});
   });
 
   test('retains inactive accounts because deactivation cannot erase history', async () => {

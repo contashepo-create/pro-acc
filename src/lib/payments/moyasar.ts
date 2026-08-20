@@ -138,12 +138,9 @@ export function verifyWebhookSignature(payload: string, signature: string): bool
   if (!secret) return false;
 
   const expected = createHmac('sha256', secret).update(payload).digest();
-  let supplied: Buffer;
-  try {
-    supplied = Buffer.from(signature, 'hex');
-  } catch {
-    return false;
-  }
+  // Node's hex decoder returns an empty/short buffer for malformed input; it
+  // does not throw, so the explicit length check is the complete fail-closed path.
+  const supplied = Buffer.from(signature, 'hex');
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 

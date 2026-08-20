@@ -64,6 +64,8 @@ describe('remaining permission functions', () => {
     expect(result.defaultPermissions['*']).toContain('create');
     user = { id: 'u1', role: '' };
     expect((await getUserPermissions('u1', 'c1')).role).toBe('supervisor');
+    user = { id: 'u1', role: 'unknown' }; permissions = null as any;
+    expect(await getUserPermissions('u1', 'c1')).toMatchObject({ role: 'unknown', defaultPermissions: {}, customPermissions: [] });
     user = null;
     await expect(getUserPermissions('u1', 'c1')).rejects.toThrow('does not belong');
     errors = { user_permissions: new Error('perms') };
@@ -92,6 +94,9 @@ describe('remaining permission functions', () => {
     const result = await getCompanyUsersWithPermissions('c1');
     expect(result[0].permissions).toHaveLength(2);
     expect(result[1].permissions).toEqual([]);
+    permissions = null as any;
+    userList = [{ id: 'u3', name: 'C' }];
+    await expect(getCompanyUsersWithPermissions('c1')).resolves.toEqual([{ id: 'u3', name: 'C', permissions: [] }]);
     userList = null;
     await expect(getCompanyUsersWithPermissions('c1')).resolves.toEqual([]);
     userList = []; errors = { users: new Error('users') };

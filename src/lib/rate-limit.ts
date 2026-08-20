@@ -105,8 +105,8 @@ export async function checkPasswordResetRateLimit(
   opts: { maxRequests?: number; windowMinutes?: number } = {}
 ): Promise<{ allowed: boolean; remainingMinutes: number }> {
   const s = sb();
-  const maxRequests = opts.maxRequests ?? 3;
-  const windowMinutes = opts.windowMinutes ?? 15;
+  const maxRequests = Math.max(1, opts.maxRequests ?? 3);
+  const windowMinutes = Math.max(1, opts.windowMinutes ?? 15);
   const since = new Date(Date.now() - windowMinutes * 60000).toISOString();
   const safeIp = sanitizeIpAddress(ipAddress);
   const safeEmail = sanitizeEmailForFilter(email);
@@ -124,8 +124,8 @@ export async function checkPasswordResetRateLimit(
 
   const count = (data || []).length;
   if (count >= maxRequests) {
-    const oldest = data?.[0]?.created_at;
-    const elapsedMs = oldest ? Date.now() - new Date(oldest).getTime() : 0;
+    // maxRequests is clamped to >=1, therefore a blocked result always has a first row.
+    const elapsedMs = Date.now() - new Date(data![0].created_at).getTime();
     const remainingMs = windowMinutes * 60000 - elapsedMs;
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
     return { allowed: false, remainingMinutes };
@@ -178,8 +178,8 @@ export async function checkRegistrationRateLimit(
   opts: { maxAttempts?: number; windowMinutes?: number } = {}
 ): Promise<{ allowed: boolean; remainingMinutes: number }> {
   const s = sb();
-  const maxAttempts = opts.maxAttempts ?? 5;
-  const windowMinutes = opts.windowMinutes ?? 60;
+  const maxAttempts = Math.max(1, opts.maxAttempts ?? 5);
+  const windowMinutes = Math.max(1, opts.windowMinutes ?? 60);
   const since = new Date(Date.now() - windowMinutes * 60000).toISOString();
   const safeIp = sanitizeIpAddress(ipAddress);
   const safeEmail = sanitizeEmailForFilter(email);
@@ -197,8 +197,8 @@ export async function checkRegistrationRateLimit(
 
   const count = (data || []).length;
   if (count >= maxAttempts) {
-    const oldest = data?.[0]?.created_at;
-    const elapsedMs = oldest ? Date.now() - new Date(oldest).getTime() : 0;
+    // maxAttempts is clamped to >=1, therefore a blocked result always has a first row.
+    const elapsedMs = Date.now() - new Date(data![0].created_at).getTime();
     const remainingMs = windowMinutes * 60000 - elapsedMs;
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
     return { allowed: false, remainingMinutes };

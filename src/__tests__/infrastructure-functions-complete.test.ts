@@ -115,13 +115,18 @@ describe('project journal helpers', () => {
     rpc.mockResolvedValueOnce({ data: [
       { project_id: 'p1', account_type: 'expense', debit: 10, credit: 1 },
       { project_id: 'p2', account_type: 'revenue', debit: 2, credit: 20 },
+      { project_id: 'p2', account_type: 'asset', debit: undefined, credit: undefined },
       { project_id: 'foreign', account_type: 'expense', debit: 999, credit: 0 },
     ], error: null });
     await expect(sumProjectsJournal('c1', ['p1', 'p2'])).resolves.toEqual({ p1: { expenses: 9, revenue: 0 }, p2: { expenses: 0, revenue: 18 } });
+    rpc.mockResolvedValueOnce({ data: [{ code: 'x', name: 'Unknown', account_type: 'asset', debit: undefined, credit: undefined }], error: null });
+    await expect(sumProjectJournal('c1', 'p1')).resolves.toMatchObject({ expenses: 0, revenue: 0, accounts: [{ debit: 0, credit: 0 }] });
     rpc.mockResolvedValueOnce({ data: null, error: null });
     await expect(sumProjectJournal('c1', 'p1')).resolves.toMatchObject({ expenses: 0, revenue: 0, accounts: [] });
     rpc.mockResolvedValueOnce({ data: null, error: new Error('db') });
     await expect(sumProjectJournal('c1', 'p1')).rejects.toThrow('db');
+    rpc.mockResolvedValueOnce({ data: null, error: null });
+    await expect(sumProjectsJournal('c1', ['p1'])).resolves.toEqual({ p1: { expenses: 0, revenue: 0 } });
     rpc.mockResolvedValueOnce({ data: null, error: new Error('multi') });
     await expect(sumProjectsJournal('c1', ['p1'])).rejects.toThrow('multi');
   });
@@ -138,6 +143,8 @@ describe('private storage references', () => {
     }
     createSignedUrl.mockResolvedValueOnce({ data: null, error: new Error('storage') });
     await expect(signPrivateReceiptReference(client, 'c1/file.png')).resolves.toBeNull();
+    createSignedUrl.mockResolvedValueOnce({ data: null, error: null });
+    await expect(signPrivateReceiptReference(client, 'c1/file.png')).resolves.toBeNull();
     createSignedUrl.mockResolvedValueOnce({ data: {}, error: null });
     await expect(signPrivateReceiptReference(client, 'c1/file.png')).resolves.toBeNull();
     createSignedUrl.mockResolvedValueOnce({ data: { signedUrl: 'https://signed.test' }, error: null });
@@ -149,12 +156,12 @@ describe('private storage references', () => {
 describe('usage limits facade', () => {
   test('normalizes plan limits and returns safe defaults without a subscription', async () => {
     getCompanyPlanLimits.mockResolvedValueOnce({
-      planCode: 'pro', max_users: 3, max_clients: undefined, max_suppliers: 10,
+      planCode: 'pro', max_users: 3, max_clients: 25, max_suppliers: 10,
       max_employees: 20, max_projects: 5, max_invoices_per_month: 500,
       max_quotations_per_month: 250, max_storage_mb: 1024, features_modules: { inventory: true },
       extra_users: 2, extra_branches: 1, extra_storage_gb: 1,
     });
-    await expect(getCompanyLimits('c1')).resolves.toMatchObject({ planCode: 'pro', max_users: 3, max_clients: null });
+    await expect(getCompanyLimits('c1')).resolves.toMatchObject({ planCode: 'pro', max_users: 3, max_clients: 25 });
     getCompanyPlanLimits.mockResolvedValueOnce({ planCode: 'x', max_users: 1, max_clients: undefined, max_suppliers: undefined, max_employees: undefined, max_projects: undefined, max_invoices_per_month: null, max_quotations_per_month: null, max_storage_mb: 0, features_modules: {}, extra_users: 0, extra_branches: 0, extra_storage_gb: 0 });
     await expect(getCompanyLimits('x')).resolves.toMatchObject({ max_clients: null, max_suppliers: null, max_employees: null, max_projects: null });
     getCompanyPlanLimits.mockResolvedValueOnce(null);
@@ -187,6 +194,11 @@ describe('subscription helpers', () => {
     const result = await getCompanySubscription('c1');
     expect(result).toMatchObject({ plan_name: 'Pro', is_expired: false, is_expiring_soon: true });
 
+    subscriptionSingle.mockResolvedValueOnce({ data: {
+      id: 's-no-plan', company_id: 'c1', plan_id: 'missing-plan', plan_code: 'legacy', status: 'active', start_date: '2026-01-01', end_date: tomorrow.toISOString().slice(0, 10),
+    }, error: null });
+    planSingle.mockResolvedValueOnce({ data: null, error: null });
+    await expect(getCompanySubscription('c1')).resolves.toMatchObject({ plan_name: null });
     subscriptionSingle.mockResolvedValueOnce({ data: {
       id: 's2', company_id: 'c1', plan_id: null, plan_code: 'trial', status: 'expired',
       start_date: '2020-01-01', end_date: '2020-01-02',

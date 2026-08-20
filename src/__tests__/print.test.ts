@@ -69,6 +69,14 @@ describe('openPrintWindow', () => {
     expect(fakeWin.print).toHaveBeenCalledTimes(1);
   });
 
+  it('handles popup and document API exceptions', () => {
+    installFakeWindow(() => { throw new Error('open'); });
+    expect(openPrintWindow('<p>x</p>')).toEqual({ ok: false, blocked: false });
+    const fakeWin = installFakeWindow();
+    fakeWin.document.open.mockImplementationOnce(() => { throw new Error('document'); });
+    expect(openPrintWindow('<p>x</p>')).toEqual({ ok: false, blocked: false });
+  });
+
   it('reports a blocked popup when window.open returns null', () => {
     installFakeWindow(() => null);
     expect(openPrintWindow('<h1>طباعة</h1>')).toEqual({ ok: false, blocked: true });

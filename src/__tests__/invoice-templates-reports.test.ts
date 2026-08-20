@@ -153,7 +153,8 @@ describe('Invoice Templates & ZATCA classification logic', () => {
 
     // Auto mode with cash consumer without VAT -> Simplified Tax Invoice (B2C)
     const b2cInv = { client_tax_number: null };
-    const b2cResult = resolveInvoiceTitle(b2cInv, 'auto');
+    const b2cResult = resolveInvoiceTitle(b2cInv);
+    expect(resolveInvoiceTitle(b2cInv, 'auto')).toEqual(b2cResult);
     expect(b2cResult.titleAr).toBe('فاتورة ضريبية مبسطة');
     expect(resolveInvoiceTitle({ client_commercial_registration: 'CR' }, 'auto').isSimplified).toBe(false);
     expect(resolveInvoiceTitle({ contacts: { tax_number: 'VAT' } }, 'auto').isSimplified).toBe(false);

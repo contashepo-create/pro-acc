@@ -51,11 +51,8 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   const derivedKey = scryptSync(password, salt, KEY_LENGTH) as Buffer;
   const keyBuffer = Buffer.from(key, 'hex');
   if (derivedKey.length !== keyBuffer.length) return false;
-  try {
-    return timingSafeEqual(derivedKey, keyBuffer);
-  } catch {
-    return false;
-  }
+  // Equal-length buffers are guaranteed above; timingSafeEqual cannot throw.
+  return timingSafeEqual(derivedKey, keyBuffer);
 }
 
 function signJwt(userId: string, role: string, version: number, secret: string, ttlSeconds: number): string {

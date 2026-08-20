@@ -38,6 +38,9 @@ describe('portal magic-link tokens', () => {
     expect(verifyPortalToken('x'.repeat(4097))).toBeNull();
     expect(verifyPortalToken('.')).toBeNull();
     expect(verifyPortalToken('a.b.c')).toBeNull();
+    const malformedPayload = Buffer.from('{bad-json').toString('base64url');
+    const malformedSignature = createHmac('sha256', process.env.PORTAL_SECRET!).update(malformedPayload).digest('base64url');
+    expect(verifyPortalToken(`${malformedPayload}.${malformedSignature}`)).toBeNull();
   });
 
   test('rejects expired and overlong-lifetime capabilities even when correctly signed', () => {

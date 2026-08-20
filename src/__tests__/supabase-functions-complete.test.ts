@@ -17,13 +17,22 @@ describe('canonical Supabase client factories', () => {
   test('creates and memoizes server and browser clients with correct auth policy', async () => {
     const module = await load();
     const server = module.createServerClient();
+    expect(module.createServerClient()).toBe(server);
     expect(module.getServerClient()).toBe(server);
     expect(createClient).toHaveBeenNthCalledWith(1, 'https://project.supabase.co', 'service', expect.objectContaining({ auth: { autoRefreshToken: false, persistSession: false } }));
     const browser = module.createClientClient();
+    expect(module.createClientClient()).toBe(browser);
     expect(module.getClientClient()).toBe(browser);
     expect(createClient).toHaveBeenNthCalledWith(2, 'https://project.supabase.co', 'anon', expect.objectContaining({ auth: { autoRefreshToken: true, persistSession: true } }));
     await module.signOut();
     expect(signOutMock).toHaveBeenCalled();
+  });
+
+  test('getters lazily create clients when called first', async () => {
+    let module = await load();
+    expect(module.getServerClient()).toBeTruthy();
+    module = await load();
+    expect(module.getClientClient()).toBeTruthy();
   });
 
   test('rejects missing server and browser credentials', async () => {
@@ -32,6 +41,9 @@ describe('canonical Supabase client factories', () => {
     expect(() => module.createServerClient()).toThrow('must be set for server client');
     module = await load();
     delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    expect(() => module.createClientClient()).toThrow('must be set for client client');
+    module = await load();
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
     expect(() => module.createClientClient()).toThrow('must be set for client client');
   });
 

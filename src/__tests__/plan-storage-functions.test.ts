@@ -25,6 +25,8 @@ describe('storage accounting and module entitlement helpers', () => {
   });
 
   test('treats empty/absent buckets as empty and surfaces unexpected storage failures', async () => {
+    list.mockResolvedValue({ data: undefined, error: null });
+    await expect(countUsedStorageBytes('c1')).resolves.toBe(0);
     list.mockResolvedValue({ data: [], error: null });
     await expect(countUsedStorageBytes('c1')).resolves.toBe(0);
     list.mockResolvedValue({ data: null, error: { message: 'bucket not found 404' } });

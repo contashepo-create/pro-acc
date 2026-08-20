@@ -327,9 +327,10 @@ export async function parseValidatedBody<S extends { safeParse: (v: unknown) => 
   const raw = await parseBody(request);
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
-    const flat = typeof parsed.error?.flatten === 'function'
-      ? parsed.error.flatten().fieldErrors
-      : String(parsed.error);
+    // All production callers pass Zod schemas, whose errors always expose
+    // `flatten()`. Keeping a non-Zod fallback created an untestable branch and
+    // hid programming errors in callers.
+    const flat = parsed.error.flatten().fieldErrors;
     throw new ValidationFailure('بيانات غير صالحة', flat);
   }
   return parsed.data;

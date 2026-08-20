@@ -63,9 +63,10 @@ describe('parseBackupUploadBody', () => {
     await expect(parseBackupUploadBody(bodyRequest('not json{{'), 10_000)).rejects.toMatchObject({ status: 400 });
   });
 
-  test('rejects a missing fileHash', async () => {
-    const payload = { backupData: validBackup() };
-    await expect(parseBackupUploadBody(bodyRequest(JSON.stringify(payload)))).rejects.toMatchObject({ status: 400 });
+  test('rejects nonobject envelopes, malformed backupData and missing/invalid fileHash', async () => {
+    for (const payload of [null, [], 'x']) await expect(parseBackupUploadBody(bodyRequest(JSON.stringify(payload)))).rejects.toMatchObject({ status: 400 });
+    for (const backupData of [null, [], 'x']) await expect(parseBackupUploadBody(bodyRequest(JSON.stringify({ backupData, fileHash: 'x' })))).rejects.toMatchObject({ status: 400 });
+    for (const fileHash of [undefined, '', 1]) await expect(parseBackupUploadBody(bodyRequest(JSON.stringify({ backupData: validBackup(), fileHash })))).rejects.toMatchObject({ status: 400 });
   });
 });
 
@@ -88,14 +89,19 @@ describe('checkBackupOwnership', () => {
     expect(checkBackupOwnership(validBackup(), C1, 'co@example.com').ok).toBe(true);
   });
 
-  test('rejects another company id', () => {
+  test('rejects another or missing company id', () => {
     expect(checkBackupOwnership(validBackup(), C2, 'co@example.com').ok).toBe(false);
+    expect(checkBackupOwnership({ data: {} } as any, C1).ok).toBe(false);
   });
 
-  test('rejects an email that no longer matches the company', () => {
+  test('rejects mismatched email but permits absent optional emails', () => {
     const backup = validBackup();
     backup.metadata.email = 'old@example.com';
     expect(checkBackupOwnership(backup, C1, 'new@example.com').ok).toBe(false);
+    expect(checkBackupOwnership(backup, C1, null).ok).toBe(true);
+    expect(checkBackupOwnership(backup, C1, '').ok).toBe(true);
+    delete (backup.metadata as any).email;
+    expect(checkBackupOwnership(backup, C1, 'new@example.com').ok).toBe(true);
   });
 });
 
@@ -138,15 +144,28 @@ describe('validateBackupPayload', () => {
     expect(report.valid).toBe(false);
   });
 
-  test('enforces per-table and total row caps', () => {
+  test('handles missing data, nonarray tables, and enforces per-table/total caps', () => {
+    expect(validateBackupPayload({ metadata: { company_id: C1 } } as any, C1).valid).toBe(true);
+    const nonarray = validBackup() as any; nonarray.data.accounts = {};
+    expect(validateBackupPayload(nonarray, C1).issues.some((issue) => issue.code === 'NOT_ARRAY')).toBe(true);
     const backup = validBackup() as any;
     backup.data.accounts = Array.from({ length: 3 }, (_, i) => ({
       id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`, company_id: C1,
     }));
-    const limits = { maxBodyBytes: 25 * 1024 * 1024, maxRowsPerTable: 2, maxTotalRows: 100 };
+    backup.data.invoices = [
+      { id: '00000000-0000-4000-8000-000000000010', company_id: C1 },
+      { id: '00000000-0000-4000-8000-000000000011', company_id: C1 },
+    ];
+    backup.data.contacts = [
+      { id: '00000000-0000-4000-8000-000000000012', company_id: C1 },
+      { id: '00000000-0000-4000-8000-000000000013', company_id: C1 },
+    ];
+    const limits = { maxBodyBytes: 25 * 1024 * 1024, maxRowsPerTable: 2, maxTotalRows: 2 };
     const report = validateBackupPayload(backup, C1, limits);
     expect(report.valid).toBe(false);
     expect(report.issues.some((issue) => issue.code === 'TOO_MANY_ROWS')).toBe(true);
+    expect(report.issues.some((issue) => issue.code === 'TOO_MANY_TOTAL_ROWS')).toBe(true);
+    expect(new BackupValidationError('x').status).toBe(400);
   });
 
   test('the allow-list and restore set stay aligned with the database RPC', () => {

@@ -40,7 +40,8 @@ describe('chart bootstrap compatibility/error branches', () => {
         single: async () => {
           if (table === 'accounts' && mode === 'insert') {
             insertCount++;
-            if (insertCount === 1) return { data: null, error: { message: 'column is_header missing', code: '42703' } };
+            if (insertCount === 1) return { data: null, error: { code: '42703' } };
+            if (insertCount === 3) return { data: null, error: { message: 'column is_header missing' } };
             const row = { ...payload, id: `a${insertCount}` }; stored.push(row); return { data: row, error: null };
           }
           if (table === 'banks_safes' && mode === 'insert') return { data: { id: 'safe' }, error: null };
@@ -54,6 +55,21 @@ describe('chart bootstrap compatibility/error branches', () => {
     expect(stored[0]).not.toHaveProperty('is_header');
   });
 
+  test('catches parent-link and default-safe failures after loading existing chart', async () => {
+    const db = { from: (table: string) => {
+      if (table === 'banks_safes') throw new Error('safe');
+      let code = '';
+      const api: any = {
+        select: () => api,
+        eq: (field: string, value: string) => { if (field === 'code') code = value; return api; },
+        maybeSingle: async () => ({ data: { id: `existing-${code}` }, error: null }),
+        update: () => { throw new Error('parent'); },
+      };
+      return api;
+    } };
+    await expect(createDefaultChartOfAccounts(db, 'c')).resolves.toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
+  });
+
   test('continues after account lookup/parent/safe failures', async () => {
     let calls = 0;
     const db = { from: (_table: string) => {
@@ -61,7 +77,7 @@ describe('chart bootstrap compatibility/error branches', () => {
         select: () => api, eq: () => api, limit: () => api,
         maybeSingle: async () => { calls++; if (calls === 1) throw new Error('lookup'); return { data: null, error: null }; },
         insert: () => api, update: () => { throw new Error('update'); },
-        single: async () => ({ data: null, error: { message: 'ordinary failure' } }),
+        single: async () => ({ data: null, error: null }),
       };
       return api;
     } };

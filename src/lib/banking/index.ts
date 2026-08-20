@@ -176,7 +176,7 @@ export function parseBankStatement(content: string, format?: 'ofx' | 'mt940' | '
     // Auto-detect
     if (content.includes('<OFX>') || content.includes('<STMTTRN>')) {
       format = 'ofx';
-    } else if (content.includes(':20:') || content.includes(':61:')) {
+    } else if (/:20:|:61:/.test(content)) {
       format = 'mt940';
     } else {
       format = 'csv';

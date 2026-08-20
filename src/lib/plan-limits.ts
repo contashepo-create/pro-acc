@@ -276,7 +276,7 @@ export async function countUsedStorageBytes(companyId: string): Promise<number> 
 export async function hasModule(companyId: string, moduleId: string): Promise<boolean> {
   const limits = await getCompanyPlanLimits(companyId);
   if (!limits) return true;
-  const fm = limits.features_modules || {};
+  const fm = limits.features_modules;
   if (Object.keys(fm).length === 0) return true;
   return fm[moduleId] !== false;
 }

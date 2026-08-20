@@ -111,8 +111,9 @@ export function computeRetainage(input: RetainageInput): RetainageResult {
     const room = Math.max(0, input.retainageCap - prior);
     if (retainedThisCycle > room) {
       retainedThisCycle = room;
-      capped = retainedThisCycle <= room + 0.0001;
-      if (prior + retainedThisCycle >= input.retainageCap - 0.0001) capped = true;
+      // Once the requested retainage exceeds the remaining room, the cap is
+      // reached by definition; the previous duplicate comparisons were always true.
+      capped = true;
     }
   }
 
