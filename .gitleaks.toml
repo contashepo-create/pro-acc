@@ -66,5 +66,16 @@ regexes = [
   # deterministic non-production strings, not issued credentials. Keep this
   # narrow so a real app secret in a test file is still reported.
   '''(?i)\b(?:dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)\b''',
+  # Narrow false-positive suppressions for the upstream generic-api-key rule.
+  # These match code identifiers/test descriptions, never credential values.
+  '''AuthErrors, production''',
+  '''secret uses dedicated, development''',
+  '''process\.env\.BACKUP_SECRET = env\.backup''',
+  '''extractToken, verifyToken''',
+  '''process\.env\.TELEGRAM_BOT_TOKEN = 'sk_not_a_bot''',
+  '''credentials: 'same-origin''',
+  '''process\.env\.MOYASAR_WEBHOOK_SECRET = 'webhook-secret''',
+  '''token', 'admin-chat''',
+  '''key: '(?:warehouse_name|claim_number|invoice_number)''',
   '''postgres(?:ql)?://(postgres:postgres|user:password)@''',
 ]
