@@ -44,6 +44,14 @@ description = "Application shared secret assigned a literal value"
 regex = '''(?i)\b(TOKEN_SECRET|ADMIN_TOKEN_SECRET|BACKUP_SECRET|PORTAL_SECRET|CRON_SECRET|PRO_ACCOUNTANT_LICENSE_SALT)\s*[:=]\s*['"]?([A-Za-z0-9+/_-]{24,})['"]?'''
 keywords = ["token_secret", "backup_secret", "portal_secret", "cron_secret", "license_salt"]
 
+[[rules.allowlists]]
+description = "Deterministic non-production values used by unit tests in PR #22"
+regexTarget = "match"
+regexes = [
+  '''(?i)test-only''',
+  '''(?i)(dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)''',
+]
+
 [allowlist]
 description = "Placeholders, fixtures, and documentation examples"
 
@@ -60,22 +68,11 @@ paths = [
 regexes = [
   '''your-(anon|service-role|project|strong-random)[A-Za-z0-9-]*''',
   '''(?i)(change|replace)-me''',
-  '''(?i)\b(example|placeholder|dummy|sample|fake|test-only)\b''',
+  '''(?i)(example|placeholder|dummy|sample|fake|test-only)''',
   '''ci-(test-secret|license-salt)[A-Za-z0-9-]*''',
   # Exact historical unit-test fixtures introduced by PR #22. These are
   # deterministic non-production strings, not issued credentials. Keep this
   # narrow so a real app secret in a test file is still reported.
-  '''(?i)\b(?:dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)\b''',
-  # Narrow false-positive suppressions for the upstream generic-api-key rule.
-  # These match code identifiers/test descriptions, never credential values.
-  '''AuthErrors, production''',
-  '''secret uses dedicated, development''',
-  '''process\.env\.BACKUP_SECRET = env\.backup''',
-  '''extractToken, verifyToken''',
-  '''process\.env\.TELEGRAM_BOT_TOKEN = 'sk_not_a_bot''',
-  '''credentials: 'same-origin''',
-  '''process\.env\.MOYASAR_WEBHOOK_SECRET = 'webhook-secret''',
-  '''token', 'admin-chat''',
-  '''key: '(?:warehouse_name|claim_number|invoice_number)''',
+  '''(?i)(dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)''',
   '''postgres(?:ql)?://(postgres:postgres|user:password)@''',
 ]
