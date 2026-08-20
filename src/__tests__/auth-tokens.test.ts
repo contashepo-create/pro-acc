@@ -15,7 +15,7 @@
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 process.env.ADMIN_TOKEN_SECRET = 'test-admin-separate-secret-32chars!';
 
-import { createToken, verifyToken, createAdminToken, verifyAdminToken as verifyAdminJwt } from '@/lib/auth';
+import { getTokenSecret, createToken, verifyToken, createAdminToken, verifyAdminToken as verifyAdminJwt } from '@/lib/auth';
 import { createHash, randomBytes, createHmac } from 'crypto';
 
 // Re-export for backwards compat with existing assertions below
@@ -44,6 +44,31 @@ function makeAdminRequest(token?: string) {
 }
 
 describe('Auth JWT', () => {
+  const signed = (headerValue: unknown, payloadValue: unknown) => {
+    const header = Buffer.from(JSON.stringify(headerValue)).toString('base64url');
+    const payload = Buffer.from(JSON.stringify(payloadValue)).toString('base64url');
+    const sig = createHmac('sha256', process.env.TOKEN_SECRET!).update(`${header}.${payload}`).digest('base64url');
+    return `${header}.${payload}.${sig}`;
+  };
+
+  test('fails closed for missing secrets and malformed header/payload claim shapes', () => {
+    const saved = process.env.TOKEN_SECRET;
+    delete process.env.TOKEN_SECRET;
+    expect(() => getTokenSecret()).toThrow('TOKEN_SECRET');
+    process.env.TOKEN_SECRET = saved;
+    const now = Math.floor(Date.now() / 1000);
+    for (const header of [null, [], { alg: 'none', typ: 'JWT' }, { alg: 'HS256', typ: 'BAD' }]) {
+      expect(verifyToken(signed(header, { sub: 'u', role: 'admin', iat: now, exp: now + 60 }))).toBeNull();
+    }
+    for (const payload of [null, [],
+      { sub: '', role: 'admin', iat: now, exp: now + 60 },
+      { sub: 'u', role: '', iat: now, exp: now + 60 },
+      { sub: 'u', role: 'admin', iat: 'x', exp: now + 60 },
+      { sub: 'u', role: 'admin', iat: now, exp: 1.5 },
+      { sub: 'u', role: 'admin', iat: now + 61, exp: now + 120 },
+      { sub: 'u', role: 'admin', iat: now, exp: now },
+    ]) expect(verifyToken(signed({ alg: 'HS256', typ: 'JWT' }, payload))).toBeNull();
+  });
   test('creates a well-formed 3-part token and verifies round-trip', () => {
     const t = createToken('user-abc', 'admin', 0);
     expect(t.split('.')).toHaveLength(3);

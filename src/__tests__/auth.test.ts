@@ -56,9 +56,9 @@ describe('Password Hashing (scrypt)', () => {
     expect(await verifyPassword(password, hash2)).toBe(true);
   });
 
-  test('should reject malformed hash', async () => {
-    const isValid = await verifyPassword('anypassword', 'not-a-valid-hash');
-    expect(isValid).toBe(false);
+  test('should reject malformed hash and wrong derived-key lengths', async () => {
+    expect(await verifyPassword('anypassword', 'not-a-valid-hash')).toBe(false);
+    expect(await verifyPassword('anypassword', 'salt:00')).toBe(false);
   });
 
   test('should handle empty password', async () => {
