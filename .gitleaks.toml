@@ -62,5 +62,9 @@ regexes = [
   '''(?i)(change|replace)-me''',
   '''(?i)\b(example|placeholder|dummy|sample|fake|test-only)\b''',
   '''ci-(test-secret|license-salt)[A-Za-z0-9-]*''',
+  # Exact historical unit-test fixtures introduced by PR #22. These are
+  # deterministic non-production strings, not issued credentials. Keep this
+  # narrow so a real app secret in a test file is still reported.
+  '''(?i)\b(?:dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)\b''',
   '''postgres(?:ql)?://(postgres:postgres|user:password)@''',
 ]

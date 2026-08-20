@@ -1,4 +1,4 @@
-process.env.TOKEN_SECRET = 'company-context-test-secret-at-least-32-chars';
+process.env.TOKEN_SECRET = 'test-only-company-context-secret-32-chars';
 const query = jest.fn();
 jest.mock('@/lib/db', () => ({ query }));
 

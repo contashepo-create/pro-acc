@@ -7,16 +7,16 @@ import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 describe('small remaining branch paths', () => {
   test('backup secret uses dedicated, development fallback, and fails closed', () => {
     const env = { backup: process.env.BACKUP_SECRET, token: process.env.TOKEN_SECRET, node: process.env.NODE_ENV };
-    process.env.BACKUP_SECRET = 'dedicated-backup-secret-at-least-32-characters';
+    process.env.BACKUP_SECRET = 'test-only-dedicated-backup-secret-32-chars';
     expect(getBackupSecret()).toContain('dedicated');
-    delete process.env.BACKUP_SECRET; process.env.TOKEN_SECRET = 'fallback-token-secret-at-least-32-characters'; (process.env as any).NODE_ENV = 'test';
+    delete process.env.BACKUP_SECRET; process.env.TOKEN_SECRET = 'test-only-fallback-token-secret-32-chars'; (process.env as any).NODE_ENV = 'test';
     expect(getBackupSecret()).toContain('fallback');
     process.env.TOKEN_SECRET = 'short';
     expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');
     delete process.env.TOKEN_SECRET;
     expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');
     (process.env as any).NODE_ENV = 'production';
-    process.env.TOKEN_SECRET = 'long-token-secret-that-must-not-fallback-production';
+    process.env.TOKEN_SECRET = 'test-only-long-token-secret-production-32-chars';
     expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');
     if (env.backup === undefined) delete process.env.BACKUP_SECRET; else process.env.BACKUP_SECRET = env.backup;
     if (env.token === undefined) delete process.env.TOKEN_SECRET; else process.env.TOKEN_SECRET = env.token;
