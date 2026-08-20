@@ -1,13 +1,12 @@
 # Global developer backup: full-database pg_dump → storage + Telegram,
 # retaining the last BACKUP_RETAIN copies (default 5).
 #
-# Schedule: every 6 hours. For HOURLY backups change the cron to:
-#   - cron: '0 * * * *'
+# Schedule: every 24 hours (Daily)
 name: Global DB backup
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 0 * * *' # يعمل مرة واحدة يومياً الساعة 00:00 بتوقيت UTC
   workflow_dispatch:
 
 concurrency:
