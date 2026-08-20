@@ -3,7 +3,10 @@ module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
+  // *.db.test.ts files require PGlite (dynamic import / --experimental-vm-modules)
+  // and are run separately via `npm run test:db`. Exclude them from the default suite.
   testMatch: ['**/__tests__/**/*.test.ts', '**/*.test.ts'],
+  testPathIgnorePatterns: ['\\.db\\.test\\.ts$'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
