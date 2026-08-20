@@ -97,6 +97,7 @@ describe('project journal helpers', () => {
     accumulateProjectLine(acc, { type: 'expense', debit: 100, credit: 20 });
     accumulateProjectLine(acc, { type: 'revenue', debit: 10, credit: 200 });
     accumulateProjectLine(acc, { type: 'asset', debit: 999, credit: 0 });
+    accumulateProjectLine(acc, { type: 'expense', debit: undefined, credit: undefined });
     expect(acc).toEqual({ expenses: 80, revenue: 190 });
   });
 
@@ -117,8 +118,12 @@ describe('project journal helpers', () => {
       { project_id: 'foreign', account_type: 'expense', debit: 999, credit: 0 },
     ], error: null });
     await expect(sumProjectsJournal('c1', ['p1', 'p2'])).resolves.toEqual({ p1: { expenses: 9, revenue: 0 }, p2: { expenses: 0, revenue: 18 } });
+    rpc.mockResolvedValueOnce({ data: null, error: null });
+    await expect(sumProjectJournal('c1', 'p1')).resolves.toMatchObject({ expenses: 0, revenue: 0, accounts: [] });
     rpc.mockResolvedValueOnce({ data: null, error: new Error('db') });
     await expect(sumProjectJournal('c1', 'p1')).rejects.toThrow('db');
+    rpc.mockResolvedValueOnce({ data: null, error: new Error('multi') });
+    await expect(sumProjectsJournal('c1', ['p1'])).rejects.toThrow('multi');
   });
 });
 

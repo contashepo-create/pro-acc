@@ -9,7 +9,7 @@ import {
 } from '@/lib/relationship-validation';
 import { getQRCodeString, generateZatcaQRData, validateInvoiceForZatca, generateInvoiceHash } from '@/lib/zatca';
 import { disbursementVoucherCreateSchema, contactCreateSchema, dateRangeSchema } from '@/lib/validation';
-import { projectExpenseCreateSchema } from '@/lib/project-delivery-validation';
+import { boqCreateSchema, projectCreateSchema, projectExpenseCreateSchema, equipmentMaintenanceSchema } from '@/lib/project-delivery-validation';
 import { custodyExpenseSchema } from '@/lib/custody-validation';
 
 function dbFor(data: Record<string, any[]>) {
@@ -182,6 +182,14 @@ describe('remaining shared validation callbacks', () => {
     expect(projectExpenseCreateSchema.safeParse({ project_id: UUID1, expense_type: 'materials', description: 'x', amount: 10, date: '2026-08-20', tax_rate: 0.12345 }).success).toBe(false);
     expect(custodyExpenseSchema.safeParse({ amount: 1, description: 'x', invoice_id: UUID1, purchase_invoice_id: UUID2 }).success).toBe(false);
     expect(custodyExpenseSchema.safeParse({ amount: 1, description: 'x', invoice_id: UUID1 }).success).toBe(true);
+    expect(boqCreateSchema.safeParse({ project_id: UUID1, description: 'x', unit: 'u', quantity: 1, unit_price: 1 }).success).toBe(false);
+    expect(boqCreateSchema.safeParse({ project_id: UUID1, code: 'B1', description: 'x', unit: 'u', quantity: 1, unit_price: 1 }).success).toBe(true);
+    const project = { name: 'P', start_date: '2026-01-01', contract_value: 0 };
+    expect(projectCreateSchema.safeParse(project).success).toBe(false);
+    expect(projectCreateSchema.safeParse({ ...project, items: [{ description: 'x', unit: 'u', quantity: 2, unit_price: 5 }] }).success).toBe(true);
+    expect(projectCreateSchema.safeParse({ ...project, contract_value: 1, end_date: '2025-01-01' }).success).toBe(false);
+    expect(equipmentMaintenanceSchema.safeParse({ maintenance_date: '2026-02-01', description: 'x', next_maintenance_date: '2026-01-01' }).success).toBe(false);
+    expect(equipmentMaintenanceSchema.safeParse({ maintenance_date: '2026-02-01', description: 'x', next_maintenance_date: null }).success).toBe(true);
   });
 });
 
