@@ -24,11 +24,21 @@ describe('storage accounting and module entitlement helpers', () => {
     await expect(countUsedStorageBytes('c1')).resolves.toBe(600);
   });
 
-  test('treats absent buckets as empty and surfaces unexpected storage failures', async () => {
+  test('treats empty/absent buckets as empty and surfaces unexpected storage failures', async () => {
+    list.mockResolvedValue({ data: [], error: null });
+    await expect(countUsedStorageBytes('c1')).resolves.toBe(0);
     list.mockResolvedValue({ data: null, error: { message: 'bucket not found 404' } });
     await expect(countUsedStorageBytes('c1')).resolves.toBe(0);
     list.mockResolvedValue({ data: null, error: new Error('permission denied') });
     await expect(countUsedStorageBytes('c1')).rejects.toThrow('permission denied');
+    list.mockResolvedValue({ data: null, error: {} });
+    await expect(countUsedStorageBytes('c1')).rejects.toEqual({});
+  });
+
+  test('enforces the bounded storage pagination scan', async () => {
+    const page = Array.from({ length: 1000 }, (_, index) => ({ name: `f${index}`, metadata: { size: 1 } }));
+    list.mockResolvedValue({ data: page, error: null });
+    await expect(countUsedStorageBytes('c1')).rejects.toThrow('safe scan limit');
   });
 
   test('defaults unknown modules to enabled and honors explicit feature flags', async () => {

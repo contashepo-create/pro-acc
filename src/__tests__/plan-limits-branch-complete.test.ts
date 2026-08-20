@@ -73,8 +73,14 @@ describe('plan limit exhaustive branches', () => {
     await expect(checkPlanLimit('c1', 'storage')).resolves.toMatchObject({ current: 0, limit: 1124, allowed: true });
   });
 
-  test('surfaces count query failures', async () => {
-    countError = new Error('count');
-    await expect(checkPlanLimit('c1', 'users')).rejects.toThrow('count');
+  test('returns zero and surfaces count failures for every resource table branch', async () => {
+    const resources = ['users','clients','suppliers','employees','projects','invoices','quotations','branches','warehouses'] as const;
+    for (const resource of resources) {
+      counts = {};
+      await expect(checkPlanLimit('c1', resource)).resolves.toMatchObject({ current: 0, allowed: true });
+      countError = new Error(`count-${resource}`);
+      await expect(checkPlanLimit('c1', resource)).rejects.toThrow(`count-${resource}`);
+      countError = null;
+    }
   });
 });

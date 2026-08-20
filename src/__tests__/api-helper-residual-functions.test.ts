@@ -61,12 +61,25 @@ describe('remaining API helper functions', () => {
     expect(assertSubscriptionAccess).toHaveBeenCalledWith('c1', 'GET', '/api/test');
   });
 
+  test('handles subscription guard AuthErrors, production write failures and read fail-open', async () => {
+    assertSubscriptionAccess.mockRejectedValueOnce(new AuthError('blocked', 403));
+    await expect(requireApiAuth(request(), {})).rejects.toThrow('blocked');
+    const saved = process.env.NODE_ENV; (process.env as any).NODE_ENV = 'production';
+    assertSubscriptionAccess.mockRejectedValueOnce(new Error('guard down'));
+    await expect(requireApiAuth(request('POST'), {})).rejects.toMatchObject({ status: 503 });
+    assertSubscriptionAccess.mockRejectedValueOnce(new Error('guard down'));
+    await expect(requireApiAuth(request('GET'), {})).resolves.toMatchObject({ companyId: 'c1' });
+    (process.env as any).NODE_ENV = saved;
+  });
+
   test('executes the legacy expiry-only subscription branch when explicitly requested', async () => {
     getCompanySubscription.mockResolvedValueOnce({ is_expired: false });
     await expect(requireApiAuth(request(), { checkSubscription: true, skipModuleGuard: true })).resolves.toMatchObject({ companyId: 'c1' });
     expect(getCompanySubscription).toHaveBeenCalledWith('c1');
     getCompanySubscription.mockResolvedValueOnce({ is_expired: true });
     await expect(requireApiAuth(request(), { checkSubscription: true, skipModuleGuard: true })).rejects.toMatchObject({ status: 403 });
+    getCompanySubscription.mockRejectedValueOnce(new Error('legacy down'));
+    await expect(requireApiAuth(request(), { checkSubscription: true, skipModuleGuard: true })).resolves.toMatchObject({ companyId: 'c1' });
   });
 
   test('validates parsed bodies and returns flattened field errors', async () => {
@@ -97,7 +110,7 @@ describe('remaining API helper functions', () => {
     expect(error('bad', 418).status).toBe(418);
     const oldEnv = process.env.NODE_ENV;
     (process.env as any).NODE_ENV = 'test';
-    for (const cause of [new Error('E1'), { message: 'E2', details: 'D' }, { msg: 'E3', hint: 'H' }, { error: { message: 'E4' } }, null]) {
+    for (const cause of [new Error('E1'), { message: 'E2', details: 'D' }, { msg: 'E3', hint: 'H' }, { error: { message: 'E4' } }, { error: { message: '' } }, null]) {
       const body = await serverError(cause).json();
       expect(body.success).toBe(false);
     }
@@ -137,9 +150,13 @@ describe('remaining API helper functions', () => {
     expect((await handleApiError({ message: 'cannot post to a closed fiscal year' }).json()).message).toContain('مقفلة');
     expect((await handleApiError({ message: 'لا توجد سنة مالية مفتوحة تغطي تاريخ العملية' }).json()).message).toContain('خارج نطاق');
     expect(handleApiError(new ValidationFailure('invalid', { field: ['bad'] })).status).toBe(422);
+    expect((await handleApiError(new ValidationFailure('message-only')).json()).errors).toBe('message-only');
+    expect(handleApiError(null).status).toBe(500);
   });
 
   test('covers rate-limit, body, csrf and pagination edge branches', async () => {
+    hitRateLimit.mockReturnValueOnce({ allowed: true, retryAfterSeconds: 0 });
+    await expect(enforceRateLimit(null as any, 'u')).resolves.toBeUndefined();
     hitRateLimit.mockReturnValueOnce({ allowed: false, retryAfterSeconds: 9 });
     await expect(enforceRateLimit(request('POST'), 'u')).rejects.toBeInstanceOf(RateLimitExceeded);
     for (const value of [null, [], 'x']) await expect(parseBody(request('POST', value))).rejects.toBeInstanceOf(ValidationFailure);
@@ -148,11 +165,15 @@ describe('remaining API helper functions', () => {
     if (oldBypass === undefined) delete process.env.CSRF_BYPASS; else process.env.CSRF_BYPASS = oldBypass;
     const missing = request('POST'); missing.headers = new Headers(); missing.cookies = { get: () => undefined };
     expect(() => requireCsrf(missing)).toThrow();
+    const noCookies = request('POST'); noCookies.cookies = undefined;
+    expect(() => requireCsrf(noCookies)).toThrow();
     const unequal = request('POST'); unequal.headers = new Headers({ 'x-csrf-token': 'long' });
     expect(() => requireCsrf(unequal)).toThrow();
     expect(getPaginationParams(new URL('http://x?page=2&pageSize=999'))).toEqual({ page: 2, pageSize: 500 });
     expect(getPaginationParams('http://x?page=bad&pageSize=-1')).toEqual({ page: 1, pageSize: 1 });
+    expect(getPaginationParams('http://x')).toEqual({ page: 1, pageSize: 50 });
     expect(getDateRangeParams(new URL('http://x?from=2026-01-01&to=2026-02-01'))).toEqual({ from: '2026-01-01', to: '2026-02-01' });
+    expect(getDateRangeParams('http://x')).toEqual({ from: null, to: null });
   });
 
   test('maps rate limit constructors through the API error handler', async () => {

@@ -71,6 +71,15 @@ describe('cache helpers', () => {
 
     const publicResponse = applyCacheHeaders(NextResponse.json({}), { cache: 'public', maxAge: 60, vary: 'Accept-Encoding' });
     expect(publicResponse.headers.get('Vary')).toBe('Accept-Encoding');
+    const defaults = NextResponse.json({});
+    defaults.headers.set('Vary', 'Origin');
+    defaults.headers.set('X-Content-Type-Options', 'custom');
+    defaults.headers.set('X-Frame-Options', 'SAMEORIGIN');
+    defaults.headers.set('Referrer-Policy', 'no-referrer');
+    applyCacheHeaders(defaults, {});
+    expect(defaults.headers.get('Cache-Control')).toBe('private, max-age=0');
+    expect(defaults.headers.get('Vary')).toContain('Origin');
+    expect(defaults.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');
   });
 
   test('generates deterministic ETags and checks request headers', () => {

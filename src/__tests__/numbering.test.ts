@@ -64,6 +64,15 @@ describe('Invoice Numbering', () => {
     expect(num).toBe(42);
   });
 
+  test('falls back for resolved RPC errors/null and zero candidates', async () => {
+    mockRpc.mockResolvedValueOnce({ data: 99, error: { message: 'rpc' } });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: { last_number: 4 } }).mockResolvedValueOnce({ data: { number: null } });
+    expect(await getNextInvoiceNumber(TEST_COMPANY_ID, 2026)).toBe(5);
+    mockRpc.mockResolvedValueOnce({ data: 0, error: null });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: null });
+    expect(await getNextInvoiceNumber(TEST_COMPANY_ID, 2026)).toBe(1);
+  });
+
   test('should fallback to MAX+1 when RPC fails', async () => {
     mockRpc.mockRejectedValue(new Error('function not found'));
     mockChain.maybeSingle.mockResolvedValue({ data: { last_number: 99 } });
@@ -130,7 +139,10 @@ describe('Journal Numbering', () => {
     expect(num).toBe(41);
   });
 
-  test('falls back through existing and missing journal sequence rows', async () => {
+  test('falls back through resolved error/null, existing and missing journal sequence rows', async () => {
+    mockRpc.mockResolvedValueOnce({ data: 8, error: { message: 'rpc' } });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: { last_number: 1 } }).mockResolvedValueOnce({ data: null });
+    expect(await getNextJournalNumber(TEST_COMPANY_ID, 2026)).toBe(2);
     mockRpc.mockResolvedValue({ data: null, error: { message: 'rpc' } });
     mockChain.maybeSingle
       .mockResolvedValueOnce({ data: { last_number: 9 } })
@@ -163,6 +175,9 @@ describe('Voucher Numbering', () => {
   });
 
   test('falls back to table max or one when voucher RPC fails', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: null });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: null });
+    expect(await getNextVoucherNumber(TEST_COMPANY_ID, 'voucher_receipts')).toBe(1);
     mockRpc.mockResolvedValue({ data: null, error: { message: 'rpc' } });
     mockChain.maybeSingle.mockResolvedValueOnce({ data: { number: 7 } });
     expect(await getNextVoucherNumber(TEST_COMPANY_ID, 'voucher_receipts')).toBe(8);
@@ -191,6 +206,9 @@ describe('Quotation Numbering', () => {
   });
 
   test('falls back to quotation max or one', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: null });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: null });
+    expect(await getNextQuotationNumber(TEST_COMPANY_ID)).toBe(1);
     mockRpc.mockRejectedValue(new Error('rpc'));
     mockChain.maybeSingle.mockResolvedValueOnce({ data: { number: 5 } });
     expect(await getNextQuotationNumber(TEST_COMPANY_ID)).toBe(6);
@@ -218,6 +236,9 @@ describe('Purchase Invoice Numbering', () => {
   });
 
   test('falls back to the highest legacy/current purchase invoice number', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: null });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: null }).mockResolvedValueOnce({ data: null });
+    expect(await getNextPurchaseInvoiceNumber(TEST_COMPANY_ID)).toBe(1);
     mockRpc.mockRejectedValue(new Error('rpc'));
     mockChain.maybeSingle.mockResolvedValueOnce({ data: { invoice_number: 8 } }).mockResolvedValueOnce({ data: { number: 10 } });
     expect(await getNextPurchaseInvoiceNumber(TEST_COMPANY_ID)).toBe(11);
@@ -243,6 +264,9 @@ describe('Purchase Order Numbering', () => {
   });
 
   test('falls back to the highest legacy/current purchase order number', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: null });
+    mockChain.maybeSingle.mockResolvedValueOnce({ data: null }).mockResolvedValueOnce({ data: null });
+    expect(await getNextPurchaseOrderNumber(TEST_COMPANY_ID)).toBe(1);
     mockRpc.mockRejectedValue(new Error('rpc'));
     mockChain.maybeSingle.mockResolvedValueOnce({ data: { po_number: 4 } }).mockResolvedValueOnce({ data: { number: 6 } });
     expect(await getNextPurchaseOrderNumber(TEST_COMPANY_ID)).toBe(7);

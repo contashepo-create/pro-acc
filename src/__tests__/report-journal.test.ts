@@ -9,6 +9,11 @@ describe('report line → account resolution', () => {
     expect(resolveLineAccountId({ account_id: 'a1', account_code: 'x' }, byId, byCode)).toBe('a1');
   });
 
+  test('returns raw unknown account id or null when neither map resolves', () => {
+    expect(resolveLineAccountId({ account_id: 'legacy', account_code: 'none' }, new Set(), new Map())).toBe('legacy');
+    expect(resolveLineAccountId({}, new Set(), new Map())).toBeNull();
+  });
+
   test('falls back to account_code when id is missing (legacy lines)', () => {
     const byId = new Set(['a1']);
     const byCode = new Map([['1110-0001', 'a1']]);
@@ -79,6 +84,12 @@ describe('report loaders enforce posted history', () => {
       };
       return query;
     },
+  });
+
+  test('handles null account pages as empty data', async () => {
+    await expect(loadReportAccounts(scriptedSupabase([{ data: null, error: null }]), 'c1')).resolves.toEqual([]);
+    await expect(loadReportJournalEntries(scriptedSupabase([{ data: null, error: null }]), 'c1')).resolves.toEqual([]);
+    await expect(loadReportJournalLines(scriptedSupabase([{ data: null, error: null }]), 'c1', ['j1'])).resolves.toEqual([]);
   });
 
   test('falls back for legacy missing columns, paginates, and surfaces fatal account errors', async () => {
