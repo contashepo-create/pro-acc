@@ -124,10 +124,17 @@ describe('bank statement parsers and matching', () => {
   test('covers malformed/optional parser fields and every explicit format branch', () => {
     const sparseOfx = '<STMTTRN><DTPOSTED>bad<TRNAMT>oops<MEMO>memo only</STMTTRN>';
     expect(parseOFX(sparseOfx)[0]).toMatchObject({ date: 'bad', amount: 0, description: 'memo only', reference: undefined, type: 'credit' });
+    expect(parseOFX('<STMTTRN></STMTTRN>')[0]).toMatchObject({ date: '', amount: 0, description: '', reference: undefined });
     expect(parseCSV('a,b\nshort,row')).toEqual([]);
     expect(parseCSV('d,a,x\n2026-01-01,abc,desc')[0]).toMatchObject({ amount: 0, type: 'credit' });
+    expect(parseCSV('date|desc|amount|ref\n2026-01-01|Pay|12|R', { separator: '|', dateCol: 0, descriptionCol: 1, amountCol: 2, referenceCol: 3 })[0]).toMatchObject({ date: '2026-01-01', description: 'Pay', amount: 12, reference: 'R' });
+    expect(parseCSV('x,y,z\na,-,desc', { hasHeader: true })).toEqual([]);
+    expect(parseCSV('x,y,z\na,1,desc', { dateCol: 9, descriptionCol: 9, referenceCol: 9 })[0]).toMatchObject({ date: '', description: '', reference: undefined });
     expect(parseMT940(':20:X\n:61:260820RC10,00\n:61:260821RD5,00')).toHaveLength(2);
     expect(parseBankStatement(ofx)[0].bankRef).toBe('abc-1');
+    expect(parseBankStatement('<STMTTRN></STMTTRN>')).toHaveLength(1);
+    expect(parseBankStatement(':20:X\n:61:260820C1,00')).toHaveLength(1);
+    expect(parseBankStatement(':61:260820C1,00')).toHaveLength(1);
     expect(parseBankStatement(mt940, 'mt940')).toHaveLength(2);
     expect(parseBankStatement(csv, 'csv')).toHaveLength(2);
     expect(parseBankStatement(csv, 'invalid' as any)).toEqual([]);

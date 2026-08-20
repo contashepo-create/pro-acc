@@ -69,6 +69,33 @@ describe('database pool helpers', () => {
     expect(client.release).toHaveBeenCalledTimes(1);
   });
 
+  test('enforces Supabase CA in production and configures development/verified TLS', async () => {
+    await endPool();
+    process.env.DATABASE_URL = 'postgres://project.supabase.co/db';
+    delete process.env.DATABASE_CA_CERT;
+    (process.env as any).NODE_ENV = 'production';
+    await expect(query('select 1')).rejects.toThrow('DATABASE_CA_CERT');
+    (process.env as any).NODE_ENV = 'test';
+    poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await query('select 1');
+    expect(Pool).toHaveBeenLastCalledWith(expect.objectContaining({ ssl: { rejectUnauthorized: false } }));
+    await endPool();
+    process.env.DATABASE_CA_CERT = 'CERT';
+    poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await query('select 1');
+    expect(Pool).toHaveBeenLastCalledWith(expect.objectContaining({ ssl: { rejectUnauthorized: true, ca: 'CERT' } }));
+    delete process.env.DATABASE_CA_CERT;
+  });
+
+  test('logs slow queries with/without SQL according to environment', async () => {
+    await endPool(); process.env.DATABASE_URL = 'postgres://localhost/db';
+    const now = jest.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1500);
+    poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    (process.env as any).NODE_ENV = 'development';
+    await query('select slow');
+    now.mockRestore();
+  });
+
   test('exposes a client and closes/resets the pool', async () => {
     const client = { query: jest.fn(), release: jest.fn() };
     connect.mockResolvedValueOnce(client);

@@ -7,6 +7,7 @@ const insertJournalLines = jest.fn();
 const createDefaultChartOfAccounts = jest.fn();
 
 let tableRows: Record<string, any[]> = {};
+let tableErrors: Record<string, Error> = {};
 const operations: Array<{ table: string; operation: string; payload?: any; filters: any[] }> = [];
 
 function makeQuery(table: string) {
@@ -30,7 +31,7 @@ function makeQuery(table: string) {
         tableRows[table] = [...(tableRows[table] || []), row];
         return { data: row, error: null };
       }
-      return { data: matching()[0] || null, error: null };
+      return { data: matching()[0] || null, error: tableErrors[table] || null };
     },
     single: async () => {
       operations.push({ table, operation, payload, filters: [...filters] });
@@ -68,6 +69,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   operations.length = 0;
   tableRows = {};
+  tableErrors = {};
 });
 
 describe('approval helpers', () => {
@@ -80,6 +82,13 @@ describe('approval helpers', () => {
 
   test('fails closed when legacy application-side posting is attempted', async () => {
     await expect(createJournalEntryForApprovedTransaction()).rejects.toThrow('atomic approval RPC');
+  });
+
+  test('surfaces approval and transaction lookup errors', async () => {
+    tableErrors.approval_requests = new Error('approval');
+    await expect(getTransactionApprovalStatus('c1', 'voucher_receipt', 'v1')).rejects.toThrow('approval');
+    tableErrors = { voucher_receipts: new Error('voucher') };
+    await expect(getTransactionApprovalStatus('c1', 'voucher_receipt', 'v1')).rejects.toThrow('voucher');
   });
 
   test('prefers the newest approval request, then falls back to transaction status', async () => {

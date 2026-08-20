@@ -38,10 +38,21 @@ describe('legacy admin auth helpers', () => {
     await expect(verifyAdminToken(request('jwt'))).resolves.toBeNull();
   });
 
-  test('returns only the trusted active database admin', async () => {
+  test('returns only the trusted active database admin with explicit/legacy token versions', async () => {
+    verifyAdminJwt.mockReturnValueOnce({ userId: 'a1', ver: 0 });
+    maybeResult = { data: { id: 'a1', is_active: true, token_version: null }, error: null };
+    await expect(verifyAdminToken(request('jwt'))).resolves.toEqual({ userId: 'a1', role: 'superadmin' });
     verifyAdminJwt.mockReturnValue({ userId: 'a1', ver: 3 });
     maybeResult = { data: { id: 'a1', is_active: true, token_version: 3 }, error: null };
     await expect(verifyAdminToken(request('jwt'))).resolves.toEqual({ userId: 'a1', role: 'superadmin' });
+  });
+
+  test('fails closed when admin database access throws', async () => {
+    verifyAdminJwt.mockReturnValue({ userId: 'a1', ver: 0 });
+    db.from.mockImplementationOnce(() => { throw new Error('db'); });
+    await expect(verifyAdminToken(request('jwt'))).resolves.toBeNull();
+    db.from.mockImplementationOnce(() => { throw new Error('db'); });
+    await expect(verifyMasterPassword('a1', 'secret')).resolves.toBe(false);
   });
 
   test('verifies the stored master hash and fails closed', async () => {

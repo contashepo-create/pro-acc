@@ -66,6 +66,7 @@ describe('message templates and channel adapters', () => {
     expect(escapeTelegramHtml).toHaveBeenCalledWith('<b>attack</b>');
     expect(telegramSender).toHaveBeenCalledWith('1', '&lt;b&gt;attack&lt;/b&gt;');
 
+    await expect(sendMessage({ channel: 'email', to: 'a@test.com', template: null as any })).resolves.toMatchObject({ channel: 'email' });
     await expect(sendMessage({ channel: 'sms' as any, to: '1', template: 'x' }))
       .resolves.toEqual({ sent: false, channel: 'sms', error: 'Channel not supported' });
   });
@@ -81,6 +82,14 @@ describe('invoice reminder orchestration', () => {
     expect(result).toMatchObject({ sent: true, channel: 'whatsapp', customerName: 'Ali' });
     expect(rpc).toHaveBeenNthCalledWith(1, 'begin_invoice_reminder_attempt_atomic', { p_company_id: 'c1', p_invoice_id: 'i1', p_user_id: 'u1' });
     expect(rpc).toHaveBeenNthCalledWith(2, 'finish_invoice_reminder_attempt_atomic', expect.objectContaining({ p_reminder_id: 'r1', p_sent: true }));
+  });
+
+  test('uses email recipient and fallback reminder fields while recording send failure', async () => {
+    mailer.mockResolvedValueOnce(false);
+    rpc.mockResolvedValueOnce({ data: { reminder_id: null, channel: 'email', email: 'a@test.com', customer_name: null, invoice_number: null, amount: null, due_date: null, company_name: null }, error: null })
+      .mockResolvedValueOnce({ data: {}, error: null });
+    await expect(sendInvoiceReminder('c', 'u', 'i')).resolves.toMatchObject({ sent: false, channel: 'email', customerName: 'العميل' });
+    expect(rpc.mock.calls[1][1]).toMatchObject({ p_reminder_id: 'null', p_message_url: null, p_error: 'تعذر إرسال البريد الإلكتروني' });
   });
 
   test('fails when reservation or finalization fails', async () => {
@@ -105,9 +114,18 @@ describe('invoice reminder orchestration', () => {
     expect(result.results[1]).toMatchObject({ invoiceId: 'i2', customerName: 'Mona', sent: false, error: 'blocked' });
   });
 
-  test('surfaces overdue query errors and handles empty lists', async () => {
+  test('uses fallback customer/error for non-Error reminder failures', async () => {
+    overdueResult = { data: [{ id: 'i1', contacts: null }], error: null };
+    rpc.mockResolvedValueOnce({ data: null, error: 'blocked-string' });
+    const result = await sendOverdueReminders('c', 'u');
+    expect(result.results[0]).toEqual({ invoiceId: 'i1', customerName: 'العميل', sent: false, error: 'تعذر إرسال التذكير' });
+  });
+
+  test('surfaces overdue query errors and handles empty/null lists', async () => {
     overdueResult = { data: null, error: new Error('query') };
     await expect(sendOverdueReminders('c', 'u')).rejects.toThrow('query');
+    overdueResult = { data: null, error: null };
+    await expect(sendOverdueReminders('c', 'u')).resolves.toEqual({ sent: 0, failed: 0, results: [] });
     overdueResult = { data: [], error: null };
     await expect(sendOverdueReminders('c', 'u')).resolves.toEqual({ sent: 0, failed: 0, results: [] });
   });

@@ -66,6 +66,8 @@ describe('admin session pointer and persistence', () => {
     await expect(getSession(pointer)).resolves.toMatchObject({ email: 'admin@example.com' });
     readResult = { data: { is_active: false, login_session_data: validSession() }, error: null };
     await expect(getSession(pointer)).resolves.toBeNull();
+    readResult = { data: { is_active: true, login_session_data: null }, error: null };
+    await expect(getSession(pointer)).resolves.toBeNull();
     readResult = { data: { is_active: true, login_session_data: validSession({ sessionId: 'c'.repeat(64) }) }, error: null };
     await expect(getSession(pointer)).resolves.toBeNull();
     await expect(getSession('bad')).resolves.toBeNull();
