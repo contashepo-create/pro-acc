@@ -246,17 +246,6 @@ export default function InvoicesPage() {
   const vatAmount = form.vat_enabled ? subtotal * 0.15 : 0;
   const total = subtotal + vatAmount;
 
-  const statusBadge = (status: string) => {
-    const map: Record<string, { variant: 'success' | 'warning' | 'danger' | 'info'; label: string }> = {
-      unpaid: { variant: 'warning', label: 'غير مدفوعة' },
-      partial: { variant: 'info', label: 'مدفوعة جزئياً' },
-      paid: { variant: 'success', label: 'مدفوعة' },
-      cancelled: { variant: 'danger', label: 'ملغاة' },
-    };
-    const m = map[status] || { variant: 'warning', label: status };
-    return <Badge variant={m.variant}>{m.label}</Badge>;
-  };
-
   const filtered = statusTab === 'all' ? invoices : invoices.filter(i => i.status === statusTab);
 
   const columns = [
