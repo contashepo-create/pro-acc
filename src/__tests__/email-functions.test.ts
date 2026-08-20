@@ -17,7 +17,6 @@ describe('email delivery functions', () => {
   test('fails safely when no provider is configured', async () => {
     const { sendEmail } = await loadEmail();
     await expect(sendEmail('a@test.com', 'Subject', '<b>Hello</b>')).resolves.toBe(false);
-    expect(global.fetch).not.toHaveBeenCalled;
     expect(createTransport).not.toHaveBeenCalled();
   });
 

@@ -6,10 +6,9 @@ let containsError: any = null;
 const db = {
   from: jest.fn(() => {
     let mode = 'read';
-    let payload: any;
     const api: any = {
       select: () => api,
-      update: (value: any) => { mode = 'update'; payload = value; updates.push(value); return api; },
+      update: (value: any) => { mode = 'update'; updates.push(value); return api; },
       eq: () => api,
       contains: () => api,
       maybeSingle: async () => mode === 'update' ? writeResult : readResult,
