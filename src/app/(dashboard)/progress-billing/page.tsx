@@ -17,6 +17,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function ProgressBillingPage() {
   const [claims, setClaims] = useState<any[]>([]);
@@ -125,7 +126,7 @@ export default function ProgressBillingPage() {
   };
 
   const columns = [
-    { key: 'claim_number', label: 'الرقم', sortable: true },
+    { key: 'claim_number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('progress_billing', row.claim_number) },
     { key: 'project_name', label: 'المشروع', sortable: true },
     { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
     { key: 'gross_amount', label: 'الإجمالي', render: (row: any) => formatCurrency(row.gross_amount) },

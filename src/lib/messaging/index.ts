@@ -142,8 +142,8 @@ export async function sendEmail(params: {
 }): Promise<{ sent: boolean; messageId?: string; error?: string }> {
   try {
     const { sendEmail: mailer } = await import('@/lib/email');
-    await mailer(params.to, params.subject, params.body);
-    return { sent: true };
+    const sent = await mailer(params.to, params.subject, params.body);
+    return sent ? { sent: true } : { sent: false, error: 'تعذر إرسال البريد الإلكتروني' };
   } catch (err) {
     return { sent: false, error: (err as Error).message };
   }
@@ -155,8 +155,7 @@ export async function sendEmail(params: {
 export async function sendTelegram(chatId: string, message: string): Promise<{ sent: boolean }> {
   try {
     const { sendTelegramMessage } = await import('@/lib/telegram');
-    await sendTelegramMessage(chatId, message);
-    return { sent: true };
+    return { sent: await sendTelegramMessage(chatId, message) };
   } catch {
     return { sent: false };
   }

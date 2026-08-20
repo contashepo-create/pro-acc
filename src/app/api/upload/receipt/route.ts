@@ -11,21 +11,11 @@ export async function POST(request: NextRequest) {
     const auth = await requireApiAuth(request);
     const s = sb();
 
-    // Enforce storage limit for the company plan. max_storage_mb = 0 means
-    // "no file uploads allowed at all" (matches the new Start/Pro/
-    // Enterprise defaults where add-on purchase is required).
-    let storageMb = 0;
-    let planCode: string | null = null;
-    try {
-      const { getCompanyPlanLimits } = await import('@/lib/plan-limits');
-      const limits = await getCompanyPlanLimits(auth.companyId);
-      storageMb = limits?.max_storage_mb ?? 0;
-      planCode = limits?.planCode ?? null;
-    } catch { storageMb = 0; }
-    if (storageMb <= 0) {
-      return error('باقتك الحالية لا تتضمن مساحة تخزين للملفات. قم بترقية الباقة أو شراء إضافة التخزين (3$ لكل جيجابايت شهرياً).', 403);
-    }
-
+    // A payment proof is required in order to buy a plan or storage add-on,
+    // including when the current plan has no billable document storage. Keep
+    // these proofs in a dedicated, tightly capped area instead of applying the
+    // plan's general file-storage entitlement (which created a circular flow:
+    // users needed storage before they could submit the receipt to buy it).
     const formData = await request.formData();
     const file = formData.get('file') as File;
 
@@ -44,20 +34,20 @@ export async function POST(request: NextRequest) {
       return error('حجم الملف كبير جداً. الحد الأقصى 5MB');
     }
 
-    // Enforce cumulative storage cap: count size already used in receipts bucket.
+    // Payment evidence is exempt from the purchased document-storage quota,
+    // but still has its own anti-abuse cap per tenant.
+    const proofDirectory = `${auth.companyId}/payment-proofs`;
+    const proofStorageCap = 50 * 1024 * 1024;
     let used = 0;
     try {
-      const { countUsedStorageBytes } = await import('@/lib/plan-limits');
-      used = await countUsedStorageBytes(auth.companyId);
+      used = await countDirectoryBytes(s, proofDirectory);
     } catch (e) {
-      console.warn('[upload] could not compute used storage; blocking upload:', e);
-      return error('تعذر التحقق من مساحة التخزين. حاول لاحقاً.', 503);
+      console.warn('[receipt-upload] could not compute proof storage:', e);
+      return error('تعذر التحقق من مساحة إيصالات الدفع. حاول لاحقاً.', 503);
     }
-    const capBytes = storageMb * 1024 * 1024;
-    if (used + file.size > capBytes) {
-      const totalGb = (storageMb / 1024).toFixed(storageMb >= 1024 ? 1 : 0);
+    if (used + file.size > proofStorageCap) {
       return error(
-        `لا تتوفر مساحة تخزين كافية. المستخدم حالياً ${formatBytes(used)} من ${storageMb >= 1024 ? `${totalGb} GB` : `${storageMb} MB`}. احذف ملفات غير ضرورية أو قم بشراء سعة إضافية.`,
+        `تم الوصول للحد الآمن لإيصالات الدفع (${formatBytes(proofStorageCap)}). تواصل مع الدعم لحذف الإيصالات القديمة.`,
         403
       );
     }
@@ -70,7 +60,7 @@ export async function POST(request: NextRequest) {
     }
     const extension = file.type === 'application/pdf' ? 'pdf'
       : file.type === 'image/png' ? 'png' : 'jpg';
-    const fileName = `${auth.companyId}/${randomUUID()}.${extension}`;
+    const fileName = `${proofDirectory}/${randomUUID()}.${extension}`;
 
     // Try to upload to Supabase Storage (receipts bucket)
     try {
@@ -120,6 +110,28 @@ export async function POST(request: NextRequest) {
     }
   } catch (err) {
     return handleApiError(err);
+  }
+}
+
+async function countDirectoryBytes(storageClient: ReturnType<typeof getSupabase>, directory: string): Promise<number> {
+  let total = 0;
+  let offset = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error: listError } = await storageClient.storage.from('receipts').list(directory, {
+      limit: pageSize,
+      offset,
+      sortBy: { column: 'name', order: 'asc' },
+    });
+    if (listError) throw listError;
+    const files = data || [];
+    for (const file of files) {
+      const size = Number(file.metadata?.size);
+      if (Number.isFinite(size) && size > 0) total += size;
+    }
+    if (files.length < pageSize) return total;
+    offset += pageSize;
+    if (offset > 50_000) throw new Error('Receipt storage listing exceeded safe limit');
   }
 }
 

@@ -65,7 +65,9 @@ const navGroups: NavGroup[] = [
     items: [
       { id: 'purchases/orders', label: 'أوامر الشراء' },
       { id: 'purchases/invoices', label: 'فواتير المشتريات' },
-      { id: 'inventory', label: 'المخزون' },
+      { id: 'warehouses', label: 'المستودعات' },
+      { id: 'inventory', label: 'الأصناف والأرصدة' },
+      { id: 'inventory-transactions', label: 'حركات وتسوية المخزون' },
     ],
   },
   {

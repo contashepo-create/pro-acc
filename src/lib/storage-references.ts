@@ -8,6 +8,7 @@ export async function signPrivateReceiptReference(
   if (/^https:\/\//i.test(reference)) return reference;
   if (reference.includes('..') || reference.startsWith('/') || /[\\\u0000-\u001f]/.test(reference)) return null;
   const { data, error } = await supabase.storage.from('receipts').createSignedUrl(reference, expiresInSeconds);
-  if (error || !data?.signedUrl) return null;
+  if (error) return null;
+  if (!data?.signedUrl) return null;
   return data.signedUrl;
 }

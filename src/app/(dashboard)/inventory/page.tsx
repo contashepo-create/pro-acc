@@ -7,6 +7,7 @@ import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
@@ -14,6 +15,7 @@ import { formatCurrency } from '@/lib/utils';
 
 export default function InventoryPage() {
   const [items, setItems] = useState<any[]>([]);
+  const [warehouses, setWarehouses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -26,17 +28,23 @@ export default function InventoryPage() {
     try {
       setLoading(true);
       setError('');
-      const res = await fetch('/api/inventory');
-      const json = await res.json();
+      const [itemResponse, warehouseResponse] = await Promise.all([
+        fetch('/api/inventory'),
+        fetch('/api/warehouses'),
+      ]);
+      const [json, warehouseJson] = await Promise.all([itemResponse.json(), warehouseResponse.json()]);
       if (json.success) setItems(json.data?.items || []);
       else setError(json.message || 'فشل');
+      if (warehouseJson.success) setWarehouses((warehouseJson.data?.warehouses || []).filter((warehouse: any) => warehouse.is_active));
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
-    if (!form.name || !form.code) { setSaveError('الاسم والرمز مطلوبان'); return; }
+    if (!form.name || !form.code || !form.unit || !form.warehouse_id) {
+      setSaveError('الاسم والرمز والوحدة والمستودع مطلوبة'); return;
+    }
     setSaving(true); setSaveError('');
     try {
       const url = editingItem ? `/api/inventory/${editingItem.id}` : '/api/inventory';
@@ -102,6 +110,7 @@ export default function InventoryPage() {
     { key: 'code', label: 'الرمز', sortable: true },
     { key: 'name', label: 'الاسم', sortable: true },
     { key: 'unit', label: 'الوحدة' },
+    { key: 'warehouse_name', label: 'المستودع', sortable: true },
     { key: 'quantity', label: 'الكمية', sortable: true },
     { key: 'unit_price', label: 'السعر', render: (row: any) => formatCurrency(row.unit_price) },
     { key: 'category', label: 'الفئة' },
@@ -131,10 +140,13 @@ export default function InventoryPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
             <Input label="الرمز" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
-            <Input label="الوحدة" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} placeholder="قطعة، كيلو" />
-            <Input label="الكمية" type="number" value={form.quantity} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
-            <Input label="السعر" type="number" value={form.unit_price} onChange={(e) => setForm({...form, unit_price: parseFloat(e.target.value) || 0})} />
+            <Input label="الوحدة *" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} placeholder="قطعة، كيلو" />
+            <Select label="المستودع *" value={form.warehouse_id} onChange={(value) => setForm({ ...form, warehouse_id: value })}
+              options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((warehouse: any) => ({ value: warehouse.id, label: warehouse.name }))]} />
             <Input label="الفئة" value={form.category} onChange={(e) => setForm({...form, category: e.target.value})} />
+            <div className="sm:col-span-2 rounded-lg border border-info/30 bg-info/10 p-3 text-xs text-text-secondary">
+              تُسجل الكمية والتكلفة من «حركات وتسوية المخزون» أو عند استلام أمر شراء؛ ولا تُدخل عند إنشاء بطاقة الصنف حتى يبقى سجل الحركة قابلاً للتدقيق.
+            </div>
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

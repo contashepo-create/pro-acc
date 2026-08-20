@@ -16,6 +16,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 interface InvoiceItem {
   id?: string;
@@ -259,7 +260,7 @@ export default function InvoicesPage() {
   const filtered = statusTab === 'all' ? invoices : invoices.filter(i => i.status === statusTab);
 
   const columns = [
-    { key: 'number', label: 'رقم الفاتورة', sortable: true, render: (row: any) => `#${row.number}` },
+    { key: 'number', label: 'رقم الفاتورة', sortable: true, render: (row: any) => formatDocumentNumber('sales_invoice', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true, render: (row: any) => row.contact_name || row.client_name || '—' },
     { key: 'total', label: 'الإجمالي', sortable: true, render: (row: any) => formatCurrency(row.total) },

@@ -5,7 +5,7 @@
  * Telegram webhook secret fail-closed policy, money/quantity bounds,
  * Telegram HTML escaping, and the journal-line numeric caps.
  */
-import { hasAllowedMagicBytes } from '@/lib/safe-input';
+import { hasAllowedMagicBytes, trustedReceiptReference } from '@/lib/safe-input';
 import { toCsvCell, recordsToCsv } from '@/lib/csv-export';
 import { verifyWebhookSecret } from '@/lib/webhook-guard';
 import { escapeTelegramHtml } from '@/lib/telegram';
@@ -87,10 +87,62 @@ describe('hasAllowedMagicBytes — polyglot/poisoned-file defense', () => {
     expect(hasAllowedMagicBytes(evil, 'image/png')).toBe(false);
   });
 
+  it('rejects archive, executable and web signatures across the bounded window', () => {
+    for (const bytes of [
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('Rar!'),
+      Buffer.from('<iframe src=x>'), Buffer.from('<svg onload=alert(1)>'),
+      Buffer.from('onerror = alert(1)'), Buffer.from('javascript:alert(1)'), Buffer.from('<?php echo 1;'),
+    ]) expect(hasAllowedMagicBytes(bytes, 'application/pdf')).toBe(false);
+  });
+
+  it('covers malformed JPEG marker structures', () => {
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff]), 'image/jpeg')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'image/jpeg')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0x01, 0, 2]), 'image/jpeg')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 1]), 'image/jpeg')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xd0, 0xff, 0xd9]), 'image/jpeg')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xff, 0xff, 0xd9]), 'image/jpeg')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0, 0, 0, 0]), 'image/jpeg')).toBe(true);
+    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xd9, 0, 0]), 'image/jpeg')).toBe(true);
+  });
+
+  it('rejects short/wrong PNGs, misplaced/incomplete PDFs and unsupported MIME', () => {
+    expect(hasAllowedMagicBytes(Buffer.from([0x89, 0x50]), 'image/png')).toBe(false);
+    const wrongSignature = Buffer.concat([Buffer.alloc(8), Buffer.from([0, 0, 0, 1]), Buffer.from('IHDR')]);
+    expect(hasAllowedMagicBytes(wrongSignature, 'image/png')).toBe(false);
+    const wrongPng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from([0, 0, 0, 1]), Buffer.from('IDAT')]);
+    expect(hasAllowedMagicBytes(wrongPng, 'image/png')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from('12345%PDF-1.4\n%%EOF'), 'application/pdf')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from('%PDX-1.4 plain'), 'application/pdf')).toBe(false);
+    expect(hasAllowedMagicBytes(Buffer.from('%PDF-1.4 no trailer'), 'application/pdf')).toBe(false);
+    expect(hasAllowedMagicBytes(realPng(), 'image/gif')).toBe(false);
+  });
+
   it('rejects garbage buffers for any mime', () => {
     expect(hasAllowedMagicBytes(Buffer.from('hello world'), 'image/jpeg')).toBe(false);
     expect(hasAllowedMagicBytes(Buffer.from('hello world'), 'application/pdf')).toBe(false);
     expect(hasAllowedMagicBytes(Buffer.from([]), 'image/png')).toBe(false);
+  });
+});
+
+describe('trustedReceiptReference', () => {
+  const company = '90000000-0000-4000-8000-000000000001';
+  beforeEach(() => { process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'; });
+  it('accepts safe tenant paths and configured Supabase object URLs', () => {
+    expect(trustedReceiptReference(`${company}/payment-proofs/a.png`, company)).toContain(company);
+    const url = `https://project.supabase.co/storage/v1/object/sign/receipts/${company}/a.png`;
+    expect(trustedReceiptReference(url, company)).toBe(url);
+  });
+  it('rejects malformed, traversal, foreign, credentialed and wrong-host references', () => {
+    for (const value of [null, '', 1, 'x'.repeat(2049), `${company}/../secret`, `${company}/bad\\x`,
+      'not-url', 'http://project.supabase.co/storage/v1/object/x',
+      `https://evil.test/storage/v1/object/${company}/a`, `https://project.supabase.co/not-storage/${company}/a`,
+      `https://project.supabase.co/storage/v1/object/other/a`]) {
+      expect(trustedReceiptReference(value, company)).toBeNull();
+    }
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.SUPABASE_URL;
+    expect(trustedReceiptReference('https://project.supabase.co/storage/v1/object/x', company)).toBeNull();
   });
 });
 
@@ -115,7 +167,8 @@ describe('csv-export — spreadsheet formula injection guard', () => {
     expect(toCsvCell('123.45')).toBe('123.45');
     expect(toCsvCell(null)).toBe('');
   });
-  it('serializes records safely', () => {
+  it('serializes records safely and handles empty exports', () => {
+    expect(recordsToCsv([])).toBe('');
     const csv = recordsToCsv([{ name: '=cmd', note: 'ok, with comma' }]);
     expect(csv).toContain("'=cmd");
     expect(csv).toContain('"ok, with comma"');

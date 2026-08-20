@@ -133,7 +133,7 @@ export function hasAllowedMagicBytes(buffer: Buffer, mime: string): boolean {
   if (mime === 'application/pdf') {
     // Header must appear essentially at the start of the file, not anywhere
     // inside the first 1KB (that was the polyglot window).
-    const head = buffer.subarray(0, Math.min(buffer.length, 8)).toString('latin1');
+    const head = buffer.subarray(0, Math.min(buffer.length, 12)).toString('latin1');
     if (!head.includes('%PDF-')) return false;
     const headerOffset = head.indexOf('%PDF-');
     if (headerOffset > 4) return false;

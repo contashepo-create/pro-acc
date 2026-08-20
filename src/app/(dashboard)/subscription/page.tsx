@@ -121,7 +121,21 @@ export default function SubscriptionPageEnhanced() {
       fetch('/api/company/data-export').then(r=>r.json()).catch(()=>({success:false})),
     ]);
     if (subData.success) { setPlans(subData.data.plans || []); setSubscription(subData.data.subscription); }
-    if (payData.success) setPaymentMethods(payData.data.methods || []);
+    if (payData.success) {
+      const methods: PaymentMethod[] = payData.data.methods || [];
+      setPaymentMethods(methods);
+      // The browser used to keep the hard-coded "instapay" value even when
+      // the select visually displayed another active method. PostgreSQL then
+      // rejected the add-user/add-on request as an invalid payment method.
+      if (methods.length > 0) {
+        setForm((current) => methods.some((method) => method.code === current.payment_method)
+          ? current
+          : { ...current, payment_method: methods[0].code });
+        setAddonForm((current) => methods.some((method) => method.code === current.payment_method)
+          ? current
+          : { ...current, payment_method: methods[0].code });
+      }
+    }
     if (reqData.success) setUpgradeRequests(reqData.data.requests || []);
     if (addonData.success) setAddonRequests(addonData.data.requests || []);
     if (supData.success) setSupportTickets(supData.data.tickets || []);
@@ -228,7 +242,7 @@ export default function SubscriptionPageEnhanced() {
     setSelectedAddon(id);
     setAddonQty(1);
     setAddonDuration('monthly');
-    setAddonForm({ payment_method: 'instapay', amount: String(addon.monthly), date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
+    setAddonForm({ payment_method: paymentMethods[0]?.code || 'instapay', amount: String(addon.monthly), date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
     setShowAddonModal(true);
   };
 

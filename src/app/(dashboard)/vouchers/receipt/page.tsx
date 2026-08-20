@@ -15,6 +15,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function ReceiptPage() {
   const [receipts, setReceipts] = useState<any[]>([]);
@@ -155,7 +156,7 @@ export default function ReceiptPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('receipt_voucher', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
     { key: 'receipt_type', label: 'النوع', sortable: true, render: (row: any) => typeBadge(row.receipt_type) },
     { key: 'contact_name', label: 'الطرف', sortable: true },

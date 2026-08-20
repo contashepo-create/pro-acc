@@ -213,13 +213,16 @@ describe('createDefaultChartOfAccounts', () => {
 
   test('is idempotent — existing codes are re-linked, not duplicated', async () => {
     const db = baseDb();
-    db.accounts.push({ id: 'pre-1000', company_id: C1, code: '1000' });
+    db.accounts.push(
+      { id: 'pre-1000', company_id: C1, code: '1000' },
+      { id: 'pre-1110', company_id: C1, code: '1110' },
+    );
     mockDb = makeDb(db);
 
     const created = await createDefaultChartOfAccounts(mockDb as any, C1);
 
     const accountInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'accounts');
-    expect(accountInserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length - 1);
+    expect(accountInserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length - 2);
     expect(accountInserts.find((c) => c.mut.payload.code === '1000')).toBeUndefined();
     expect(created).toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
   });

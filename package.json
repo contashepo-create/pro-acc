@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "jest --verbose",
+    "test:unit": "jest --runInBand",
+    "test:coverage": "jest --runInBand --coverage --coverageReporters=text --coverageReporters=json-summary",
     "test:watch": "jest --watch",
     "test:integration": "jest src/__tests__/comprehensive-integration.test.ts --runInBand",
     "test:regression": "jest --runInBand",

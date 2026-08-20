@@ -22,4 +22,14 @@ module.exports = {
     'src/lib/**/*.ts',
     '!src/lib/**/*.d.ts',
   ],
+  // Ratchet the measured baseline: new code may raise these values but cannot
+  // silently reduce the tested share of shared business functions.
+  coverageThreshold: {
+    global: {
+      statements: 100,
+      branches: 100,
+      functions: 100,
+      lines: 100,
+    },
+  },
 };

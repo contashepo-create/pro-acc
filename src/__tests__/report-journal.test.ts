@@ -1,5 +1,5 @@
 import {
-  loadReportAccounts, loadReportJournalEntries, resolveLineAccountId,
+  loadReportAccounts, loadReportJournalEntries, loadReportJournalLines, resolveLineAccountId,
 } from '@/lib/report-journal';
 
 describe('report line → account resolution', () => {
@@ -7,6 +7,11 @@ describe('report line → account resolution', () => {
     const byId = new Set(['a1']);
     const byCode = new Map([['1110-0001', 'a1']]);
     expect(resolveLineAccountId({ account_id: 'a1', account_code: 'x' }, byId, byCode)).toBe('a1');
+  });
+
+  test('returns raw unknown account id or null when neither map resolves', () => {
+    expect(resolveLineAccountId({ account_id: 'legacy', account_code: 'none' }, new Set(), new Map())).toBe('legacy');
+    expect(resolveLineAccountId({}, new Set(), new Map())).toBeNull();
   });
 
   test('falls back to account_code when id is missing (legacy lines)', () => {
@@ -31,6 +36,11 @@ function fakeSupabase(tables: Record<string, any[]>) {
         eq: (column: string, value: unknown) => {
           filters.push(`eq:${column}:${value}`);
           rows = rows.filter((row) => row[column] === value);
+          return query;
+        },
+        in: (column: string, values: unknown[]) => {
+          filters.push(`in:${column}:${values.join(',')}`);
+          rows = rows.filter((row) => values.includes(row[column]));
           return query;
         },
         or: (expression: string) => {
@@ -65,6 +75,50 @@ function fakeSupabase(tables: Record<string, any[]>) {
 }
 
 describe('report loaders enforce posted history', () => {
+  const scriptedSupabase = (responses: Array<{ data: any[] | null; error: any }>) => ({
+    from: () => {
+      const query: any = {
+        select: () => query, eq: () => query, in: () => query, or: () => query, is: () => query,
+        gte: () => query, lte: () => query, order: () => query, range: () => query,
+        then: (resolve: any, reject: any) => Promise.resolve(responses.shift() || { data: [], error: null }).then(resolve, reject),
+      };
+      return query;
+    },
+  });
+
+  test('handles null account pages as empty data', async () => {
+    await expect(loadReportAccounts(scriptedSupabase([{ data: null, error: null }]), 'c1')).resolves.toEqual([]);
+    await expect(loadReportJournalEntries(scriptedSupabase([{ data: null, error: null }]), 'c1')).resolves.toEqual([]);
+    await expect(loadReportJournalLines(scriptedSupabase([{ data: null, error: null }]), 'c1', ['j1'])).resolves.toEqual([]);
+  });
+
+  test('falls back for legacy missing columns, paginates, and surfaces fatal account errors', async () => {
+    const thousand = Array.from({ length: 1000 }, (_, id) => ({ id: String(id) }));
+    const legacy = scriptedSupabase([
+      { data: null, error: { message: 'column is_header 42703' } },
+      { data: thousand, error: null }, { data: [{ id: 'last' }], error: null },
+    ]);
+    expect(await loadReportAccounts(legacy, 'c1')).toHaveLength(1001);
+    const fatal = scriptedSupabase([{ data: null, error: new Error('fatal') }]);
+    await expect(loadReportAccounts(fatal, 'c1')).rejects.toThrow('fatal');
+    await expect(loadReportAccounts(scriptedSupabase([{ data: null, error: {} }]), 'c1')).rejects.toEqual({});
+  });
+
+  test('paginates journal entry pages', async () => {
+    const thousand = Array.from({ length: 1000 }, (_, id) => ({ id: String(id) }));
+    await expect(loadReportJournalEntries(scriptedSupabase([{ data: thousand, error: null }, { data: [{ id: 'last' }], error: null }]), 'c1')).resolves.toHaveLength(1001);
+  });
+
+  test('falls back for legacy journal deletion column and surfaces fatal errors', async () => {
+    const legacy = scriptedSupabase([
+      { data: null, error: { message: 'deleted_at missing' } },
+      { data: [{ id: 'j1' }], error: null },
+    ]);
+    await expect(loadReportJournalEntries(legacy, 'c1', { from: '2026-01-01', to: '2026-12-31' })).resolves.toEqual([{ id: 'j1' }]);
+    await expect(loadReportJournalEntries(scriptedSupabase([{ data: null, error: new Error('fatal') }]), 'c1')).rejects.toThrow('fatal');
+    await expect(loadReportJournalEntries(scriptedSupabase([{ data: null, error: {} }]), 'c1')).rejects.toEqual({});
+  });
+
   test('retains inactive accounts because deactivation cannot erase history', async () => {
     const db = fakeSupabase({
       accounts: [
@@ -74,6 +128,25 @@ describe('report loaders enforce posted history', () => {
     });
     const rows = await loadReportAccounts(db, 'c1');
     expect(rows.map((row) => row.id)).toEqual(['active', 'inactive']);
+  });
+
+  test('loads journal lines only for requested entry chunks', async () => {
+    const db = fakeSupabase({ journal_lines: [
+      { id: 'l1', company_id: 'c1', journal_entry_id: 'j1', debit: 10, credit: 0 },
+      { id: 'l2', company_id: 'c1', journal_entry_id: 'j2', debit: 0, credit: 10 },
+      { id: 'foreign', company_id: 'c2', journal_entry_id: 'j1', debit: 99, credit: 0 },
+    ] });
+    const lines = await loadReportJournalLines(db, 'c1', ['j1']);
+    expect(lines.map((line) => line.id)).toEqual(['l1']);
+    expect(await loadReportJournalLines(db, 'c1', [])).toEqual([]);
+  });
+
+  test('paginates line chunks and surfaces line query errors', async () => {
+    const thousand = Array.from({ length: 1000 }, (_, id) => ({ id }));
+    const paged = scriptedSupabase([{ data: thousand, error: null }, { data: [{ id: 1000 }], error: null }]);
+    expect(await loadReportJournalLines(paged, 'c1', ['j1'])).toHaveLength(1001);
+    const failed = scriptedSupabase([{ data: null, error: new Error('lines') }]);
+    await expect(loadReportJournalLines(failed, 'c1', ['j1'])).rejects.toThrow('lines');
   });
 
   test('excludes drafts and deleted journals but keeps a reversed source beside its reversal', async () => {

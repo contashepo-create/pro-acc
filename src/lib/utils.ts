@@ -37,8 +37,10 @@ export function sanitizeText(text: string | null | undefined): string {
   if (!text) return '';
   return text
     .replace(/<[^>]*>/g, '')
-    .replace(/['";\\]/g, '')
+    // Remove complete entities before punctuation; stripping `;` first left
+    // fragments such as "&amp" in sanitized output.
     .replace(/&(?:amp|lt|gt|quot|#x27|#x3C|#x3E|#39|#x2F|#x60|nbsp);/gi, '')
+    .replace(/['";\\]/g, '')
     .replace(/[\u200B-\u200D\uFEFF\u200E\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064]/g, '')
     .trim();
 }

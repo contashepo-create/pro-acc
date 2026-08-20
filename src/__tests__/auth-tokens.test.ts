@@ -15,7 +15,7 @@
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 process.env.ADMIN_TOKEN_SECRET = 'test-admin-separate-secret-32chars!';
 
-import { createToken, verifyToken, createAdminToken, verifyAdminToken as verifyAdminJwt } from '@/lib/auth';
+import { getTokenSecret, createToken, verifyToken, createAdminToken, verifyAdminToken as verifyAdminJwt, extractToken } from '@/lib/auth';
 import { createHash, randomBytes, createHmac } from 'crypto';
 
 // Re-export for backwards compat with existing assertions below
@@ -44,6 +44,41 @@ function makeAdminRequest(token?: string) {
 }
 
 describe('Auth JWT', () => {
+  const signed = (headerValue: unknown, payloadValue: unknown) => {
+    const header = Buffer.from(JSON.stringify(headerValue)).toString('base64url');
+    const payload = Buffer.from(JSON.stringify(payloadValue)).toString('base64url');
+    const sig = createHmac('sha256', process.env.TOKEN_SECRET!).update(`${header}.${payload}`).digest('base64url');
+    return `${header}.${payload}.${sig}`;
+  };
+
+  test('fails closed for missing secrets and malformed header/payload claim shapes', () => {
+    const saved = process.env.TOKEN_SECRET;
+    delete process.env.TOKEN_SECRET;
+    expect(() => getTokenSecret()).toThrow('TOKEN_SECRET');
+    process.env.TOKEN_SECRET = saved;
+    const fixedNow = Date.now();
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(fixedNow);
+    const now = Math.floor(fixedNow / 1000);
+    for (const header of [null, [], { alg: 'none', typ: 'JWT' }, { alg: 'HS256', typ: 'BAD' }]) {
+      expect(verifyToken(signed(header, { sub: 'u', role: 'admin', iat: now, exp: now + 60 }))).toBeNull();
+    }
+    for (const payload of [null, [],
+      { sub: '', role: 'admin', iat: now, exp: now + 60 },
+      { sub: 'u', role: '', iat: now, exp: now + 60 },
+      { sub: 'u', role: 'admin', iat: 'x', exp: now + 60 },
+      { sub: 'u', role: 'admin', iat: now, exp: 1.5 },
+      { sub: 'u', role: 'admin', iat: now + 61, exp: now + 120 },
+      { sub: 'u', role: 'admin', iat: now, exp: now },
+    ]) expect(verifyToken(signed({ alg: 'HS256', typ: 'JWT' }, payload))).toBeNull();
+    nowSpy.mockRestore();
+  });
+  test('extracts bearer/cookie tokens and handles missing cookie APIs', () => {
+    expect(extractToken({ headers: new Headers({ authorization: 'Bearer abc' }) } as any)).toBe('abc');
+    expect(extractToken({ headers: new Headers(), cookies: { get: () => ({ value: 'cookie' }) } } as any)).toBe('cookie');
+    expect(extractToken({ headers: new Headers(), cookies: { get: () => undefined } } as any)).toBeNull();
+    expect(extractToken({ headers: new Headers() } as any)).toBeNull();
+  });
+
   test('creates a well-formed 3-part token and verifies round-trip', () => {
     const t = createToken('user-abc', 'admin', 0);
     expect(t.split('.')).toHaveLength(3);
@@ -139,6 +174,24 @@ describe('token_version invalidation semantics', () => {
 });
 
 describe('Admin token (superadmin JWT)', () => {
+  test('production fails closed when the separate admin secret is absent', () => {
+    const saved = process.env.ADMIN_TOKEN_SECRET; const savedEnv = process.env.NODE_ENV;
+    delete process.env.ADMIN_TOKEN_SECRET; (process.env as any).NODE_ENV = 'production';
+    expect(() => createAdminToken('admin', 0)).toThrow('ADMIN_TOKEN_SECRET');
+    process.env.ADMIN_TOKEN_SECRET = saved; (process.env as any).NODE_ENV = savedEnv;
+  });
+
+  test('development fallback signs admin JWTs with TOKEN_SECRET when admin secret is absent', () => {
+    const saved = process.env.ADMIN_TOKEN_SECRET;
+    const savedEnv = process.env.NODE_ENV;
+    delete process.env.ADMIN_TOKEN_SECRET;
+    (process.env as any).NODE_ENV = 'test';
+    const token = createAdminToken('fallback-admin', 0);
+    expect(verifyToken(token)?.role).toBe('superadmin');
+    process.env.ADMIN_TOKEN_SECRET = saved;
+    (process.env as any).NODE_ENV = savedEnv;
+  });
+
   test('accepts a valid superadmin admin_token (signed with ADMIN_TOKEN_SECRET)', () => {
     const t = createAdminToken('admin-1', 0);
     const payload = verifyAdminJwt(t);

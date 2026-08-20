@@ -15,6 +15,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function CashPage() {
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -192,6 +193,7 @@ export default function CashPage() {
   );
   
   const columns = [
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('cash_transaction', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
     { key: 'type', label: 'النوع', sortable: true, render: (row: any) => typeBadge(row.type) },
     { key: 'account_name', label: 'الحساب', sortable: true },
@@ -264,11 +266,11 @@ export default function CashPage() {
             />
             <Input label="المبلغ" type="number" value={form.amount} disabled={!!editingTransaction} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
             <Select
-              label="الحساب"
+              label="الحساب المقابل (إيراد/مصروف)"
               value={form.account_id}
               disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, account_id: v})}
-              options={[{ value: '', label: 'اختر حساباً' }, ...accounts.map((a: any) => ({ value: a.id, label: `${a.code} - ${a.name}` }))]}
+              options={[{ value: '', label: 'اختر حساب الإيراد أو المصروف' }, ...accounts.filter((account: any) => account.id !== banks.find((bank: any) => bank.id === form.bank_safe_id)?.account_id).map((a: any) => ({ value: a.id, label: `${a.code} - ${a.name}` }))]}
             />
             <Select
               label="الخزينة/البنك"

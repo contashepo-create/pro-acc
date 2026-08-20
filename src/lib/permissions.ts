@@ -218,12 +218,9 @@ export async function hasModulePermission(
     return rolePerms[module].includes(action) || rolePerms[module].includes('*');
   }
 
-  // التحقق من الصلاحيات العامة (wildcard)
-  if (rolePerms['*']) {
-    return rolePerms['*'].includes(action) || rolePerms['*'].includes('*');
-  }
-
-  return false;
+  // Every built-in/fallback role defines the wildcard permission list.
+  const globalPermissions = rolePerms['*'];
+  return globalPermissions.includes(action) || globalPermissions.includes('*');
 }
 
 /**

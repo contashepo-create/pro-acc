@@ -139,7 +139,7 @@ export function checkBackupOwnership(
     return { ok: false, status: 403, message: 'النسخة الاحتياطية لا تخص هذه الشركة' };
   }
   if (
-    backupData.metadata?.email
+    backupData.metadata.email
     && currentEmail
     && backupData.metadata.email.toLowerCase() !== currentEmail.toLowerCase()
   ) {

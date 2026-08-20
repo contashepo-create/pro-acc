@@ -139,6 +139,9 @@ describe('Invoice Templates & ZATCA classification logic', () => {
     expect(ids).toContain('elegant');
     expect(ids).toContain('construction');
     expect(ids).toContain('thermal');
+    expect(getTemplateConfig('classic').layout).toBe('classic');
+    expect(getTemplateConfig('missing').id).toBe(INVOICE_TEMPLATES[0].id);
+    expect(DEFAULT_INVOICE_SETTINGS.invoiceType).toBe('auto');
   });
 
   test('resolveInvoiceTitle correctly resolves B2B (Standard) vs B2C (Simplified)', () => {
@@ -150,8 +153,13 @@ describe('Invoice Templates & ZATCA classification logic', () => {
 
     // Auto mode with cash consumer without VAT -> Simplified Tax Invoice (B2C)
     const b2cInv = { client_tax_number: null };
-    const b2cResult = resolveInvoiceTitle(b2cInv, 'auto');
+    const b2cResult = resolveInvoiceTitle(b2cInv);
+    expect(resolveInvoiceTitle(b2cInv, 'auto')).toEqual(b2cResult);
     expect(b2cResult.titleAr).toBe('فاتورة ضريبية مبسطة');
+    expect(resolveInvoiceTitle({ client_commercial_registration: 'CR' }, 'auto').isSimplified).toBe(false);
+    expect(resolveInvoiceTitle({ contacts: { tax_number: 'VAT' } }, 'auto').isSimplified).toBe(false);
+    expect(resolveInvoiceTitle({ contacts: { commercial_registration: 'CR' } }, 'auto').isSimplified).toBe(false);
+    expect(resolveInvoiceTitle(null, 'auto').isSimplified).toBe(true);
     expect(b2cResult.isSimplified).toBe(true);
 
     // Explicit standard override

@@ -15,6 +15,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function DisbursementPage() {
   const [disbursements, setDisbursements] = useState<any[]>([]);
@@ -167,7 +168,7 @@ export default function DisbursementPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('disbursement_voucher', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
     { key: 'disbursement_type', label: 'النوع', sortable: true, render: (row: any) => typeBadge(row.disbursement_type) },
     { key: 'contact_name', label: 'المورد', sortable: true },

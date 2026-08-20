@@ -36,6 +36,20 @@ describe('detectDuplicateInvoices', () => {
     expect(findings).toHaveLength(0);
   });
 
+  test('uses fallback ids in duplicate messages', () => {
+    const findings = detectDuplicateInvoices([
+      { contact_id: 'c1', amount: 10, date: '2026-01-01' },
+      { contact_id: 'c1', amount: 10, date: '2026-01-02' },
+    ], 2);
+    expect(findings[0].refId).toBe('? & ?');
+  });
+
+  test('normalizes empty-string party ids in duplicate comparison', () => {
+    expect(detectDuplicateInvoices([
+      { contact_id: '', amount: 10, date: '2026-01-01' }, { contact_id: '', amount: 10, date: '2026-01-02' },
+    ])).toHaveLength(1);
+  });
+
   test('treats missing party as distinct (no false positive)', () => {
     const findings = detectDuplicateInvoices([
       { id: 'a', contact_id: null, amount: 500, date: '2026-01-01' },
@@ -60,6 +74,11 @@ describe('detectOutliers', () => {
     expect(detectOutliers([{ id: 'a', amount: 10 }, { id: 'b', amount: 1000 }])).toHaveLength(0);
   });
 
+  test('rejects insufficient finite samples and nonpositive medians', () => {
+    expect(detectOutliers([{ amount: 1 }, { amount: 2 }, { amount: NaN }, { amount: Infinity }])).toEqual([]);
+    expect(detectOutliers([{ amount: 0 }, { amount: 0 }, { amount: 0 }, { amount: 100 }])).toEqual([]);
+  });
+
   test('returns nothing when no outliers', () => {
     const findings = detectOutliers(
       [{ amount: 100 }, { amount: 101 }, { amount: 99 }, { amount: 102 }, { amount: 103 }], 5
@@ -77,6 +96,10 @@ describe('detectSpendingSpikes', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0].code).toBe('SPENDING_SPIKE');
     expect(findings[0].severity).toBe('high');
+  });
+
+  test('uses default spike thresholds and ignores ordinary changes', () => {
+    expect(detectSpendingSpikes([{ period: '1', amount: 10 }, { period: '2', amount: 20 }])).toEqual([]);
   });
 
   test('ignores small prior baselines to avoid false spikes', () => {

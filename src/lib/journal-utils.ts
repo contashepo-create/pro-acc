@@ -116,7 +116,7 @@ export async function insertJournalLines(
       error: new Error(`تعذر العثور على ${unresolved.length} حساب للقيد — تحقق من الحسابات المختارة`),
     };
   }
-  if (lines.some((line) => Boolean((accMap.get(line.account_id) as any)?.is_header))) {
+  if (lines.some((line) => Boolean((accMap.get(line.account_id) as any).is_header))) {
     return { error: new Error('لا يجوز الترحيل على حساب رئيسي') };
   }
 
@@ -127,8 +127,8 @@ export async function insertJournalLines(
       company_id: companyId,
       journal_entry_id: line.journal_entry_id,
       account_id: line.account_id,
-      account_code: acc?.code,
-      account_name: acc?.name,
+      account_code: acc.code,
+      account_name: acc.name,
       debit: line.debit || 0,
       credit: line.credit || 0,
       description: line.description || null,

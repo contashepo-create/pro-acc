@@ -8,14 +8,9 @@ function dnsLookup(hostname: string, options: any, callback: any) {
     if (!addresses || addresses.length === 0) {
       return callback(new Error(`No addresses found for ${hostname}`));
     }
-    // Try each address until one works
-    const tryAddress = (index: number) => {
-      if (index >= addresses.length) {
-        return callback(new Error(`All addresses failed for ${hostname}`));
-      }
-      callback(null, addresses[index].address, addresses[index].family);
-    };
-    tryAddress(0);
+    // Node's lookup contract accepts one selected address; DNS already
+    // returned at least one candidate above.
+    callback(null, addresses[0].address, addresses[0].family);
   });
 }
 

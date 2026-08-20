@@ -16,6 +16,7 @@ import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { fetchRecord, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatCurrency } from '@/lib/utils';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 const statusMeta: Record<string, { variant: 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'; label: string }> = {
   draft: { variant: 'default', label: 'مسودة' },
@@ -105,7 +106,7 @@ export default function ChangeOrdersPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم' },
+    { key: 'number', label: 'الرقم', render: (row: any) => formatDocumentNumber('change_order', row.number) },
     { key: 'title', label: 'العنوان' },
     { key: 'projects', label: 'المشروع', render: (r: any) => r.projects?.name || r.project_id },
     { key: 'base_contract_amount', label: 'العقد الأساسي', render: (r: any) => formatCurrency(r.base_contract_amount) },

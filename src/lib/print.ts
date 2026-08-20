@@ -40,22 +40,23 @@ export function openPrintWindow(
   }
 
   if (!printWindow) return { ok: false, blocked: true };
+  const targetWindow = printWindow;
 
   try {
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
+    targetWindow.document.open();
+    targetWindow.document.write(html);
+    targetWindow.document.close();
     try {
-      printWindow.opener = null;
+      targetWindow.opener = null;
     } catch {
       /* best-effort only */
     }
-    printWindow.focus();
+    targetWindow.focus();
 
     const trigger = () => {
       try {
-        printWindow?.focus();
-        printWindow?.print();
+        targetWindow.focus();
+        targetWindow.print();
       } catch {
         /* ignore */
       }

@@ -164,6 +164,26 @@ describe('UBL XML Generation', () => {
     expect(xml).toContain('<cbc:TaxAmount currencyID="SAR">22.50</cbc:TaxAmount>');
   });
 
+  test('renders optional buyer address and allowance/charge totals', () => {
+    const data = {
+      ...ublData,
+      buyer: { ...ublData.buyer, address: { street: 'S', city: 'C', postalZone: '1', country: 'EG' } },
+      amounts: { ...ublData.amounts, allowanceTotalAmount: 10, chargeTotalAmount: 10 },
+    };
+    const xml = generateUBLInvoice(data);
+    expect(xml).toContain('<cbc:StreetName>S</cbc:StreetName>');
+    expect(xml).toContain('<cbc:AllowanceTotalAmount');
+    expect(xml).toContain('<cbc:ChargeTotalAmount');
+  });
+
+  test('rejects empty/invalid monetary and invoice-line values', () => {
+    expect(() => generateUBLInvoice({ ...ublData, items: [] })).toThrow('Invalid UBL financial values');
+    expect(() => generateUBLInvoice({ ...ublData, vatRate: 2 })).toThrow('Invalid UBL financial values');
+    for (const patch of [
+      { quantity: 0 }, { unitPrice: -1 }, { total: -1 }, { vatRate: -1 }, { vatRate: 2 }, { total: NaN },
+    ]) expect(() => generateUBLInvoice({ ...ublData, items: [{ ...ublData.items[0], ...patch }] })).toThrow();
+  });
+
   test('should reject inconsistent source totals', () => {
     expect(() => generateUBLInvoice({
       ...ublData,

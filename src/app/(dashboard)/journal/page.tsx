@@ -13,6 +13,7 @@ import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { apiFetch } from '@/lib/api-client';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function JournalPage() {
   const router = useRouter();
@@ -51,7 +52,7 @@ export default function JournalPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('journal', row.number) },
     { key: 'date', label: 'التاريخ', render: (r: any) => formatDate(r.date) },
     { key: 'description', label: 'البيان' },
     { key: 'total_debit', label: 'المدين', render: (r: any) => formatCurrency(r.total_debit || 0) },

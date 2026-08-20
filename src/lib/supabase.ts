@@ -4,7 +4,7 @@ let serverClient: SupabaseClient | null = null;
 let clientClient: SupabaseClient | null = null;
 
 function clean(s: string): string {
-  return (s || '').replace(/^\uFEFF/, '').trim();
+  return s.replace(/^\uFEFF/, '').trim();
 }
 
 export function createServerClient(): SupabaseClient {

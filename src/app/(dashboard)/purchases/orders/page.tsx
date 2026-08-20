@@ -17,18 +17,21 @@ import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 interface OrderItem {
   description: string;
   quantity: number;
   unit_price: number;
+  inventory_item_id?: string;
 }
 
-const emptyItem: OrderItem = { description: '', quantity: 1, unit_price: 0 };
+const emptyItem: OrderItem = { description: '', quantity: 1, unit_price: 0, inventory_item_id: '' };
 
 export default function PurchaseOrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -48,17 +51,20 @@ export default function PurchaseOrdersPage() {
     try {
       setLoading(true);
       setError('');
-      const [ordRes, supRes] = await Promise.all([
+      const [ordRes, supRes, itemRes] = await Promise.all([
         fetch('/api/purchases/orders'),
         fetch('/api/contacts?type=supplier'),
+        fetch('/api/inventory?items=true&pageSize=500'),
       ]);
-      const [ordJson, supJson] = await Promise.all([
+      const [ordJson, supJson, itemJson] = await Promise.all([
         ordRes.json(),
         supRes.json(),
+        itemRes.json(),
       ]);
       if (ordJson.success) setOrders(ordJson.data?.orders || []);
       else setError(ordJson.message || 'فشل');
       if (supJson.success) setSuppliers(supJson.data?.contacts || []);
+      if (itemJson.success) setInventoryItems(itemJson.data?.items || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -168,7 +174,7 @@ export default function PurchaseOrdersPage() {
   };
 
   const columns = [
-    { key: 'po_number', label: 'الرقم', sortable: true },
+    { key: 'po_number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('purchase_order', row.number || row.po_number) },
     { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
     { key: 'supplier_name', label: 'المورد', sortable: true },
     { key: 'total', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total) },
@@ -255,7 +261,16 @@ export default function PurchaseOrdersPage() {
                   {form.items.map((item: OrderItem, i: number) => (
                     <tr key={i} className="border-t border-border">
                       <td className="p-2">
-                        <input className="w-full bg-transparent outline-none" value={item.description} onChange={(e) => updateItem(i, { description: e.target.value })} placeholder="وصف البند" />
+                        <div className="space-y-1">
+                          <select className="w-full bg-transparent border-b border-border pb-1 outline-none text-xs" value={item.inventory_item_id || ''} onChange={(event) => {
+                            const selected = inventoryItems.find((candidate: any) => candidate.id === event.target.value);
+                            updateItem(i, { inventory_item_id: event.target.value, description: selected?.code || item.description });
+                          }}>
+                            <option value="">بند حر / صنف جديد</option>
+                            {inventoryItems.map((inventoryItem: any) => <option key={inventoryItem.id} value={inventoryItem.id}>{inventoryItem.code} - {inventoryItem.name} ({inventoryItem.warehouse_name || 'مستودع'})</option>)}
+                          </select>
+                          <input className="w-full bg-transparent outline-none" value={item.description} onChange={(e) => updateItem(i, { description: e.target.value, inventory_item_id: '' })} placeholder="كود الصنف أو وصف البند" />
+                        </div>
                       </td>
                       <td className="p-2">
                         <input className="w-full bg-transparent outline-none" type="number" min={0} step="any" value={item.quantity} onChange={(e) => updateItem(i, { quantity: Number(e.target.value) })} />
@@ -287,7 +302,7 @@ export default function PurchaseOrdersPage() {
       <RecordViewModal
         isOpen={!!viewingOrder}
         onClose={() => setViewingOrder(null)}
-        title={viewingOrder ? `أمر شراء رقم #${viewingOrder.po_number}` : 'معاينة أمر الشراء'}
+        title={viewingOrder ? `أمر شراء رقم ${formatDocumentNumber('purchase_order', viewingOrder.number || viewingOrder.po_number)}` : 'معاينة أمر الشراء'}
         record={viewingOrder}
         extra={viewingOrder?.items?.length ? (
           <div className="border border-border rounded-xl overflow-x-auto mt-3">

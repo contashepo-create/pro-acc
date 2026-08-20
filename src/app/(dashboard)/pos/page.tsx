@@ -13,6 +13,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { Badge } from '@/components/ui/Badge';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatDocumentNumber } from '@/lib/document-number';
 
 export default function POSPage() {
   const [sales, setSales] = useState<any[]>([]);
@@ -64,7 +65,7 @@ export default function POSPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('pos_sale', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (r:any) => formatDate(r.date) },
     { key: 'total', label: 'الإجمالي', render: (r:any) => formatCurrency(r.total) },
     { key: 'payment_method', label: 'طريقة الدفع', render: (r:any) => <Badge>{r.payment_method}</Badge> },
