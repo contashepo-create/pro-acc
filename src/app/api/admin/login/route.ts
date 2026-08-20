@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
       s = sb();
     } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
-      return error('حدث خطأ في الخادم', 500);
+      return error(e instanceof Error ? e.message : 'حدث خطأ غير متوقع', 500);
     }
 
     step = 'query_admin_user';
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
       queryErr = result.error;
     } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
-      return error('حدث خطأ في الخادم', 500);
+      return error(e instanceof Error ? e.message : 'حدث خطأ غير متوقع', 500);
     }
 
     if (queryErr && queryErr.code !== 'PGRST116') throw queryErr;
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
       valid = await verifyPassword(password, a.password_hash);
     } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
-      return error('حدث خطأ في الخادم', 500);
+      return error(e instanceof Error ? e.message : 'حدث خطأ غير متوقع', 500);
     }
 
     if (!valid) {
@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
       });
     } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
-      return error('حدث خطأ في الخادم', 500);
+      return error(e instanceof Error ? e.message : 'حدث خطأ غير متوقع', 500);
     }
 
     step = 'send_telegram';
@@ -177,11 +177,9 @@ export async function POST(request: NextRequest) {
     return response;
   } catch (err) {
     console.error(`[ADMIN LOGIN CRITICAL FAILED at step ${step}]:`, err, err instanceof Error ? err.stack : undefined);
+    const message = err instanceof Error && err.message ? err.message : 'حدث خطأ غير متوقع';
     return new Response(
-      JSON.stringify({
-        success: false,
-        message: 'حدث خطأ في الخادم. يرجى المحاولة مرة أخرى',
-      }),
+      JSON.stringify({ success: false, message }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }

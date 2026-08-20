@@ -33,10 +33,10 @@ describe('central admin guard branches', () => {
     result.data.email = 'ADMIN@TEST.COM'; result.data.name = 'Admin';
     await expect(requireAdmin(req('jwt'))).resolves.toMatchObject({ email: 'admin@test.com', name: 'Admin' });
   });
-  test('serializes known admin errors and hides unknown internals', async () => {
+  test('serializes known admin errors and surfaces real unknown messages', async () => {
     const known = adminJsonError(new AdminAuthError('No', 403));
     expect(known.status).toBe(403); expect((await known.json()).message).toBe('No');
     const unknown = adminJsonError(new Error('secret SQL'));
-    expect(unknown.status).toBe(500); expect((await unknown.json()).message).toBe('حدث خطأ في الخادم');
+    expect(unknown.status).toBe(500); expect((await unknown.json()).message).toBe('secret SQL');
   });
 });

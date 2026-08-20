@@ -118,7 +118,10 @@ describe('remaining API helper functions', () => {
       expect(body.success).toBe(false);
     }
     (process.env as any).NODE_ENV = 'production';
-    expect((await serverError(new Error('secret')).json()).message).toBe('حدث خطأ في الخادم');
+    // Real error message surfaces in production too (not a generic placeholder).
+    const prodBody = await serverError(new Error('secret')).json();
+    expect(prodBody.message).toBe('secret');
+    expect(prodBody.errorId).toMatch(/^[a-z0-9]+$/);
     (process.env as any).NODE_ENV = oldEnv;
   });
 

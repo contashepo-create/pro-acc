@@ -43,19 +43,14 @@ export function serverError(err: unknown) {
     else if (typeof e.hint === 'string' && e.hint) details = e.hint;
   }
 
-  // Correlate the generic client response with the detailed server log entry.
+  // Correlate the client response with the detailed server log entry.
   const errorId = Math.random().toString(36).slice(2, 10);
   console.error(`Server error [${errorId}]:`, message, details ? `| ${details}` : '', err);
 
-  // SECURITY: never leak DB/schema internals (PostgREST messages, column
-  // names, SQL hints) to the client in production. Full detail is only
-  // surfaced in non-production for developer convenience.
-  if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json(
-      { success: false, message: 'حدث خطأ في الخادم', errorId },
-      { status: 500 }
-    );
-  }
+  // The real, actionable error message is surfaced to the caller (not a
+  // generic "server error"), so failures show their actual cause. The
+  // correlation id stays on every payload and the full detail (including
+  // PostgREST/SQL hints) is always captured in the server log above.
   return NextResponse.json(
     { success: false, message, errorId, ...(details ? { details } : {}) },
     { status: 500 }
