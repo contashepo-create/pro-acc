@@ -12,7 +12,7 @@ Before writing this plan, the actual codebase was inspected. Here's what already
 
 | Area | Coverage |
 |------|----------|
-| Unit/integration tests | **1102 tests across 107 suites**, all passing |
+| Unit/integration tests | **1131 tests across 108 suites**, all passing |
 | API surface guard | `api-surface-guard.test.ts` — statically walks all route files and enforces every tenant route filters by `company_id` (critical because `service_role` bypasses RLS) |
 | ZATCA QR/TLV tests | `zatca.test.ts`, `zatca-qr-branches.test.ts`, **`golden-zatca-qr.test.ts`** *(new)* |
 | SQL-level VAT golden tests | **`golden-invoice-vat-sql.db.test.ts`** *(new)* — runs `create_sales_invoice_atomic()` in a real PGlite Postgres with all 75 migrations applied |
@@ -291,10 +291,11 @@ These are already covered and working:
 | `safe-input.test.ts` | 32 | Path traversal, URL validation, file magic bytes, polyglot defense |
 | `webhook-guard.test.ts` | 12 | Fail-closed production, fail-open dev, timing-safe |
 | `ubl-builder.test.ts` | 25 | UBL XML structure, escaping/anti-XSS, financial consistency |
+| `zatca-ubl-structure.test.ts` | 29 | Full ZATCA UBL mandatory element validation |
 | `account-resolve.test.ts` | 14 | Header account detection, cash/bank code matching |
 | `custody-validation.test.ts` | 25 | All custody Zod schemas, money enforcement, strict mode |
 | `communication-validation.test.ts` | 40 | Approval, telegram, push, complaint schemas |
-| **Total new Jest tests** | **195** | |
+| **Total new Jest tests** | **224** | |
 
 ### Playwright E2E Tests (ready to run against staging)
 
