@@ -17,6 +17,7 @@ import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
 import { getCountriesList, getCountryConfig } from '@/lib/countries';
+import OverheadSettings from '@/components/settings/OverheadSettings';
 import { 
   INVOICE_TEMPLATES, 
   DEFAULT_INVOICE_SETTINGS, 
@@ -471,6 +472,7 @@ export default function SettingsPage() {
         { id: 'about', label: 'حول البرنامج' },
         { id: 'appearance', label: 'المظهر' },
         { id: 'notifications', label: 'إشعارات' },
+        { id: 'projectcosting', label: 'المشاريع والتكاليف' },
         { id: 'telegram', label: 'تيليجرام 🤖' },
       ]} activeTab={tab} onChange={setTab} />
 
@@ -1083,6 +1085,9 @@ export default function SettingsPage() {
           </div>
         </Card>
       )}
+
+      {/* Project Costing & Overhead Tab */}
+      {tab === 'projectcosting' && <OverheadSettings />}
 
       {/* Telegram Tab */}
       {tab === 'telegram' && (

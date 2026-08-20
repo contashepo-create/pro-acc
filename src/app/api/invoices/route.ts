@@ -201,6 +201,23 @@ export async function POST(request: NextRequest) {
       console.warn('ZATCA QR generation bypassed:', zatcaErr);
     }
 
+    // Financial audit trail: record the invoice creation with the actor and
+    // key financial fields (fail-open, must never break the posting).
+    try {
+      const { logAudit } = await import('@/lib/audit');
+      await logAudit({
+        company_id: auth.companyId, user_id: auth.userId, entity_type: 'invoice',
+        entity_id: invoice.id, action: 'create',
+        after: {
+          id: invoice.id, number: invoice.number, date, total: invoice.total,
+          subtotal: invoice.subtotal, vat_amount: invoice.vat_amount, status: invoice.status,
+        },
+        summary: `إنشاء فاتورة ${invoice.number} بإجمالي ${invoice.total}`,
+      });
+    } catch (auditError) {
+      console.error('Invoice audit write failed:', auditError);
+    }
+
     return success({
       ...invoice,
       items: itemsRes || [],

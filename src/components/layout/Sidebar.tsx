@@ -125,6 +125,7 @@ const navGroups: NavGroup[] = [
       { id: 'fiscal', label: 'السنوات المالية' },
       { id: 'notifications', label: 'الإشعارات' },
       { id: 'financial-audit', label: 'سجل التدقيق المالي' },
+      { id: 'explanations', label: 'الشروحات والدليل' },
     ],
   },
 ];

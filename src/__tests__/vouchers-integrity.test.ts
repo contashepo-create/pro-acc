@@ -151,7 +151,10 @@ describe('voucher atomic route boundaries', () => {
       p_company_id: C1, p_user_id: USER, p_contact_id: CONTACT, p_bank_safe_id: SAFE,
       p_amount: 125.5, p_request_approval: false,
     });
-    expect(mockDb.calls.filter((call) => call.mut.kind)).toHaveLength(0);
+    // Only the financial audit trail is written directly (fail-open logging);
+    // no business data bypasses the atomic RPC.
+    const nonAuditMutations = mockDb.calls.filter((call) => call.mut.kind && call.table !== 'financial_audit_trails');
+    expect(nonAuditMutations).toHaveLength(0);
   });
 
   test('additional user persists an unposted approval request when approval configuration is unavailable', async () => {

@@ -133,6 +133,17 @@ export async function POST(request: NextRequest) {
     });
     if (createErr) throw createErr;
     const voucher = data as Record<string, any>;
+    try {
+      const { logAudit } = await import('@/lib/audit');
+      await logAudit({
+        company_id: auth.companyId, user_id: auth.userId, entity_type: 'voucher_disbursement',
+        entity_id: String(voucher.id || ''), action: 'create',
+        after: { id: voucher.id, amount, date, disbursement_type, status: voucher.status || 'posted' },
+        summary: `سند صرف بقيمة ${amount}${voucher.requires_approval ? ' (بانتظار الاعتماد)' : ''}`,
+      });
+    } catch (auditError) {
+      console.error('Disbursement audit write failed:', auditError);
+    }
 
     if (voucher.requires_approval) {
       let notificationSent = false;

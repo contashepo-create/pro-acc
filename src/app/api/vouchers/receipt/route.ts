@@ -140,6 +140,17 @@ export async function POST(request: NextRequest) {
     });
     if (createErr) throw createErr;
     const voucher = data as Record<string, any>;
+    try {
+      const { logAudit } = await import('@/lib/audit');
+      await logAudit({
+        company_id: auth.companyId, user_id: auth.userId, entity_type: 'voucher_receipt',
+        entity_id: String(voucher.id || ''), action: 'create',
+        after: { id: voucher.id, amount, date, receipt_type, status: voucher.status || 'posted' },
+        summary: `سند قبض بقيمة ${amount}${voucher.requires_approval ? ' (بانتظار الاعتماد)' : ''}`,
+      });
+    } catch (auditError) {
+      console.error('Receipt audit write failed:', auditError);
+    }
     if (voucher.requires_approval) {
       // If the policy lookup itself was unavailable, do not immediately repeat
       // the same failing lookup inside Telegram delivery. The pending voucher

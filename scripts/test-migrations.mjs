@@ -271,6 +271,85 @@ async function smokePostedLedgerReports() {
   assert.ok(project2);
 }
 
+async function smokeProjectCostingAllocation() {
+  const c='74000000-0000-4000-8000-000000000001';
+  const u='74000000-0000-4000-8000-000000000002';
+  const c2='74000000-0000-4000-8000-000000000003';
+  const u2='74000000-0000-4000-8000-000000000004';
+  const asset='74000000-0000-4000-8000-000000000010';
+  const mat='74000000-0000-4000-8000-000000000011';
+  const labor='74000000-0000-4000-8000-000000000012';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Cost tenant'),($2,'Foreign tenant')`,[c,c2]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES
+    ($1,$2,'cost-a@example.test','x','Cost A','admin',TRUE),
+    ($3,$4,'cost-b@example.test','x','Cost B','admin',TRUE)`,[u,c,u2,c2]);
+  await db.query(`INSERT INTO accounts(id,company_id,code,name,type,is_header) VALUES
+    ($1,$2,'1000','Cost cash','asset',FALSE),($3,$2,'5110','Materials','expense',FALSE),
+    ($4,$2,'5120','Direct labor','expense',FALSE)`,[asset,c,mat,labor]);
+  const project=(await db.query(`SELECT create_project_atomic($1,'Cost project',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c,u])).rows[0].result.id;
+  const foreignProject=(await db.query(`SELECT create_project_atomic($1,'Foreign project',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c2,u2])).rows[0].result.id;
+
+  // Post direct material + direct labour tagged to the project.
+  await db.query(`SELECT create_journal_entry($1,'2026-02-01','general','materials',$2,$3::jsonb)`,[
+    c,u,JSON.stringify([
+      {accountId:mat,debit:200,credit:0,projectId:project},
+      {accountId:asset,debit:0,credit:200,projectId:project},
+    ]),
+  ]);
+  await db.query(`SELECT create_journal_entry($1,'2026-02-01','general','labor',$2,$3::jsonb)`,[
+    c,u,JSON.stringify([
+      {accountId:labor,debit:100,credit:0,projectId:project},
+      {accountId:asset,debit:0,credit:100,projectId:project},
+    ]),
+  ]);
+
+  // Two overhead rules: 10% of direct cost + 20% of direct labor.
+  await db.query(`INSERT INTO overhead_allocations(company_id,name,allocation_basis,rate,is_active)
+    VALUES($1::uuid,'OH-cost','direct_cost',0.10,TRUE)`,[c]);
+  await db.query(`INSERT INTO overhead_allocations(company_id,name,allocation_basis,rate,is_active)
+    VALUES($1::uuid,'OH-labor','direct_labor',0.20,TRUE)`,[c]);
+  // Foreign tenant rule must be invisible to tenant c.
+  await db.query(`INSERT INTO overhead_allocations(company_id,name,allocation_basis,rate,is_active)
+    VALUES($1::uuid,'OH-foreign','direct_cost',0.99,TRUE)`,[c2]);
+
+  const row=(await db.query(`SELECT * FROM get_project_costing_overhead($1,ARRAY[$2]::uuid[])`,[c,project])).rows[0];
+  assert.equal(Number(row.direct_cost),300);          // 200 materials + 100 labor
+  assert.equal(Number(row.direct_labor),100);
+  // allocated = 0.10*300 + 0.20*100 = 30 + 20 = 50
+  assert.equal(Number(row.allocated_overhead),50);
+
+  const foreignRows=await db.query(`SELECT * FROM get_project_costing_overhead($1,ARRAY[$2]::uuid[])`,[c2,foreignProject]);
+  // foreign has no posted costs => no row; and tenant c's rules must not leak.
+  assert.equal(foreignRows.rows.length,0);
+
+  // Salary sheet with project allocation on an item.
+  const employeeId=(await db.query(`SELECT create_employee_atomic($1,'Cost worker','','',500,'','','2026-01-01',$2) result`,[
+    c,u,
+  ])).rows[0].result.id;
+  const sheet=(await db.query(`SELECT create_salary_sheet($1,'Cost payroll',2,2026,'2026-02-15',$2::jsonb) result`,[
+    c,JSON.stringify([{employee_id:employeeId,basic_salary:500,allowances:0,deductions:0,project_id:project}]),
+  ])).rows[0].result;
+  const savedItem=await db.query(`SELECT project_id FROM salary_items WHERE sheet_id=$1 AND company_id=$2`,[sheet.id,c]);
+  assert.equal(savedItem.rows[0].project_id,project);
+
+  // Reject a foreign project on a salary item.
+  await assert.rejects(()=>db.query(`SELECT create_salary_sheet($1,'Foreign payroll',2,2026,'2026-02-15',$2::jsonb)`,[
+    c,JSON.stringify([{employee_id:employeeId,basic_salary:100,allowances:0,deductions:0,project_id:foreignProject}]),
+  ]));
+
+  // Salary items reference a project that belongs to another tenant must be
+  // rejected by the guard trigger too.
+  await assert.rejects(()=>db.query(
+    `INSERT INTO salary_items(company_id,sheet_id,employee_id,basic_salary,allowances,deductions,net_pay,project_id)
+     VALUES($1,$2,$3,1,0,0,1,$4)`,[c,sheet.id,employeeId,foreignProject]));
+
+  // Clean up the salary sheet so a later global count assertion stays at zero.
+  await db.query(`SELECT delete_draft_salary_sheet($1,$2)`,[c,sheet.id]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM salary_items WHERE company_id=$1`,[c])).rows[0].count),0);
+}
+
+
+
 async function smokeAdminEntitlements(ids) {
   const adminId='90000000-0000-4000-8000-000000000001';
   const inactiveAdmin='90000000-0000-4000-8000-000000000099';
@@ -2021,6 +2100,7 @@ try {
   await smokeAdminGlobalConfiguration();
   const ids = await seedLedger();
   await smokePostedLedgerReports();
+  await smokeProjectCostingAllocation();
   await smokeAdminEntitlements(ids);
   await smokeAdminSupport(ids);
   await smokePurchasingAndInventory(ids);
