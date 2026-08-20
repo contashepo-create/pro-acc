@@ -139,6 +139,9 @@ describe('Invoice Templates & ZATCA classification logic', () => {
     expect(ids).toContain('elegant');
     expect(ids).toContain('construction');
     expect(ids).toContain('thermal');
+    expect(getTemplateConfig('classic').layout).toBe('classic');
+    expect(getTemplateConfig('missing').id).toBe(INVOICE_TEMPLATES[0].id);
+    expect(DEFAULT_INVOICE_SETTINGS.invoiceType).toBe('auto');
   });
 
   test('resolveInvoiceTitle correctly resolves B2B (Standard) vs B2C (Simplified)', () => {

@@ -1,3 +1,5 @@
+import { createHmac, timingSafeEqual } from 'crypto';
+
 /**
  * Moyasar Payment Gateway Integration
  * https://moyasar.com/docs/api/
@@ -135,13 +137,14 @@ export function verifyWebhookSignature(payload: string, signature: string): bool
   const secret = process.env.MOYASAR_WEBHOOK_SECRET;
   if (!secret) return false;
 
-  const crypto = require('crypto');
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(payload)
-    .digest('hex');
-
-  return expected === signature;
+  const expected = createHmac('sha256', secret).update(payload).digest();
+  let supplied: Buffer;
+  try {
+    supplied = Buffer.from(signature, 'hex');
+  } catch {
+    return false;
+  }
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
 /**
