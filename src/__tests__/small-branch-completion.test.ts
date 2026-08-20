@@ -13,6 +13,8 @@ describe('small remaining branch paths', () => {
     expect(getBackupSecret()).toContain('fallback');
     process.env.TOKEN_SECRET = 'short';
     expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');
+    delete process.env.TOKEN_SECRET;
+    expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');
     (process.env as any).NODE_ENV = 'production';
     process.env.TOKEN_SECRET = 'long-token-secret-that-must-not-fallback-production';
     expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');

@@ -162,7 +162,8 @@ describe('csv-export — spreadsheet formula injection guard', () => {
     expect(toCsvCell('123.45')).toBe('123.45');
     expect(toCsvCell(null)).toBe('');
   });
-  it('serializes records safely', () => {
+  it('serializes records safely and handles empty exports', () => {
+    expect(recordsToCsv([])).toBe('');
     const csv = recordsToCsv([{ name: '=cmd', note: 'ok, with comma' }]);
     expect(csv).toContain("'=cmd");
     expect(csv).toContain('"ok, with comma"');

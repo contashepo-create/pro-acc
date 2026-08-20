@@ -10,6 +10,8 @@ describe('fiscal preflight fallback branches', () => {
     await expect(assertOpenFiscalPeriod('c', '2026-01-01')).resolves.toBeUndefined();
     result = { data: [], error: null };
     await expect(assertOpenFiscalPeriod('c', '2026-01-01')).resolves.toBeUndefined();
+    result = { data: null, error: null };
+    await expect(assertOpenFiscalPeriod('c', '2026-01-01')).resolves.toBeUndefined();
   });
   test('reports no open range and unnamed closed years', async () => {
     result = { data: [{ id: 'y', name: null, start_date: '2025-01-01', end_date: '2025-12-31', status: 'closed' }], error: null };

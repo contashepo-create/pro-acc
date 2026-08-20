@@ -8,7 +8,8 @@ const base = {
 };
 
 describe('CSRF origin verification (proxy layer)', () => {
-  it('always allows safe methods', () => {
+  it('always allows safe methods including the default', () => {
+    expect(passesOriginCheck({ ...base, method: undefined as any })).toBe(true);
     for (const method of ['GET', 'HEAD', 'OPTIONS', 'get']) {
       expect(
         passesOriginCheck({ ...base, method, origin: 'https://evil.example' })
@@ -58,8 +59,10 @@ describe('CSRF origin verification (proxy layer)', () => {
     ).toBe(false);
   });
 
-  it('allows non-browser requests (no Origin, no Referer) — curl/webhooks/tests', () => {
+  it('allows non-browser requests and fails closed on signaled requests without a known host', () => {
     expect(passesOriginCheck({ ...base, method: 'POST' })).toBe(true);
+    expect(passesOriginCheck({ ...base, method: 'POST', requestHost: undefined as any, origin: 'https://app.example.com' })).toBe(false);
+    expect(passesOriginCheck({ ...base, method: 'POST', requestHost: undefined as any, origin: null, referer: null })).toBe(true);
   });
 
   it('port must match too (host includes port)', () => {

@@ -24,6 +24,7 @@ describe('account codes — order & RTL aliases', () => {
   test('handles empty lookup and every legacy child-code ordering', () => {
     expect(accountCodeLookupKeys('')).toEqual([]);
     expect(nextChildAccountCode('1110', ['11100002', '4-1110', '1110-bad', 'other'])).toBe('1110-0005');
+    expect(nextChildAccountCode('1110', ['11100002'])).toBe('1110-0003');
     expect(normalizeAccountCode(null)).toBe('');
     expect(normalizeAccountCode('11 10 - 0001')).toBe('1110-0001');
   });

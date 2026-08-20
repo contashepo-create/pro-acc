@@ -10,6 +10,7 @@ import {
 import { getQRCodeString, generateZatcaQRData, validateInvoiceForZatca, generateInvoiceHash } from '@/lib/zatca';
 import { disbursementVoucherCreateSchema, contactCreateSchema, dateRangeSchema } from '@/lib/validation';
 import { projectExpenseCreateSchema } from '@/lib/project-delivery-validation';
+import { custodyExpenseSchema } from '@/lib/custody-validation';
 
 function dbFor(data: Record<string, any[]>) {
   return {
@@ -133,6 +134,7 @@ describe('remaining relationship schema callbacks', () => {
     expect(contractCreateSchema.safeParse({ ...contract, end_date: '2025-12-31' }).success).toBe(false);
     expect(contractUpdateSchema.safeParse({}).success).toBe(false);
     expect(contractUpdateSchema.safeParse({ title: 'Updated' }).success).toBe(true);
+    expect(contractUpdateSchema.safeParse({ project_id: UUID1 }).success).toBe(true);
     expect(contractDocumentSchema.safeParse({ filename: 'invoice.pdf', content_type: 'application/pdf', file_data: 'x' }).success).toBe(true);
     expect(contractDocumentSchema.safeParse({ filename: '../bad.pdf', content_type: 'application/pdf', file_data: 'x' }).success).toBe(false);
   });
@@ -178,6 +180,8 @@ describe('remaining shared validation callbacks', () => {
     expect(dateRangeSchema.safeParse({ from: '2026-02-01', to: '2026-01-01' }).success).toBe(false);
     expect(projectExpenseCreateSchema.safeParse({ project_id: UUID1, expense_type: 'materials', description: 'x', amount: 10, date: '2026-08-20', tax_rate: 0.1234 }).success).toBe(true);
     expect(projectExpenseCreateSchema.safeParse({ project_id: UUID1, expense_type: 'materials', description: 'x', amount: 10, date: '2026-08-20', tax_rate: 0.12345 }).success).toBe(false);
+    expect(custodyExpenseSchema.safeParse({ amount: 1, description: 'x', invoice_id: UUID1, purchase_invoice_id: UUID2 }).success).toBe(false);
+    expect(custodyExpenseSchema.safeParse({ amount: 1, description: 'x', invoice_id: UUID1 }).success).toBe(true);
   });
 });
 

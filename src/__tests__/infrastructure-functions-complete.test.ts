@@ -133,6 +133,8 @@ describe('private storage references', () => {
     }
     createSignedUrl.mockResolvedValueOnce({ data: null, error: new Error('storage') });
     await expect(signPrivateReceiptReference(client, 'c1/file.png')).resolves.toBeNull();
+    createSignedUrl.mockResolvedValueOnce({ data: {}, error: null });
+    await expect(signPrivateReceiptReference(client, 'c1/file.png')).resolves.toBeNull();
     createSignedUrl.mockResolvedValueOnce({ data: { signedUrl: 'https://signed.test' }, error: null });
     await expect(signPrivateReceiptReference(client, 'c1/file.png', 30)).resolves.toBe('https://signed.test');
     expect(createSignedUrl).toHaveBeenLastCalledWith('c1/file.png', 30);
@@ -148,6 +150,8 @@ describe('usage limits facade', () => {
       extra_users: 2, extra_branches: 1, extra_storage_gb: 1,
     });
     await expect(getCompanyLimits('c1')).resolves.toMatchObject({ planCode: 'pro', max_users: 3, max_clients: null });
+    getCompanyPlanLimits.mockResolvedValueOnce({ planCode: 'x', max_users: 1, max_clients: undefined, max_suppliers: undefined, max_employees: undefined, max_projects: undefined, max_invoices_per_month: null, max_quotations_per_month: null, max_storage_mb: 0, features_modules: {}, extra_users: 0, extra_branches: 0, extra_storage_gb: 0 });
+    await expect(getCompanyLimits('x')).resolves.toMatchObject({ max_clients: null, max_suppliers: null, max_employees: null, max_projects: null });
     getCompanyPlanLimits.mockResolvedValueOnce(null);
     await expect(getCompanyLimits('new')).resolves.toMatchObject({ planCode: null, max_users: 1, max_invoices_per_month: 100 });
   });
@@ -186,6 +190,9 @@ describe('subscription helpers', () => {
   });
 
   test('requires an existing non-expired subscription', async () => {
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 30);
+    subscriptionSingle.mockResolvedValueOnce({ data: { id: 'ok', company_id: 'c', plan_id: null, plan_code: 'pro', status: 'active', start_date: '2026-01-01', end_date: tomorrow.toISOString().slice(0, 10) }, error: null });
+    await expect(requireActiveSubscription('c')).resolves.toBeUndefined();
     subscriptionSingle.mockResolvedValueOnce({ data: null, error: {} });
     await expect(requireActiveSubscription('missing')).rejects.toThrow('لا يوجد اشتراك فعال');
     subscriptionSingle.mockResolvedValueOnce({ data: {

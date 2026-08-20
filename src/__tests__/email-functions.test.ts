@@ -49,6 +49,9 @@ describe('email delivery functions', () => {
     await expect(module.sendEmail('to@test.com', 'S', '<p>H</p>')).resolves.toBe(true);
     expect(createTransport).toHaveBeenCalledWith(expect.objectContaining({ host: 'smtp.test', port: 465, secure: true, requireTLS: false }));
     expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ from: 'App <from@test.com>', to: 'to@test.com' }));
+    sendMail.mockResolvedValueOnce({ messageId: 'm2' });
+    await expect(module.sendEmail('second@test.com', 'S2', 'H2')).resolves.toBe(true);
+    expect(createTransport).toHaveBeenCalledTimes(1);
 
     sendMail.mockRejectedValueOnce(new Error('smtp down'));
     module = await loadEmail({ SMTP_HOST: 'smtp.test', SMTP_PORT: '587', SMTP_USER: 'u', SMTP_PASS: 'p' });

@@ -37,7 +37,7 @@ function parseMoney(value: unknown): number | null | undefined {
   return number;
 }
 
-function parseInteger(value: unknown, nullable = true): number | null | undefined {
+function parseInteger(value: unknown, nullable: boolean): number | null | undefined {
   if (value === null || value === '') return nullable ? null : undefined;
   if (typeof value !== 'number' && typeof value !== 'string') return undefined;
   if (typeof value === 'string' && !/^\d+$/.test(value.trim())) return undefined;
