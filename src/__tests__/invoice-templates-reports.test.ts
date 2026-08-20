@@ -155,6 +155,10 @@ describe('Invoice Templates & ZATCA classification logic', () => {
     const b2cInv = { client_tax_number: null };
     const b2cResult = resolveInvoiceTitle(b2cInv, 'auto');
     expect(b2cResult.titleAr).toBe('فاتورة ضريبية مبسطة');
+    expect(resolveInvoiceTitle({ client_commercial_registration: 'CR' }, 'auto').isSimplified).toBe(false);
+    expect(resolveInvoiceTitle({ contacts: { tax_number: 'VAT' } }, 'auto').isSimplified).toBe(false);
+    expect(resolveInvoiceTitle({ contacts: { commercial_registration: 'CR' } }, 'auto').isSimplified).toBe(false);
+    expect(resolveInvoiceTitle(null, 'auto').isSimplified).toBe(true);
     expect(b2cResult.isSimplified).toBe(true);
 
     // Explicit standard override

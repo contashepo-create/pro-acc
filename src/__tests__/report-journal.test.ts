@@ -70,6 +70,37 @@ function fakeSupabase(tables: Record<string, any[]>) {
 }
 
 describe('report loaders enforce posted history', () => {
+  const scriptedSupabase = (responses: Array<{ data: any[] | null; error: any }>) => ({
+    from: () => {
+      const query: any = {
+        select: () => query, eq: () => query, in: () => query, or: () => query, is: () => query,
+        gte: () => query, lte: () => query, order: () => query, range: () => query,
+        then: (resolve: any, reject: any) => Promise.resolve(responses.shift() || { data: [], error: null }).then(resolve, reject),
+      };
+      return query;
+    },
+  });
+
+  test('falls back for legacy missing columns, paginates, and surfaces fatal account errors', async () => {
+    const thousand = Array.from({ length: 1000 }, (_, id) => ({ id: String(id) }));
+    const legacy = scriptedSupabase([
+      { data: null, error: { message: 'column is_header 42703' } },
+      { data: thousand, error: null }, { data: [{ id: 'last' }], error: null },
+    ]);
+    expect(await loadReportAccounts(legacy, 'c1')).toHaveLength(1001);
+    const fatal = scriptedSupabase([{ data: null, error: new Error('fatal') }]);
+    await expect(loadReportAccounts(fatal, 'c1')).rejects.toThrow('fatal');
+  });
+
+  test('falls back for legacy journal deletion column and surfaces fatal errors', async () => {
+    const legacy = scriptedSupabase([
+      { data: null, error: { message: 'deleted_at missing' } },
+      { data: [{ id: 'j1' }], error: null },
+    ]);
+    await expect(loadReportJournalEntries(legacy, 'c1', { from: '2026-01-01', to: '2026-12-31' })).resolves.toEqual([{ id: 'j1' }]);
+    await expect(loadReportJournalEntries(scriptedSupabase([{ data: null, error: new Error('fatal') }]), 'c1')).rejects.toThrow('fatal');
+  });
+
   test('retains inactive accounts because deactivation cannot erase history', async () => {
     const db = fakeSupabase({
       accounts: [
@@ -90,6 +121,14 @@ describe('report loaders enforce posted history', () => {
     const lines = await loadReportJournalLines(db, 'c1', ['j1']);
     expect(lines.map((line) => line.id)).toEqual(['l1']);
     expect(await loadReportJournalLines(db, 'c1', [])).toEqual([]);
+  });
+
+  test('paginates line chunks and surfaces line query errors', async () => {
+    const thousand = Array.from({ length: 1000 }, (_, id) => ({ id }));
+    const paged = scriptedSupabase([{ data: thousand, error: null }, { data: [{ id: 1000 }], error: null }]);
+    expect(await loadReportJournalLines(paged, 'c1', ['j1'])).toHaveLength(1001);
+    const failed = scriptedSupabase([{ data: null, error: new Error('lines') }]);
+    await expect(loadReportJournalLines(failed, 'c1', ['j1'])).rejects.toThrow('lines');
   });
 
   test('excludes drafts and deleted journals but keeps a reversed source beside its reversal', async () => {

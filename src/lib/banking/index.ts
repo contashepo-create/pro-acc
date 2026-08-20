@@ -47,7 +47,8 @@ export function parseOFX(ofxContent: string): BankTransaction[] {
 
     const getAmount = () => {
       const m = block.match(/<TRNAMT>([^<]+)/);
-      return m ? parseFloat(m[1].trim()) : 0;
+      const parsed = m ? parseFloat(m[1].trim()) : 0;
+      return Number.isFinite(parsed) ? parsed : 0;
     };
 
     const getDescription = () => {

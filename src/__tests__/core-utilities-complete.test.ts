@@ -121,11 +121,16 @@ describe('bank statement parsers and matching', () => {
     expect(parseCSV('h1,h2,h3\na,b')).toEqual([]);
   });
 
-  test('auto-detects each statement format and honors explicit format', () => {
+  test('covers malformed/optional parser fields and every explicit format branch', () => {
+    const sparseOfx = '<STMTTRN><DTPOSTED>bad<TRNAMT>oops<MEMO>memo only</STMTTRN>';
+    expect(parseOFX(sparseOfx)[0]).toMatchObject({ date: 'bad', amount: 0, description: 'memo only', reference: undefined, type: 'credit' });
+    expect(parseCSV('a,b\nshort,row')).toEqual([]);
+    expect(parseCSV('d,a,x\n2026-01-01,abc,desc')[0]).toMatchObject({ amount: 0, type: 'credit' });
+    expect(parseMT940(':20:X\n:61:260820RC10,00\n:61:260821RD5,00')).toHaveLength(2);
     expect(parseBankStatement(ofx)[0].bankRef).toBe('abc-1');
-    expect(parseBankStatement(mt940)).toHaveLength(2);
-    expect(parseBankStatement(csv)).toHaveLength(2);
+    expect(parseBankStatement(mt940, 'mt940')).toHaveLength(2);
     expect(parseBankStatement(csv, 'csv')).toHaveLength(2);
+    expect(parseBankStatement(csv, 'invalid' as any)).toEqual([]);
   });
 
   test('reconciles by correct debit/credit side, amount, date and words', () => {
@@ -159,7 +164,7 @@ describe('branding, localization, themes and gantt helpers', () => {
     expect(generateInvoiceHeader(branding)).toContain('linear-gradient');
     expect(generateInvoiceHeader({ ...branding, invoiceTemplate: 'classic' })).toContain('background: #112233');
     expect(generateInvoiceHeader({ ...branding, invoiceTemplate: 'minimal', logoUrl: null, footerText: '' })).toContain('color: #1f2937');
-    const malicious = generateInvoiceHeader({ ...branding, companyName: '<script>alert(1)</script>', footerText: '<img onerror=1>' });
+    const malicious = generateInvoiceHeader({ ...branding, primaryColor: 'red;position:fixed', secondaryColor: 'bad', companyName: '<script>alert(1)</script>', footerText: '<img onerror=1>' });
     expect(malicious).not.toContain('<script>');
     expect(malicious).not.toContain('<img onerror');
     expect(Object.keys(INVOICE_TEMPLATES)).toEqual(['modern', 'classic', 'minimal']);
@@ -174,6 +179,10 @@ describe('branding, localization, themes and gantt helpers', () => {
     expect(i18nCurrency(12.5, 'en', 'USD')).toContain('$12.50');
     expect(i18nDate(new Date(2026, 7, 20), 'en')).toContain('2026');
     expect(formatNumber(1234, 'en')).toBe('1,234');
+    expect(t('common.save', 'xx' as any)).toBe('حفظ');
+    expect(i18nCurrency(12.5)).toContain('١٢٫٥٠');
+    expect(i18nDate('2026-08-20')).toBeTruthy();
+    expect(formatNumber(1234)).toContain('١');
   });
 
   test('returns requested/fallback themes with complete variants', () => {
