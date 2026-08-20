@@ -494,12 +494,12 @@ export default function InvoicesPage() {
                   )}
                   <div className="flex justify-between items-center pt-2 border-t border-border">
                     <span className="text-text-secondary">المجموع الفرعي</span>
-                    <span className="font-bold text-text-primary text-lg">{formatCurrency(subtotal)}</span>
+                    <span className="font-bold text-text-primary text-lg" data-testid="invoice-subtotal">{formatCurrency(subtotal)}</span>
                   </div>
                   {form.vat_enabled && (
                     <div className="flex justify-between items-center">
                       <span className="text-text-secondary">ضريبة القيمة المضافة (15%)</span>
-                      <span className="font-bold text-text-primary">{formatCurrency(vatAmount)}</span>
+                      <span className="font-bold text-text-primary" data-testid="invoice-vat">{formatCurrency(vatAmount)}</span>
                     </div>
                   )}
                 </div>
@@ -508,7 +508,7 @@ export default function InvoicesPage() {
                 <div className="bg-accent/10 border border-accent/20 rounded-xl p-4">
                   <div className="flex justify-between items-center">
                     <span className="text-text-secondary text-sm">الإجمالي النهائي</span>
-                    <span className="text-2xl font-bold text-accent">{formatCurrency(total)}</span>
+                    <span className="text-2xl font-bold text-accent" data-testid="invoice-total">{formatCurrency(total)}</span>
                   </div>
                 </div>
 

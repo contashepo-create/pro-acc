@@ -12,7 +12,7 @@ Before writing this plan, the actual codebase was inspected. Here's what already
 
 | Area | Coverage |
 |------|----------|
-| Unit/integration tests | **917 tests across 99 suites**, all passing |
+| Unit/integration tests | **1102 tests across 107 suites**, all passing |
 | API surface guard | `api-surface-guard.test.ts` — statically walks all route files and enforces every tenant route filters by `company_id` (critical because `service_role` bypasses RLS) |
 | ZATCA QR/TLV tests | `zatca.test.ts`, `zatca-qr-branches.test.ts`, **`golden-zatca-qr.test.ts`** *(new)* |
 | SQL-level VAT golden tests | **`golden-invoice-vat-sql.db.test.ts`** *(new)* — runs `create_sales_invoice_atomic()` in a real PGlite Postgres with all 75 migrations applied |
@@ -280,13 +280,42 @@ These are already covered and working:
 
 ## Files Added in This Plan
 
-| File | Purpose | Run with |
-|------|---------|----------|
-| `src/__tests__/golden-zatca-qr.test.ts` | Independent QR TLV verification (4 tests) | `npm test` |
-| `src/__tests__/golden-invoice-vat-sql.db.test.ts` | Real SQL VAT calculation verification (6 tests) | `npm run test:db` |
-| `src/__tests__/helpers/pglite-schema.ts` | Reusable PGlite full-schema bootstrap helper | (imported by db tests) |
-| `docs/PRE_LAUNCH_TESTING_PLAN.md` | This document | — |
+### Jest Tests (all passing)
 
-Config changes:
+| File | Tests | Purpose |
+|------|-------|---------|
+| `golden-zatca-qr.test.ts` | 4 | Independent QR TLV verification (byte-for-byte) |
+| `golden-invoice-vat-sql.db.test.ts` | 6 | Real SQL VAT calculation via PGlite |
+| `document-number.test.ts` | 22 | All doc type prefixes, padding, edge cases |
+| `csv-export.test.ts` | 15 | OWASP formula injection defense |
+| `safe-input.test.ts` | 32 | Path traversal, URL validation, file magic bytes, polyglot defense |
+| `webhook-guard.test.ts` | 12 | Fail-closed production, fail-open dev, timing-safe |
+| `ubl-builder.test.ts` | 25 | UBL XML structure, escaping/anti-XSS, financial consistency |
+| `account-resolve.test.ts` | 14 | Header account detection, cash/bank code matching |
+| `custody-validation.test.ts` | 25 | All custody Zod schemas, money enforcement, strict mode |
+| `communication-validation.test.ts` | 40 | Approval, telegram, push, complaint schemas |
+| **Total new Jest tests** | **195** | |
+
+### Playwright E2E Tests (ready to run against staging)
+
+| File | Purpose |
+|------|---------|
+| `e2e/helpers.ts` | Login, registration, navigation helpers |
+| `e2e/auth.spec.ts` | Login/register flows, RTL, validation |
+| `e2e/invoice-lifecycle.spec.ts` | Create → save → view → print → ZATCA QR |
+| `e2e/tenant-isolation.spec.ts` | Cross-company data leak prevention |
+| `e2e/rbac-ui.spec.ts` | UI-level role enforcement |
+| `e2e/no-console-errors.spec.ts` | Smoke test across 10 critical pages |
+
+### Helpers & Config
+
+| File | Purpose |
+|------|---------|
+| `helpers/pglite-schema.ts` | Reusable PGlite full-schema bootstrap |
+| `playwright.config.ts` | Playwright configuration |
+
+### Config changes
 - `jest.config.js` — added `testPathIgnorePatterns: ['\\.db\\.test\\.ts$']`
-- `package.json` — added `test:db` script
+- `package.json` — added `test:db`, `test:e2e`, `test:e2e:headed` scripts
+- `invoices/page.tsx` — added `data-testid` for subtotal/VAT/total
+- `@playwright/test` — added as devDependency
