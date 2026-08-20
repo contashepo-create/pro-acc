@@ -5,12 +5,14 @@ import { validateOverheadRule } from '@/lib/project-overhead';
 
 const sb = () => getSupabase();
 const ROW_COLUMNS = 'id, name, allocation_basis, rate, is_active, created_at, updated_at';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** PUT /api/projects/overhead/[id] — update a rule. */
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireRole(req, ['admin', 'manager']);
     const { id } = await params;
+    if (!UUID_RE.test(id)) return error('معرّف القاعدة غير صالح', 400);
     const body = await parseBody(req);
     const check = validateOverheadRule(body);
     if (typeof check === 'string') return error(check);
@@ -37,6 +39,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   try {
     const auth = await requireRole(req, ['admin', 'manager']);
     const { id } = await params;
+    if (!UUID_RE.test(id)) return error('معرّف القاعدة غير صالح', 400);
     const { data, error: err } = await sb().from('overhead_allocations')
       .delete().eq('id', id).eq('company_id', auth.companyId)
       .select('id').maybeSingle();
