@@ -328,6 +328,58 @@
 }
 
 /* ============================================================
+   ZEROCOLD DEVELOPER PANEL — always-dark professional theme
+   The zerocold pages are built around a dark palette (light accent
+   text on dark translucent chips). Scoping the dark variables to this
+   shell guarantees those colours are ALWAYS legible and consistent,
+   independent of the main app's light/dark setting.
+   ============================================================ */
+.zerocold-shell {
+  color-scheme: dark;
+  --color-bg-primary: #0b0d14;
+  --color-bg-secondary: #141826;
+  --color-bg-tertiary: #1d2336;
+  --color-bg-card: #11141f;
+  --color-bg-hover: #1b2132;
+  --color-bg-elevated: #161a28;
+  --color-text-primary: #f2f3f7;
+  --color-text-secondary: #c6cad9;
+  --color-text-muted: #8d93ab;
+  --color-text-inverse: #0b0d14;
+  --color-accent: #f59e0b;
+  --color-accent-hover: #d97706;
+  --color-accent-light: rgba(245, 158, 11, 0.14);
+  --color-accent-glow: rgba(245, 158, 11, 0.08);
+  --color-border: #262c40;
+  --color-border-light: #333a52;
+  --color-border-focus: #f59e0b;
+  --color-sidebar-bg: #0a0c12;
+  --color-sidebar-hover: #141826;
+  --color-sidebar-active: rgba(245, 158, 11, 0.12);
+  --color-header-bg: rgba(11, 13, 20, 0.9);
+  --color-success: #34d399;
+  --color-success-light: rgba(52, 211, 153, 0.14);
+  --color-warning: #fbbf24;
+  --color-warning-light: rgba(251, 191, 36, 0.14);
+  --color-danger: #f87171;
+  --color-danger-light: rgba(248, 113, 113, 0.14);
+  --color-info: #60a5fa;
+  --color-info-light: rgba(96, 165, 250, 0.14);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-dropdown: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+}
+/* Any dark-translucent chip (red/emerald/amber/...-950/XX) is invisible on a
+   light body; within the dark shell it stays correct. Ensure default tables,
+   inputs and scrollbars honour the shell colours too. */
+.zerocold-shell ::-webkit-scrollbar-track { background: transparent; }
+.zerocold-shell ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+.zerocold-shell ::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+.zerocold-shell input, .zerocold-shell select, .zerocold-shell textarea {
+  color-scheme: dark;
+}
+
+/* ============================================================
    BASE STYLES
    ============================================================ */
 * {
