@@ -80,8 +80,15 @@ export async function GET(
     const netInvoiced = invoicedNet - creditNoteAmount;
     const remaining = contractValue - netInvoiced;
     const outstanding = Math.max(0, invoicedGross - paidAmount);
-    const actualProfit = journal.revenue > 0 ? journal.profit : (netInvoiced - totalExpenses);
-    const profitMargin = netInvoiced > 0 ? (actualProfit / netInvoiced) * 100 : 0;
+    // Profit must be computed on a single, consistent basis. When the ledger
+    // holds any project activity, revenue and expenses both come from the
+    // ledger; otherwise (no posted project journal yet) fall back to the
+    // invoice-based revenue net of credit notes. Mixing invoice revenue with
+    // journal expenses produced inconsistent, non-comparable profit figures.
+    const hasJournalActivity = journal.revenue !== 0 || journal.expenses !== 0;
+    const revenueBasis = hasJournalActivity ? journal.revenue : netInvoiced;
+    const actualProfit = revenueBasis - totalExpenses;
+    const profitMargin = revenueBasis > 0 ? (actualProfit / revenueBasis) * 100 : 0;
     const completionPercent = contractValue > 0 ? (netInvoiced / contractValue) * 100 : 0;
 
     return success({

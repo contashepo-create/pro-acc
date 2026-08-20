@@ -25,6 +25,7 @@ function makeDb(db: Record<string, Row[]>) {
       in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
       neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
       not: () => api, gte: () => api, lte: () => api, or: () => api,
+      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
       order: () => api, limit: () => api, range: () => api,
       insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
       update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },

@@ -430,6 +430,7 @@ export const inventoryMovementSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
   notes: z.string().max(500).optional(),
   to_warehouse_id: z.string().uuid('مستودع الوجهة غير صالح').optional().nullable(),
+  project_id: z.string().uuid('رقم المشروع غير صالح').optional().nullable(),
 }).strict().refine(
   (m) => m.type === 'adjust' || m.type === 'adjustment' ? true : m.quantity > 0,
   { message: 'الكمية يجب أن تكون أكبر من صفر' }

@@ -13,6 +13,8 @@ export interface MovementInput {
   date?: string;
   notes?: string;
   to_warehouse_id?: string | null;
+  /** Optional project the movement is allocated to (e.g. materials issued to a project). */
+  project_id?: string | null;
 }
 
 export interface MovementResult {
@@ -51,6 +53,7 @@ export async function applyStockMovement(
     p_notes: input.notes || '',
     p_to_warehouse_id: input.to_warehouse_id || null,
     p_user_id: userId,
+    p_project_id: input.project_id || null,
   });
   if (error) {
     const message = String(error.message || '');

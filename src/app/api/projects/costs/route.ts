@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { deliveryUuid } from '@/lib/project-delivery-validation';
+import { classifyProjectCost, PROJECT_COST_CATEGORY_LABELS, type ProjectCostCategory } from '@/lib/project-cost-classifier';
 
 const sb = () => getSupabase();
 
@@ -9,10 +10,12 @@ const sb = () => getSupabase();
  * GET /api/projects/costs?projectId=
  * تحليل تكاليف/إيرادات مشروع من سطور القيد الموسومة بـ project_id.
  *
- * FIX: سابقاً كان يجمع السطور مرتين (مرة عبر journal_entries.project_id ومرة
- * عبر journal_lines.project_id مباشرة) فتتضخّم التكاليف، والاستعلام المباشر
- * لم يكن مقيداً بالشركة. الآن مصدر واحد مقيد بالشركة + التحقق من انتماء
- * المشروع للشركة.
+ * Integrity rules (matching the DB-side `get_project_account_totals`):
+ *  - Single source: `journal_lines.project_id` (tenant-scoped).
+ *  - Only lines whose journal entry is POSTED (or reversed) and NOT deleted
+ *    are included — draft/pending/deleted entries must never inflate costs.
+ *  - Cost accounts are categorized through the shared canonical classifier so
+ *    the breakdown matches the other profitability reports.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -30,11 +33,14 @@ export async function GET(request: NextRequest) {
     if (projectError) throw projectError;
     if (!project) return error('المشروع غير موجود', 404);
 
-    // مصدر واحد: سطور القيد الموسومة بـ project_id (مقيدة بالشركة)
+    // مصدر واحد: سطور القيد الموسومة بـ project_id (مقيدة بالشركة) عبر القيود
+    // المثبتة غير المحذوفة فقط، كما تفعل كل دوال التقارير المحاسبية الأخرى.
     const { data: lines, error: linesError } = await s.from('journal_lines')
-      .select('debit, credit, accounts(code, name, type)')
+      .select('debit, credit, journal_entries!inner(deleted_at, status, reversed_by), accounts(code, name, type)')
       .eq('project_id', projectId)
-      .eq('company_id', auth.companyId);
+      .eq('company_id', auth.companyId)
+      .or('journal_entries.status.eq.posted,journal_entries.reversed_by.not.is.null')
+      .is('journal_entries.deleted_at', null);
     if (linesError) throw linesError;
 
     const accountMap: Record<string, { code: string; name: string; type: string; total_debit: number; total_credit: number }> = {};
@@ -60,24 +66,21 @@ export async function GET(request: NextRequest) {
 
     const expenseRows = Object.values(accountMap).sort((a, b) => a.code.localeCompare(b.code));
 
-    const categories: Record<string, { code: string; name: string; total: number; items: any[] }> = {
-      materials: { code: '5110', name: 'المواد', total: 0, items: [] },
-      labor: { code: '5210', name: 'العمالة', total: 0, items: [] },
-      subcontractor: { code: '2150', name: 'مقاولين باطن', total: 0, items: [] },
-      equipment: { code: '5200', name: 'معدات', total: 0, items: [] },
-      other: { code: '5000', name: 'مصروفات أخرى', total: 0, items: [] },
+    const categories: Record<ProjectCostCategory, { code: string; name: string; total: number; items: any[] }> = {
+      materials: { code: '5110', name: PROJECT_COST_CATEGORY_LABELS.materials, total: 0, items: [] },
+      labor: { code: '5120', name: PROJECT_COST_CATEGORY_LABELS.labor, total: 0, items: [] },
+      subcontractor: { code: '5130', name: PROJECT_COST_CATEGORY_LABELS.subcontractor, total: 0, items: [] },
+      equipment: { code: '5140', name: PROJECT_COST_CATEGORY_LABELS.equipment, total: 0, items: [] },
+      other: { code: '5400', name: PROJECT_COST_CATEGORY_LABELS.other, total: 0, items: [] },
     };
 
     for (const row of expenseRows) {
       const netAmount = row.total_debit - row.total_credit;
       if (netAmount === 0) continue;
       const item = { account_id: row.code, account_code: row.code, account_name: row.name, debit: row.total_debit, credit: row.total_credit, net: netAmount };
-      const code = row.code;
-      if (code.startsWith('511')) { categories.materials.total += netAmount; categories.materials.items.push(item); }
-      else if (code.startsWith('521') || code.startsWith('522')) { categories.labor.total += netAmount; categories.labor.items.push(item); }
-      else if (code.startsWith('215')) { categories.subcontractor.total += netAmount; categories.subcontractor.items.push(item); }
-      else if (code.startsWith('52') && !code.startsWith('521')) { categories.equipment.total += netAmount; categories.equipment.items.push(item); }
-      else if (row.type === 'expense') { categories.other.total += netAmount; categories.other.items.push(item); }
+      const category = classifyProjectCost(row.code);
+      categories[category].total += netAmount;
+      categories[category].items.push(item);
     }
 
     return success({

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { sumProjectJournal, sumProjectsJournal } from '@/lib/project-costs';
+import { classifyProjectCost, emptyProjectCostBucket } from '@/lib/project-cost-classifier';
 import { deliveryDate, deliveryUuid } from '@/lib/project-delivery-validation';
 
 const number = (value: unknown) => Number(value) || 0;
@@ -31,18 +32,17 @@ export async function GET(request: NextRequest) {
       ]);
       if (billingResult.error) throw billingResult.error;
       const billing = billingResult.data?.[0] || {};
-      const costs = { materials: 0, labor: 0, subcontractors: 0, equipment: 0, other: 0, total: journal.expenses };
+      const costs = emptyProjectCostBucket();
+      let total = 0;
       for (const account of journal.accounts) {
         if (account.type !== 'expense') continue;
         const net = account.debit - account.credit;
-        if (account.code.startsWith('511')) costs.materials += net;
-        else if (account.code.startsWith('521') || account.code.startsWith('522')) costs.labor += net;
-        else if (account.code.startsWith('513')) costs.subcontractors += net;
-        else if (account.code.startsWith('512')) costs.equipment += net;
-        else costs.other += net;
+        total += net;
+        costs[classifyProjectCost(account.code)] += net;
       }
+      const categorized = { ...costs, total };
       const revenue = journal.revenue;
-      const profit = revenue - costs.total;
+      const profit = revenue - categorized.total;
       const contractValue = number((project as any).contract_value);
       return success({
         project: {
@@ -52,12 +52,12 @@ export async function GET(request: NextRequest) {
         },
         financials: {
           revenue, invoice_revenue: number(billing.net_billed), credit_notes: number(billing.credits),
-          costs, profit, profit_margin: revenue ? (profit / revenue) * 100 : 0,
+          costs: categorized, profit, profit_margin: revenue ? (profit / revenue) * 100 : 0,
           contract_value: contractValue,
           completion_percent: contractValue ? (revenue / contractValue) * 100 : 0,
           remaining_value: contractValue - revenue,
         },
-        summary: { total_revenue: revenue, total_costs: costs.total, net_profit: profit, profit_margin: revenue ? (profit / revenue) * 100 : 0 },
+        summary: { total_revenue: revenue, total_costs: categorized.total, net_profit: profit, profit_margin: revenue ? (profit / revenue) * 100 : 0 },
         period: { from, to }, revenue_source: 'general_ledger',
       });
     }

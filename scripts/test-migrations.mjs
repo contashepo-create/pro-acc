@@ -453,6 +453,37 @@ async function smokePurchasingAndInventory(ids) {
     c,warehouse2.id,
   ])).rows[0].quantity),3);
 
+  // Project allocation: issuing material to an active project must tag the
+  // cost journal line (5100) and the transaction with project_id, so direct
+  // material costs flow into project profitability / WIP reports.
+  const invProject=(await db.query(`SELECT create_project_atomic($1,'Stock project',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c,u])).rows[0].result.id;
+  const foreignInvProject=(await db.query(`SELECT create_project_atomic($1,'Foreign stock project',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c2,u2])).rows[0].result.id;
+  // Re-add stock to source warehouse to have quantity to issue.
+  await db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'add',6,100,'2026-03-06','restock',NULL,$4)`,[
+    c,item.id,warehouse1.id,u,
+  ]);
+  const issueToProject=(await db.query(
+    `SELECT post_inventory_movement_atomic($1,$2,$3,'issue',4,NULL,'2026-03-06','materials for project',NULL,$4,$5) result`,
+    [c,item.id,warehouse1.id,u,invProject],
+  )).rows[0].result;
+  assert.equal(issueToProject.transaction.project_id,invProject);
+  const costLine=(await db.query(
+    `SELECT jl.project_id FROM journal_lines jl JOIN accounts a ON a.id=jl.account_id
+      WHERE jl.journal_entry_id=$1 AND a.code='5100' AND jl.company_id=$2`,
+    [issueToProject.journal_entry_id,c],
+  )).rows[0];
+  assert.equal(costLine.project_id,invProject);
+
+  // project_id is only valid for issue/return and for an active tenant project.
+  await assert.rejects(()=>db.query(
+    `SELECT post_inventory_movement_atomic($1,$2,$3,'add',1,1,'2026-03-06','wrong kind',NULL,$4,$5) result`,
+    [c,item.id,warehouse1.id,u,invProject],
+  ));
+  await assert.rejects(()=>db.query(
+    `SELECT post_inventory_movement_atomic($1,$2,$3,'issue',1,NULL,'2026-03-06','foreign project',NULL,$4,$5) result`,
+    [c,item.id,warehouse1.id,u,foreignInvProject],
+  ));
+
   await assert.rejects(()=>db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'add',1,1,'2026-03-05','cross tenant',NULL,$4)`,[
     c2,item.id,foreignWarehouse,u2,
   ]));

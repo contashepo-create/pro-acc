@@ -140,6 +140,7 @@ describe('atomic inventory movement boundary', () => {
     expect(mockDb.rpcCalls[0]).toEqual({ name: 'post_inventory_movement_atomic', params: {
       p_company_id: C1, p_item_id: ITEM, p_warehouse_id: W1, p_type: 'add', p_quantity: 5,
       p_unit_price: 120, p_date: '2026-08-01', p_notes: '', p_to_warehouse_id: null, p_user_id: 'u1',
+      p_project_id: null,
     } });
     expect(mockDb.calls.some((call) => ['journal_entries', 'inventory_items', 'inventory_transactions'].includes(call.table))).toBe(false);
   });
@@ -166,6 +167,20 @@ describe('atomic inventory movement boundary', () => {
     const response = await movementPOST(request(movement({ type: 'issue', quantity: 99 })));
     expect(response.status).toBe(400);
     expect(mockDb.calls.some((call) => ['journal_entries', 'inventory_items', 'inventory_transactions'].includes(call.table))).toBe(false);
+  });
+
+  test('a project allocation is passed through to the movement RPC', async () => {
+    const PROJECT = '00000000-0000-4000-8000-00000000ab01';
+    const response = await movementPOST(request(movement({ type: 'issue', project_id: PROJECT })));
+    expect(response.status).toBe(201);
+    expect(mockDb.rpcCalls[0].name).toBe('post_inventory_movement_atomic');
+    expect(mockDb.rpcCalls[0].params.p_project_id).toBe(PROJECT);
+  });
+
+  test('an invalid project id is rejected before the RPC', async () => {
+    const response = await movementPOST(request(movement({ project_id: 'not-a-uuid' })));
+    expect(response.status).toBe(400);
+    expect(mockDb.rpcCalls).toHaveLength(0);
   });
 });
 
