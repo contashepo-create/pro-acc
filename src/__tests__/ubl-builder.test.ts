@@ -155,8 +155,8 @@ describe('generateUBLInvoice', () => {
 
   test('defaults to SA country when not specified', () => {
     const data = validInvoiceData();
-    data.seller.address = {};
-    data.buyer.address = {};
+    data.seller.address = {} as any;
+    data.buyer.address = {} as any;
     const xml = generateUBLInvoice(data);
     expect(xml).toContain('<cbc:IdentificationCode>SA</cbc:IdentificationCode>');
   });

@@ -100,14 +100,14 @@ export async function createSchemaContext(): Promise<SchemaContext> {
     [JSON.stringify(COA_SEED)],
   );
 
-  const { company, user } = setupResult.rows[0].result;
+  const { company, user } = (setupResult.rows[0] as any).result;
 
   return {
     db,
     companyId: company.id,
     userId: user.id,
-    query: (sql, params) => db.query(sql, params),
-    exec: (sql) => db.exec(sql),
+    query: (sql: string, params?: any[]) => db.query(sql, params),
+    exec: (sql: string) => db.exec(sql).then(() => {}),
     close: () => db.close(),
   };
 }

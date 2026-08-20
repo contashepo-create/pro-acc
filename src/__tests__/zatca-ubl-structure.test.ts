@@ -210,10 +210,10 @@ describe('ZATCA UBL structural validation', () => {
   // ─── Simplified invoice variant ───
   test('simplified invoice (B2C) uses type name 0200000', () => {
     const simplified = makeStandardInvoice();
-    simplified.invoiceTypeName = '0200000';
+    (simplified as any).invoiceTypeName = '0200000';
     // Remove buyer VAT (simplified doesn't require it)
     delete (simplified.buyer as any).vatNumber;
-    const simplifiedXml = generateUBLInvoice(simplified);
+    const simplifiedXml = generateUBLInvoice(simplified as any);
     expect(simplifiedXml).toContain('name="0200000"');
   });
 });
