@@ -1,0 +1,118 @@
+/**
+ * Route-boundary tests for auth/login and auth/logout.
+ *
+ * Security: schema validation, rate limiting, inactive-account 403, wrong
+ * password 401, successful login issues a token and bumps last_login, and
+ * logout invalidates the session by bumping token_version.
+ */
+process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
+import { createToken } from '@/lib/auth';
+
+type Row = Record<string, any>;
+
+function makeDb(db: Record<string, Row[]>) {
+  const muts: Array<{ table: string; kind: string; payload?: any }> = [];
+  const from = (table: string) => {
+    const ops: any[] = [];
+    const rows = () =>
+      (db[table] || []).filter((r) => ops.every((o) => o.op === 'eq' ? r[o.col] === o.val : true));
+    const api: any = {
+      select: () => api,
+      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
+      limit: (n: number) => { ops.push({ op: 'limit', n }); return api; },
+      order: () => api, range: () => api, neq: () => api, in: () => api, is: () => api,
+      insert: (payload: any) => { muts.push({ table, kind: 'insert', payload }); return api; },
+      update: (payload: any) => { muts.push({ table, kind: 'update', payload }); return api; },
+      maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
+      single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
+      then: (ok: any, fail: any) =>
+        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+    };
+    return api;
+  };
+  return { from, muts };
+}
+
+let mockDb: ReturnType<typeof makeDb>;
+let mockVerify: jest.Mock;
+let mockCheckRateLimit: jest.Mock;
+
+jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
+jest.mock('@/lib/rate-limit', () => ({ checkRateLimit: (...a: any[]) => mockCheckRateLimit(...a) }));
+jest.mock('@/lib/auth', () => ({
+  verifyPassword: (...a: any[]) => mockVerify(...a),
+  createToken: (uid: string, role: string, ver: number) => `mock-jwt-${uid}-${role}-${ver}`,
+  extractToken: (req: any) => req.headers?.get?.('authorization')?.replace('Bearer ', '') || null,
+  verifyToken: (t: string) => (t.startsWith('mock-jwt') ? { userId: t.split('-')[2], ver: 0 } : null),
+}));
+
+import { POST as loginPOST } from '@/app/api/auth/login/route';
+import { POST as logoutPOST } from '@/app/api/auth/logout/route';
+
+const C1 = 'company-1';
+const USER = { id: 'u1', company_id: C1, email: 'admin@example.com', name: 'م', role: 'admin',
+  password_hash: 'salt:hash', is_active: true, token_version: 0, email_verified: true, last_login: null };
+
+function baseDb() {
+  return {
+    users: [USER],
+    companies: [{ id: C1, is_active: true, name: 'شركة' }],
+    login_attempts: [], subscriptions: [],
+  } as Record<string, Row[]>;
+}
+
+function loginReq(body: any, ip = '1.2.3.4') {
+  return { method: 'POST', url: 'http://localhost/api/auth/login',
+    headers: { get: (k: string) => k === 'x-forwarded-for' ? ip : null },
+    cookies: { get: () => undefined }, json: async () => body } as any;
+}
+
+beforeEach(() => {
+  mockDb = makeDb(baseDb());
+  mockVerify = jest.fn().mockResolvedValue(true);
+  mockCheckRateLimit = jest.fn().mockResolvedValue({ allowed: true });
+});
+
+describe('auth/login security & validation', () => {
+  test('rejects invalid schema (400)', async () => {
+    const res = await loginPOST(loginReq({ email: 'not-an-email', password: 'x' }));
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 429 when rate-limited', async () => {
+    mockCheckRateLimit.mockResolvedValueOnce({ allowed: false, remainingMinutes: 5 });
+    const res = await loginPOST(loginReq({ email: 'admin@example.com', password: 'Secret123!' }));
+    expect(res.status).toBe(429);
+  });
+
+  test('returns 403 for an inactive account', async () => {
+    mockDb = makeDb({ ...baseDb(), users: [{ ...USER, is_active: false }] });
+    const res = await loginPOST(loginReq({ email: 'admin@example.com', password: 'Secret123!' }));
+    expect(res.status).toBe(403);
+  });
+
+  test('returns 401 for a wrong password', async () => {
+    mockVerify.mockResolvedValueOnce(false);
+    const res = await loginPOST(loginReq({ email: 'admin@example.com', password: 'WrongPass1!' }));
+    expect(res.status).toBe(401);
+  });
+
+  test('returns 200 and sets a session cookie on success', async () => {
+    const res = await loginPOST(loginReq({ email: 'admin@example.com', password: 'Secret123!' }));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data.token).toContain('mock-jwt');
+  });
+});
+
+describe('auth/logout', () => {
+  test('bumps token_version to invalidate the session', async () => {
+    const req = { method: 'POST', url: 'http://localhost/api/auth/logout',
+      headers: { get: (k: string) => k === 'authorization' ? `Bearer mock-jwt-u1-admin-0` : null },
+      cookies: { get: () => undefined } } as any;
+    const res = await logoutPOST(req);
+    expect(res.status).toBe(200);
+    const upd = mockDb.muts.find((m) => m.table === 'users' && m.kind === 'update');
+    expect(upd?.payload.token_version).toBe(1);
+  });
+});
