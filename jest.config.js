@@ -47,9 +47,9 @@ module.exports = {
     // measured API baselines and are ratcheted upward as coverage grows.
     global: {
       statements: 37,
-      branches: 25,
-      functions: 44,
-      lines: 41,
+      branches: 26,
+      functions: 45,
+      lines: 42,
     },
   },
 };
