@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, requireApiAuth, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -12,7 +12,7 @@ export async function PUT(
     const auth = await requireModulePermission(request, 'timesheets', 'update');
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody(request);
     const { action } = body;
 
     // Handle clock out

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error } from '@/lib/api-helpers';
+import { success, error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
 import { sendAdminNotification, escapeTelegramHtml } from '@/lib/telegram';
@@ -11,7 +11,7 @@ import { sendAdminNotification, escapeTelegramHtml } from '@/lib/telegram';
 export async function POST(request: NextRequest) {
   try {
     const admin = await requireAdmin(request);
-    const body = await request.json().catch(() => ({})) as { masterPassword?: string };
+    const body = await parseBody<{ masterPassword?: string }>(request);
     if (!body.masterPassword) {
       return error('كلمة المرور الرئيسية مطلوبة', 401);
     }

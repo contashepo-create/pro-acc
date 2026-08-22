@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -35,7 +35,7 @@ export async function PUT(
     const auth = await requireManagerOrAbove(request);
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody(request);
 
     const { data: existing } = await s.from('transaction_categories')
       .select('id')

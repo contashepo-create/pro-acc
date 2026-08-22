@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { error } from '@/lib/api-helpers';
+import { error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
 
@@ -11,7 +11,7 @@ import { verifyMasterPassword, auditLog } from '@/lib/admin-auth';
 export async function POST(request: NextRequest) {
   try {
     const admin = await requireAdmin(request);
-    const body = await request.json().catch(() => ({})) as { masterPassword?: string };
+    const body = await parseBody<{ masterPassword?: string }>(request);
     if (!body.masterPassword) return error('كلمة المرور الرئيسية مطلوبة', 401);
     const valid = await verifyMasterPassword(admin.adminId, String(body.masterPassword));
     if (!valid) return error('كلمة المرور الرئيسية غير صحيحة', 401);

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
+import { success, error, notFound, requireApiAuth, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -29,7 +29,7 @@ export async function PUT(
     const auth = await requireModulePermission(request, 'fiscal', 'update');
     const { id } = await params;
     const s = sb();
-    const body = await request.json();
+    const body = await parseBody(request);
 
     const { data: existing } = await s.from('fiscal_years')
       .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
