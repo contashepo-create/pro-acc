@@ -283,9 +283,19 @@ export async function enforceRateLimit(request: Request, principal: string): Pro
   const method = (request?.method || 'GET').toUpperCase();
   const isWrite = !['GET', 'HEAD', 'OPTIONS'].includes(method);
   const limit = isWrite ? WRITE_LIMIT : READ_LIMIT;
-  const result = hitRateLimit(`${principal}:${isWrite ? 'w' : 'r'}`, limit);
-  if (!result.allowed) {
-    throw new RateLimitExceeded(result.retryAfterSeconds);
+  const key = `${principal}:${isWrite ? 'w' : 'r'}`;
+  // 1) Cheap local fast path: rejects floods on this instance instantly.
+  const local = hitRateLimit(key, limit);
+  if (!local.allowed) {
+    throw new RateLimitExceeded(local.retryAfterSeconds);
+  }
+  // 2) Authoritative shared budget (migration 077): one atomic row update the
+  //    whole fleet counts against, so per-instance Maps cannot be rotated
+  //    around on serverless. Fails open on store outage (see the module).
+  const { hitSharedRateLimit } = await import('@/lib/shared-rate-limit');
+  const shared = await hitSharedRateLimit(key, limit);
+  if (!shared.allowed) {
+    throw new RateLimitExceeded(shared.retryAfterSeconds);
   }
 }
 

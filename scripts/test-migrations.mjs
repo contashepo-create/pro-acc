@@ -2239,6 +2239,53 @@ async function smokeJournalImmutabilityAndBalance() {
   assert.equal((await db.query(`SELECT count(*)::int n FROM journal_entries WHERE id=$1`,[plain.id])).rows[0].n,0);
 }
 
+/**
+ * Migration 077: the shared atomic rate-limit store must enforce the
+ * distributed budget exactly — the in-memory limiter alone can be rotated
+ * around on serverless, so the DB share is what actually binds.
+ */
+async function smokeRateLimitStore() {
+  const key = 'smoke:tenant-a';
+  const key2 = 'smoke:tenant-b';
+  const key3 = 'smoke:concurrent';
+
+  // A budget of 3 is consumed exactly, then blocks with a positive retry.
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal((await db.query(`SELECT hit_rate_limit($1, 60000, 3) r`, [key])).rows[0].r.allowed, true);
+  }
+  const blocked = (await db.query(`SELECT hit_rate_limit($1, 60000, 3) r`, [key])).rows[0].r;
+  assert.equal(blocked.allowed, false);
+  assert.ok(Number(blocked.retry_after_seconds) >= 1);
+
+  // A different key keeps its own independent budget.
+  assert.equal((await db.query(`SELECT hit_rate_limit($1, 60000, 3) r`, [key2])).rows[0].r.allowed, true);
+
+  // The window rolls over: an aged window resets the counter.
+  await db.query(`UPDATE rate_limit_buckets SET window_start = NOW() - INTERVAL '2 minutes' WHERE key = $1`, [key]);
+  assert.equal((await db.query(`SELECT hit_rate_limit($1, 60000, 3) r`, [key])).rows[0].r.allowed, true);
+
+  // Concurrent hits on a fresh key with a budget of 5: exactly five pass —
+  // the ON CONFLICT row lock must serialize the read-modify-write even when
+  // the fleet hammers the same key at once.
+  const race = await Promise.allSettled(Array.from({ length: 10 }, (_, i) =>
+    db.withConnection((conn) => conn.query(`SELECT hit_rate_limit($1, 60000, 5) r`, [key3]))
+      .then((q) => q.rows[0].r.allowed)));
+  const allowed = race.filter((x) => x.status === 'fulfilled' && x.value).length;
+  assert.equal(allowed, 5, 'concurrent hits must never over-allocate the shared budget');
+
+  // Invalid parameters are rejected up front.
+  await assert.rejects(() => db.query(`SELECT hit_rate_limit(NULL, 60000, 3)`));
+  await assert.rejects(() => db.query(`SELECT hit_rate_limit('smoke:x', 100, 3)`));
+  await assert.rejects(() => db.query(`SELECT hit_rate_limit('smoke:x', 60000, 0)`));
+
+  // Pruning removes stale buckets and keeps fresh ones.
+  await db.query(`UPDATE rate_limit_buckets SET window_start = NOW() - INTERVAL '1 hour' WHERE key = $1`, [key2]);
+  assert.ok(Number((await db.query(`SELECT prune_rate_limit_buckets(600000) n`)).rows[0].n) >= 1);
+  assert.equal((await db.query(`SELECT count(*)::int n FROM rate_limit_buckets WHERE key = $1`, [key2])).rows[0].n, 0);
+  assert.equal((await db.query(`SELECT count(*)::int n FROM rate_limit_buckets WHERE key = $1`, [key3])).rows[0].n, 1);
+  await assert.rejects(() => db.query(`SELECT prune_rate_limit_buckets(100)`));
+}
+
 try {
   await applyMigrations();
   await smokeInitialSetup();
@@ -2257,6 +2304,7 @@ try {
   await smokeTelegramApprovalActorFallback();
   await smokeFiscalYearControls();
   await smokeJournalImmutabilityAndBalance();
+  await smokeRateLimitStore();
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
   await db.close();

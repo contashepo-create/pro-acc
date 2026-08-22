@@ -2,6 +2,10 @@
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
 import { getContactBalance, getContactBalances } from '@/lib/contact-utils';
 

@@ -15,6 +15,10 @@
  *    registered before the secret-token scheme (no header at all) so that
  *    inline approval buttons never die silently for legacy deployments.
  */
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { randomBytes } from 'crypto';
 
 // Generated per run rather than written as literals: hardcoded credential

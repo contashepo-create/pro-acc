@@ -4,6 +4,7 @@ const getCompanySubscription = jest.fn();
 const assertSubscriptionAccess = jest.fn(async () => undefined);
 const hasModulePermission = jest.fn(async () => true);
 const hitRateLimit = jest.fn(() => ({ allowed: true, retryAfterSeconds: 0 }));
+const hitSharedRateLimit = jest.fn(async () => ({ allowed: true, retryAfterSeconds: 0 }));
 let userResult: any = { data: { company_id: 'c1', is_active: true, role: 'admin', token_version: 0 }, error: null };
 let companyResult: any = { data: { is_active: true }, error: null };
 
@@ -20,6 +21,7 @@ jest.mock('@/lib/subscription', () => ({ getCompanySubscription }));
 jest.mock('@/lib/subscription-guard', () => ({ assertSubscriptionAccess }));
 jest.mock('@/lib/permissions', () => ({ hasModulePermission }));
 jest.mock('@/lib/memory-rate-limit', () => ({ hitRateLimit, READ_LIMIT: 100, WRITE_LIMIT: 20 }));
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit }));
 
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
@@ -189,10 +191,18 @@ describe('remaining API helper functions', () => {
   });
 
   test('covers rate-limit, body, csrf and pagination edge branches', async () => {
+    // Local fast path allows -> the shared (DB) budget is consulted and allows.
     hitRateLimit.mockReturnValueOnce({ allowed: true, retryAfterSeconds: 0 });
+    hitSharedRateLimit.mockResolvedValueOnce({ allowed: true, retryAfterSeconds: 0 });
     await expect(enforceRateLimit(null as any, 'u')).resolves.toBeUndefined();
+    // Local fast path blocks -> rejected before the shared store is touched.
     hitRateLimit.mockReturnValueOnce({ allowed: false, retryAfterSeconds: 9 });
     await expect(enforceRateLimit(request('POST'), 'u')).rejects.toBeInstanceOf(RateLimitExceeded);
+    // Local allows but the authoritative shared budget blocks -> 429 with the
+    // shared store's retry-after.
+    hitRateLimit.mockReturnValueOnce({ allowed: true, retryAfterSeconds: 0 });
+    hitSharedRateLimit.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 11 });
+    await expect(enforceRateLimit(request('POST'), 'u')).rejects.toMatchObject({ retryAfterSeconds: 11 });
     for (const value of [null, [], 'x']) await expect(parseBody(request('POST', value))).rejects.toBeInstanceOf(ValidationFailure);
     const oldBypass = process.env.CSRF_BYPASS; process.env.CSRF_BYPASS = 'true';
     expect(() => requireCsrf({ ...request('POST'), headers: new Headers() })).not.toThrow();

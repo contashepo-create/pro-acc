@@ -37,6 +37,10 @@ jest.mock('../lib/supabase-client', () => ({
   }),
 }));
 
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { requireRole, requireAdmin, requireManagerOrAbove, requireAccountantOrAbove, AuthError } from '../lib/api-helpers';
 
 const mockRequest = {} as Request;
