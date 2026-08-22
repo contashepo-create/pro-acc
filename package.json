@@ -21,6 +21,8 @@
     "audit:db": "MIGRATION_DRIVER=postgres node scripts/audit-live-db.mjs",
     "schema:generate": "node scripts/generate-full-schema.mjs",
     "test:db": "NODE_OPTIONS=\"--experimental-vm-modules\" jest --testMatch=\"**/*.db.test.ts\" --testPathIgnorePatterns=\"[]\" --verbose",
+    "test:ui": "jest -c jest.ui.config.js --runInBand",
+    "test:ui:coverage": "jest -c jest.ui.config.js --runInBand --coverage",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed"
   },
