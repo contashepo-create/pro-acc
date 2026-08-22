@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -53,7 +53,7 @@ export async function PUT(request: NextRequest) {
     // (الاسم/الرقم الضريبي/نسبة الضريبة) يتطلبها مدير نظام. سابقاً كان أي
     // مستخدم مصادَق (حتى supervisor) يستطيع تغيير vat_rate/tax_number.
     const auth = await requireManagerOrAbove(request);
-    const body = await request.json();
+    const body = await parseBody(request);
     const s = sb();
 
     // Save settings key-value pairs (operational preferences — manager+).

@@ -85,6 +85,11 @@
 --   073-project-no-auto-invoice.sql
 --   074-voucher-auto-settlement.sql
 --   075-purchase-invoice-other-expenses.sql
+--   076-lock-down-audit-tables-and-helper.sql
+--   077-lock-down-internal-trigger-functions.sql
+--   078-server-only-public-schema-privileges.sql
+--   079-server-only-function-privileges.sql
+--   080-remove-duplicate-indexes.sql
 -- ============================================================================
 
 
@@ -19789,4 +19794,148 @@ $$;
 
 REVOKE ALL ON FUNCTION public.create_purchase_invoice_atomic(UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.create_purchase_invoice_atomic(UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 076-lock-down-audit-tables-and-helper.sql
+-- ----------------------------------------------------------------------------
+
+-- 076: Lock down platform/audit tables and an internal SECURITY DEFINER helper.
+--
+-- Supabase applies broad default table grants to API roles when tables are
+-- created. RLS blocks ordinary row operations, but TRUNCATE does not invoke
+-- RLS, so platform-only tables must also have their table privileges revoked.
+-- The expense-account resolver is an internal helper called only by the
+-- service-role purchase-invoice RPC and must not be executable through the
+-- public PostgREST roles.
+
+REVOKE ALL PRIVILEGES ON TABLE public.global_backup_journal
+  FROM PUBLIC, anon, authenticated;
+REVOKE ALL PRIVILEGES ON TABLE public.registration_attempts
+  FROM PUBLIC, anon, authenticated;
+
+GRANT ALL PRIVILEGES ON TABLE public.global_backup_journal TO service_role;
+GRANT ALL PRIVILEGES ON TABLE public.registration_attempts TO service_role;
+
+REVOKE ALL ON FUNCTION public.resolve_other_expense_account(UUID, TEXT, UUID)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.resolve_other_expense_account(UUID, TEXT, UUID)
+  TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 077-lock-down-internal-trigger-functions.sql
+-- ----------------------------------------------------------------------------
+
+-- 077: Internal trigger functions must not be directly executable by API roles.
+-- Revoking direct EXECUTE does not disable their attached triggers.
+
+REVOKE ALL ON FUNCTION public.bootstrap_company_fiscal_year()
+  FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.guard_salary_item_project_tenant()
+  FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.touch_overhead_allocation()
+  FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.bootstrap_company_fiscal_year() TO service_role;
+GRANT EXECUTE ON FUNCTION public.guard_salary_item_project_tenant() TO service_role;
+GRANT EXECUTE ON FUNCTION public.touch_overhead_allocation() TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 078-server-only-public-schema-privileges.sql
+-- ----------------------------------------------------------------------------
+
+-- 078: The application is server-only with respect to PostgreSQL/Supabase.
+-- Browser code never queries public tables directly; every request passes
+-- through authenticated API routes using service_role. Remove Supabase's broad
+-- API-role grants (including TRUNCATE, which bypasses RLS) and prevent them
+-- from returning on objects created by later migrations.
+
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public
+  FROM anon, authenticated;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public
+  FROM anon, authenticated;
+
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT ALL ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT ALL ON SEQUENCES TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 079-server-only-function-privileges.sql
+-- ----------------------------------------------------------------------------
+
+-- 079: Keep the public RPC surface server-only.
+-- The browser never invokes PostgreSQL functions directly. API routes call
+-- them with service_role after application authentication/authorization.
+-- PostgreSQL grants EXECUTE on new functions to PUBLIC by default, so revoke
+-- both current and future grants from API roles and PUBLIC.
+
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT EXECUTE ON FUNCTIONS TO service_role;
+
+-- RLS policy expressions execute as the querying API role. This SECURITY
+-- INVOKER helper only reads that role's own request.jwt.claims GUC and is the
+-- sole intentional API-role function grant.
+GRANT EXECUTE ON FUNCTION public.tenant_company_id()
+  TO anon, authenticated, service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 080-remove-duplicate-indexes.sql
+-- ----------------------------------------------------------------------------
+
+-- 080: Remove identical indexes/UNIQUE constraints reported by the live
+-- Supabase performance advisor. Every removed object has an equivalent index
+-- or constraint that remains in place; no uniqueness guarantee is weakened.
+
+DROP INDEX IF EXISTS public.idx_activation_codes_code_unique;
+DROP INDEX IF EXISTS public.idx_ad_clicks_advertisement;
+DROP INDEX IF EXISTS public.idx_ad_views_advertisement;
+DROP INDEX IF EXISTS public.idx_company_telegram_company;
+
+ALTER TABLE public.custom_actions
+  DROP CONSTRAINT IF EXISTS custom_actions_company_id_code_key;
+
+DROP INDEX IF EXISTS public.idx_financial_audit_log_company;
+DROP INDEX IF EXISTS public.idx_financial_audit_log_table;
+
+ALTER TABLE public.invoice_sequences
+  DROP CONSTRAINT IF EXISTS invoice_sequences_company_id_year_key;
+ALTER TABLE public.journal_sequences
+  DROP CONSTRAINT IF EXISTS journal_sequences_company_id_year_key;
+
+DROP INDEX IF EXISTS public.idx_invoices_company_id;
+DROP INDEX IF EXISTS public.idx_journal_entries_company_id;
+
+ALTER TABLE public.journal_entries
+  DROP CONSTRAINT IF EXISTS journal_entries_company_id_number_key;
+
+DROP INDEX IF EXISTS public.idx_journal_lines_account_id;
+DROP INDEX IF EXISTS public.idx_journal_lines_journal_entry_id;
+
+ALTER TABLE public.purchase_invoices
+  DROP CONSTRAINT IF EXISTS purchase_invoices_company_id_number_key;
+ALTER TABLE public.purchase_orders
+  DROP CONSTRAINT IF EXISTS purchase_orders_company_id_number_key;
+ALTER TABLE public.quotations
+  DROP CONSTRAINT IF EXISTS quotations_company_id_number_key;
+
+DROP INDEX IF EXISTS public.idx_voucher_disbursements_company_id;
+ALTER TABLE public.voucher_disbursements
+  DROP CONSTRAINT IF EXISTS voucher_disbursements_company_id_number_key;
+
+DROP INDEX IF EXISTS public.idx_voucher_receipts_company_id;
+ALTER TABLE public.voucher_receipts
+  DROP CONSTRAINT IF EXISTS voucher_receipts_company_id_number_key;
 
