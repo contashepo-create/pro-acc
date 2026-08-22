@@ -271,6 +271,85 @@ async function smokePostedLedgerReports() {
   assert.ok(project2);
 }
 
+async function smokeProjectCostingAllocation() {
+  const c='74000000-0000-4000-8000-000000000001';
+  const u='74000000-0000-4000-8000-000000000002';
+  const c2='74000000-0000-4000-8000-000000000003';
+  const u2='74000000-0000-4000-8000-000000000004';
+  const asset='74000000-0000-4000-8000-000000000010';
+  const mat='74000000-0000-4000-8000-000000000011';
+  const labor='74000000-0000-4000-8000-000000000012';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Cost tenant'),($2,'Foreign tenant')`,[c,c2]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active) VALUES
+    ($1,$2,'cost-a@example.test','x','Cost A','admin',TRUE),
+    ($3,$4,'cost-b@example.test','x','Cost B','admin',TRUE)`,[u,c,u2,c2]);
+  await db.query(`INSERT INTO accounts(id,company_id,code,name,type,is_header) VALUES
+    ($1,$2,'1000','Cost cash','asset',FALSE),($3,$2,'5110','Materials','expense',FALSE),
+    ($4,$2,'5120','Direct labor','expense',FALSE)`,[asset,c,mat,labor]);
+  const project=(await db.query(`SELECT create_project_atomic($1,'Cost project',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c,u])).rows[0].result.id;
+  const foreignProject=(await db.query(`SELECT create_project_atomic($1,'Foreign project',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c2,u2])).rows[0].result.id;
+
+  // Post direct material + direct labour tagged to the project.
+  await db.query(`SELECT create_journal_entry($1,'2026-02-01','general','materials',$2,$3::jsonb)`,[
+    c,u,JSON.stringify([
+      {accountId:mat,debit:200,credit:0,projectId:project},
+      {accountId:asset,debit:0,credit:200,projectId:project},
+    ]),
+  ]);
+  await db.query(`SELECT create_journal_entry($1,'2026-02-01','general','labor',$2,$3::jsonb)`,[
+    c,u,JSON.stringify([
+      {accountId:labor,debit:100,credit:0,projectId:project},
+      {accountId:asset,debit:0,credit:100,projectId:project},
+    ]),
+  ]);
+
+  // Two overhead rules: 10% of direct cost + 20% of direct labor.
+  await db.query(`INSERT INTO overhead_allocations(company_id,name,allocation_basis,rate,is_active)
+    VALUES($1::uuid,'OH-cost','direct_cost',0.10,TRUE)`,[c]);
+  await db.query(`INSERT INTO overhead_allocations(company_id,name,allocation_basis,rate,is_active)
+    VALUES($1::uuid,'OH-labor','direct_labor',0.20,TRUE)`,[c]);
+  // Foreign tenant rule must be invisible to tenant c.
+  await db.query(`INSERT INTO overhead_allocations(company_id,name,allocation_basis,rate,is_active)
+    VALUES($1::uuid,'OH-foreign','direct_cost',0.99,TRUE)`,[c2]);
+
+  const row=(await db.query(`SELECT * FROM get_project_costing_overhead($1,ARRAY[$2]::uuid[])`,[c,project])).rows[0];
+  assert.equal(Number(row.direct_cost),300);          // 200 materials + 100 labor
+  assert.equal(Number(row.direct_labor),100);
+  // allocated = 0.10*300 + 0.20*100 = 30 + 20 = 50
+  assert.equal(Number(row.allocated_overhead),50);
+
+  const foreignRows=await db.query(`SELECT * FROM get_project_costing_overhead($1,ARRAY[$2]::uuid[])`,[c2,foreignProject]);
+  // foreign has no posted costs => no row; and tenant c's rules must not leak.
+  assert.equal(foreignRows.rows.length,0);
+
+  // Salary sheet with project allocation on an item.
+  const employeeId=(await db.query(`SELECT create_employee_atomic($1,'Cost worker','','',500,'','','2026-01-01',$2) result`,[
+    c,u,
+  ])).rows[0].result.id;
+  const sheet=(await db.query(`SELECT create_salary_sheet($1,'Cost payroll',2,2026,'2026-02-15',$2::jsonb) result`,[
+    c,JSON.stringify([{employee_id:employeeId,basic_salary:500,allowances:0,deductions:0,project_id:project}]),
+  ])).rows[0].result;
+  const savedItem=await db.query(`SELECT project_id FROM salary_items WHERE sheet_id=$1 AND company_id=$2`,[sheet.id,c]);
+  assert.equal(savedItem.rows[0].project_id,project);
+
+  // Reject a foreign project on a salary item.
+  await assert.rejects(()=>db.query(`SELECT create_salary_sheet($1,'Foreign payroll',2,2026,'2026-02-15',$2::jsonb)`,[
+    c,JSON.stringify([{employee_id:employeeId,basic_salary:100,allowances:0,deductions:0,project_id:foreignProject}]),
+  ]));
+
+  // Salary items reference a project that belongs to another tenant must be
+  // rejected by the guard trigger too.
+  await assert.rejects(()=>db.query(
+    `INSERT INTO salary_items(company_id,sheet_id,employee_id,basic_salary,allowances,deductions,net_pay,project_id)
+     VALUES($1,$2,$3,1,0,0,1,$4)`,[c,sheet.id,employeeId,foreignProject]));
+
+  // Clean up the salary sheet so a later global count assertion stays at zero.
+  await db.query(`SELECT delete_draft_salary_sheet($1,$2)`,[c,sheet.id]);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM salary_items WHERE company_id=$1`,[c])).rows[0].count),0);
+}
+
+
+
 async function smokeAdminEntitlements(ids) {
   const adminId='90000000-0000-4000-8000-000000000001';
   const inactiveAdmin='90000000-0000-4000-8000-000000000099';
@@ -452,6 +531,37 @@ async function smokePurchasingAndInventory(ids) {
   assert.equal(Number((await db.query(`SELECT quantity FROM inventory_items WHERE company_id=$1 AND warehouse_id=$2 AND code='RUNTIME-STEEL'`,[
     c,warehouse2.id,
   ])).rows[0].quantity),3);
+
+  // Project allocation: issuing material to an active project must tag the
+  // cost journal line (5100) and the transaction with project_id, so direct
+  // material costs flow into project profitability / WIP reports.
+  const invProject=(await db.query(`SELECT create_project_atomic($1,'Stock project',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c,u])).rows[0].result.id;
+  const foreignInvProject=(await db.query(`SELECT create_project_atomic($1,'Foreign stock project',NULL,1000,'2026-01-01',NULL,'active','','','[]'::jsonb,FALSE,$2) result`,[c2,u2])).rows[0].result.id;
+  // Re-add stock to source warehouse to have quantity to issue.
+  await db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'add',6,100,'2026-03-06','restock',NULL,$4)`,[
+    c,item.id,warehouse1.id,u,
+  ]);
+  const issueToProject=(await db.query(
+    `SELECT post_inventory_movement_atomic($1,$2,$3,'issue',4,NULL,'2026-03-06','materials for project',NULL,$4,$5) result`,
+    [c,item.id,warehouse1.id,u,invProject],
+  )).rows[0].result;
+  assert.equal(issueToProject.transaction.project_id,invProject);
+  const costLine=(await db.query(
+    `SELECT jl.project_id FROM journal_lines jl JOIN accounts a ON a.id=jl.account_id
+      WHERE jl.journal_entry_id=$1 AND a.code='5100' AND jl.company_id=$2`,
+    [issueToProject.journal_entry_id,c],
+  )).rows[0];
+  assert.equal(costLine.project_id,invProject);
+
+  // project_id is only valid for issue/return and for an active tenant project.
+  await assert.rejects(()=>db.query(
+    `SELECT post_inventory_movement_atomic($1,$2,$3,'add',1,1,'2026-03-06','wrong kind',NULL,$4,$5) result`,
+    [c,item.id,warehouse1.id,u,invProject],
+  ));
+  await assert.rejects(()=>db.query(
+    `SELECT post_inventory_movement_atomic($1,$2,$3,'issue',1,NULL,'2026-03-06','foreign project',NULL,$4,$5) result`,
+    [c,item.id,warehouse1.id,u,foreignInvProject],
+  ));
 
   await assert.rejects(()=>db.query(`SELECT post_inventory_movement_atomic($1,$2,$3,'add',1,1,'2026-03-05','cross tenant',NULL,$4)`,[
     c2,item.id,foreignWarehouse,u2,
@@ -813,8 +923,13 @@ async function smokeAtomicWriters(ids) {
   const atomicProject=(await db.query(`SELECT create_project_atomic($1,'Atomic project',$2,75,'2026-02-01',NULL,'active','','',$3::jsonb,TRUE,$4) result`,[
     c,contact,JSON.stringify([{description:'Project work',unit:'unit',quantity:1,unit_price:75}]),u,
   ])).rows[0].result;
-  assert.ok(atomicProject.invoice.id);
+  // A project is a reference: even when p_auto_invoice is passed TRUE, no
+  // invoice is created and no journal entry is posted (the app no longer
+  // sends auto_invoice at all). Only invoices move the client balance.
+  assert.equal(atomicProject.invoice,null);
   assert.equal(Number(atomicProject.boq_items_count),1);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM invoices WHERE company_id=$1 AND project_id=$2`,[c,atomicProject.id])).rows[0].count),0);
+  assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='invoice' AND reference_id IN (SELECT id FROM invoices WHERE company_id=$1 AND project_id=$2)`,[c,atomicProject.id])).rows[0].count),0);
   const progressClaim=(await db.query(`SELECT create_progress_billing_atomic($1,$2,'2026-02-03','','Claim',30,0.1,0.15,FALSE,$3) result`,[c,atomicProject.id,u])).rows[0].result;
   assert.ok(progressClaim.journal_entry_id);
   assert.equal(Number(progressClaim.retention_amount),3);
@@ -839,6 +954,28 @@ async function smokeAtomicWriters(ids) {
   ]);
   assert.equal(converted[0].rows[0].result.id,converted[1].rows[0].result.id);
   assert.equal((await db.query(`SELECT count(*)::int count FROM projects WHERE id=$1 AND company_id=$2`,[converted[0].rows[0].result.id,c])).rows[0].count,1);
+
+  // Purchase invoice with "other expenses" that are NOT owed to the supplier.
+  const otherExpenseInvoice=(await db.query(
+    `SELECT create_purchase_invoice_atomic($1,$2,NULL,NULL,NULL,TRUE,'2026-02-02',$3::jsonb,0,'other expense',$4,
+       $5::jsonb,$6) result`,
+    [c,contact,JSON.stringify([{description:'Goods',quantity:2,unit_price:100}]),u,
+     JSON.stringify([{description:'أجرة نقل',amount:50,account_code:'5100'},{description:'صيانة',amount:30,account_code:'5100'}]),a['1000']],
+  )).rows[0].result;
+  assert.equal(Number(otherExpenseInvoice.other_expenses_total),80);
+  // Supplier payable must equal only the items subtotal (200), not +80.
+  const otherExpenseInvRow=(await db.query(`SELECT total,other_expenses_total FROM purchase_invoices WHERE id=$1`,[otherExpenseInvoice.id])).rows[0];
+  assert.equal(Number(otherExpenseInvRow.total),200);
+  assert.equal(Number(otherExpenseInvRow.other_expenses_total),80);
+  // The other-expenses journal must balance and not touch the supplier AP.
+  const oeJournalId=otherExpenseInvoice.other_expenses_journal_entry_id;
+  const oeTotals=(await db.query(`SELECT COALESCE(sum(debit),0) d,COALESCE(sum(credit),0) c FROM journal_lines WHERE journal_entry_id=$1`,[oeJournalId])).rows[0];
+  assert.equal(Number(oeTotals.d),Number(oeTotals.c));
+  // Reject an invalid other-expense amount.
+  await assert.rejects(()=>db.query(
+    `SELECT create_purchase_invoice_atomic($1,$2,NULL,NULL,NULL,TRUE,'2026-02-02',$3::jsonb,0,'bad',$4,$5::jsonb,$6) result`,
+    [c,contact,JSON.stringify([{description:'Goods',quantity:1,unit_price:10}]),u,
+     JSON.stringify([{description:'x',amount:-5}]),b]));
 
   const machine=(await db.query(`SELECT create_fixed_asset($1,'Machine','A1','equipment','2026-02-01',500,5,'straight_line','','',$2,$3) result`, [c, b, u])).rows[0].result;
   const newBank=await db.query(`SELECT create_bank_safe($1,'New Bank','bank','123',500,$2) result`,[c,u]);
@@ -1041,6 +1178,28 @@ async function smokeAtomicWriters(ids) {
   const updatedDisbursement=(await db.query(`SELECT update_voucher_disbursement_atomic($1,$2,NULL,NULL,FALSE,NULL,FALSE,40,NULL,'updated',$3) result`,[c,directVoucher.rows[0].result.id,u])).rows[0].result;
   assert.equal(Number(updatedDisbursement.amount),40);
   assert.equal((await db.query(`SELECT cancel_voucher_disbursement_atomic($1,$2,$3) result`,[c,directVoucher.rows[0].result.id,u])).rows[0].result.status,'cancelled');
+  // Supplier FIFO auto-settlement: an undirected disbursement settles the
+  // oldest open purchase invoices of the same supplier.
+  const fifoPo1='74000000-0000-4000-8000-000000000f01';
+  const fifoPo2='74000000-0000-4000-8000-000000000f02';
+  await db.query(`INSERT INTO purchase_invoices(id,company_id,number,date,supplier_id,total,paid_amount,status)
+    VALUES($1,$2,500,'2026-01-05',$3,100,0,'unpaid'),($4,$2,501,'2026-01-20',$3,200,0,'unpaid')`,[fifoPo1,c,contact,fifoPo2]);
+  const fifoDisp=(await db.query(`SELECT create_voucher_disbursement_atomic($1,'2026-02-03','supplier',$2,NULL,250,$3,'FIFO settle','[]'::jsonb,FALSE,$4,TRUE) result`,
+    [c,contact,b,u])).rows[0].result;
+  assert.equal(Number(fifoDisp.allocated_amount),250);
+  assert.equal((await db.query(`SELECT status FROM purchase_invoices WHERE id=$1`,[fifoPo1])).rows[0].status,'paid');
+  const fifoPo2row=(await db.query(`SELECT paid_amount,status FROM purchase_invoices WHERE id=$1`,[fifoPo2])).rows[0];
+  assert.equal(Number(fifoPo2row.paid_amount),150);
+  assert.equal(fifoPo2row.status,'partial');
+  // Client FIFO auto-settlement via an undirected receipt.
+  const fifoInv='74000000-0000-4000-8000-000000000f03';
+  await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,900,'2026-01-05','2026-02-05',$3,120,0,0,120,0,'unpaid')`,[fifoInv,c,contact]);
+  const fifoReceipt=(await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-03','client',$2,120,$3,'FIFO receipt','[]'::jsonb,TRUE,FALSE,$4) result`,[c,contact,b,u])).rows[0].result;
+  assert.equal(Number(fifoReceipt.allocated_amount),120);
+  assert.equal((await db.query(`SELECT status FROM invoices WHERE id=$1`,[fifoInv])).rows[0].status,'paid');
+  await db.query(`SELECT cancel_voucher_disbursement_atomic($1,$2,$3)`,[c,fifoDisp.id,u]);
+  await db.query(`SELECT cancel_voucher_receipt_atomic($1,$2,$3)`,[c,fifoReceipt.id,u]);
+
   const salesInvoice='71000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,101,'2026-02-01','2026-03-01',$3,80,0,0,80,0,'unpaid')`,[salesInvoice,c,contact]);
   const receipt=await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','client',$2,80,$3,'receipt',$4::jsonb,FALSE,FALSE,$5) result`,
@@ -1990,6 +2149,7 @@ try {
   await smokeAdminGlobalConfiguration();
   const ids = await seedLedger();
   await smokePostedLedgerReports();
+  await smokeProjectCostingAllocation();
   await smokeAdminEntitlements(ids);
   await smokeAdminSupport(ids);
   await smokePurchasingAndInventory(ids);

@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
       p_company_id: auth.companyId, p_name: input.name, p_client_id: input.client_id || null,
       p_contract_value: contractValue, p_start_date: input.start_date, p_end_date: input.end_date || null,
       p_status: input.status || 'active', p_description: input.description || '', p_location: input.location || '',
-      p_items: normalizedItems, p_auto_invoice: input.auto_invoice || false, p_user_id: auth.userId,
+      p_items: normalizedItems, p_auto_invoice: false, p_user_id: auth.userId,
     });
     if (rpcError) throw rpcError;
     return success(data, 201);

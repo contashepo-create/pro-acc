@@ -246,17 +246,6 @@ export default function InvoicesPage() {
   const vatAmount = form.vat_enabled ? subtotal * 0.15 : 0;
   const total = subtotal + vatAmount;
 
-  const statusBadge = (status: string) => {
-    const map: Record<string, { variant: 'success' | 'warning' | 'danger' | 'info'; label: string }> = {
-      unpaid: { variant: 'warning', label: 'غير مدفوعة' },
-      partial: { variant: 'info', label: 'مدفوعة جزئياً' },
-      paid: { variant: 'success', label: 'مدفوعة' },
-      cancelled: { variant: 'danger', label: 'ملغاة' },
-    };
-    const m = map[status] || { variant: 'warning', label: status };
-    return <Badge variant={m.variant}>{m.label}</Badge>;
-  };
-
   const filtered = statusTab === 'all' ? invoices : invoices.filter(i => i.status === statusTab);
 
   const columns = [
@@ -264,7 +253,6 @@ export default function InvoicesPage() {
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true, render: (row: any) => row.contact_name || row.client_name || '—' },
     { key: 'total', label: 'الإجمالي', sortable: true, render: (row: any) => formatCurrency(row.total) },
-    { key: 'status', label: 'الحالة', sortable: true, render: (row: any) => statusBadge(row.status) },
     { key: 'paid_amount', label: 'المدفوع', render: (row: any) => formatCurrency(row.paid_amount) },
     { key: 'actions', label: '', render: (row: any) => (
       <div className="flex items-center gap-1">

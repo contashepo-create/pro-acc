@@ -13,6 +13,13 @@ import {
   Wallet,
   CalendarClock,
   Activity,
+  ArrowUpLeft,
+  FilePlus2,
+  PlusCircle,
+  PackagePlus,
+  UserPlus,
+  BarChart3,
+  HardHat,
 } from 'lucide-react';
 import {
   BarChart,
@@ -24,6 +31,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
+import { useAuthStore } from '@/store/auth-store';
 
 interface DashboardData {
   totalRevenue: number;
@@ -59,26 +67,77 @@ function formatSAR(value: number) {
   return `${sign}${formatAmount(Math.abs(value))} ر.س`;
 }
 
-function StatCard({ title, value, icon: Icon, tone }: {
+const ACCENTS: Record<string, { icon: string; name: string; nameEn: string }> = {
+  success: { icon: 'linear-gradient(135deg, #34d399, #10b981)', name: 'الأخضر', nameEn: 'green' },
+  danger: { icon: 'linear-gradient(135deg, #f87171, #ef4444)', name: 'الأحمر', nameEn: 'red' },
+  accent: { icon: 'linear-gradient(135deg, #60a5fa, #3b82f6)', name: 'الأزرق', nameEn: 'blue' },
+  info: { icon: 'linear-gradient(135deg, #38bdf8, #2563eb)', name: 'السماوي', nameEn: 'sky' },
+  warning: { icon: 'linear-gradient(135deg, #fbbf24, #f59e0b)', name: 'الكهرماني', nameEn: 'amber' },
+};
+
+function StatCard({ title, value, icon: Icon, tone, sub }: {
   title: string; value: string; icon: React.ElementType;
-  tone: 'success' | 'danger' | 'accent' | 'info' | 'warning';
+  tone: 'success' | 'danger' | 'accent' | 'info' | 'warning'; sub?: string;
 }) {
-  const iconColor = `var(--color-${tone})`;
-  const chipBg = `var(--color-${tone}-light)`;
+  const grad = ACCENTS[tone]?.icon || ACCENTS.accent.icon;
   return (
-    <div className="rounded-2xl border p-5 shadow-sm" style={{ background: 'var(--color-bg-card)', borderColor: 'var(--color-border)' }}>
-      <div className="flex items-start justify-between mb-3">
-        <div className="w-11 h-11 rounded-xl flex items-center justify-center" style={{ background: chipBg }}>
-          <Icon size={20} style={{ color: iconColor }} />
+    <div
+      className="relative overflow-hidden rounded-2xl border p-5 card-lift"
+      style={{ background: 'var(--color-bg-card)', borderColor: 'var(--color-border)' }}
+    >
+      <div className="flex items-start justify-between mb-4">
+        <div
+          className="w-11 h-11 rounded-xl flex items-center justify-center text-white shadow-sm"
+          style={{ background: grad }}
+        >
+          <Icon size={20} />
         </div>
+        <ArrowUpLeft size={16} className="opacity-30" style={{ color: 'var(--color-text-muted)' }} />
       </div>
-      <div className="font-mono font-bold text-2xl" style={{ color: 'var(--color-text-primary)' }}>{value}</div>
-      <div className="text-sm mt-0.5" style={{ color: 'var(--color-text-muted)' }}>{title}</div>
+      <div className="font-mono font-bold text-xl md:text-2xl leading-tight" style={{ color: 'var(--color-text-primary)' }}>
+        {value}
+      </div>
+      <div className="text-sm mt-1.5 font-medium" style={{ color: 'var(--color-text-secondary)' }}>{title}</div>
+      {sub && <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>{sub}</div>}
     </div>
   );
 }
 
+function QuickAction({ href, label, icon: Icon, desc }: {
+  href: string; label: string; icon: React.ElementType; desc: string;
+}) {
+  return (
+    <a
+      href={href}
+      className="group flex items-center gap-3 rounded-xl border p-3 card-lift"
+      style={{ background: 'var(--color-bg-card)', borderColor: 'var(--color-border)' }}
+    >
+      <div
+        className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 text-white"
+        style={{ background: 'linear-gradient(135deg, var(--color-accent), var(--color-accent-hover))' }}
+      >
+        <Icon size={18} />
+      </div>
+      <div className="min-w-0">
+        <div className="text-sm font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>{label}</div>
+        <div className="text-xs truncate" style={{ color: 'var(--color-text-muted)' }}>{desc}</div>
+      </div>
+    </a>
+  );
+}
+
+const ACTIVITY_LABELS: Record<string, string> = {
+  create: 'إنشاء',
+  update: 'تعديل',
+  delete: 'حذف',
+  approve: 'اعتماد',
+  reject: 'رفض',
+  post: 'ترحيل',
+  request_approval: 'طلب اعتماد',
+};
+
 export default function DashboardPage() {
+  const { user, company } = useAuthStore();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -107,8 +166,9 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--color-accent)' }} />
+      <div className="flex flex-col items-center justify-center h-72 gap-3">
+        <Loader2 size={36} className="animate-spin" style={{ color: 'var(--color-accent)' }} />
+        <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>جاري تحميل لوحة التحكم...</p>
       </div>
     );
   }
@@ -129,6 +189,7 @@ export default function DashboardPage() {
   const s = data || empty;
   const netTone = s.netProfit >= 0 ? 'success' : 'danger';
   const netLabel = `${s.netProfit >= 0 ? '' : '-'}${formatAmount(Math.abs(s.netProfit))} ر.س`;
+  const firstName = user?.name?.split(' ')[0] || '';
 
   const chartData = [
     { name: 'هذا الشهر', 'الإيرادات': s.revenueThisMonth, 'المصروفات': s.expenseThisMonth },
@@ -139,7 +200,37 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <HeaderBlock />
+      {/* Welcome banner */}
+      <div
+        className="relative overflow-hidden rounded-2xl border p-6"
+        style={{ background: 'linear-gradient(135deg, var(--color-bg-card), var(--color-bg-elevated))', borderColor: 'var(--color-border)' }}
+      >
+        <div
+          className="absolute inset-0 opacity-[0.06]"
+          style={{ background: 'linear-gradient(135deg, var(--color-accent), transparent)' }}
+        />
+        <div className="relative flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-sm" style={{ color: 'var(--color-text-muted)' }}>أهلاً بك،</span>
+              <span className="text-lg font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                {firstName || 'مستخدم'} 👋
+              </span>
+            </div>
+            <h1 className="text-2xl font-extrabold tracking-tight" style={{ color: 'var(--color-text-primary)' }}>
+              لوحة التحكم
+            </h1>
+            <p className="text-sm mt-1" style={{ color: 'var(--color-text-secondary)' }}>
+              {company?.name ? `نظرة عامة على أداء ${company.name} المالي والتشغيلي` : 'نظرة عامة على أداء الشركة المالي والتشغيلي'}
+            </p>
+          </div>
+          <div className="text-sm px-4 py-2 rounded-xl border" style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text-muted)', borderColor: 'var(--color-border)' }}>
+            {typeof window !== 'undefined'
+              ? new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+              : ''}
+          </div>
+        </div>
+      </div>
 
       {deniedNotice && (
         <div className="rounded-xl p-4 text-sm font-semibold flex items-center gap-2"
@@ -149,19 +240,35 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* مؤشرات رئيسية */}
+      {/* مؤشرات مالية رئيسية */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="إجمالي الإيرادات" value={formatSAR(s.totalRevenue)} icon={TrendingUp} tone="success" />
-        <StatCard title="إجمالي المصروفات" value={formatSAR(s.totalExpense)} icon={TrendingDown} tone="danger" />
+        <StatCard title="إجمالي الإيرادات" value={formatSAR(s.totalRevenue)} icon={TrendingUp} tone="success" sub={`هذا الشهر: ${formatSAR(s.revenueThisMonth)}`} />
+        <StatCard title="إجمالي المصروفات" value={formatSAR(s.totalExpense)} icon={TrendingDown} tone="danger" sub={`هذا الشهر: ${formatSAR(s.expenseThisMonth)}`} />
         <StatCard title="صافي الربح" value={netLabel} icon={DollarSign} tone={netTone === 'success' ? 'success' : 'danger'} />
         <StatCard title="الرصيد النقدي" value={formatSAR(s.cashBalance)} icon={Wallet} tone="accent" />
       </div>
 
+      {/* مؤشرات تشغيلية */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="الذمم المدينة (لنا)" value={formatSAR(s.accountsReceivable)} icon={Users} tone="info" />
         <StatCard title="الذمم الدائنة (علينا)" value={formatSAR(s.accountsPayable)} icon={Receipt} tone="warning" />
-        <StatCard title="المشاريع النشطة" value={String(s.activeProjects)} icon={Building2} tone="success" />
-        <StatCard title="فواتير متأخرة" value={`${s.overdueInvoices} (${formatSAR(s.overdueAmount)})`} icon={CalendarClock} tone="danger" />
+        <StatCard title="المشاريع النشطة" value={String(s.activeProjects)} icon={Building2} tone="success" sub={`إجمالي المشاريع: ${s.totalProjects}`} />
+        <StatCard title="فواتير متأخرة" value={`${s.overdueInvoices}`} icon={CalendarClock} tone="danger" sub={formatSAR(s.overdueAmount)} />
+      </div>
+
+      {/* إجراءات سريعة */}
+      <div className="rounded-2xl border p-5" style={{ background: 'var(--color-bg-card)', borderColor: 'var(--color-border)' }}>
+        <div className="flex items-center gap-2 mb-4">
+          <BarChart3 size={18} style={{ color: 'var(--color-accent)' }} />
+          <h3 className="text-base font-bold" style={{ color: 'var(--color-text-primary)' }}>إجراءات سريعة</h3>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          <QuickAction href="/invoices" label="فاتورة مبيعات" icon={FilePlus2} desc="إصدار فاتورة جديدة" />
+          <QuickAction href="/projects" label="مشروع جديد" icon={HardHat} desc="إضافة مشروع" />
+          <QuickAction href="/purchases/orders" label="أمر شراء" icon={PackagePlus} desc="طلب توريد" />
+          <QuickAction href="/clients" label="عميل جديد" icon={UserPlus} desc="إضافة عميل" />
+          <QuickAction href="/journal/new" label="قيد محاسبي" icon={PlusCircle} desc="ترحيل قيد" />
+        </div>
       </div>
 
       {/* الرسم البياني */}
@@ -240,10 +347,10 @@ export default function DashboardPage() {
           ) : (
             <ul className="space-y-3">
               {s.recentActivity.slice(0, 8).map((a: any, i: number) => (
-                <li key={i} className="flex items-start justify-between gap-3">
+                <li key={i} className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-sm font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>
-                      {a.action} · {a.entity_type}
+                      <span className="font-bold" style={{ color: 'var(--color-accent)' }}>{ACTIVITY_LABELS[a.action] || a.action}</span> · {a.entity_type}
                     </div>
                   </div>
                   <div className="text-xs whitespace-nowrap font-mono" style={{ color: 'var(--color-text-muted)' }}>
@@ -260,10 +367,18 @@ export default function DashboardPage() {
 }
 
 function HeaderBlock() {
+  const today = typeof window !== 'undefined'
+    ? new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    : '';
   return (
-    <div>
-      <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>لوحة التحكم</h1>
-      <p className="text-sm mt-1" style={{ color: 'var(--color-text-secondary)' }}>نظرة عامة على أداء الشركة المالي والتشغيلي</p>
+    <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+      <div>
+        <h1 className="text-2xl font-extrabold tracking-tight" style={{ color: 'var(--color-text-primary)' }}>لوحة التحكم</h1>
+        <p className="text-sm mt-1" style={{ color: 'var(--color-text-secondary)' }}>نظرة عامة على أداء الشركة المالي والتشغيلي</p>
+      </div>
+      <div className="text-sm px-3 py-1.5 rounded-lg" style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text-muted)' }}>
+        {today}
+      </div>
     </div>
   );
 }

@@ -33,10 +33,25 @@ describe('central admin guard branches', () => {
     result.data.email = 'ADMIN@TEST.COM'; result.data.name = 'Admin';
     await expect(requireAdmin(req('jwt'))).resolves.toMatchObject({ email: 'admin@test.com', name: 'Admin' });
   });
-  test('serializes known admin errors and hides unknown internals', async () => {
+  test('serializes known admin errors and surfaces real unknown messages', async () => {
     const known = adminJsonError(new AdminAuthError('No', 403));
     expect(known.status).toBe(403); expect((await known.json()).message).toBe('No');
     const unknown = adminJsonError(new Error('secret SQL'));
-    expect(unknown.status).toBe(500); expect((await unknown.json()).message).toBe('حدث خطأ في الخادم');
+    expect(unknown.status).toBe(500); expect((await unknown.json()).message).toBe('secret SQL');
+  });
+  test('adminJsonError surfaces object/string messages and falls back safely', async () => {
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    // PostgREST-shaped object with a string message.
+    const objErr = await (await adminJsonError({ message: 'column missing', details: 'SQL hint' })).json();
+    expect(objErr.message).toBe('column missing');
+    expect(objErr.errorId).toMatch(/^[a-z0-9]+$/);
+    // Object whose message is a non-string (falls back to generic).
+    expect((await (await adminJsonError({ message: 42 })).json()).message).toBe('حدث خطأ غير متوقع');
+    // Non-object values (string/null) fall back to generic.
+    expect((await (await adminJsonError('boom')).json()).message).toBe('حدث خطأ غير متوقع');
+    expect((await (await adminJsonError(null)).json()).message).toBe('حدث خطأ غير متوقع');
+    // Error with empty message falls back to generic too.
+    expect((await (await adminJsonError(new Error(''))).json()).message).toBe('حدث خطأ غير متوقع');
+    log.mockRestore();
   });
 });

@@ -59,12 +59,20 @@ export function adminJsonError(err: unknown) {
   if (err instanceof AdminAuthError) {
     return NextResponse.json({ success: false, message: err.message }, { status: err.status });
   }
-  // Never expose PostgREST messages, SQL hints, constraint names or schema
-  // details to the browser. Keep a correlation id for the detailed server log.
+  // Surface the real error message so admin failures show their actual cause.
+  // The correlation id stays on the payload and full detail is logged below.
+  // Empty/whitespace-only messages fall back to a generic string.
+  let message = 'حدث خطأ غير متوقع';
+  if (err instanceof Error && typeof err.message === 'string' && err.message.trim()) {
+    message = err.message;
+  } else if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string'
+    && String((err as { message: string }).message).trim()) {
+    message = String((err as { message: string }).message);
+  }
   const errorId = Math.random().toString(36).slice(2, 10);
   console.error(`[admin] error [${errorId}]:`, err);
   return NextResponse.json(
-    { success: false, message: 'حدث خطأ في الخادم', errorId },
+    { success: false, message, errorId },
     { status: 500 }
   );
 }

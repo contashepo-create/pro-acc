@@ -115,12 +115,16 @@ export async function POST(request: NextRequest) {
       ? { requiresApproval: false }
       : await checkApprovalThreshold(auth.companyId, amount, 'voucher_receipt', auth.userId);
 
-    let autoFifo = false;
+    // A client receipt with no explicit invoice allocation is applied to the
+    // oldest open invoices by default (FIFO), so an undirected payment settles
+    // the client's outstanding invoices. Explicitly disable via the
+    // auto_allocate_receipts_fifo setting = 'false'.
+    let autoFifo = true;
     if ((!invoice_items || invoice_items.length === 0) && receipt_type === 'client' && contact_id) {
       const { data: setting, error: settingErr } = await s.from('settings')
         .select('value').eq('company_id', auth.companyId).eq('key', 'auto_allocate_receipts_fifo').maybeSingle();
       if (settingErr) throw settingErr;
-      autoFifo = !!setting && ['true', '1', 'yes'].includes(String(setting.value).toLowerCase());
+      if (setting && ['false', '0', 'no'].includes(String(setting.value).toLowerCase())) autoFifo = false;
     }
 
     // Numbering, voucher, journal, explicit/FIFO allocation, invoice states
@@ -140,6 +144,17 @@ export async function POST(request: NextRequest) {
     });
     if (createErr) throw createErr;
     const voucher = data as Record<string, any>;
+    try {
+      const { logAudit } = await import('@/lib/audit');
+      await logAudit({
+        company_id: auth.companyId, user_id: auth.userId, entity_type: 'voucher_receipt',
+        entity_id: String(voucher.id || ''), action: 'create',
+        after: { id: voucher.id, amount, date, receipt_type, status: voucher.status || 'posted' },
+        summary: `سند قبض بقيمة ${amount}${voucher.requires_approval ? ' (بانتظار الاعتماد)' : ''}`,
+      });
+    } catch (auditError) {
+      console.error('Receipt audit write failed:', auditError);
+    }
     if (voucher.requires_approval) {
       // If the policy lookup itself was unavailable, do not immediately repeat
       // the same failing lookup inside Telegram delivery. The pending voucher

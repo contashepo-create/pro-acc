@@ -3,6 +3,7 @@ import { success, error, handleApiError, requireModulePermission } from '@/lib/a
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 import { parseReportPagination } from '@/lib/report-validation';
+import { classifyProjectCost } from '@/lib/project-cost-classifier';
 
 const number = (value: unknown) => Number(value) || 0;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -38,11 +39,11 @@ export async function GET(req: NextRequest) {
         if (row.account_type !== 'expense') continue;
         const amount = number(row.debit) - number(row.credit);
         costs.total += amount;
-        const code = String(row.code || '');
-        if (code.startsWith('511')) costs.materials += amount;
-        else if (code.startsWith('521') || code.startsWith('522')) costs.workers += amount;
-        else if (code.startsWith('513')) costs.subcontractors += amount;
-        else costs.purchases += amount;
+        const category = classifyProjectCost(String(row.code || ''));
+        if (category === 'materials') costs.materials += amount;
+        else if (category === 'labor') costs.workers += amount;
+        else if (category === 'subcontractor') costs.subcontractors += amount;
+        else costs.purchases += amount; // equipment + other operating
       }
       return success({ ...costs, source: 'general_ledger', period: { from, to } });
     }

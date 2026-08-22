@@ -70,6 +70,20 @@ export async function POST(req: NextRequest) {
       p_created_by: auth.userId,
     });
     if (rpcError) throw rpcError;
+    try {
+      const { logAudit } = await import('@/lib/audit');
+      await logAudit({
+        company_id: auth.companyId, user_id: auth.userId, entity_type: 'project_expense',
+        entity_id: String((data as any)?.id || ''), action: 'create',
+        after: {
+          id: (data as any)?.id, project_id: input.project_id, expense_type: input.expense_type,
+          amount: input.amount, date: input.date, status: (data as any)?.status,
+        },
+        summary: `مصروف مشروع (${input.expense_type}) بقيمة ${input.amount}`,
+      });
+    } catch (auditError) {
+      console.error('Project expense audit write failed:', auditError);
+    }
     return success(data, 201);
   } catch (cause) {
     return handleApiError(cause);

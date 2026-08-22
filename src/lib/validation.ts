@@ -267,6 +267,13 @@ export const purchaseInvoiceSchema = z.object({
   project_id: z.string().uuid().optional().nullable(),
   custody_id: z.string().uuid().optional().nullable(),
   link_to_project: z.boolean().optional(),
+  payment_account_id: z.string().uuid().optional().nullable(),
+  other_expenses: z.array(z.object({
+    description: z.string().min(1).max(200),
+    amount: z.number().positive().refine((v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-8, 'مبلغ غير صالح'),
+    account_code: z.string().max(20).optional(),
+    account_id: z.string().uuid().optional().nullable(),
+  }).strict()).max(100).optional(),
 }).strict();
 
 export const purchaseInvoiceUpdateSchema = z.object({
@@ -430,6 +437,7 @@ export const inventoryMovementSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }).optional(),
   notes: z.string().max(500).optional(),
   to_warehouse_id: z.string().uuid('مستودع الوجهة غير صالح').optional().nullable(),
+  project_id: z.string().uuid('رقم المشروع غير صالح').optional().nullable(),
 }).strict().refine(
   (m) => m.type === 'adjust' || m.type === 'adjustment' ? true : m.quantity > 0,
   { message: 'الكمية يجب أن تكون أكبر من صفر' }

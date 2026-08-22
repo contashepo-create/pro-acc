@@ -55,9 +55,49 @@
 }
 
 /* ============================================================
+   GLOBAL FALLBACK (applies before/without any theme class)
+   Ensures the app NEVER renders with undefined colors, even during
+   first paint or if the theme initializer fails. Mirrors the default
+   Sapphire light palette so text/contrast are always legible.
+   ============================================================ */
+:root {
+  --color-bg-primary: #f8fafc;
+  --color-bg-secondary: #f1f5f9;
+  --color-bg-tertiary: #e2e8f0;
+  --color-bg-card: #ffffff;
+  --color-bg-hover: #f1f5f9;
+  --color-bg-elevated: #ffffff;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748b;
+  --color-text-inverse: #f8fafc;
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-light: rgba(37, 99, 235, 0.1);
+  --color-accent-glow: rgba(37, 99, 235, 0.06);
+  --color-border: #cbd5e1;
+  --color-border-light: #f8fafc;
+  --color-border-focus: #2563eb;
+  --color-sidebar-bg: #ffffff;
+  --color-sidebar-hover: rgba(0, 0, 0, 0.04);
+  --color-sidebar-active: rgba(37, 99, 235, 0.08);
+  --color-header-bg: rgba(248, 250, 252, 0.85);
+  --color-success: #047857;
+  --color-success-light: rgba(4, 120, 87, 0.1);
+  --color-warning: #b45309;
+  --color-warning-light: rgba(180, 83, 9, 0.1);
+  --color-danger: #b91c1c;
+  --color-danger-light: rgba(185, 28, 28, 0.08);
+  --color-info: #1d4ed8;
+  --color-info-light: rgba(29, 78, 216, 0.08);
+  color-scheme: light;
+}
+
+/* ============================================================
    THEME 1: Sapphire Carbon (Default Premium Zinc Blue)
    ============================================================ */
 .theme-sapphire {
+  color-scheme: dark;
   --color-bg-primary: #030712;
   --color-bg-secondary: #111827;
   --color-bg-tertiary: #1f2937;
@@ -93,6 +133,7 @@
   --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
 }
 .theme-sapphire.light {
+  color-scheme: light;
   --color-bg-primary: #f8fafc;
   --color-bg-secondary: #f1f5f9;
   --color-bg-tertiary: #e2e8f0;
@@ -132,6 +173,7 @@
    THEME 2: Amber Classic (Warm Charcoal Gold)
    ============================================================ */
 .theme-amber {
+  color-scheme: dark;
   --color-bg-primary: #09080d;
   --color-bg-secondary: #120f1d;
   --color-bg-tertiary: #1b1429;
@@ -167,6 +209,7 @@
   --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
 }
 .theme-amber.light {
+  color-scheme: light;
   --color-bg-primary: #faf9f6;
   --color-bg-secondary: #f3f1eb;
   --color-bg-tertiary: #e9e5db;
@@ -206,6 +249,7 @@
    THEME 3: Teal Dusk (Deep Emerald Forest)
    ============================================================ */
 .theme-teal {
+  color-scheme: dark;
   --color-bg-primary: #090c0c;
   --color-bg-secondary: #111817;
   --color-bg-tertiary: #182422;
@@ -241,6 +285,7 @@
   --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
 }
 .theme-teal.light {
+  color-scheme: light;
   --color-bg-primary: #f2f6f5;
   --color-bg-secondary: #e4ecea;
   --color-bg-tertiary: #d6e2e0;
@@ -280,6 +325,58 @@
   height: 3px;
   background: var(--section-accent, var(--color-accent));
   transition: background 0.3s ease;
+}
+
+/* ============================================================
+   ZEROCOLD DEVELOPER PANEL — always-dark professional theme
+   The zerocold pages are built around a dark palette (light accent
+   text on dark translucent chips). Scoping the dark variables to this
+   shell guarantees those colours are ALWAYS legible and consistent,
+   independent of the main app's light/dark setting.
+   ============================================================ */
+.zerocold-shell {
+  color-scheme: dark;
+  --color-bg-primary: #0b0d14;
+  --color-bg-secondary: #141826;
+  --color-bg-tertiary: #1d2336;
+  --color-bg-card: #11141f;
+  --color-bg-hover: #1b2132;
+  --color-bg-elevated: #161a28;
+  --color-text-primary: #f2f3f7;
+  --color-text-secondary: #c6cad9;
+  --color-text-muted: #8d93ab;
+  --color-text-inverse: #0b0d14;
+  --color-accent: #f59e0b;
+  --color-accent-hover: #d97706;
+  --color-accent-light: rgba(245, 158, 11, 0.14);
+  --color-accent-glow: rgba(245, 158, 11, 0.08);
+  --color-border: #262c40;
+  --color-border-light: #333a52;
+  --color-border-focus: #f59e0b;
+  --color-sidebar-bg: #0a0c12;
+  --color-sidebar-hover: #141826;
+  --color-sidebar-active: rgba(245, 158, 11, 0.12);
+  --color-header-bg: rgba(11, 13, 20, 0.9);
+  --color-success: #34d399;
+  --color-success-light: rgba(52, 211, 153, 0.14);
+  --color-warning: #fbbf24;
+  --color-warning-light: rgba(251, 191, 36, 0.14);
+  --color-danger: #f87171;
+  --color-danger-light: rgba(248, 113, 113, 0.14);
+  --color-info: #60a5fa;
+  --color-info-light: rgba(96, 165, 250, 0.14);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-dropdown: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+}
+/* Any dark-translucent chip (red/emerald/amber/...-950/XX) is invisible on a
+   light body; within the dark shell it stays correct. Ensure default tables,
+   inputs and scrollbars honour the shell colours too. */
+.zerocold-shell ::-webkit-scrollbar-track { background: transparent; }
+.zerocold-shell ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+.zerocold-shell ::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+.zerocold-shell input, .zerocold-shell select, .zerocold-shell textarea {
+  color-scheme: dark;
 }
 
 /* ============================================================

@@ -79,6 +79,12 @@
 --   067-audit-hardening-fixes.sql
 --   068-telegram-approval-actor-fallback.sql
 --   069-fiscal-year-controls.sql
+--   070-operational-document-numbers.sql
+--   071-project-costing-integrity.sql
+--   072-project-costing-allocation.sql
+--   073-project-no-auto-invoice.sql
+--   074-voucher-auto-settlement.sql
+--   075-purchase-invoice-other-expenses.sql
 -- ============================================================================
 
 
@@ -19039,4 +19045,748 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.create_fiscal_year_atomic(UUID,TEXT,DATE,DATE,UUID) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.create_fiscal_year_atomic(UUID,TEXT,DATE,DATE,UUID) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 070-operational-document-numbers.sql
+-- ----------------------------------------------------------------------------
+
+-- Stable tenant-scoped numbers for operational transactions that previously
+-- exposed UUIDs only. Human prefixes are presentation-level (CT/STK/BR); the
+-- database stores the concurrency-safe numeric sequence.
+
+ALTER TABLE cash_transactions ADD COLUMN IF NOT EXISTS number INTEGER;
+ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS number INTEGER;
+ALTER TABLE bank_reconciliation ADD COLUMN IF NOT EXISTS number INTEGER;
+
+WITH ranked AS (
+  SELECT id, row_number() OVER (PARTITION BY company_id ORDER BY created_at, id)::INTEGER AS seq
+  FROM cash_transactions
+) UPDATE cash_transactions target SET number=ranked.seq FROM ranked
+  WHERE target.id=ranked.id AND target.number IS NULL;
+
+WITH ranked AS (
+  SELECT id, row_number() OVER (PARTITION BY company_id ORDER BY created_at, id)::INTEGER AS seq
+  FROM inventory_transactions
+) UPDATE inventory_transactions target SET number=ranked.seq FROM ranked
+  WHERE target.id=ranked.id AND target.number IS NULL;
+
+WITH ranked AS (
+  SELECT id, row_number() OVER (PARTITION BY company_id ORDER BY created_at, id)::INTEGER AS seq
+  FROM bank_reconciliation
+) UPDATE bank_reconciliation target SET number=ranked.seq FROM ranked
+  WHERE target.id=ranked.id AND target.number IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_transactions_company_number
+  ON cash_transactions(company_id, number);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_transactions_company_number
+  ON inventory_transactions(company_id, number);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_reconciliation_company_number
+  ON bank_reconciliation(company_id, number);
+
+CREATE OR REPLACE FUNCTION public.assign_operational_document_number()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_next INTEGER;
+BEGIN
+  IF NEW.company_id IS NULL THEN RAISE EXCEPTION 'company_id is required for document numbering'; END IF;
+  IF NEW.number IS NOT NULL THEN RETURN NEW; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended(
+    'operational-number:' || TG_TABLE_NAME || ':' || NEW.company_id::TEXT, 0
+  ));
+  EXECUTE format('SELECT COALESCE(MAX(number),0)+1 FROM public.%I WHERE company_id=$1', TG_TABLE_NAME)
+    INTO v_next USING NEW.company_id;
+  NEW.number := v_next;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_cash_transaction_number ON cash_transactions;
+CREATE TRIGGER trg_cash_transaction_number BEFORE INSERT ON cash_transactions
+  FOR EACH ROW EXECUTE FUNCTION public.assign_operational_document_number();
+DROP TRIGGER IF EXISTS trg_inventory_transaction_number ON inventory_transactions;
+CREATE TRIGGER trg_inventory_transaction_number BEFORE INSERT ON inventory_transactions
+  FOR EACH ROW EXECUTE FUNCTION public.assign_operational_document_number();
+DROP TRIGGER IF EXISTS trg_bank_reconciliation_number ON bank_reconciliation;
+CREATE TRIGGER trg_bank_reconciliation_number BEFORE INSERT ON bank_reconciliation
+  FOR EACH ROW EXECUTE FUNCTION public.assign_operational_document_number();
+
+ALTER TABLE cash_transactions ALTER COLUMN number SET NOT NULL;
+ALTER TABLE inventory_transactions ALTER COLUMN number SET NOT NULL;
+ALTER TABLE bank_reconciliation ALTER COLUMN number SET NOT NULL;
+
+REVOKE ALL ON FUNCTION public.assign_operational_document_number() FROM PUBLIC,anon,authenticated;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 071-project-costing-integrity.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- 071: Project costing integrity
+--
+-- 1. Inventory issue/return movements can now be allocated to a project.
+--    Before this, material issued from stock was posted to the cost of sales
+--    account (5100) WITHOUT a project_id, so direct material costs never
+--    appeared in any project profitability / WIP report. Now the movement
+--    accepts an optional p_project_id, validates it (tenant + active), tags
+--    the cost journal line with projectId, and stores it on the transaction.
+-- 2. This mirrors the tenant/active validation used by every other project
+--    cost entry point (post_project_expense, post_equipment_cost, …).
+-- ============================================================================
+
+DROP FUNCTION IF EXISTS public.post_inventory_movement_atomic(
+  UUID,UUID,UUID,TEXT,NUMERIC,NUMERIC,DATE,TEXT,UUID,UUID
+);
+
+CREATE OR REPLACE FUNCTION public.post_inventory_movement_atomic(
+  p_company_id UUID,p_item_id UUID,p_warehouse_id UUID,p_type TEXT,p_quantity NUMERIC,
+  p_unit_price NUMERIC,p_date DATE,p_notes TEXT,p_to_warehouse_id UUID,p_user_id UUID,
+  p_project_id UUID DEFAULT NULL
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_item inventory_items%ROWTYPE; v_target inventory_items%ROWTYPE; v_warehouse warehouses%ROWTYPE;
+  v_before NUMERIC; v_after NUMERIC; v_target_before NUMERIC; v_target_after NUMERIC;
+  v_cost NUMERIC; v_value NUMERIC; v_diff NUMERIC; v_kind TEXT; v_txn inventory_transactions%ROWTYPE;
+  v_inventory UUID; v_income UUID; v_cost_account UUID; v_debit UUID; v_credit UUID;
+  v_journal JSONB; v_journal_id UUID; v_txn_id UUID:=gen_random_uuid(); v_lines JSONB;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  v_kind:=CASE WHEN p_type='adjust' THEN 'adjustment' ELSE p_type END;
+  IF v_kind NOT IN('add','issue','adjustment','transfer','return') OR p_date IS NULL
+    OR p_quantity IS NULL OR p_quantity<0 OR p_quantity<>round(p_quantity,2)
+    OR (v_kind<>'adjustment' AND p_quantity<=0)
+    OR (p_unit_price IS NOT NULL AND (p_unit_price<0 OR p_unit_price<>round(p_unit_price,2)))
+    OR length(COALESCE(p_notes,''))>500
+  THEN RAISE EXCEPTION 'بيانات الحركة المخزنية غير صالحة'; END IF;
+
+  -- Project allocation is only meaningful for consumption (issue / return of
+  -- material to a project). Reject it for stock-in, adjustment and transfer,
+  -- and validate the project is an active tenant project like every other
+  -- project-cost entry point.
+  IF p_project_id IS NOT NULL THEN
+    IF v_kind NOT IN ('issue','return') THEN
+      RAISE EXCEPTION 'ربط المشروع مسموح فقط لحركات الصرف والإرجاع';
+    END IF;
+    IF NOT EXISTS(SELECT 1 FROM projects WHERE id=p_project_id AND company_id=p_company_id AND status='active') THEN
+      RAISE EXCEPTION 'المشروع غير صالح أو غير نشط';
+    END IF;
+  END IF;
+
+  SELECT * INTO v_item FROM inventory_items WHERE id=p_item_id AND company_id=p_company_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الصنف غير موجود'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('inventory-stock:'||p_company_id::TEXT||':'||lower(v_item.code),0));
+  SELECT * INTO v_item FROM inventory_items WHERE id=p_item_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT COALESCE(v_item.is_active,TRUE) THEN RAISE EXCEPTION 'الصنف غير نشط'; END IF;
+  IF v_item.warehouse_id<>p_warehouse_id THEN RAISE EXCEPTION 'الصنف لا ينتمي إلى مستودع المصدر'; END IF;
+  SELECT * INTO v_warehouse FROM warehouses WHERE id=p_warehouse_id AND company_id=p_company_id AND COALESCE(is_active,TRUE);
+  IF NOT FOUND THEN RAISE EXCEPTION 'مستودع المصدر غير موجود'; END IF;
+
+  v_before:=COALESCE(v_item.quantity,0); v_after:=v_before; v_cost:=COALESCE(v_item.unit_price,0);
+  IF v_kind='add' THEN
+    v_cost:=COALESCE(p_unit_price,v_cost);
+    IF v_cost<0 THEN RAISE EXCEPTION 'تكلفة الإضافة غير صالحة'; END IF;
+    v_after:=round(v_before+p_quantity,2);
+    IF v_after>0 THEN
+      v_cost:=round(((v_before*COALESCE(v_item.unit_price,0))+(p_quantity*v_cost))/v_after,2);
+    END IF;
+    v_value:=round(p_quantity*COALESCE(p_unit_price,v_item.unit_price,0),2);
+    v_debit:=NULL; v_credit:=NULL;
+  ELSIF v_kind='issue' THEN
+    IF v_before+0.005<p_quantity THEN RAISE EXCEPTION 'الكمية غير متوفرة في المخزون'; END IF;
+    v_after:=round(v_before-p_quantity,2); v_value:=round(p_quantity*v_cost,2);
+  ELSIF v_kind='return' THEN
+    v_after:=round(v_before+p_quantity,2); v_value:=round(p_quantity*v_cost,2);
+  ELSIF v_kind='adjustment' THEN
+    v_diff:=round(p_quantity-v_before,2);
+    IF abs(v_diff)<0.005 THEN RAISE EXCEPTION 'لا فرق عن الرصيد الحالي'; END IF;
+    v_after:=p_quantity; v_value:=round(abs(v_diff)*v_cost,2);
+  ELSE
+    IF p_to_warehouse_id IS NULL OR p_to_warehouse_id=p_warehouse_id THEN RAISE EXCEPTION 'مستودع الوجهة غير صالح'; END IF;
+    IF v_before+0.005<p_quantity THEN RAISE EXCEPTION 'الكمية غير متوفرة في المخزون'; END IF;
+    IF NOT EXISTS(SELECT 1 FROM warehouses WHERE id=p_to_warehouse_id AND company_id=p_company_id AND COALESCE(is_active,TRUE))
+    THEN RAISE EXCEPTION 'مستودع الوجهة غير موجود'; END IF;
+    SELECT * INTO v_target FROM inventory_items WHERE company_id=p_company_id AND warehouse_id=p_to_warehouse_id
+      AND lower(code)=lower(v_item.code) FOR UPDATE;
+    IF v_target.id IS NULL THEN
+      INSERT INTO inventory_items(company_id,code,name,unit,warehouse_id,quantity,unit_price,category,is_active)
+      VALUES(p_company_id,v_item.code,v_item.name,v_item.unit,p_to_warehouse_id,0,v_cost,v_item.category,TRUE)
+      RETURNING * INTO v_target;
+    ELSIF NOT COALESCE(v_target.is_active,TRUE) THEN
+      RAISE EXCEPTION 'صنف الوجهة غير نشط';
+    END IF;
+    v_target_before:=COALESCE(v_target.quantity,0); v_target_after:=round(v_target_before+p_quantity,2);
+    UPDATE inventory_items SET quantity=v_target_after,
+      unit_price=CASE WHEN v_target_after=0 THEN v_cost
+        ELSE round(((v_target_before*COALESCE(v_target.unit_price,0))+(p_quantity*v_cost))/v_target_after,2) END,
+      updated_at=now() WHERE id=v_target.id;
+    v_after:=round(v_before-p_quantity,2); v_value:=round(p_quantity*v_cost,2);
+  END IF;
+
+  -- Financially effective stock movements are posted in the same transaction.
+  -- The cost line (inventory <-> cost of sales) is tagged with the project so
+  -- the material cost flows into project profitability / WIP reports.
+  IF v_kind<>'transfer' AND v_value>0 THEN
+    SELECT id INTO v_inventory FROM accounts WHERE company_id=p_company_id AND code='1170'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    SELECT id INTO v_income FROM accounts WHERE company_id=p_company_id AND code='4200'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    SELECT id INTO v_cost_account FROM accounts WHERE company_id=p_company_id AND code='5100'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    IF v_inventory IS NULL THEN RAISE EXCEPTION 'حساب المخزون 1170 غير موجود'; END IF;
+    IF v_kind='add' OR (v_kind='adjustment' AND v_diff>0) THEN v_debit:=v_inventory; v_credit:=v_income;
+    ELSIF v_kind='return' THEN v_debit:=v_inventory; v_credit:=v_cost_account;
+    ELSE v_debit:=v_cost_account; v_credit:=v_inventory; END IF;
+    IF v_debit IS NULL OR v_credit IS NULL THEN RAISE EXCEPTION 'حساب مقابل حركة المخزون غير موجود'; END IF;
+    v_lines:=jsonb_build_array(
+      jsonb_build_object('accountId',v_debit,'debit',v_value,'credit',0,'projectId',p_project_id),
+      jsonb_build_object('accountId',v_credit,'debit',0,'credit',v_value,'projectId',p_project_id)
+    );
+    v_journal:=create_journal_entry(p_company_id,p_date,'general','حركة مخزون: '||v_item.name,p_user_id,v_lines);
+    v_journal_id:=(v_journal->>'id')::UUID;
+    UPDATE journal_entries SET reference_type='inventory_movement',reference_id=v_txn_id
+      WHERE id=v_journal_id AND company_id=p_company_id;
+  END IF;
+
+  UPDATE inventory_items SET quantity=v_after,unit_price=v_cost,updated_at=now() WHERE id=v_item.id;
+  INSERT INTO inventory_transactions(
+    id,company_id,item_id,warehouse_id,to_warehouse_id,type,quantity,unit_price,total_value,
+    balance_before,balance_after,date,notes,reference_type,reference_id,created_by,project_id
+  ) VALUES(
+    v_txn_id,p_company_id,v_item.id,p_warehouse_id,p_to_warehouse_id,v_kind,
+    CASE WHEN v_kind='adjustment' THEN abs(v_diff) ELSE p_quantity END,
+    v_cost,v_value,v_before,v_after,p_date,NULLIF(btrim(p_notes),''),
+    CASE WHEN v_journal_id IS NULL THEN NULL ELSE 'journal_entry' END,v_journal_id,p_user_id,p_project_id
+  ) RETURNING * INTO v_txn;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','inventory_transaction',v_txn.id,
+    to_jsonb(v_txn)||CASE WHEN v_kind='transfer' THEN jsonb_build_object('target_item_id',v_target.id,
+      'target_balance_before',v_target_before,'target_balance_after',v_target_after) ELSE '{}'::JSONB END);
+  RETURN jsonb_build_object('transaction',to_jsonb(v_txn),'source_quantity',v_after,
+    'target_quantity',CASE WHEN v_kind='transfer' THEN v_target_after ELSE NULL END,'journal_entry_id',v_journal_id);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.post_inventory_movement_atomic(UUID,UUID,UUID,TEXT,NUMERIC,NUMERIC,DATE,TEXT,UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.post_inventory_movement_atomic(UUID,UUID,UUID,TEXT,NUMERIC,NUMERIC,DATE,TEXT,UUID,UUID,UUID) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 072-project-costing-allocation.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- 072: Project costing — direct labor allocation & overhead (indirect) costs
+--
+-- Follows international construction-accounting practice (Sage 300 CRE,
+-- QuickBooks for Contractors, Viewpoint, NetSuite job costing):
+--
+--  1. DIRECT LABOR -> project
+--     Each salary-sheet item (an employee's salary line) can now carry an
+--     optional project_id. When the salary sheet is eventually posted to the
+--     ledger, the direct-labour cost is attributed to that project — the same
+--     "tag payroll lines to job + cost code" pattern the majors use.
+--     (Base wages live on account 5210 / direct labour 5120 and are
+--     recognised as project labour by the shared cost classifier.)
+--
+--  2. INDIRECT / OVERHEAD costs -> project
+--     A company may define one or more overhead-allocation rules. Each rule
+--     picks an allocation basis and a rate:
+--        basis = 'direct_cost'  -> allocated = rate x project direct cost
+--        basis = 'direct_labor' -> allocated = rate x project direct labour
+--     This mirrors Sage 300's overhead-type-and-rate-on-a-cost-category and
+--     the standard "percentage of direct cost / direct labour" methods. The
+--     allocated amount is reported SEPARATELY from direct costs so true job
+--     profitability can be seen (direct profit vs. profit after overhead).
+-- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1) Direct labor -> project: salary item carries an optional project.
+-- ---------------------------------------------------------------------------
+ALTER TABLE salary_items
+  ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id);
+
+CREATE INDEX IF NOT EXISTS idx_salary_items_project
+  ON salary_items(company_id, project_id);
+
+-- Tenant guard: a salary item's project must belong to the same company as the
+-- item (mirrors the guard used by the other project-cost entry points).
+CREATE OR REPLACE FUNCTION public.guard_salary_item_project_tenant()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+  IF NEW.project_id IS NOT NULL AND NOT EXISTS(
+    SELECT 1 FROM projects WHERE id=NEW.project_id AND company_id=NEW.company_id
+  ) THEN
+    RAISE EXCEPTION 'salary item project tenant mismatch';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_guard_salary_item_project_tenant ON salary_items;
+CREATE TRIGGER trg_guard_salary_item_project_tenant
+  BEFORE INSERT OR UPDATE ON salary_items
+  FOR EACH ROW EXECUTE FUNCTION public.guard_salary_item_project_tenant();
+
+-- ---------------------------------------------------------------------------
+-- 2) Overhead (indirect) allocation rules
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS overhead_allocations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  allocation_basis TEXT NOT NULL DEFAULT 'direct_cost'
+    CHECK (allocation_basis IN ('direct_cost', 'direct_labor')),
+  rate NUMERIC(10,4) NOT NULL DEFAULT 0
+    CHECK (rate >= 0 AND rate <= 1 AND rate = ROUND(rate, 4)),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(company_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_overhead_allocations_company
+  ON overhead_allocations(company_id, is_active);
+
+-- Update timestamp on rule edits.
+CREATE OR REPLACE FUNCTION public.touch_overhead_allocation()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+  NEW.updated_at := NOW();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_touch_overhead_allocation ON overhead_allocations;
+CREATE TRIGGER trg_touch_overhead_allocation
+  BEFORE UPDATE ON overhead_allocations
+  FOR EACH ROW EXECUTE FUNCTION public.touch_overhead_allocation();
+
+REVOKE ALL ON TABLE public.overhead_allocations FROM PUBLIC, anon, authenticated;
+
+ALTER TABLE public.overhead_allocations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation_overhead_allocations ON public.overhead_allocations;
+CREATE POLICY tenant_isolation_overhead_allocations ON public.overhead_allocations
+  FOR ALL
+  USING (company_id = public.tenant_company_id())
+  WITH CHECK (company_id = public.tenant_company_id());
+
+-- ---------------------------------------------------------------------------
+-- 3) Per-project costing + allocated overhead (single source for reports)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.get_project_costing_overhead(
+  p_company_id UUID,
+  p_project_ids UUID[] DEFAULT NULL,
+  p_from DATE DEFAULT NULL,
+  p_to DATE DEFAULT NULL
+) RETURNS TABLE(
+  project_id UUID,
+  direct_cost NUMERIC,
+  direct_labor NUMERIC,
+  allocated_overhead NUMERIC,
+  allocation_basis TEXT,
+  rate NUMERIC
+) LANGUAGE sql SECURITY DEFINER SET search_path=public STABLE AS $$
+  WITH totals AS (
+    SELECT jl.project_id,
+      COALESCE(sum(CASE WHEN a.type='expense' THEN jl.debit-jl.credit ELSE 0 END),0) AS direct_cost,
+      COALESCE(sum(CASE WHEN a.type='expense'
+        AND (a.code LIKE '512%' OR a.code LIKE '521%') THEN jl.debit-jl.credit ELSE 0 END),0) AS direct_labor
+    FROM journal_lines jl
+    JOIN journal_entries je ON je.id=jl.journal_entry_id AND je.company_id=p_company_id
+      AND je.deleted_at IS NULL AND (je.status='posted' OR je.reversed_by IS NOT NULL)
+    JOIN accounts a ON a.id=jl.account_id AND a.company_id=p_company_id
+    JOIN projects p ON p.id=jl.project_id AND p.company_id=p_company_id
+    WHERE jl.company_id=p_company_id AND jl.project_id IS NOT NULL
+      AND (p_project_ids IS NULL OR jl.project_id=ANY(p_project_ids))
+      AND (p_from IS NULL OR je.date>=p_from) AND (p_to IS NULL OR je.date<=p_to)
+    GROUP BY jl.project_id
+  ),
+  rules AS (
+    SELECT allocation_basis, rate, row_number() OVER (ORDER BY created_at, id) AS rn
+    FROM overhead_allocations
+    WHERE company_id=p_company_id AND is_active=TRUE
+  ),
+  combined AS (
+    SELECT t.project_id, t.direct_cost, t.direct_labor,
+      COALESCE(sum(r.rate * CASE WHEN r.allocation_basis='direct_labor' THEN t.direct_labor ELSE t.direct_cost END),0) AS allocated_overhead,
+      min(r.allocation_basis) AS basis,
+      COALESCE(sum(r.rate),0) AS rate
+    FROM totals t CROSS JOIN rules r
+    GROUP BY t.project_id, t.direct_cost, t.direct_labor
+  )
+  SELECT t.project_id, t.direct_cost, t.direct_labor,
+    COALESCE(c.allocated_overhead,0),
+    COALESCE(c.basis, 'direct_cost'),
+    COALESCE(c.rate,0)
+  FROM totals t LEFT JOIN combined c ON c.project_id=t.project_id;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_project_costing_overhead(UUID, UUID[], DATE, DATE)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_project_costing_overhead(UUID, UUID[], DATE, DATE)
+  TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- 4) create_salary_sheet now accepts an optional project_id per item so each
+--    employee's labour cost can be allocated to a project (direct labour).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.create_salary_sheet(
+  p_company_id UUID, p_name TEXT, p_month INTEGER, p_year INTEGER,
+  p_date DATE, p_items JSONB
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_sheet salary_sheets%ROWTYPE; v_item JSONB; v_employee UUID; v_project UUID;
+  v_basic NUMERIC; v_allowances NUMERIC; v_deductions NUMERIC;
+BEGIN
+  IF NULLIF(BTRIM(p_name),'') IS NULL OR LENGTH(p_name)>200 OR p_month NOT BETWEEN 1 AND 12 OR p_year NOT BETWEEN 2000 AND 9999 THEN
+    RAISE EXCEPTION 'بيانات كشف الرواتب غير صالحة';
+  END IF;
+  IF jsonb_typeof(COALESCE(p_items,'[]'::JSONB))<>'array' OR jsonb_array_length(COALESCE(p_items,'[]'::JSONB))>1000 THEN
+    RAISE EXCEPTION 'بنود كشف الرواتب غير صالحة';
+  END IF;
+  INSERT INTO salary_sheets(company_id,name,month,year,date,status)
+  VALUES(p_company_id,BTRIM(p_name),p_month,p_year,p_date,'draft') RETURNING * INTO v_sheet;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(COALESCE(p_items,'[]'::JSONB))
+  LOOP
+    BEGIN
+      v_employee:=(v_item->>'employee_id')::UUID;
+      v_basic:=COALESCE((v_item->>'basic_salary')::NUMERIC,0);
+      v_allowances:=COALESCE((v_item->>'allowances')::NUMERIC,0);
+      v_deductions:=COALESCE((v_item->>'deductions')::NUMERIC,0);
+      v_project:=NULLIF((v_item->>'project_id')::TEXT,'')::UUID;
+    EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+      RAISE EXCEPTION 'أحد بنود كشف الرواتب غير صالح';
+    END;
+    IF NOT EXISTS(SELECT 1 FROM employees WHERE id=v_employee AND company_id=p_company_id AND COALESCE(is_active,TRUE)=TRUE) THEN
+      RAISE EXCEPTION 'أحد الموظفين غير موجود أو غير نشط';
+    END IF;
+    IF v_project IS NOT NULL AND NOT EXISTS(
+      SELECT 1 FROM projects WHERE id=v_project AND company_id=p_company_id AND status='active'
+    ) THEN
+      RAISE EXCEPTION 'المشروع المرتبط ببند الرواتب غير صالح أو غير نشط';
+    END IF;
+    IF v_basic<0 OR v_allowances<0 OR v_deductions<0 OR v_basic<>ROUND(v_basic,2)
+      OR v_allowances<>ROUND(v_allowances,2) OR v_deductions<>ROUND(v_deductions,2)
+      OR v_basic+v_allowances-v_deductions<0 THEN RAISE EXCEPTION 'أحد بنود كشف الرواتب غير صالح'; END IF;
+    INSERT INTO salary_items(company_id,sheet_id,employee_id,basic_salary,allowances,deductions,net_pay,project_id)
+    VALUES(p_company_id,v_sheet.id,v_employee,v_basic,v_allowances,v_deductions,v_basic+v_allowances-v_deductions,v_project);
+  END LOOP;
+  RETURN to_jsonb(v_sheet);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_salary_sheet(UUID,TEXT,INTEGER,INTEGER,DATE,JSONB) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_salary_sheet(UUID,TEXT,INTEGER,INTEGER,DATE,JSONB) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 073-project-no-auto-invoice.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- 073: Project is a reference record — it must never auto-create an invoice
+--
+-- Business rule (requested): creating a project must NOT create an invoice,
+-- must NOT post a journal entry, and must NOT affect the client's balance.
+-- The client link on the project is reference-only (for reviewing a client's
+-- projects). Invoices are created manually and can be derived from the
+-- project; only invoices move the client balance.
+--
+-- The previous create_project_atomic accepted p_auto_invoice and, when true,
+-- created a sales invoice (and effectively touched the client). We remove
+-- that path entirely while keeping the function signature stable so existing
+-- callers and the wrapper continue to work.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.create_project_atomic(
+  p_company_id UUID,p_name TEXT,p_client_id UUID,p_contract_value NUMERIC,
+  p_start_date DATE,p_end_date DATE,p_status TEXT,p_description TEXT,p_location TEXT,
+  p_items JSONB,p_auto_invoice BOOLEAN,p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_project projects%ROWTYPE;
+  v_client UUID:=p_client_id;
+  v_contact contacts%ROWTYPE;
+  v_item JSONB;
+  v_qty NUMERIC;
+  v_price NUMERIC;
+  v_items_total NUMERIC:=0;
+BEGIN
+  IF NULLIF(btrim(p_name),'') IS NULL OR length(p_name)>300 OR p_contract_value<=0
+    OR p_start_date IS NULL OR (p_end_date IS NOT NULL AND p_end_date<p_start_date)
+    OR p_status NOT IN ('active','on_hold') OR jsonb_typeof(p_items)<>'array'
+    OR jsonb_array_length(p_items)>1000 OR length(COALESCE(p_description,''))>5000
+    OR length(COALESCE(p_location,''))>1000
+  THEN RAISE EXCEPTION 'بيانات المشروع غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM set_config('app.project_write_company',p_company_id::TEXT,TRUE);
+
+  IF v_client IS NULL THEN
+    -- A project without a chosen client stays reference-only (no cash-customer
+    -- auto-creation, no invoice). The client link is optional for projects.
+    v_client:=NULL;
+  ELSIF NOT EXISTS(
+    SELECT 1 FROM contacts WHERE id=v_client AND company_id=p_company_id AND COALESCE(is_active,TRUE)
+  ) THEN RAISE EXCEPTION 'العميل غير موجود'; END IF;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    BEGIN v_qty:=(v_item->>'quantity')::NUMERIC; v_price:=(v_item->>'unit_price')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'بند جدول كميات غير صالح'; END;
+    IF NULLIF(btrim(v_item->>'description'),'') IS NULL OR v_qty<=0 OR v_price<0
+    THEN RAISE EXCEPTION 'بند جدول كميات غير صالح'; END IF;
+    v_items_total:=v_items_total+round(v_qty*v_price,2);
+  END LOOP;
+  IF jsonb_array_length(p_items)>0 AND abs(v_items_total-p_contract_value)>0.01 THEN
+    RAISE EXCEPTION 'قيمة العقد لا تطابق إجمالي جدول الكميات';
+  END IF;
+
+  INSERT INTO projects(
+    company_id,name,client_id,contract_value,start_date,end_date,status,
+    description,location,created_by
+  ) VALUES(
+    p_company_id,btrim(p_name),v_client,p_contract_value,p_start_date,p_end_date,
+    p_status,NULLIF(btrim(p_description),''),NULLIF(btrim(p_location),''),p_user_id
+  ) RETURNING * INTO v_project;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_qty:=(v_item->>'quantity')::NUMERIC; v_price:=(v_item->>'unit_price')::NUMERIC;
+    INSERT INTO boq_items(company_id,project_id,description,unit,quantity,unit_price,total)
+    VALUES(p_company_id,v_project.id,btrim(v_item->>'description'),COALESCE(NULLIF(btrim(v_item->>'unit'),''),'واحدة'),v_qty,v_price,round(v_qty*v_price,2));
+  END LOOP;
+
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','project',v_project.id,to_jsonb(v_project));
+  RETURN to_jsonb(v_project)||jsonb_build_object(
+    'invoice',NULL,
+    'boq_items_count',jsonb_array_length(p_items)
+  );
+END;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 074-voucher-auto-settlement.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- 074: Voucher auto-settlement — apply undirected payments/disbursements to
+-- the oldest open invoices.
+--
+-- Client receipts already supported FIFO (oldest unpaid invoice first) when
+-- no allocations were supplied. This adds the mirror for supplier/
+-- subcontractor DISBURSEMENTS so an undirected payment to a supplier settles
+-- his oldest purchase invoices, matching the user's requested behavior:
+-- "settle the oldest invoices from the balance/payments, same for supplier."
+-- ============================================================================
+
+DROP FUNCTION IF EXISTS public.create_voucher_disbursement_atomic(
+  UUID,DATE,TEXT,UUID,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID
+);
+
+CREATE OR REPLACE FUNCTION public.create_voucher_disbursement_atomic(
+ p_company_id UUID,p_date DATE,p_disbursement_type TEXT,p_contact_id UUID,p_employee_id UUID,p_amount NUMERIC,
+ p_bank_safe_id UUID,p_reason TEXT,p_allocations JSONB,p_request_approval BOOLEAN,p_user_id UUID,
+ p_auto_fifo BOOLEAN DEFAULT FALSE
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_bank banks_safes%ROWTYPE; v_voucher voucher_disbursements%ROWTYPE; v_number INTEGER; v_counterpart UUID;
+ v_journal JSONB; v_journal_id UUID; v_balance NUMERIC; v_item JSONB; v_invoice purchase_invoices%ROWTYPE;
+ v_alloc NUMERIC; v_alloc_total NUMERIC:=0; v_applied NUMERIC:=0; v_remaining NUMERIC; v_new_paid NUMERIC; v_approval approval_requests%ROWTYPE;
+BEGIN
+ IF p_date IS NULL OR p_disbursement_type NOT IN ('supplier','employee_advance','subcontractor','client_refund','other')
+  OR p_amount<=0 OR p_amount<>ROUND(p_amount,2) OR NULLIF(BTRIM(p_reason),'') IS NULL OR LENGTH(p_reason)>500
+  OR jsonb_typeof(p_allocations)<>'array' OR jsonb_array_length(p_allocations)>100 THEN RAISE EXCEPTION 'بيانات سند الصرف غير صالحة'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+ IF p_contact_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM contacts WHERE id=p_contact_id AND company_id=p_company_id) THEN RAISE EXCEPTION 'الطرف غير موجود'; END IF;
+ IF p_employee_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM employees WHERE id=p_employee_id AND company_id=p_company_id AND is_active=TRUE) THEN RAISE EXCEPTION 'الموظف غير موجود'; END IF;
+ SELECT * INTO v_bank FROM banks_safes WHERE id=p_bank_safe_id AND company_id=p_company_id AND is_active=TRUE FOR UPDATE;
+ IF NOT FOUND OR v_bank.account_id IS NULL THEN RAISE EXCEPTION 'البنك أو الخزينة غير موجود'; END IF;
+ SELECT id INTO v_counterpart FROM accounts WHERE company_id=p_company_id AND code=CASE p_disbursement_type
+  WHEN 'supplier' THEN '2110' WHEN 'employee_advance' THEN '1160' WHEN 'subcontractor' THEN '2150'
+  WHEN 'client_refund' THEN '1130' ELSE '5400' END AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+ IF v_counterpart IS NULL OR v_counterpart=v_bank.account_id THEN RAISE EXCEPTION 'الحساب المقابل غير صالح'; END IF;
+
+ FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+  BEGIN v_alloc:=(v_item->>'amount')::NUMERIC; EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'مبلغ التخصيص غير صالح'; END;
+  IF NULLIF(v_item->>'invoice_id','') IS NULL OR v_alloc<=0 OR v_alloc<>ROUND(v_alloc,2) THEN RAISE EXCEPTION 'بيانات تخصيص الفواتير غير صالحة'; END IF;
+  IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_allocations) x WHERE x->>'invoice_id'=v_item->>'invoice_id' GROUP BY x->>'invoice_id' HAVING COUNT(*)>1) THEN RAISE EXCEPTION 'تخصيص فاتورة مكرر'; END IF;
+  SELECT * INTO v_invoice FROM purchase_invoices WHERE id=(v_item->>'invoice_id')::UUID AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND OR v_invoice.status IN ('cancelled','paid') THEN RAISE EXCEPTION 'فاتورة الشراء غير صالحة للتخصيص'; END IF;
+  IF p_contact_id IS NOT NULL AND v_invoice.supplier_id<>p_contact_id THEN RAISE EXCEPTION 'الفاتورة لا تخص الطرف المحدد'; END IF;
+  IF v_invoice.paid_amount+v_alloc>v_invoice.total+0.005 THEN RAISE EXCEPTION 'التخصيص يتجاوز المتبقي على الفاتورة'; END IF;
+  v_alloc_total:=v_alloc_total+v_alloc;
+ END LOOP;
+ IF v_alloc_total>p_amount+0.005 THEN RAISE EXCEPTION 'مجموع التخصيصات يتجاوز مبلغ السند'; END IF;
+
+ v_number:=next_voucher_number(p_company_id,'voucher_disbursements');
+ INSERT INTO voucher_disbursements(company_id,number,date,disbursement_type,contact_id,employee_id,amount,bank_safe_id,reason,created_by,status)
+ VALUES(p_company_id,v_number,p_date,p_disbursement_type,p_contact_id,p_employee_id,p_amount,p_bank_safe_id,BTRIM(p_reason),p_user_id,
+  CASE WHEN p_request_approval THEN 'pending' ELSE 'approved' END) RETURNING * INTO v_voucher;
+
+ IF p_request_approval THEN
+  INSERT INTO approval_requests(company_id,transaction_type,transaction_id,entity_type,entity_id,amount,requester_id,status,message,description)
+  VALUES(p_company_id,'voucher_disbursement',v_voucher.id::TEXT,'voucher_disbursement',v_voucher.id,p_amount,p_user_id,'pending',BTRIM(p_reason),BTRIM(p_reason)) RETURNING * INTO v_approval;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+   INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+   VALUES(p_company_id,v_voucher.id,(v_item->>'invoice_id')::UUID,(v_item->>'amount')::NUMERIC,NULL);
+  END LOOP;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,p_user_id,'request_approval','voucher_disbursement',v_voucher.id,jsonb_build_object('approval_id',v_approval.id,'amount',p_amount));
+  RETURN to_jsonb(v_voucher)||jsonb_build_object('requires_approval',TRUE,'approval_id',v_approval.id);
+ END IF;
+
+ v_balance:=get_account_balance(p_company_id,v_bank.account_id,NULL,NULL);
+ IF v_balance+0.005<p_amount THEN RAISE EXCEPTION 'الرصيد غير كاف للصرف'; END IF;
+ v_journal:=create_journal_entry(p_company_id,p_date,'general','سند صرف رقم '||v_number||': '||BTRIM(p_reason),p_user_id,jsonb_build_array(
+  jsonb_build_object('accountId',v_counterpart,'debit',p_amount,'credit',0,'contactId',p_contact_id),
+  jsonb_build_object('accountId',v_bank.account_id,'debit',0,'credit',p_amount)));
+ v_journal_id:=(v_journal->>'id')::UUID;
+ UPDATE journal_entries SET reference_type='voucher_disbursement',reference_id=v_voucher.id WHERE id=v_journal_id AND company_id=p_company_id;
+ FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+  SELECT * INTO v_invoice FROM purchase_invoices WHERE id=(v_item->>'invoice_id')::UUID AND company_id=p_company_id FOR UPDATE;
+  v_alloc:=(v_item->>'amount')::NUMERIC; v_new_paid:=ROUND(v_invoice.paid_amount+v_alloc,2);
+  UPDATE purchase_invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_invoice.total-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+  INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+  VALUES(p_company_id,v_voucher.id,v_invoice.id,v_alloc,v_journal_id);
+  v_applied:=v_applied+v_alloc;
+ END LOOP;
+
+ -- Supplier / subcontractor FIFO: an undirected disbursement settles the
+ -- oldest open purchase invoices of the same supplier.
+ IF jsonb_array_length(p_allocations)=0 AND COALESCE(p_auto_fifo,FALSE)
+    AND p_disbursement_type IN ('supplier','subcontractor') AND p_contact_id IS NOT NULL THEN
+  v_remaining:=p_amount;
+  FOR v_invoice IN SELECT * FROM purchase_invoices
+   WHERE company_id=p_company_id AND supplier_id=p_contact_id AND status NOT IN ('cancelled','paid')
+   ORDER BY date,number FOR UPDATE LOOP
+   EXIT WHEN v_remaining<=0.005;
+   v_alloc:=LEAST(v_remaining,ROUND(v_invoice.total-v_invoice.paid_amount,2)); CONTINUE WHEN v_alloc<=0;
+   v_new_paid:=ROUND(v_invoice.paid_amount+v_alloc,2);
+   UPDATE purchase_invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_invoice.total-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+   INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+   VALUES(p_company_id,v_voucher.id,v_invoice.id,v_alloc,v_journal_id);
+   v_applied:=v_applied+v_alloc; v_remaining:=v_remaining-v_alloc;
+  END LOOP;
+ END IF;
+ UPDATE voucher_disbursements SET journal_entry_id=v_journal_id WHERE id=v_voucher.id RETURNING * INTO v_voucher;
+ INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,p_user_id,'post','voucher_disbursement',v_voucher.id,to_jsonb(v_voucher));
+ RETURN to_jsonb(v_voucher)||jsonb_build_object('requires_approval',FALSE,'allocated_amount',ROUND(v_applied,2),'unapplied_amount',ROUND(p_amount-v_applied,2));
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_voucher_disbursement_atomic(UUID,DATE,TEXT,UUID,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID,BOOLEAN) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_voucher_disbursement_atomic(UUID,DATE,TEXT,UUID,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID,BOOLEAN) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 075-purchase-invoice-other-expenses.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================================
+-- 075: Purchase invoice — additional "other expenses" line
+--
+-- A purchase invoice can carry extra costs that are NOT owed to the supplier
+-- (freight, fuel, car rental, labour, maintenance, etc.). These increase the
+-- cost base of the purchase (they are debited to the cost/inventory account
+-- alongside the line items) but are credited to a payment account rather than
+-- to the supplier's payable, so the supplier balance stays clean.
+--
+--   Debit  cost account          = items subtotal + other expenses
+--   Credit supplier payable      = items subtotal (+ VAT)
+--   Credit payment account       = other expenses total
+--
+-- The per-item cost therefore rises above the supplier's unit price, matching
+-- the requested behaviour.
+-- ============================================================================
+
+ALTER TABLE purchase_invoices
+  ADD COLUMN IF NOT EXISTS other_expenses_total NUMERIC(15,2) NOT NULL DEFAULT 0;
+
+-- Resolve an account by code/optional id for an "other expense" line.
+CREATE OR REPLACE FUNCTION public.resolve_other_expense_account(
+  p_company_id UUID, p_code TEXT, p_account_id UUID
+) RETURNS UUID LANGUAGE sql SECURITY DEFINER SET search_path=public STABLE AS $$
+  SELECT id FROM accounts
+  WHERE company_id=p_company_id
+    AND ((p_account_id IS NOT NULL AND id=p_account_id) OR (p_account_id IS NULL AND code=COALESCE(NULLIF(p_code,''),'5400')))
+    AND type='expense' AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE)
+  LIMIT 1;
+$$;
+
+DROP FUNCTION IF EXISTS public.create_purchase_invoice_atomic(
+  UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID
+);
+
+CREATE OR REPLACE FUNCTION public.create_purchase_invoice_atomic(
+  p_company_id UUID,p_supplier_id UUID,p_purchase_order_id UUID,p_project_id UUID,
+  p_custody_id UUID,p_link_to_project BOOLEAN,p_date DATE,p_items JSONB,
+  p_tax_rate NUMERIC,p_notes TEXT,p_user_id UUID,
+  p_other_expenses JSONB DEFAULT '[]'::JSONB,
+  p_payment_account_id UUID DEFAULT NULL
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_result JSONB;
+  v_invoice_id UUID;
+  v_inv_number TEXT;
+  v_oe JSONB;
+  v_oe_desc TEXT;
+  v_oe_amount NUMERIC;
+  v_oe_code TEXT;
+  v_oe_account_id UUID;
+  v_oe_acc UUID;
+  v_other_total NUMERIC:=0;
+  v_pay_acc UUID;
+  v_lines JSONB:='[]'::JSONB;
+  v_journal JSONB;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM set_config('app.custody_write_company',p_company_id::TEXT,TRUE);
+
+  -- Validate other expenses first so nothing is partially committed.
+  IF jsonb_typeof(COALESCE(p_other_expenses,'[]'::JSONB))<>'array' OR jsonb_array_length(p_other_expenses)>100
+  THEN RAISE EXCEPTION 'بيانات المصروفات الإضافية غير صالحة'; END IF;
+  FOR v_oe IN SELECT value FROM jsonb_array_elements(COALESCE(p_other_expenses,'[]'::JSONB)) LOOP
+    BEGIN
+      v_oe_amount:=(v_oe->>'amount')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'مبلغ مصروف إضافي غير صالح'; END;
+    v_oe_desc:=COALESCE(BTRIM(v_oe->>'description'),'');
+    v_oe_code:=COALESCE(v_oe->>'account_code','5400');
+    IF NULLIF(v_oe_desc,'') IS NULL OR LENGTH(v_oe_desc)>200 OR v_oe_amount IS NULL OR v_oe_amount<=0
+      OR v_oe_amount<>ROUND(v_oe_amount,2) THEN RAISE EXCEPTION 'بند مصروف إضافي غير صالح'; END IF;
+    v_other_total:=v_other_total+v_oe_amount;
+  END LOOP;
+
+  v_result:=create_purchase_invoice_atomic_v55_internal(p_company_id,p_supplier_id,p_purchase_order_id,
+    p_project_id,p_custody_id,p_link_to_project,p_date,p_items,p_tax_rate,p_notes,p_user_id);
+  v_invoice_id:=(v_result->>'id')::UUID;
+  v_inv_number:=COALESCE(v_result->>'invoice_number',v_result->>'number');
+
+  IF v_other_total>0 THEN
+    IF p_payment_account_id IS NOT NULL THEN
+      SELECT id INTO v_pay_acc FROM accounts WHERE id=p_payment_account_id AND company_id=p_company_id
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      IF v_pay_acc IS NULL THEN RAISE EXCEPTION 'حساب دفع المصروفات الإضافية غير صالح'; END IF;
+    ELSE
+      SELECT id INTO v_pay_acc FROM accounts WHERE company_id=p_company_id AND code='1110'
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      IF v_pay_acc IS NULL THEN RAISE EXCEPTION 'حساب دفع المصروفات الإضافية غير موجود'; END IF;
+    END IF;
+    FOR v_oe IN SELECT value FROM jsonb_array_elements(p_other_expenses) LOOP
+      v_oe_amount:=(v_oe->>'amount')::NUMERIC;
+      v_oe_desc:=COALESCE(BTRIM(v_oe->>'description'),'');
+      v_oe_code:=COALESCE(v_oe->>'account_code','5400');
+      v_oe_account_id:=NULLIF(v_oe->>'account_id','')::UUID;
+      v_oe_acc:=resolve_other_expense_account(p_company_id,v_oe_code,v_oe_account_id);
+      IF v_oe_acc IS NULL THEN RAISE EXCEPTION 'حساب مصروف «%» غير موجود', v_oe_code; END IF;
+      v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+        'accountId',v_oe_acc,'debit',v_oe_amount,'credit',0,'description',v_oe_desc,'projectId',(v_result->>'project_id')::UUID));
+    END LOOP;
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_pay_acc,'debit',0,'credit',v_other_total,'description','مصاريف إضافية فاتورة '||v_inv_number));
+    v_journal:=create_journal_entry(p_company_id,p_date,'general','مصاريف إضافية فاتورة '||v_inv_number,p_user_id,v_lines);
+    UPDATE purchase_invoices SET other_expenses_total=v_other_total WHERE id=v_invoice_id AND company_id=p_company_id;
+  END IF;
+
+  RETURN v_result||jsonb_build_object('other_expenses_total',v_other_total,
+    'other_expenses_journal_entry_id',CASE WHEN v_journal IS NULL THEN NULL ELSE v_journal->>'id' END);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_purchase_invoice_atomic(UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_purchase_invoice_atomic(UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID) TO service_role;
 

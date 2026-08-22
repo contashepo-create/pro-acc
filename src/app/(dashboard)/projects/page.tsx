@@ -579,7 +579,7 @@ export default function ProjectsPage() {
             </div>
 
             {/* رأس الجدول */}
-            <div className="hidden md:grid grid-cols-[2.5rem_1fr_6rem_7rem_9rem_9rem_2.5rem] gap-2 px-3 pb-2 text-[11px] font-bold text-text-muted">
+            <div className="hidden md:grid grid-cols-[2rem_minmax(0,2.4fr)_5rem_5.5rem_7rem_7.5rem_2.5rem] gap-2 px-3 pb-2 text-[11px] font-bold text-text-muted">
               <span className="text-center">#</span>
               <span>البيان / وصف الأعمال</span>
               <span className="text-center">الوحدة</span>
@@ -593,7 +593,7 @@ export default function ProjectsPage() {
               {boqItems.map((item, idx) => (
                 <div
                   key={idx}
-                  className="grid grid-cols-1 md:grid-cols-[2.5rem_1fr_6rem_7rem_9rem_9rem_2.5rem] gap-2 items-center p-2 rounded-xl bg-bg-secondary border border-border"
+                  className="grid grid-cols-1 md:grid-cols-[2rem_minmax(0,2.4fr)_5rem_5.5rem_7rem_7.5rem_2.5rem] gap-2 items-center p-2 rounded-xl bg-bg-secondary border border-border"
                 >
                   <span className="hidden md:block text-center text-xs font-mono font-bold text-text-muted">{idx + 1}</span>
                   <div className="md:col-start-1 md:hidden text-xs font-mono text-text-muted">بند {idx + 1}</div>
@@ -644,6 +644,18 @@ export default function ProjectsPage() {
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* ملخص بنود جدول الكميات */}
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+              <div className="text-sm text-text-muted">
+                عدد البنود: <span className="font-bold text-text-primary">{boqItems.filter((i: any) => i.description?.trim()).length}</span>
+                {' '}— إجمالي الكميات: <span className="font-bold text-text-primary">{boqItems.reduce((s: number, i: any) => s + (Number(i.quantity) || 0), 0).toLocaleString('en')}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-text-muted">إجمالي قيمة العقد:</span>
+                <span className="font-mono font-bold text-accent text-lg">{formatCurrency(form.contract_value)}</span>
+              </div>
             </div>
           </section>
 

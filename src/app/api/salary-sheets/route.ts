@@ -29,16 +29,27 @@ export async function POST(req: NextRequest) {
     const normalized = (items || []).map((item: any) => ({
       employee_id: item?.employeeId, basic_salary: Number(item?.basicSalary ?? 0),
       allowances: Number(item?.allowances ?? 0), deductions: Number(item?.deductions ?? 0),
+      project_id: item?.projectId ?? item?.project_id ?? null,
     }));
     if (normalized.some((item: any) => !item.employee_id || ![item.basic_salary,item.allowances,item.deductions].every((value) => Number.isFinite(value) && value>=0)
       || item.basic_salary+item.allowances-item.deductions<0)
       || new Set(normalized.map((item: any) => item.employee_id)).size!==normalized.length) return error('أحد بنود كشف الرواتب غير صالح أو مكرر');
+    if (normalized.some((item: any) => item.project_id && (typeof item.project_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.project_id)))) {
+      return error('معرّف المشروع المرتبط بأحد البنود غير صالح');
+    }
     if (normalized.length) {
       const employeeIds = normalized.map((item: any) => item.employee_id);
+      const projectIds = normalized.map((item: any) => item.project_id).filter(Boolean);
       const { data: employees, error: employeeError } = await s.from('employees').select('id')
         .eq('company_id', auth.companyId).in('id', employeeIds);
       if (employeeError) throw employeeError;
       if ((employees || []).length !== employeeIds.length) return error('أحد الموظفين لا ينتمي إلى الشركة', 404);
+      if (projectIds.length) {
+        const { data: projects, error: projectError } = await s.from('projects').select('id')
+          .eq('company_id', auth.companyId).in('id', projectIds);
+        if (projectError) throw projectError;
+        if ((projects || []).length !== new Set(projectIds).size) return error('أحد المشاريع المرتبطة لا ينتمي إلى الشركة', 404);
+      }
     }
     const { data: sheet, error: rpcErr } = await s.rpc('create_salary_sheet', {
       p_company_id: auth.companyId,

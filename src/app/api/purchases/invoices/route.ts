@@ -62,6 +62,8 @@ export async function POST(req: NextRequest) {
       p_custody_id: value.custody_id || null, p_link_to_project: value.link_to_project !== false,
       p_date: value.date, p_items: value.items, p_tax_rate: value.tax_rate,
       p_notes: value.notes || '', p_user_id: auth.userId,
+      p_other_expenses: value.other_expenses || [],
+      p_payment_account_id: value.payment_account_id || null,
     });
     const message = String(createError?.message || '');
     if (message.includes('المورد غير موجود') || message.includes('المشروع غير موجود')) return error(message, 404);

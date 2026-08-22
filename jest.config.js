@@ -24,15 +24,32 @@ module.exports = {
   collectCoverageFrom: [
     'src/lib/**/*.ts',
     '!src/lib/**/*.d.ts',
+    // Track the API route layer (business/security/accounting logic) too.
+    'src/app/api/**/*.ts',
   ],
   // Ratchet the measured baseline: new code may raise these values but cannot
   // silently reduce the tested share of shared business functions.
+  //
+  // src/lib/** is held to 100% (statements/branches/functions/lines). The API
+  // route layer is large and is being brought up incrementally — the global
+  // thresholds below reflect the current blended baseline and are raised as
+  // coverage grows; they can never regress without a test going red.
   coverageThreshold: {
-    global: {
+    // src/lib/** is held to 100% (statements/branches/functions/lines).
+    'src/lib/**/*.ts': {
       statements: 100,
       branches: 100,
       functions: 100,
       lines: 100,
+    },
+    // global applies to files not matched by a specific glob — i.e. the API
+    // route layer (src/lib/** is pinned to 100% above). These are the current
+    // measured API baselines and are ratcheted upward as coverage grows.
+    global: {
+      statements: 79,
+      branches: 63,
+      functions: 92,
+      lines: 88,
     },
   },
 };
