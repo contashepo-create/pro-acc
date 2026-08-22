@@ -62,6 +62,22 @@ describe('SearchInput', () => {
     act(() => { jest.advanceTimersByTime(350); });
     expect(onChange).toHaveBeenCalledWith('abc');
   });
+
+  test('clears the value via the clear button', () => {
+    const onChange = jest.fn();
+    render(<SearchInput onChange={onChange} value="بحث" />);
+    const input = screen.getByPlaceholderText('بحث...');
+    expect(input).toHaveValue('بحث');
+    fireEvent.click(screen.getByLabelText('مسح البحث'));
+    expect(input).toHaveValue('');
+    expect(onChange).toHaveBeenCalledWith('');
+  });
+
+  test('renders a loader instead of a clear button when loading', () => {
+    const onChange = jest.fn();
+    render(<SearchInput onChange={onChange} value="x" loading />);
+    expect(screen.queryByLabelText('مسح البحث')).not.toBeInTheDocument();
+  });
 });
 
 describe('Modal', () => {

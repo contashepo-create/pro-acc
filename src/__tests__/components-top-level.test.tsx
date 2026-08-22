@@ -3,7 +3,7 @@
  * Run via jest -c jest.ui.config.js (jsdom + React Testing Library).
  */
 import React from 'react';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
 import { VisitorTracker } from '@/components/VisitorTracker';
 import { SubscriptionBanner } from '@/components/SubscriptionBanner';
@@ -70,6 +70,39 @@ describe('AdBanner', () => {
     });
     render(<AdBanner />);
     expect(await screen.findByText('إعلان')).toBeInTheDocument();
+  });
+
+  test('renders a link when the banner has one', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'a1', title: 'إعلان', body: 'نص', type: 'banner', link_url: 'https://x.com', link_text: 'افتح' }] }),
+    });
+    render(<AdBanner />);
+    const link = await screen.findByRole('link', { name: 'افتح' });
+    expect(link).toHaveAttribute('href', 'https://x.com');
+  });
+
+  test('dismisses a banner and persists the dismissal', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'a1', title: 'إعلان', body: 'نص', type: 'banner', link_url: null, link_text: null, priority: 1 }] }),
+    });
+    render(<AdBanner />);
+    await screen.findByText('إعلان');
+    fireEvent.click(screen.getByTitle('إخفاء'));
+    expect(screen.queryByText('إعلان')).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('proacc_dismissed_banners') || '[]')).toContain('a1');
+  });
+
+  test('skips banners already dismissed', async () => {
+    localStorage.setItem('proacc_dismissed_banners', JSON.stringify(['a1']));
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'a1', title: 'إعلان', body: 'نص', type: 'banner', link_url: null, link_text: null, priority: 1 }] }),
+    });
+    const { container } = render(<AdBanner />);
+    await act(async () => { await Promise.resolve(); });
+    expect(container.firstChild).toBeNull();
   });
 });
 
