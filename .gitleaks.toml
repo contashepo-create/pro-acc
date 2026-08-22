@@ -45,10 +45,11 @@ regex = '''(?i)\b(TOKEN_SECRET|ADMIN_TOKEN_SECRET|BACKUP_SECRET|PORTAL_SECRET|CR
 keywords = ["token_secret", "backup_secret", "portal_secret", "cron_secret", "license_salt"]
 
 [[rules.allowlists]]
-description = "Deterministic non-production values used by unit tests in PR #22"
+description = "Deterministic non-production values used by unit tests"
 regexTarget = "match"
 regexes = [
   '''(?i)test-only''',
+  '''(?i)(test-secret-key-for-unit-tests-32chars|test-admin-secret-key-for-unit-tests-32chars|user-test-secret-that-is-at-least-32-characters|admin-test-secret-that-is-at-least-32-characters|tenant-entitlement-test-secret-32-characters|test-admin-separate-secret-32chars|test-portal-secret-that-is-at-least-32-characters-long|portal-test-secret-at-least-32-characters-long|expected-secret-value-32chars)''',
   '''(?i)(dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)''',
 ]
 
@@ -74,5 +75,9 @@ regexes = [
   # deterministic non-production strings, not issued credentials. Keep this
   # narrow so a real app secret in a test file is still reported.
   '''(?i)(dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)''',
+  # Deterministic JWT-signing/portal/backup fixtures used across the unit-test
+  # suite. Throwaway non-production values; a real secret beside them is still
+  # reported because these markers never appear in issued credentials.
+  '''(?i)(test-secret-key-for-unit-tests-32chars|test-admin-secret-key-for-unit-tests-32chars|user-test-secret-that-is-at-least-32-characters|admin-test-secret-that-is-at-least-32-characters|tenant-entitlement-test-secret-32-characters|test-admin-separate-secret-32chars|test-portal-secret-that-is-at-least-32-characters-long|portal-test-secret-at-least-32-characters-long|expected-secret-value-32chars)''',
   '''postgres(?:ql)?://(postgres:postgres|user:password)@''',
 ]
