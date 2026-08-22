@@ -16,6 +16,12 @@ jest.mock('@/store/theme-store', () => ({ initTheme: (...a: any[]) => initThemeM
 const fetchMock = jest.fn();
 global.fetch = fetchMock as any;
 
+beforeEach(() => {
+  localStorage.clear();
+  sessionStorage.clear();
+  document.body.innerHTML = '';
+});
+
 afterEach(() => {
   jest.clearAllMocks();
   jest.useRealTimers();
@@ -114,5 +120,47 @@ describe('AnnouncementBar', () => {
     });
     render(<AnnouncementBar />);
     expect(await screen.findByText('تنويه')).toBeInTheDocument();
+  });
+
+  test('renders a link when the announcement has one', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'a1', title: 'تنويه', body: 'نص', type: 'announcement', link_url: 'https://x.com', link_text: 'تفاصيل' }] }),
+    });
+    render(<AnnouncementBar />);
+    const link = await screen.findByRole('link', { name: 'تفاصيل' });
+    expect(link).toHaveAttribute('href', 'https://x.com');
+  });
+
+  test('dismisses an announcement and persists it', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'a1', title: 'تنويه', body: 'نص', type: 'announcement', link_url: null, link_text: null, priority: 1 }] }),
+    });
+    render(<AnnouncementBar />);
+    await screen.findByText('تنويه');
+    fireEvent.click(screen.getByTitle('إخفاء الإعلان'));
+    expect(screen.queryByText('تنويه')).not.toBeInTheDocument();
+    const stored = JSON.parse(localStorage.getItem('proacc_dismissed_ads') || '{}');
+    expect(stored).toHaveProperty('a1');
+  });
+
+  test('hides announcements whose show_until date has passed', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'a1', title: 'منتهي', body: 'نص', type: 'announcement', show_until: '2020-01-01T00:00:00', link_url: null, link_text: null, priority: 1 }] }),
+    });
+    const { container } = render(<AnnouncementBar />);
+    await act(async () => { await Promise.resolve(); });
+    expect(container.firstChild).toBeNull();
+  });
+
+  test('renders an alert-type announcement with different styling', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ id: 'a1', title: 'تحذير', body: 'نص', type: 'alert', link_url: null, link_text: null, priority: 1 }] }),
+    });
+    render(<AnnouncementBar />);
+    expect(await screen.findByText('تحذير')).toBeInTheDocument();
   });
 });
