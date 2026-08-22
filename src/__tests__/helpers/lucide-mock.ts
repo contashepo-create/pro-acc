@@ -10,7 +10,7 @@ const iconHandler: Record<string, any> = {
 
 function Icon(name: string) {
   return function MockIcon(props: any) {
-    return React.createElement('span', { 'data-icon': name, ...props }, name);
+    return React.createElement('span', { 'data-icon': name, ...props });
   };
 }
 

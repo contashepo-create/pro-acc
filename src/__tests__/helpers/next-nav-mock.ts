@@ -1,15 +1,20 @@
 /** Mock for next/navigation used by UI tests. */
 
+const router = {
+  push: jest.fn(),
+  replace: jest.fn(),
+  prefetch: jest.fn(),
+  back: jest.fn(),
+  forward: jest.fn(),
+  refresh: jest.fn(),
+};
+
 export function useRouter() {
-  return {
-    push: jest.fn(),
-    replace: jest.fn(),
-    prefetch: jest.fn(),
-    back: jest.fn(),
-    forward: jest.fn(),
-    refresh: jest.fn(),
-  };
+  return router;
 }
+
+/** Shared router instance so tests can assert on the same mock the component used. */
+export const __router = router;
 
 export function usePathname() {
   return '/dashboard';

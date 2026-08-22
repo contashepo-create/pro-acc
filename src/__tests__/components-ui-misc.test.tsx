@@ -39,7 +39,7 @@ describe('ActionButtons', () => {
     const onEdit = jest.fn();
     const onDelete = jest.fn();
     render(<ActionButtons item={{ id: '1', name: 'x' }} onEdit={onEdit} onDelete={onDelete} />);
-    fireEvent.click(screen.getByText('Edit'));
+    fireEvent.click(screen.getByTitle('تعديل السجل'));
     expect(onEdit).toHaveBeenCalled();
   });
 });
