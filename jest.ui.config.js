@@ -37,10 +37,10 @@ module.exports = {
   coverageThreshold: {
     // Aggregate across all components (global applies to the whole run).
     global: {
-      statements: 69,
-      branches: 52,
-      functions: 63,
-      lines: 69,
+      statements: 70,
+      branches: 53,
+      functions: 64,
+      lines: 70,
     },
   },
 };
