@@ -88,4 +88,55 @@ describe('Toast', () => {
     toast.success('تم الحفظ بنجاح');
     expect(await screen.findByText('تم الحفظ بنجاح')).toBeInTheDocument();
   });
+
+  test('renders error, info and warning toasts with type classes', async () => {
+    render(<ToastContainer />);
+    toast.error('خطأ');
+    toast.info('معلومة');
+    toast.warning('تحذير');
+    expect(await screen.findByText('خطأ')).toBeInTheDocument();
+    expect(screen.getByText('معلومة')).toBeInTheDocument();
+    expect(screen.getByText('تحذير')).toBeInTheDocument();
+  });
+
+  test('dismisses a toast via the close button', async () => {
+    jest.useFakeTimers();
+    render(<ToastContainer />);
+    act(() => {
+      toast.success('سأغلق');
+    });
+    expect(screen.getByText('سأغلق')).toBeInTheDocument();
+    act(() => {
+      const closeButtons = screen.getAllByLabelText('إغلاق');
+      fireEvent.click(closeButtons[closeButtons.length - 1]);
+    });
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
+    expect(screen.queryByText('سأغلق')).not.toBeInTheDocument();
+  });
+
+  test('dismisses a toast via toast.dismiss', async () => {
+    render(<ToastContainer />);
+    const id = toast.error('سأحذف');
+    await screen.findByText('سأحذف');
+    act(() => {
+      toast.dismiss(id);
+    });
+    expect(screen.queryByText('سأحذف')).not.toBeInTheDocument();
+  });
+
+  test('auto-dismisses after the configured duration', async () => {
+    jest.useFakeTimers();
+    render(<ToastContainer />);
+    act(() => {
+      toast.success('مؤقت', 100);
+    });
+    expect(screen.getByText('مؤقت')).toBeInTheDocument();
+    act(() => {
+      jest.advanceTimersByTime(100);
+      jest.advanceTimersByTime(300);
+    });
+    expect(screen.queryByText('مؤقت')).not.toBeInTheDocument();
+  });
 });

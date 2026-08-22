@@ -63,12 +63,72 @@ describe('Select', () => {
 });
 
 describe('AdPopup', () => {
-  test('renders a fetched popup ad', async () => {
+  const ad = { id: 'p1', title: 'عرض', body: 'نص', type: 'promotion', link_url: null, link_text: null, priority: 1 };
+
+  beforeEach(() => {
     fetchMock.mockResolvedValue({
       ok: true,
-      json: async () => ({ success: true, data: [{ id: 'p1', title: 'عرض', body: 'نص', type: 'promotion', link_url: null, link_text: null, priority: 1 }] }),
+      json: async () => ({ success: true, data: [ad] }),
+    });
+  });
+
+  test('renders a fetched popup ad', async () => {
+    render(<AdPopup />);
+    expect(await screen.findByText('عرض', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText('نص')).toBeInTheDocument();
+  });
+
+  test('dismisses the popup and stores the dismissal', async () => {
+    render(<AdPopup />);
+    await screen.findByText('عرض', {}, { timeout: 3000 });
+    fireEvent.click(screen.getByTitle('إغلاق'));
+    expect(screen.queryByText('عرض')).not.toBeInTheDocument();
+    const stored = JSON.parse(localStorage.getItem('proacc_dismissed_popups') || '{}');
+    expect(stored).toHaveProperty('p1');
+  });
+
+  test('does not show a popup again in the same session', async () => {
+    sessionStorage.setItem('proacc_popup_shown_this_session', 'true');
+    render(<AdPopup />);
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(screen.queryByText('عرض')).not.toBeInTheDocument();
+  });
+
+  test('renders a link button when the ad has a link', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: [{ ...ad, link_url: 'https://example.com', link_text: 'تفاصيل أكثر' }],
+      }),
+    });
+    render(<AdPopup />);
+    const link = await screen.findByRole('link', { name: 'تفاصيل أكثر' }, { timeout: 3000 });
+    expect(link).toHaveAttribute('href', 'https://example.com');
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
+  test('shows the announcement fallback icon for an unknown type', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: [{ ...ad, type: 'unknown_type' }] }),
     });
     render(<AdPopup />);
     expect(await screen.findByText('عرض', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText('unknown_type')).toBeInTheDocument();
+  });
+
+  test('skips ads that were already dismissed', async () => {
+    localStorage.setItem('proacc_dismissed_popups', JSON.stringify({ p1: new Date(Date.now() + 999999).toISOString() }));
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: [ad, { id: 'p2', title: 'إعلان ثان', body: 'جسم', type: 'banner', link_url: null, link_text: null, priority: 2 }],
+      }),
+    });
+    render(<AdPopup />);
+    expect(await screen.findByText('إعلان ثان', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByText('عرض')).not.toBeInTheDocument();
   });
 });

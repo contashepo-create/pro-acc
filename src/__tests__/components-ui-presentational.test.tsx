@@ -71,6 +71,25 @@ describe('Card', () => {
     render(<Card>محتوى</Card>);
     expect(screen.getByText('محتوى')).toBeInTheDocument();
   });
+
+  test('renders title, hover class and clickable padding variants', () => {
+    const onClick = jest.fn();
+    const { container } = render(
+      <Card title="بطاقة" hover onClick={onClick} padding="md">
+        محتوى
+      </Card>
+    );
+    expect(screen.getByText('بطاقة')).toBeInTheDocument();
+    expect(container.querySelector('.card-lift')).not.toBeNull();
+    expect(container.querySelector('.p-4')).not.toBeNull();
+  });
+
+  test('fires onClick on Enter key when clickable', () => {
+    const onClick = jest.fn();
+    const { container } = render(<Card onClick={onClick}>محتوى</Card>);
+    fireEvent.keyDown(container.querySelector('[role="button"]')!, { key: 'Enter' });
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('StatCard', () => {
@@ -78,6 +97,22 @@ describe('StatCard', () => {
     render(<StatCard title="الإيرادات" value="100" />);
     expect(screen.getByText('الإيرادات')).toBeInTheDocument();
     expect(screen.getByText('100')).toBeInTheDocument();
+  });
+
+  test('renders a downward trend with percentage', () => {
+    render(<StatCard title="المصاريف" value="200" trend={{ direction: 'down', percentage: 5 }} />);
+    expect(screen.getByText('5%')).toBeInTheDocument();
+    expect(screen.getByText('200')).toBeInTheDocument();
+  });
+
+  test('renders an icon and is clickable via keyboard', () => {
+    const onClick = jest.fn();
+    const { container } = render(
+      <StatCard title="المبيعات" value="300" icon={<span>📊</span>} onClick={onClick} accentColor="#fff" />
+    );
+    expect(screen.getByText('📊')).toBeInTheDocument();
+    fireEvent.keyDown(container.querySelector('[role="button"]')!, { key: ' ' });
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -127,5 +162,25 @@ describe('LoadingSkeleton', () => {
   test('renders skeleton rows', () => {
     const { container } = render(<LoadingSkeleton count={2} />);
     expect(container.querySelectorAll('.skeleton').length).toBeGreaterThan(0);
+  });
+
+  test('renders the table variant with count rows', () => {
+    const { container } = render(<LoadingSkeleton variant="table" count={3} />);
+    expect(container.querySelectorAll('.skeleton').length).toBe(3);
+  });
+
+  test('renders the card and chart variants', () => {
+    const { container } = render(<LoadingSkeleton variant="card" />);
+    expect(container.querySelectorAll('.skeleton').length).toBeGreaterThan(0);
+    const { container: chartContainer } = render(<LoadingSkeleton variant="chart" height={248} />);
+    expect(chartContainer.querySelectorAll('.skeleton').length).toBeGreaterThan(0);
+  });
+
+  test('renders the custom variant with numeric dimensions', () => {
+    const { container } = render(<LoadingSkeleton variant="custom" width={120} height={40} />);
+    const row = container.querySelector('.skeleton') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.style.width).toBe('120px');
+    expect(row.style.height).toBe('40px');
   });
 });
