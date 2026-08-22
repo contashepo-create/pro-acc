@@ -113,12 +113,12 @@ describe('activate-code GET deep', () => {
 describe('permissions/modules PUT', () => {
   test('updates a custom module', async () => {
     mockDb = makeDb({ ...baseDb(), custom_modules: [{ id: ID1, company_id: C1, code: 'custom_1', name: 'قسم' }] });
-    const res = await modPUT(req('admin', 'PUT', 'http://localhost/x', { id: ID1, name: 'قسم محدث' }), { params: Promise.resolve({ id: ID1 }) });
+    const res = await modPUT(req('admin', 'PUT', 'http://localhost/x', { id: ID1, name: 'قسم محدث' }));
     expect(res.status).toBe(200);
   });
 
   test('rejects a missing id', async () => {
-    const res = await modPUT(req('admin', 'PUT', 'http://localhost/x', {}), { params: Promise.resolve({ id: ID1 }) });
+    const res = await modPUT(req('admin', 'PUT', 'http://localhost/x', {}));
     expect(res.status).toBe(400);
   });
 });
