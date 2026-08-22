@@ -46,10 +46,10 @@ module.exports = {
     // route layer (src/lib/** is pinned to 100% above). These are the current
     // measured API baselines and are ratcheted upward as coverage grows.
     global: {
-      statements: 76,
-      branches: 60,
-      functions: 89,
-      lines: 71,
+      statements: 77,
+      branches: 61,
+      functions: 90,
+      lines: 72,
     },
   },
 };
