@@ -163,14 +163,14 @@ describe('telegram/webhook', () => {
   }
 
   test('returns 403 when the webhook secret is rejected', async () => {
-    process.env.NODE_ENV = 'production';
+    (process.env as any).NODE_ENV = 'production';
     const res = await webhookPOST({
       url: 'http://localhost/x',
       headers: { get: () => null },
       json: async () => ({}),
     } as any);
     expect(res.status).toBe(403);
-    process.env.NODE_ENV = 'test';
+    (process.env as any).NODE_ENV = 'test';
   });
 
   test('replies to a /start message via Telegram', async () => {
