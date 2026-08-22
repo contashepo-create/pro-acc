@@ -93,7 +93,7 @@ describe('Switch', () => {
 describe('Pagination', () => {
   test('renders page numbers and navigates', () => {
     const onPageChange = jest.fn();
-    render(<Pagination page={1} totalPages={3} onPageChange={onPageChange} />);
+    render(<Pagination currentPage={1} totalPages={3} onPageChange={onPageChange} />);
     fireEvent.click(screen.getByText('2'));
     expect(onPageChange).toHaveBeenCalledWith(2);
   });
@@ -125,7 +125,7 @@ describe('Divider', () => {
 
 describe('LoadingSkeleton', () => {
   test('renders skeleton rows', () => {
-    const { container } = render(<LoadingSkeleton rows={2} />);
+    const { container } = render(<LoadingSkeleton count={2} />);
     expect(container.querySelectorAll('.skeleton').length).toBeGreaterThan(0);
   });
 });
