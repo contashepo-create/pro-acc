@@ -3,6 +3,12 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createDriver } from './migration-drivers.mjs';
+import {
+  encryptTelegramToken,
+  decryptTelegramToken,
+  selfTestKats,
+  KAT,
+} from './lib/telegram-token-crypto.mjs';
 
 const migrationsDir = path.resolve('src/migrations');
 // MIGRATION_DRIVER=postgres runs this exact suite against a REAL PostgreSQL
@@ -114,6 +120,75 @@ async function smokeAdminOtp() {
   const cooldown=await db.query(`SELECT prepare_admin_otp_resend($1,$2,'root@example.test',$3,$4,$5) result`,
     [adminId,sessionId,'a'.repeat(64),now+1,now+300001]);
   assert.equal(cooldown.rows[0].result.status,'cooldown');
+}
+
+async function smokeTelegramTokenAtRest() {
+  // KAT: the script-side implementation must reproduce the pinned vector.
+  // The SAME constants are asserted against the application (TS)
+  // implementation by src/__tests__/telegram-token-crypto.test.ts, so the
+  // two implementations can never drift apart silently.
+  assert.ok(selfTestKats(), 'Telegram token KAT self-test failed');
+
+  const TEST_KEY = KAT.key;
+  const encAdmin = '90000000-0000-4000-8000-000000000002';
+  const plainAdmin = '90000000-0000-4000-8000-000000000003';
+  const noBotAdmin = '90000000-0000-4000-8000-000000000004';
+  const adminInsert = (id, email, name, token) =>
+    db.query(
+      `INSERT INTO admin_users(id,email,password_hash,master_password_hash,telegram_chat_id,telegram_bot_token,name,is_active)
+       VALUES($1,$2,'x','y','1',$3,$4,TRUE)`,
+      [id, email, token, name]
+    );
+
+  // 1) The encrypted envelope persists byte-identically and decrypts.
+  const envelope = encryptTelegramToken(KAT.token, { key: TEST_KEY });
+  assert.ok(envelope.startsWith('enc:v1:'), 'envelope must carry the enc:v1: prefix');
+  assert.notEqual(envelope, KAT.envelope, 'IV must be random per write (KAT uses a pinned IV)');
+  await adminInsert(encAdmin, 'enc@example.test', 'Enc', envelope);
+  const stored = (await db.query(`SELECT telegram_bot_token FROM admin_users WHERE id=$1`, [encAdmin])).rows[0].telegram_bot_token;
+  assert.equal(stored, envelope);
+  assert.equal(decryptTelegramToken(stored, { key: TEST_KEY }), KAT.token);
+
+  // 2) NULL is a valid state: admin without a dedicated bot → the global
+  //    TELEGRAM_BOT_TOKEN env var applies (081 dropped NOT NULL).
+  await adminInsert(noBotAdmin, 'nobot@example.test', 'NoBot', null);
+  assert.equal(
+    (await db.query(`SELECT telegram_bot_token FROM admin_users WHERE id=$1`, [noBotAdmin])).rows[0].telegram_bot_token,
+    null
+  );
+
+  // 3) Legacy plaintext Telegram-token-shaped values are cleared by the 081
+  //    rule. The migration ran before any rows existed in this suite, so the
+  //    exact 081 expression is applied here to a seeded row — this pins the
+  //    shape the migration clears (and the endpoint input validation must
+  //    accept, so new values can never look like legacy plaintext).
+  const legacyToken = KAT.token;
+  await adminInsert(plainAdmin, 'legacy@example.test', 'Legacy', legacyToken);
+  await db.query(`UPDATE admin_users SET telegram_bot_token=NULL
+    WHERE telegram_bot_token ~ '^[0-9]{8,10}:A[A-Za-z0-9_-]{30,100}$'`);
+  assert.equal(
+    (await db.query(`SELECT telegram_bot_token FROM admin_users WHERE id=$1`, [plainAdmin])).rows[0].telegram_bot_token,
+    null
+  );
+  // ...while a non-token-shaped dev placeholder is left untouched, and the
+  //    encrypted envelope survives the same sweep.
+  assert.equal(
+    (await db.query(`SELECT telegram_bot_token FROM admin_users WHERE id=$1`, ['90000000-0000-4000-8000-000000000001'])).rows[0].telegram_bot_token,
+    'token'
+  );
+  assert.equal(
+    (await db.query(`SELECT telegram_bot_token FROM admin_users WHERE id=$1`, [encAdmin])).rows[0].telegram_bot_token,
+    envelope
+  );
+
+  // 4) A tampered envelope (or the wrong key) must fail GCM authentication.
+  // envelope = 'enc:v1:<iv>:<tag>:<ct>' → split(':') has 5 parts.
+  const [, , ivB64, tagB64, ctB64] = envelope.split(':');
+  const flipped = ctB64.slice(0, 2) + (ctB64[2] === 'A' ? 'B' : 'A') + ctB64.slice(3);
+  // async wrappers: decryptTelegramToken throws synchronously, and
+  // assert.rejects only observes promise rejections.
+  await assert.rejects(async () => decryptTelegramToken(`enc:v1:${ivB64}:${tagB64}:${flipped}`, { key: TEST_KEY }));
+  await assert.rejects(async () => decryptTelegramToken(envelope, { key: 'ff'.repeat(32) }));
 }
 
 async function smokeAdminGlobalConfiguration() {
@@ -2290,6 +2365,7 @@ try {
   await applyMigrations();
   await smokeInitialSetup();
   await smokeAdminOtp();
+  await smokeTelegramTokenAtRest();
   await smokeAdminGlobalConfiguration();
   const ids = await seedLedger();
   await smokePostedLedgerReports();
