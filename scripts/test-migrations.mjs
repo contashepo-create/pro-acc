@@ -220,22 +220,29 @@ async function smokePostedLedgerReports() {
     c1,u1,JSON.stringify([{accountId:asset,debit:100,credit:0},{accountId:revenue,debit:0,credit:100}]),
   ]);
   await db.query(`UPDATE accounts SET is_active=FALSE WHERE id=$1`,[revenue]);
-  const draft=(await db.query(`SELECT create_journal_entry($1,'2026-01-11','general','Draft expense',$2,$3::jsonb) result`,[
-    c1,u1,JSON.stringify([
-      {accountId:materials,debit:500,credit:0,projectId:project1},
-      {accountId:asset,debit:0,credit:500,projectId:project1},
-    ]),
-  ])).rows[0].result;
-  await db.query(`UPDATE journal_entries SET status='draft' WHERE id=$1`,[draft.id]);
   await db.query(`SELECT create_journal_entry($1,'2026-01-12','general','Posted project expense',$2,$3::jsonb)`,[
     c1,u1,JSON.stringify([
       {accountId:materials,debit:25,credit:0,projectId:project1},
       {accountId:asset,debit:0,credit:25,projectId:project1},
     ]),
   ]);
-  const rejected=(await db.query(`SELECT create_journal_entry($1,'2026-01-13','general','Rejected source',$2,$3::jsonb) result`,[
-    c1,u1,JSON.stringify([{accountId:materials,debit:7,credit:0},{accountId:asset,debit:0,credit:7}]),
-  ])).rows[0].result;
+  // Migration 076 makes a line-bearing entry immutable: an unposted entry is
+  // created as a draft from the start, never demoted after posting. These
+  // raw inserts deliberately use out-of-band numbers AFTER every RPC write
+  // below (the RPC numbering is max(number)+1, so a high fixed number placed
+  // earlier would steer the sequence into a collision).
+  const draft={id:(await db.query(`INSERT INTO journal_entries(company_id,number,date,type,description,status,created_by)
+    VALUES($1,999101,'2026-01-11','general','Draft expense','draft',$2) RETURNING id`,[c1,u1])).rows[0].id};
+  await db.query(`INSERT INTO journal_lines(company_id,journal_entry_id,account_id,account_code,account_name,debit,credit,project_id)
+    VALUES($1,$2,$3,'5100','Materials expense',500,0,$5),($1,$2,$4,'1000','Report cash',0,500,$5)`,
+    [c1,draft.id,materials,asset,project1]);
+  // Rejection belongs to the approval lifecycle: the source enters the queue
+  // as 'pending' (a posted entry is never edited into 'rejected' — 076).
+  const rejected={id:(await db.query(`INSERT INTO journal_entries(company_id,number,date,type,description,status,created_by)
+    VALUES($1,999102,'2026-01-13','general','Rejected source','pending',$2) RETURNING id`,[c1,u1])).rows[0].id};
+  await db.query(`INSERT INTO journal_lines(company_id,journal_entry_id,account_id,account_code,account_name,debit,credit)
+    VALUES($1,$2,$3,'5100','Materials expense',7,0),($1,$2,$4,'1000','Report cash',0,7)`,
+    [c1,rejected.id,materials,asset]);
   await db.query(`SELECT post_journal_reversal($1,$2,'report_test',$2,'Reject test',$3)`,[c1,rejected.id,u1]);
   await db.query(`UPDATE journal_entries SET status='rejected' WHERE id=$1`,[rejected.id]);
 
@@ -2142,6 +2149,96 @@ async function smokeFiscalYearControls() {
   assert.equal((await db.query(`SELECT start_date FROM fiscal_years WHERE id=$1`, [next.id])).rows[0].start_date.toISOString().slice(0, 10), '2027-01-01');
 }
 
+/**
+ * Migration 076: a line-bearing journal entry is immutable and every
+ * completed entry is exactly balanced — enforced in the database on every
+ * write path, not only in the application code and the atomic RPCs.
+ */
+async function smokeJournalImmutabilityAndBalance() {
+  const c = '83000000-0000-4000-8000-000000000001';
+  const u = '83000000-0000-4000-8000-000000000002';
+  const cash = '83000000-0000-4000-8000-000000000010';
+  const revenue = '83000000-0000-4000-8000-000000000011';
+  await db.query(`INSERT INTO companies(id,name) VALUES($1,'Journal guard tenant')`, [c]);
+  await db.query(`INSERT INTO users(id,company_id,email,password_hash,name,role,is_active)
+    VALUES($1,$2,'journal-guard@example.test','x','Guard admin','admin',TRUE)`, [u, c]);
+  await db.query(`INSERT INTO accounts(id,company_id,code,name,type,is_header) VALUES
+    ($1,$2,'1000','Cash','asset',FALSE),($3,$2,'4100','Revenue','revenue',FALSE)`, [cash, c, revenue]);
+
+  const source=(await db.query(`SELECT create_journal_entry($1,'2026-04-01','general','Guard source',$2,$3::jsonb) result`,[
+    c,u,JSON.stringify([{accountId:cash,debit:500,credit:0},{accountId:revenue,debit:0,credit:500}]),
+  ])).rows[0].result;
+
+  // A completed (line-bearing) posted entry is immutable: every financial
+  // field and the delete itself are rejected at the database level, and the
+  // row survives untouched.
+  await assert.rejects(()=>db.query(`UPDATE journal_entries SET date='2026-04-02' WHERE id=$1`,[source.id]),/immutable/);
+  await assert.rejects(()=>db.query(`UPDATE journal_entries SET description='tampered' WHERE id=$1`,[source.id]),/immutable/);
+  await assert.rejects(()=>db.query(`UPDATE journal_entries SET number=999 WHERE id=$1`,[source.id]),/immutable/);
+  await assert.rejects(()=>db.query(`UPDATE journal_entries SET type='accrual' WHERE id=$1`,[source.id]),/immutable/);
+  await assert.rejects(()=>db.query(`UPDATE journal_entries SET deleted_at=NOW() WHERE id=$1`,[source.id]),/immutable/);
+  await assert.rejects(()=>db.query(`DELETE FROM journal_entries WHERE id=$1`,[source.id]),/cannot be deleted/);
+  assert.equal((await db.query(`SELECT count(*)::int n FROM journal_entries
+    WHERE id=$1 AND date='2026-04-01' AND description='Guard source'`,[source.id])).rows[0].n,1);
+
+  // Whole-entry balance is enforced at COMMIT for direct writes: an
+  // unbalanced line insert cannot reach the ledger even though every line
+  // passes the per-row integrity checks individually.
+  await db.exec('BEGIN');
+  const unbalanced=(await db.query(`INSERT INTO journal_entries(company_id,number,date,type,description,created_by)
+    VALUES($1,999301,'2026-04-01','general','unbalanced',$2) RETURNING id`,[c,u])).rows[0].id;
+  await db.query(`INSERT INTO journal_lines(company_id,journal_entry_id,account_id,account_code,account_name,debit,credit)
+    VALUES($1,$2,$3,'1000','Cash',500,0),($1,$2,$4,'4100','Revenue',0,400)`,[c,unbalanced,cash,revenue]);
+  await assert.rejects(()=>db.exec('COMMIT'),/unbalanced/);
+  await db.exec('ROLLBACK');
+
+  // Editing a line of a balanced posted entry out of balance is rejected too,
+  // and deleting one side of the pair is rejected as well.
+  await db.exec('BEGIN');
+  await db.query(`UPDATE journal_lines SET debit=400 WHERE journal_entry_id=$1 AND debit>0`,[source.id]);
+  await assert.rejects(()=>db.exec('COMMIT'),/unbalanced/);
+  await db.exec('ROLLBACK');
+  await db.exec('BEGIN');
+  await db.query(`DELETE FROM journal_lines WHERE journal_entry_id=$1 AND debit>0`,[source.id]);
+  await assert.rejects(()=>db.exec('COMMIT'),/unbalanced/);
+  await db.exec('ROLLBACK');
+  assert.equal((await db.query(`SELECT count(*)::int n FROM journal_lines WHERE journal_entry_id=$1`,[source.id])).rows[0].n,2);
+
+  // A line-less orphan (failed line-insert cleanup) remains deletable — the
+  // header-only cleanup path of the application writers depends on it.
+  const orphan=(await db.query(`INSERT INTO journal_entries(company_id,number,date,type,description,created_by)
+    VALUES($1,999302,'2026-04-01','general','orphan',$2) RETURNING id`,[c,u])).rows[0].id;
+  await db.query(`DELETE FROM journal_entries WHERE id=$1`,[orphan.id]);
+  assert.equal((await db.query(`SELECT count(*)::int n FROM journal_entries WHERE id=$1`,[orphan.id])).rows[0].n,0);
+
+  // The sanctioned lifecycle still works: the audited reversal links the
+  // source, reference links are updatable, and the approval transitions
+  // posted -> pending and pending -> posted are allowed — while a direct
+  // posted -> rejected tamper is rejected.
+  const reversal=(await db.query(`SELECT post_journal_reversal($1,$2,'guard_reversal',$2,'Guard reversal',$3) rev`,[c,source.id,u])).rows[0].rev;
+  assert.ok(reversal);
+  await db.query(`UPDATE journal_entries SET reference_type='guard_test',reference_id=$2 WHERE id=$1`,[source.id,u]);
+  await db.query(`UPDATE journal_entries SET status='pending' WHERE id=$1`,[source.id]);
+  assert.equal((await db.query(`SELECT status FROM journal_entries WHERE id=$1`,[source.id])).rows[0].status,'pending');
+  await db.query(`UPDATE journal_entries SET status='posted' WHERE id=$1`,[source.id]);
+  await assert.rejects(()=>db.query(`UPDATE journal_entries SET status='rejected' WHERE id=$1`,[source.id]),/status transition/);
+  const linked=(await db.query(`SELECT reversed_by,reference_type FROM journal_entries WHERE id=$1`,[source.id])).rows[0];
+  assert.equal(linked.reversed_by,reversal);
+  assert.equal(linked.reference_type,'guard_test');
+
+  // The company-wide reset (the same transaction-scoped GUC every other
+  // tenant guard honours) may still wipe the ledger.
+  const plain=(await db.query(`SELECT create_journal_entry($1,'2026-04-02','general','Reset target',$2,$3::jsonb) result`,[
+    c,u,JSON.stringify([{accountId:cash,debit:5,credit:0},{accountId:revenue,debit:0,credit:5}]),
+  ])).rows[0].result;
+  await db.exec('BEGIN');
+  await db.query(`SELECT set_config('app.business_data_reset',$1,TRUE)`,[c]);
+  await db.query(`DELETE FROM journal_lines WHERE journal_entry_id=$1 AND company_id=$2`,[plain.id,c]);
+  await db.query(`DELETE FROM journal_entries WHERE id=$1 AND company_id=$2`,[plain.id,c]);
+  await db.exec('COMMIT');
+  assert.equal((await db.query(`SELECT count(*)::int n FROM journal_entries WHERE id=$1`,[plain.id])).rows[0].n,0);
+}
+
 try {
   await applyMigrations();
   await smokeInitialSetup();
@@ -2159,6 +2256,7 @@ try {
   await smokeTenantIsolationUnderRls();
   await smokeTelegramApprovalActorFallback();
   await smokeFiscalYearControls();
+  await smokeJournalImmutabilityAndBalance();
   console.log('Clean migrations and atomic RPC smoke tests passed.');
 } finally {
   await db.close();
