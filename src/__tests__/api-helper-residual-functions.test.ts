@@ -118,11 +118,39 @@ describe('remaining API helper functions', () => {
       expect(body.success).toBe(false);
     }
     (process.env as any).NODE_ENV = 'production';
-    // Real error message surfaces in production too (not a generic placeholder).
+    // The client never sees the real message — generic + correlation id only,
+    // in every environment (production included).
     const prodBody = await serverError(new Error('secret')).json();
-    expect(prodBody.message).toBe('secret');
+    expect(prodBody.message).toBe('حدث خطأ في الخادم');
     expect(prodBody.errorId).toMatch(/^[a-z0-9]+$/);
+    expect(JSON.stringify(prodBody)).not.toContain('secret');
     (process.env as any).NODE_ENV = oldEnv;
+  });
+
+  test('a Postgres-shaped error never leaks constraint/table names to the client', async () => {
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const pgError = {
+      message: 'update or delete on table "journal_lines" violates foreign key constraint "journal_lines_entry_fkey" on table "invoices"',
+      code: '23503',
+      details: 'Key (journal_entry_id)=(0192d) is still referenced from table "invoices"',
+      hint: 'Consider using a different value, or use CASCADE.',
+    };
+    const body = await serverError(pgError).json();
+    expect(body.success).toBe(false);
+    expect(body.message).toBe('حدث خطأ في الخادم');
+    expect(body.errorId).toMatch(/^[a-z0-9]+$/);
+    const payload = JSON.stringify(body);
+    expect(payload).not.toContain('journal_lines');
+    expect(payload).not.toContain('journal_lines_entry_fkey');
+    expect(payload).not.toContain('is still referenced');
+    expect(payload).not.toContain('CASCADE');
+    expect(body.details).toBeUndefined();
+    // ...but the full detail must still be captured in the server log.
+    expect(log).toHaveBeenCalled();
+    const logged = log.mock.calls.map((c) => JSON.stringify(c)).join('');
+    expect(logged).toContain('journal_lines_entry_fkey');
+    expect(logged).toContain('CASCADE');
+    log.mockRestore();
   });
 
   test('rejects every authentication identity failure branch', async () => {

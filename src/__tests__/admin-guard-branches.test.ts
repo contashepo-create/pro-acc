@@ -33,24 +33,29 @@ describe('central admin guard branches', () => {
     result.data.email = 'ADMIN@TEST.COM'; result.data.name = 'Admin';
     await expect(requireAdmin(req('jwt'))).resolves.toMatchObject({ email: 'admin@test.com', name: 'Admin' });
   });
-  test('serializes known admin errors and surfaces real unknown messages', async () => {
+  test('serializes known admin errors and keeps unknown errors generic', async () => {
     const known = adminJsonError(new AdminAuthError('No', 403));
     expect(known.status).toBe(403); expect((await known.json()).message).toBe('No');
+    // Unknown errors (including internal ones) never leak their message.
     const unknown = adminJsonError(new Error('secret SQL'));
-    expect(unknown.status).toBe(500); expect((await unknown.json()).message).toBe('secret SQL');
+    expect(unknown.status).toBe(500);
+    expect((await unknown.json()).message).toBe('حدث خطأ غير متوقع');
   });
-  test('adminJsonError surfaces object/string messages and falls back safely', async () => {
+  test('adminJsonError keeps internal details out of the payload for every shape', async () => {
     const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    // PostgREST-shaped object with a string message.
+    // PostgREST-shaped object with a string message: generic + correlation id,
+    // nothing of the internal message in the body.
     const objErr = await (await adminJsonError({ message: 'column missing', details: 'SQL hint' })).json();
-    expect(objErr.message).toBe('column missing');
+    expect(objErr.message).toBe('حدث خطأ غير متوقع');
     expect(objErr.errorId).toMatch(/^[a-z0-9]+$/);
-    // Object whose message is a non-string (falls back to generic).
+    expect(JSON.stringify(objErr)).not.toContain('column missing');
+    expect(JSON.stringify(objErr)).not.toContain('SQL hint');
+    // Object whose message is a non-string: generic.
     expect((await (await adminJsonError({ message: 42 })).json()).message).toBe('حدث خطأ غير متوقع');
-    // Non-object values (string/null) fall back to generic.
+    // Non-object values (string/null): generic.
     expect((await (await adminJsonError('boom')).json()).message).toBe('حدث خطأ غير متوقع');
     expect((await (await adminJsonError(null)).json()).message).toBe('حدث خطأ غير متوقع');
-    // Error with empty message falls back to generic too.
+    // Error with empty message: generic too.
     expect((await (await adminJsonError(new Error(''))).json()).message).toBe('حدث خطأ غير متوقع');
     log.mockRestore();
   });

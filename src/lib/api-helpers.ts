@@ -29,8 +29,8 @@ export function validationError(errors: Record<string, string[]> | string) {
 export function serverError(err: unknown) {
   // NOTE: Supabase/PostgREST errors are NOT Error instances — they are plain
   // objects shaped { message, code, details, hint }. Unwrap every common
-  // shape so the actual error surfaces IN THE SERVER LOG.
-  let message = 'حدث خطأ في الخادم';
+  // shape so the ACTUAL error surfaces in the SERVER LOG below.
+  let message = '';
   let details: string | undefined;
   if (err instanceof Error && err.message) {
     message = err.message;
@@ -43,16 +43,17 @@ export function serverError(err: unknown) {
     else if (typeof e.hint === 'string' && e.hint) details = e.hint;
   }
 
-  // Correlate the client response with the detailed server log entry.
+  // The client only ever sees a generic message plus a correlation id.
+  // Postgres/PostgREST messages, details and hints leak schema, table and
+  // constraint names to any caller, so the full picture stays server-side.
+  // Routes that need to surface a real, user-facing business message must
+  // classify it (BusinessRuleError / ValidationFailure / AuthError) instead
+  // of letting it fall through here.
   const errorId = Math.random().toString(36).slice(2, 10);
-  console.error(`Server error [${errorId}]:`, message, details ? `| ${details}` : '', err);
+  console.error(`Server error [${errorId}]:`, message || String(err), details ? `| ${details}` : '', err);
 
-  // The real, actionable error message is surfaced to the caller (not a
-  // generic "server error"), so failures show their actual cause. The
-  // correlation id stays on every payload and the full detail (including
-  // PostgREST/SQL hints) is always captured in the server log above.
   return NextResponse.json(
-    { success: false, message, errorId, ...(details ? { details } : {}) },
+    { success: false, message: 'حدث خطأ في الخادم', errorId },
     { status: 500 }
   );
 }
