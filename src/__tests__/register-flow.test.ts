@@ -159,6 +159,20 @@ describe('register — atomic company bootstrap', () => {
     expect(JSON.stringify(body)).not.toContain('verification_hash');
   });
 
+  test('never embeds the session JWT in the response body (dev session included)', async () => {
+    setRpcResult('register_company', registration);
+    const res = await registerPOST(req({ ...validBody, email: 'noleak@example.com' }));
+    const body = await res.json();
+    expect(res.status).toBe(201);
+    // In non-production a session is issued — it must live only in the
+    // HttpOnly cookie, never in the JSON body (XSS would read a body token).
+    expect(body.data.token).toBeUndefined();
+    const cookieValue = (res as any).cookies?.get?.('token')?.value as string | undefined;
+    if (cookieValue) {
+      expect(JSON.stringify(body.data)).not.toContain(cookieValue);
+    }
+  });
+
   test('maps a database uniqueness conflict to 409', async () => {
     setRpcResult('register_company', {
       data: null,

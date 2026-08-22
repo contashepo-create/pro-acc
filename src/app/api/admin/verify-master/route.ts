@@ -77,10 +77,12 @@ export async function POST(request: NextRequest) {
     await deleteSession(adminId);
     try { await auditLog(a.id, 'admin_login_success', 'Admin login successful (step 3)'); } catch {}
 
+    // SECURITY: the admin session JWT travels only in the HttpOnly
+    // admin_token cookie — never in the JSON body (XSS could read a body
+    // token and fully neutralize the httpOnly protection).
     const response = success({
       message: 'تم تسجيل الدخول بنجاح',
       admin: { id: a.id, name: a.name, email: a.email, role: 'superadmin' },
-      token,
     });
 
     setAuthCookie(response, 'admin_token', token, 86400);

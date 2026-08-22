@@ -252,10 +252,11 @@ export async function POST(request: NextRequest) {
     // mailbox ownership is proven. The user signs in after verification.
     const issueDevelopmentSession = process.env.NODE_ENV !== 'production';
     const token = issueDevelopmentSession ? createToken(user.id, user.role) : null;
+    // SECURITY: same rule as login — the session JWT (development only) lives
+    // exclusively in the HttpOnly cookie, never in the JSON body.
     const response = success({
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
       company: { id: co.id, name: companyName },
-      token,
       emailVerificationSent: emailSent,
       message: emailSent
         ? 'تم إنشاء الحساب. يرجى تأكيد بريدك الإلكتروني خلال 24 ساعة'

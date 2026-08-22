@@ -131,6 +131,9 @@ export async function POST(request: NextRequest) {
     const token = createToken(u.id, u.role, Number((u as any).token_version) || 0);
     const { password_hash: _, ...safeUser } = u;
 
+    // SECURITY: the session JWT travels ONLY in the HttpOnly cookie. Embedding
+    // it in the JSON body would let any XSS read it and fully neutralize the
+    // httpOnly protection, so the response must never carry a token field.
     const response = success({
       user: safeUser,
       company: {
@@ -146,7 +149,6 @@ export async function POST(request: NextRequest) {
         end_date: endDateStr,
         days_remaining: daysRemaining,
       },
-      token,
     });
 
     setAuthCookie(response, 'token', token, 86400 * 7);

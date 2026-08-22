@@ -101,7 +101,13 @@ describe('auth/login security & validation', () => {
     const res = await loginPOST(loginReq({ email: 'admin@example.com', password: 'Secret123!' }));
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.data.token).toContain('mock-jwt');
+    // The session lives in the HttpOnly cookie — set on the response...
+    const cookie = res.cookies.get('token');
+    expect(cookie?.value).toContain('mock-jwt');
+    // ...and must NEVER be duplicated into the JSON body (XSS could read a
+    // body token and fully bypass the httpOnly protection).
+    expect(json.data.token).toBeUndefined();
+    expect(JSON.stringify(json.data)).not.toContain('mock-jwt');
   });
 });
 
