@@ -11,40 +11,40 @@ const load = async () => {
   return import('@/lib/supabase');
 };
 
-beforeEach(() => { delete (globalThis as any).window; });
+beforeEach(() => { delete (globalThis as { window?: unknown }).window; });
 
 describe('canonical Supabase client factories', () => {
   test('creates and memoizes server and browser clients with correct auth policy', async () => {
-    const module = await load();
-    const server = module.createServerClient();
-    expect(module.createServerClient()).toBe(server);
-    expect(module.getServerClient()).toBe(server);
+    const mod = await load();
+    const server = mod.createServerClient();
+    expect(mod.createServerClient()).toBe(server);
+    expect(mod.getServerClient()).toBe(server);
     expect(createClient).toHaveBeenNthCalledWith(1, 'https://project.supabase.co', 'service', expect.objectContaining({ auth: { autoRefreshToken: false, persistSession: false } }));
-    const browser = module.createClientClient();
-    expect(module.createClientClient()).toBe(browser);
-    expect(module.getClientClient()).toBe(browser);
+    const browser = mod.createClientClient();
+    expect(mod.createClientClient()).toBe(browser);
+    expect(mod.getClientClient()).toBe(browser);
     expect(createClient).toHaveBeenNthCalledWith(2, 'https://project.supabase.co', 'anon', expect.objectContaining({ auth: { autoRefreshToken: true, persistSession: true } }));
-    await module.signOut();
+    await mod.signOut();
     expect(signOutMock).toHaveBeenCalled();
   });
 
   test('getters lazily create clients when called first', async () => {
-    let module = await load();
-    expect(module.getServerClient()).toBeTruthy();
-    module = await load();
-    expect(module.getClientClient()).toBeTruthy();
+    let mod = await load();
+    expect(mod.getServerClient()).toBeTruthy();
+    mod = await load();
+    expect(mod.getClientClient()).toBeTruthy();
   });
 
   test('rejects missing server and browser credentials', async () => {
-    let module = await load();
+    let mod = await load();
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
-    expect(() => module.createServerClient()).toThrow('must be set for server client');
-    module = await load();
+    expect(() => mod.createServerClient()).toThrow('must be set for server client');
+    mod = await load();
     delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    expect(() => module.createClientClient()).toThrow('must be set for client client');
-    module = await load();
+    expect(() => mod.createClientClient()).toThrow('must be set for client client');
+    mod = await load();
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
-    expect(() => module.createClientClient()).toThrow('must be set for client client');
+    expect(() => mod.createClientClient()).toThrow('must be set for client client');
   });
 
   test('compatibility module exposes all canonical getters and remains server-only', async () => {
@@ -58,7 +58,7 @@ describe('canonical Supabase client factories', () => {
     expect(typeof compatibility.getServerClient).toBe('function');
     expect(typeof compatibility.getClientClient).toBe('function');
     expect(compatibility.getSupabase()).toBe(compatibility.getServerClient());
-    (globalThis as any).window = {};
+    (globalThis as { window?: unknown }).window = {};
     expect(() => compatibility.getSupabase()).toThrow('server-only');
   });
 });

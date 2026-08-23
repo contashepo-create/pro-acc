@@ -3,11 +3,11 @@
  * Run via jest -c jest.ui.config.js (jsdom + RTL).
  */
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import OverheadSettings from '@/components/settings/OverheadSettings';
 
 const fetchMock = jest.fn();
-global.fetch = fetchMock as any;
+global.fetch = fetchMock as unknown as typeof fetch;
 
 afterEach(() => {
   jest.clearAllMocks();
@@ -55,8 +55,8 @@ describe('OverheadSettings', () => {
   });
 
   test('adds a rule and shows the toast', async () => {
-    const savedRules: any[] = [];
-    fetchMock.mockImplementation((_url: string, opts?: any) => {
+    const savedRules: Array<{ id: string; name: string; allocation_basis: string; rate: number; is_active: boolean }> = [];
+    fetchMock.mockImplementation((_url: string, opts?: RequestInit) => {
       if (opts?.method === 'POST') {
         savedRules.push({ id: 'n1', name: 'قاعدة جديدة', allocation_basis: 'direct_cost', rate: 0.15, is_active: true });
         return Promise.resolve({ json: async () => ({ success: true, data: { rows: savedRules } }) });
@@ -73,7 +73,7 @@ describe('OverheadSettings', () => {
   });
 
   test('toggles a rule and deletes a rule', async () => {
-    fetchMock.mockImplementation((_url: string, opts?: any) => {
+    fetchMock.mockImplementation((_url: string, opts?: RequestInit) => {
       if (opts?.method === 'PUT') return Promise.resolve({ json: async () => ({ success: true }) });
       if (opts?.method === 'DELETE') return Promise.resolve({ json: async () => ({ success: true }) });
       return Promise.resolve({ ok: true, json: async () => ({ success: true, data: { rows: [row] } }) });

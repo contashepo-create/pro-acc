@@ -36,16 +36,15 @@ jest.mock('@/lib/rate-limit', () => ({
 
 import { POST as forgotPOST } from '@/app/api/auth/forgot-password/route';
 import { POST as resetPOST } from '@/app/api/auth/reset-password/route';
+import type { NextRequest } from 'next/server';
 
-const baseReq = { headers: { get: () => null }, nextUrl: { origin: 'http://localhost' } } as any;
-
-function req(body: any, extra: any = {}) {
+function req(body: Record<string, unknown>, extra: Record<string, unknown> = {}) {
   return {
     json: async () => body,
     headers: { get: () => null },
     nextUrl: { origin: 'http://localhost' },
     ...extra,
-  } as any;
+  } as unknown as NextRequest;
 }
 
 describe('forgot-password — input validation', () => {
