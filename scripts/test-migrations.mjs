@@ -2342,7 +2342,7 @@ async function smokeRateLimitStore() {
   // Concurrent hits on a fresh key with a budget of 5: exactly five pass —
   // the ON CONFLICT row lock must serialize the read-modify-write even when
   // the fleet hammers the same key at once.
-  const race = await Promise.allSettled(Array.from({ length: 10 }, (_, i) =>
+  const race = await Promise.allSettled(Array.from({ length: 10 }, () =>
     db.withConnection((conn) => conn.query(`SELECT hit_rate_limit($1, 60000, 5) r`, [key3]))
       .then((q) => q.rows[0].r.allowed)));
   const allowed = race.filter((x) => x.status === 'fulfilled' && x.value).length;

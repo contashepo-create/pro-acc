@@ -134,7 +134,7 @@ async function main() {
       const response = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
         method: 'POST', body: form, signal: AbortSignal.timeout(300_000),
       });
-      const body = await response.json() as any;
+      const body = await response.json() as { ok?: boolean; result?: { message_id?: string | number } };
       if (!response.ok || !body.ok) throw new Error(`Telegram sendDocument failed for chat ${chatId}: ${JSON.stringify(body)}`);
       deliveredTo.push({ chat_id: chatId, message_id: String(body.result?.message_id ?? '') });
     }
@@ -149,7 +149,7 @@ async function main() {
         signal: AbortSignal.timeout(30_000),
         body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'HTML' }),
       });
-      const body = await response.json() as any;
+      const body = await response.json() as { ok?: boolean; result?: { message_id?: string | number } };
       if (!response.ok || !body.ok) throw new Error(`Telegram sendMessage failed for chat ${chatId}: ${JSON.stringify(body)}`);
       deliveredTo.push({ chat_id: chatId, message_id: String(body.result?.message_id ?? '') });
     }

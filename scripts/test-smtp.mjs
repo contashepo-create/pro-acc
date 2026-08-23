@@ -76,7 +76,7 @@ const transporter = createTransport({
 
 console.log('\n========== VERIFYING CONNECTION/AUTH ==========');
 try {
-  const ok = await transporter.verify();
+  await transporter.verify();
   console.log('  ✓ SMTP server reachable & credentials accepted');
 } catch (err) {
   console.error('  ✗ SMTP verification FAILED:', err && err.message ? err.message : err);

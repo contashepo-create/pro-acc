@@ -67,12 +67,24 @@ function isZodType(v: unknown): v is z.ZodType {
   return v instanceof z.ZodType;
 }
 
+type ZodInternals = {
+  _zod?: { def?: { type?: string; innerType?: z.ZodType; unknownKeys?: string } };
+  _def?: { shape?: Record<string, unknown> };
+  constructor?: { name: string };
+  element?: z.ZodType;
+};
+
+function zodInternals(schema: z.ZodType): ZodInternals {
+  return schema as ZodInternals;
+}
+
 function zodTypeName(schema: z.ZodType): string {
-  return (schema as any)?._zod?.def?.type ?? (schema as any)?.constructor?.name ?? '';
+  const internals = zodInternals(schema);
+  return internals?._zod?.def?.type ?? internals?.constructor?.name ?? '';
 }
 
 function schemaFieldNames(schema: z.ZodType): string[] {
-  const shape = (schema as any)?._def?.shape;
+  const shape = zodInternals(schema)?._def?.shape;
   if (!shape || typeof shape !== 'object') return [];
   return Object.keys(shape);
 }
@@ -83,8 +95,8 @@ function interesting(fieldName: string, schema: z.ZodType): boolean {
   // string fields whose NAME matches money words are false positives.
   if (typeName === 'number') return true;
   if (typeName === 'coerce') {
-    const inner = (schema as any)?._zod?.def?.innerType;
-    return zodTypeName(inner) === 'number';
+    const inner = zodInternals(schema)?._zod?.def?.innerType;
+    return inner ? zodTypeName(inner) === 'number' : false;
   }
   return false;
 }
@@ -98,7 +110,7 @@ for (const [modName, mod] of mods) {
     if (!isZodType(value)) continue;
     // only object schemas (or arrays of objects) that represent request bodies
     let schema: z.ZodType = value;
-    if (zodTypeName(value) === 'array') schema = (value as any).element as z.ZodType;
+    if (zodTypeName(value) === 'array') schema = zodInternals(value).element as z.ZodType;
     if (zodTypeName(schema) !== 'object') continue;
     schemaCount++;
 
@@ -120,7 +132,7 @@ for (const [modName, mod] of mods) {
     }
 
     // 1b. prototype-pollution keys must be rejected by strict schemas
-    const isStrict = (schema as any)?._zod?.def?.unknownKeys === 'strict';
+    const isStrict = zodInternals(schema)?._zod?.def?.unknownKeys === 'strict';
     for (const key of PROTOTYPE) {
       const res = schema.safeParse({ [key]: 'polluted' });
       if (res.success && isStrict) {
@@ -129,10 +141,10 @@ for (const [modName, mod] of mods) {
     }
 
     // 1c. numeric-field abuse
-    const shapeObj = (schema as any)?._def?.shape ?? {};
+    const shapeObj = zodInternals(schema)?._def?.shape ?? {};
     for (const field of schemaFieldNames(schema)) {
       const fieldSchema = shapeObj[field];
-      if (!interesting(field, fieldSchema)) continue;
+      if (!interesting(field, fieldSchema as z.ZodType)) continue;
       for (const evil of [NaN, Infinity, -Infinity]) {
         const res = schema.safeParse({ [field]: evil });
         if (res.success) finding('MEDIUM', `fuzz/${modName}/${exportName}`, `numeric field "${field}" accepted ${String(evil)}`);
@@ -251,7 +263,7 @@ const polyglotPng = Buffer.concat([validPng, Buffer.from('<script>alert(1)</scri
 if (magic(polyglotPng, 'image/png')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML after PNG header passes validation');
 
 // generateUBLInvoice — XML injection resistance
-const ublBase: any = {
+const ublBase: Parameters<typeof generateUBLInvoice>[0] = {
   uuid: '00000000-0000-4000-8000-000000000000',
   number: 1001,
   issueDate: '2026-01-01',
@@ -261,7 +273,7 @@ const ublBase: any = {
   currencyCode: 'SAR',
   seller: { name: 'شركة الاختبار <x>&"\'', vatNumber: '300000000000003', registrationNumber: '1010000000', address: { street: 'الرياض', city: 'الرياض', postalZone: '11111', country: 'SA' } },
   buyer: { name: 'عميل الاختبار <y>&"\'', vatNumber: '300000000000003' },
-  items: [{ name: 'صنف <z>&"\'', quantity: 1, unitPrice: 100, total: 100, vatRate: 0.15 }],
+  items: [{ id: '1', description: 'صنف <z>&"\'', quantity: 1, unitPrice: 100, total: 100, vatRate: 0.15 }],
   amounts: { lineExtensionAmount: 100, taxExclusiveAmount: 100, taxInclusiveAmount: 115, taxAmount: 15 },
   vatRate: 0.15,
   paymentMeansCode: '30',

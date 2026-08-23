@@ -67,7 +67,7 @@ async function main() {
     'SELECT id, code FROM accounts WHERE company_id = $1',
     [COMPANY_ID]
   );
-  const byCode = Object.fromEntries(acct.rows.map((r: any) => [r.code, r.id]));
+  const byCode = Object.fromEntries(acct.rows.map((r) => [r.code, r.id]));
 
   // 3) Invoices + balanced journal entries
   let invNo = await nextNumber('invoices', 'number');

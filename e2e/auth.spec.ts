@@ -10,14 +10,13 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { login, registerOrLogin, TEST_EMAIL, TEST_PASSWORD } from './helpers';
+import { login } from './helpers';
 
 test.describe('Authentication', () => {
   test('login page renders with RTL layout', async ({ page }) => {
     await page.goto('/login');
 
     // Page should be RTL
-    const dir = await page.locator('html').getAttribute('dir');
     // Accept dir="rtl" or the page rendering in RTL without explicit attr
     // (Next.js may set this via CSS or lang attribute)
 

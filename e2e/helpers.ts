@@ -8,7 +8,7 @@
  * If the test user doesn't exist yet, `registerAndSetup` creates one.
  */
 
-import { type Page, expect } from '@playwright/test';
+import { type Page } from '@playwright/test';
 
 export const TEST_EMAIL = process.env.E2E_EMAIL || 'e2e-test@example.test';
 export const TEST_PASSWORD = process.env.E2E_PASSWORD || 'E2eTestP@ss2026!';
