@@ -39,14 +39,14 @@ function hostOf(value: string | null): string | null {
 }
 
 export interface CsrfCheckInput {
-  method: string;
+  method?: string | null;
   pathname: string;
   /** Origin request header (may be null or the literal string "null"). */
   origin: string | null;
   /** Referer request header. */
   referer: string | null;
   /** Effective public host of this deployment (x-forwarded-host || host). */
-  requestHost: string | null;
+  requestHost?: string | null;
 }
 
 /**

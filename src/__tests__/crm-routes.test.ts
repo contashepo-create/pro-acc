@@ -60,10 +60,8 @@ import {
 } from '@/app/api/crm/[id]/route';
 import { resetRateLimits } from '@/lib/memory-rate-limit';
 
-const PID = '00000000-0000-4000-8000-000000000d01';
 const CID = '00000000-0000-4000-8000-00000000000a';
 const C1 = 'company-1';
-const ADMIN = '00000000-0000-4000-8000-00000000a001';
 
 function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: Row) {
   const token = createToken('u1', role, 0);
@@ -83,7 +81,7 @@ function baseDb() {
 
 beforeEach(() => { resetRateLimits(); mockDb = makeDb(baseDb()); });
 
-function crmRow(over: Record<string, any> = {}) {
+function crmRow(over: Record<string, unknown> = {}) {
   return {
     id: CID, company_id: C1, name: 'عميل محتمل', type: 'lead',
     email: 'lead@example.com', pipeline_stage: 'new', estimated_value: 1000,

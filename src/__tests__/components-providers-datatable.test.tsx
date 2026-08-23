@@ -8,12 +8,13 @@ import Providers from '@/components/Providers';
 import { DataTable } from '@/components/ui/DataTable';
 
 const checkSessionMock = jest.fn();
-jest.mock('@/store/auth-store', () => ({ useAuthStore: (sel: any) => sel({ checkSession: checkSessionMock }) }));
+jest.mock('@/store/auth-store', () => ({ useAuthStore: (sel: (s: { checkSession: jest.Mock }) => unknown) => sel({ checkSession: checkSessionMock }) }));
 jest.mock('@tanstack/react-query', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional: require() inside jest.mock factory (hoisting)
   const React = require('react');
   return {
     QueryClient: class { },
-    QueryClientProvider: ({ children }: any) => React.createElement(React.Fragment, null, children),
+    QueryClientProvider: ({ children }: { children: unknown }) => React.createElement(React.Fragment, null, children),
   };
 });
 

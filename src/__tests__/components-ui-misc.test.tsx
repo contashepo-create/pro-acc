@@ -4,7 +4,7 @@
  * Run via jest -c jest.ui.config.js (jsdom + RTL).
  */
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { Barcode } from '@/components/ui/Barcode';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
@@ -12,11 +12,11 @@ import { Select } from '@/components/ui/Select';
 import { AdPopup } from '@/components/AdPopup';
 
 const JsBarcodeMock = jest.fn();
-jest.mock('jsbarcode', () => (...a: any[]) => JsBarcodeMock(...a));
+jest.mock('jsbarcode', () => (...a: unknown[]) => JsBarcodeMock(...a));
 jest.mock('@/lib/print', () => ({ openPrintWindow: () => ({ ok: true }) }));
 
 const fetchMock = jest.fn();
-global.fetch = fetchMock as any;
+global.fetch = fetchMock as unknown as typeof fetch;
 
 beforeEach(() => {
   localStorage.clear();
