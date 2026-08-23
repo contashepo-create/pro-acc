@@ -11,15 +11,16 @@
  */
 
 import fs from 'node:fs';
+import type { PGlite } from '@electric-sql/pglite';
 import path from 'node:path';
 
 /* ---------- public types ---------- */
 export interface SchemaContext {
-  db: any; // PGlite instance
+  db: PGlite; // PGlite instance
   companyId: string;
   userId: string;
   /** Convenience wrapper: db.query(sql, params) */
-  query: (sql: string, params?: any[]) => Promise<any>;
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
   /** Convenience wrapper: db.exec(sql) */
   exec: (sql: string) => Promise<void>;
   close: () => Promise<void>;
@@ -75,7 +76,7 @@ export async function createSchemaContext(): Promise<SchemaContext> {
   for (const filename of files) {
     const tracked = await db.query('SELECT 1 FROM _migrations WHERE filename=$1', [filename]);
     if (tracked.rows.length) continue;
-    let sql = fs.readFileSync(path.join(migrationsDir, filename), 'utf8')
+    const sql = fs.readFileSync(path.join(migrationsDir, filename), 'utf8')
       .replace(/^\s*BEGIN\s*;\s*$/gim, '')
       .replace(/^\s*COMMIT\s*;\s*$/gim, '')
       .replace(/^CREATE EXTENSION IF NOT EXISTS pgcrypto;\s*$/gim, '')
@@ -85,9 +86,9 @@ export async function createSchemaContext(): Promise<SchemaContext> {
       if (sql) await db.exec(sql);
       await db.query('INSERT INTO _migrations(filename) VALUES($1)', [filename]);
       await db.exec('COMMIT');
-    } catch (error: any) {
+    } catch (error) {
       await db.exec('ROLLBACK');
-      throw new Error(`Migration ${filename}: ${error.message}`, { cause: error });
+      throw new Error(`Migration ${filename}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
   }
 
@@ -100,13 +101,13 @@ export async function createSchemaContext(): Promise<SchemaContext> {
     [JSON.stringify(COA_SEED)],
   );
 
-  const { company, user } = (setupResult.rows[0] as any).result;
+  const { company, user } = (setupResult.rows[0] as { result: { company: { id: string }; user: { id: string } } }).result;
 
   return {
     db,
     companyId: company.id,
     userId: user.id,
-    query: (sql: string, params?: any[]) => db.query(sql, params),
+    query: (sql: string, params?: unknown[]) => db.query(sql, params),
     exec: (sql: string) => db.exec(sql).then(() => {}),
     close: () => db.close(),
   };

@@ -74,8 +74,8 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /** Allocate overhead across projects from the active rules and their bases. */
 export function allocateOverhead(
-  costs: ProjectCostBase[],
-  rules: OverheadAllocationRule[],
+  costs: ProjectCostBase[] | null,
+  rules: OverheadAllocationRule[] | null,
 ): ProjectOverheadResult[] {
   const active = (rules || []).filter((r) => r.isActive);
   return (costs || []).map((c) => {
@@ -93,6 +93,6 @@ export function allocateOverhead(
 }
 
 /** Total allocated overhead across a set of projects (for a summary row). */
-export function sumAllocatedOverhead(results: ProjectOverheadResult[]): number {
+export function sumAllocatedOverhead(results: ProjectOverheadResult[] | null): number {
   return round2((results || []).reduce((s, r) => s + (r.allocatedOverhead || 0), 0));
 }

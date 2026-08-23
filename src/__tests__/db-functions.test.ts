@@ -3,8 +3,9 @@ const connect = jest.fn();
 const end = jest.fn();
 let capturedPoolErrorHandler: ((error: Error) => void) | undefined;
 const on = jest.fn((event: string, callback: (error: Error) => void) => { if (event === 'error') capturedPoolErrorHandler = callback; });
-let poolConfig: any;
-const Pool = jest.fn((config: any) => { poolConfig = config; return { query: poolQuery, connect, end, on }; });
+type LookupFn = (host: string, options: unknown, callback: (error: Error | null, address?: string, family?: number) => void) => void;
+let poolConfig: { lookup?: LookupFn } | undefined;
+const Pool = jest.fn((config: { lookup?: LookupFn }) => { poolConfig = config; return { query: poolQuery, connect, end, on }; });
 const lookup = jest.fn();
 
 jest.mock('pg', () => ({ Pool }));
@@ -32,17 +33,18 @@ describe('database pool helpers', () => {
     }
     lookup.mockImplementationOnce((_host: string, _opts: unknown, cb: (error: Error | null, addresses?: Array<{ address: string; family: number }>) => void) => cb(new Error('dns')));
     const errorCallback = jest.fn();
-    poolConfig.lookup('db.test', {}, errorCallback);
+    const lookupFn = poolConfig!.lookup!;
+    lookupFn('db.test', {}, errorCallback);
     expect(errorCallback.mock.calls[0][0]).toBeInstanceOf(Error);
 
     lookup.mockImplementationOnce((_host: string, _opts: unknown, cb: (error: Error | null, addresses?: Array<{ address: string; family: number }>) => void) => cb(null, []));
     const emptyCallback = jest.fn();
-    poolConfig.lookup('db.test', {}, emptyCallback);
+    lookupFn('db.test', {}, emptyCallback);
     expect(emptyCallback.mock.calls[0][0].message).toContain('No addresses');
 
     lookup.mockImplementationOnce((_host: string, _opts: unknown, cb: (error: Error | null, addresses?: Array<{ address: string; family: number }>) => void) => cb(null, [{ address: '1.2.3.4', family: 4 }]));
     const successCallback = jest.fn();
-    poolConfig.lookup('db.test', {}, successCallback);
+    lookupFn('db.test', {}, successCallback);
     expect(successCallback).toHaveBeenCalledWith(null, '1.2.3.4', 4);
     expect(typeof capturedPoolErrorHandler).toBe('function');
     capturedPoolErrorHandler!(new Error('pool'));
@@ -78,9 +80,9 @@ describe('database pool helpers', () => {
     await endPool();
     process.env.DATABASE_URL = 'postgres://project.supabase.co/db';
     delete process.env.DATABASE_CA_CERT;
-    (process.env as any).NODE_ENV = 'production';
+    Reflect.set(process.env, 'NODE_ENV', 'production');
     await expect(query('select 1')).rejects.toThrow('DATABASE_CA_CERT');
-    (process.env as any).NODE_ENV = 'test';
+    Reflect.set(process.env, 'NODE_ENV', 'test');
     poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
     await query('select 1');
     expect(Pool).toHaveBeenLastCalledWith(expect.objectContaining({ ssl: { rejectUnauthorized: false } }));
@@ -96,17 +98,17 @@ describe('database pool helpers', () => {
     await endPool(); process.env.DATABASE_URL = 'postgres://localhost/db';
     const now = jest.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1500);
     poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
-    (process.env as any).NODE_ENV = 'development';
+    Reflect.set(process.env, 'NODE_ENV', 'development');
     await query('select slow');
     now.mockRestore();
     await endPool();
     const now2 = jest.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1500);
     poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
-    (process.env as any).NODE_ENV = 'test';
+    Reflect.set(process.env, 'NODE_ENV', 'test');
     await query('select hidden slow');
     now2.mockRestore();
     await endPool();
-    (process.env as any).NODE_ENV = 'development';
+    Reflect.set(process.env, 'NODE_ENV', 'development');
     poolQuery.mockRejectedValueOnce(new Error('dev query'));
     await expect(query('select secret')).rejects.toThrow('dev query');
   });
