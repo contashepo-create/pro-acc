@@ -1,3 +1,5 @@
+import type { Row } from './types';
+
 /**
  * Overhead (indirect cost) allocation for project costing.
  *
@@ -24,13 +26,13 @@ export const basisLabel = (basis: OverheadAllocationBasis) =>
  * Validate an overhead-rule payload (create/update). Returns either a
  * normalized object of provided fields or an Arabic error string.
  */
-export function validateOverheadRule(body: any):
+export function validateOverheadRule(body: Row):
   | { name?: string; basis?: string; rate?: number; active?: boolean }
   | string {
   if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > 100)) {
     return 'اسم قاعدة التخصيص غير صالح';
   }
-  if (body.allocation_basis !== undefined && !OVERHEAD_BASIS.has(body.allocation_basis)) {
+  if (body.allocation_basis !== undefined && !OVERHEAD_BASIS.has(String(body.allocation_basis))) {
     return 'أساس التخصيص غير صالح';
   }
   if (body.rate !== undefined) {
@@ -42,7 +44,12 @@ export function validateOverheadRule(body: any):
   if (body.is_active !== undefined && typeof body.is_active !== 'boolean') {
     return 'حالة القاعدة غير صالحة';
   }
-  return { name: body.name, basis: body.allocation_basis, rate: body.rate, active: body.is_active };
+  return {
+    name: body.name == null ? undefined : String(body.name),
+    basis: body.allocation_basis == null ? undefined : String(body.allocation_basis),
+    rate: body.rate == null ? undefined : Number(body.rate),
+    active: body.is_active == null ? undefined : Boolean(body.is_active),
+  };
 }
 
 export interface OverheadAllocationRule {

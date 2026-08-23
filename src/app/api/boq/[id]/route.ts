@@ -3,6 +3,8 @@ import { success, error, notFound, parseBody, handleApiError, requireModulePermi
 import { getSupabase } from '@/lib/supabase-client';
 import { boqUpdateSchema, deliveryUuid } from '@/lib/project-delivery-validation';
 
+import type { Row } from '@/lib/types';
+
 async function findItem(companyId: string, id: string) {
   const { data, error: queryError } = await getSupabase().from('boq_items')
     .select('id,project_id,item_code,code,description,unit,quantity,unit_price,total,parent_id,level,created_at,projects(name)')
@@ -18,7 +20,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     if (!deliveryUuid.safeParse(id).success) return error('معرف بند المقايسة غير صالح');
     const item = await findItem(auth.companyId, id);
     if (!item) return notFound();
-    return success({ ...item, project_name: (item as any).projects?.name || null, projects: undefined });
+    return success({ ...item, project_name: (item as Row).projects ? String(((item as Row).projects as Row).name) || null : null, projects: undefined });
   } catch (cause) {
     return handleApiError(cause);
   }

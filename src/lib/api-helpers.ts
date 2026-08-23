@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { applyCacheHeaders, type CacheOptions } from '@/lib/cache';
 
+import type { RequestLike, Row } from './types';
+
 export function success<T>(data: T, status = 200, cacheOptions?: CacheOptions) {
   const response = NextResponse.json({ success: true, data }, { status });
   // Default no-store: tenant lists (accounts, journals, …) must not linger in
@@ -29,30 +31,34 @@ export function validationError(errors: Record<string, string[]> | string) {
 export function serverError(err: unknown) {
   // NOTE: Supabase/PostgREST errors are NOT Error instances — they are plain
   // objects shaped { message, code, details, hint }. Unwrap every common
-  // shape so the actual error surfaces IN THE SERVER LOG.
-  let message = 'حدث خطأ في الخادم';
+  // shape so the ACTUAL error surfaces in the SERVER LOG below.
+  let message = '';
   let details: string | undefined;
   if (err instanceof Error && err.message) {
     message = err.message;
   } else if (err && typeof err === 'object') {
-    const e = err as Record<string, any>;
+    const e = err as Row;
     if (typeof e.message === 'string' && e.message) message = e.message;
     else if (typeof e.msg === 'string' && e.msg) message = e.msg;
-    else if (e.error && typeof e.error.message === 'string' && e.error.message) message = e.error.message;
+    else {
+      const inner = e.error as Row | null;
+      if (inner && typeof inner.message === 'string' && inner.message) message = inner.message;
+    }
     if (typeof e.details === 'string' && e.details) details = e.details;
     else if (typeof e.hint === 'string' && e.hint) details = e.hint;
   }
 
-  // Correlate the client response with the detailed server log entry.
+  // The client only ever sees a generic message plus a correlation id.
+  // Postgres/PostgREST messages, details and hints leak schema, table and
+  // constraint names to any caller, so the full picture stays server-side.
+  // Routes that need to surface a real, user-facing business message must
+  // classify it (BusinessRuleError / ValidationFailure / AuthError) instead
+  // of letting it fall through here.
   const errorId = Math.random().toString(36).slice(2, 10);
-  console.error(`Server error [${errorId}]:`, message, details ? `| ${details}` : '', err);
+  console.error(`Server error [${errorId}]:`, message || String(err), details ? `| ${details}` : '', err);
 
-  // The real, actionable error message is surfaced to the caller (not a
-  // generic "server error"), so failures show their actual cause. The
-  // correlation id stays on every payload and the full detail (including
-  // PostgREST/SQL hints) is always captured in the server log above.
   return NextResponse.json(
-    { success: false, message, errorId, ...(details ? { details } : {}) },
+    { success: false, message: 'حدث خطأ في الخادم', errorId },
     { status: 500 }
   );
 }
@@ -111,7 +117,7 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
   const { data: company, error: companyErr } = await s.from('companies')
     .select('is_active').eq('id', u.company_id).single();
   if (companyErr || !company) throw new AuthError('تعذر التحقق من الشركة', 503);
-  if ((company as Record<string, any>).is_active !== true) {
+  if ((company as Row).is_active !== true) {
     throw new AuthError('الشركة غير نشطة. تواصل مع مدير النظام', 403);
   }
 
@@ -122,7 +128,7 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
     try {
       const url = new URL(request.url, 'http://localhost');
       const { assertSubscriptionAccess } = await import('@/lib/subscription-guard');
-      await assertSubscriptionAccess(u.company_id, request.method, url.pathname);
+      await assertSubscriptionAccess(String(u.company_id), request.method, url.pathname);
     } catch (e) {
       if (e instanceof AuthError) throw e;
       // Never let an unavailable entitlement lookup grant write access in a
@@ -138,7 +144,7 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
     // manage module gating themselves).
     try {
       const { getCompanySubscription } = await import('@/lib/subscription');
-      const sub = await getCompanySubscription(u.company_id);
+      const sub = await getCompanySubscription(String(u.company_id));
       if (sub && sub.is_expired) {
         throw new AuthError('انتهت صلاحية الاشتراك. يرجى تجديد الاشتراك', 403);
       }
@@ -148,7 +154,7 @@ export async function requireApiAuth(request: Request, options: { checkSubscript
     }
   }
 
-  return { companyId: u.company_id, userId: payload.userId, role: u.role };
+  return { companyId: String(u.company_id), userId: payload.userId, role: String(u.role) };
 }
 
 export async function requireApiAuthWithSubscription(request: Request) {
@@ -230,7 +236,7 @@ export async function requireAdminAuth(request: Request): Promise<{ userId: stri
     const { requireAdmin } = await import('@/lib/admin-guard');
     const ctx = await requireAdmin(request);
     return { userId: ctx.adminId, email: ctx.email };
-  } catch (e) {
+  } catch {
     throw new AuthError('غير مصرح به');
   }
 }
@@ -282,13 +288,23 @@ export async function enforceRateLimit(request: Request, principal: string): Pro
   const method = (request?.method || 'GET').toUpperCase();
   const isWrite = !['GET', 'HEAD', 'OPTIONS'].includes(method);
   const limit = isWrite ? WRITE_LIMIT : READ_LIMIT;
-  const result = hitRateLimit(`${principal}:${isWrite ? 'w' : 'r'}`, limit);
-  if (!result.allowed) {
-    throw new RateLimitExceeded(result.retryAfterSeconds);
+  const key = `${principal}:${isWrite ? 'w' : 'r'}`;
+  // 1) Cheap local fast path: rejects floods on this instance instantly.
+  const local = hitRateLimit(key, limit);
+  if (!local.allowed) {
+    throw new RateLimitExceeded(local.retryAfterSeconds);
+  }
+  // 2) Authoritative shared budget (migration 077): one atomic row update the
+  //    whole fleet counts against, so per-instance Maps cannot be rotated
+  //    around on serverless. Fails open on store outage (see the module).
+  const { hitSharedRateLimit } = await import('@/lib/shared-rate-limit');
+  const shared = await hitSharedRateLimit(key, limit);
+  if (!shared.allowed) {
+    throw new RateLimitExceeded(shared.retryAfterSeconds);
   }
 }
 
-export async function parseBody<T = any>(request: Request): Promise<T> {
+export async function parseBody<T = Row>(request: Request): Promise<T> {
   const body = await request.json();
   // Harden: handlers universally treat the body as a plain object
   // (`body.field`). Arrays / primitives / null silently produce `undefined`
@@ -315,20 +331,20 @@ export class ValidationFailure extends Error {
  *
  *   const body = await parseValidatedBody(request, invoiceSchema);
  */
-export async function parseValidatedBody<S extends { safeParse: (v: unknown) => any }>(
+export async function parseValidatedBody<S extends { safeParse: (v: unknown) => Row }>(
   request: Request,
   schema: S
-): Promise<S extends { safeParse: (v: unknown) => { success: true; data: infer D } | any } ? D : never> {
+): Promise<S extends { safeParse: (v: unknown) => { success: true; data: infer D } | Row } ? D : never> {
   const raw = await parseBody(request);
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     // All production callers pass Zod schemas, whose errors always expose
     // `flatten()`. Keeping a non-Zod fallback created an untestable branch and
     // hid programming errors in callers.
-    const flat = parsed.error.flatten().fieldErrors;
+    const flat = (parsed.error as { flatten: () => { fieldErrors: Record<string, string[]> } }).flatten().fieldErrors;
     throw new ValidationFailure('بيانات غير صالحة', flat);
   }
-  return parsed.data;
+  return parsed.data as S extends { safeParse: (v: unknown) => { success: true; data: infer D } | Row } ? D : never;
 }
 
 export function checkCsrf(request: Request): boolean {
@@ -340,7 +356,7 @@ export function checkCsrf(request: Request): boolean {
   if (process.env.CSRF_BYPASS === 'true') return true;
 
   const csrfToken = request.headers.get('x-csrf-token');
-  const csrfCookie = (request as Record<string, any>).cookies?.get?.('csrf_token')?.value;
+  const csrfCookie = (request as RequestLike).cookies?.get?.('csrf_token')?.value;
 
   if (!csrfToken || !csrfCookie) return false;
   

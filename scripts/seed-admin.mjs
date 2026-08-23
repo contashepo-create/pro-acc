@@ -1,5 +1,33 @@
-import { query } from './src/lib/db';
+// Seed the first admin user.
+//
+// The per-admin Telegram bot token is stored ENCRYPTED (enc:v1: envelope,
+// AES-256-GCM) — see scripts/lib/telegram-token-crypto.mjs. The data
+// encryption key comes from the TELEGRAM_TOKEN_KEY env var (64 hex chars,
+// e.g. `openssl rand -hex 32`). Without it the token column is left NULL
+// and the global TELEGRAM_BOT_TOKEN env var remains the bot source.
+import { Pool } from 'pg';
 import { scryptSync, randomBytes } from 'crypto';
+import { config } from 'dotenv';
+import { encryptTelegramToken } from './lib/telegram-token-crypto.mjs';
+
+config({ path: '.env.local' });
+
+const connectionString = (process.env.DATABASE_URL || '').replace(/^\uFEFF/, '').trim();
+// Mirror src/lib/db.ts TLS policy: Supabase connections must be encrypted;
+// production refuses to start without a CA cert.
+let sslConfig;
+if (connectionString.includes('supabase')) {
+  if (process.env.DATABASE_CA_CERT) {
+    sslConfig = { rejectUnauthorized: true, ca: process.env.DATABASE_CA_CERT };
+  } else {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('DATABASE_CA_CERT must be set in production for Supabase TLS verification');
+    }
+    sslConfig = { rejectUnauthorized: false };
+    console.warn('⚠️ DATABASE_CA_CERT not set; TLS verification disabled (dev only).');
+  }
+}
+const pool = new Pool({ connectionString, ssl: sslConfig });
 
 async function hashPassword(password) {
   const salt = randomBytes(32).toString('hex');
@@ -7,8 +35,19 @@ async function hashPassword(password) {
   return salt + ':' + derivedKey.toString('hex');
 }
 
+function storeToken(token) {
+  if (!token) return null;
+  try {
+    return encryptTelegramToken(token);
+  } catch (e) {
+    console.warn('⚠️', e.message);
+    console.warn('   Leaving telegram_bot_token NULL; the global TELEGRAM_BOT_TOKEN env var still works.');
+    return null;
+  }
+}
+
 async function seed() {
-  const existing = await query('SELECT id FROM admin_users LIMIT 1');
+  const existing = await pool.query('SELECT id FROM admin_users LIMIT 1');
   if (existing.rows.length > 0) {
     console.log('Admin user already exists, skipping seed.');
     process.exit(0);
@@ -33,14 +72,16 @@ async function seed() {
 
   const passwordHash = await hashPassword(ADMIN_PASSWORD);
   const masterHash = await hashPassword(ADMIN_MASTER_PASSWORD);
+  const tokenToStore = storeToken(TELEGRAM_BOT_TOKEN);
 
-  await query(
+  await pool.query(
     `INSERT INTO admin_users (email, password_hash, master_password_hash, telegram_chat_id, telegram_bot_token, name)
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [ADMIN_EMAIL, passwordHash, masterHash, TELEGRAM_CHAT_ID, TELEGRAM_BOT_TOKEN, ADMIN_NAME]
+    [ADMIN_EMAIL, passwordHash, masterHash, TELEGRAM_CHAT_ID, tokenToStore, ADMIN_NAME]
   );
 
   console.log(`✓ Admin user created: ${ADMIN_EMAIL}`);
+  await pool.end();
   process.exit(0);
 }
 

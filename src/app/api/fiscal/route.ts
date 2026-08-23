@@ -1,6 +1,6 @@
-import { NextRequest } from 'next/server';
-import { success, error, parseBody, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, parseBody, requireModulePermission, handleApiError} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 

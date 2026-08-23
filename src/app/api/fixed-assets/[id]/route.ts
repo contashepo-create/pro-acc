@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { fixedAssetUpdateSchema, hrUuid } from '@/lib/hr-validation';
 import { FIXED_ASSET_COLUMNS } from '../route';
 
+import type { Row } from '@/lib/types';
+
 async function findAsset(companyId: string, id: string) {
   const { data, error: queryError } = await getSupabase().from('fixed_assets').select(FIXED_ASSET_COLUMNS)
     .eq('id', id).eq('company_id', companyId).maybeSingle();
@@ -20,7 +22,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (!asset) return notFound();
     return success({
       ...asset,
-      net_book_value: Number((asset as any).purchase_cost || 0) - Number((asset as any).accumulated_depreciation || 0),
+      net_book_value: Number((asset as Row).purchase_cost || 0) - Number((asset as Row).accumulated_depreciation || 0),
     });
   } catch (cause) {
     return handleApiError(cause);

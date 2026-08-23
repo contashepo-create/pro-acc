@@ -3,6 +3,8 @@ import { success, error, parseBody, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { trustedReceiptReference } from '@/lib/safe-input';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 type AddonType = 'extra_user' | 'extra_branch' | 'storage_gb';
@@ -74,7 +76,7 @@ export async function POST(req: NextRequest) {
     if (createError?.code === '23505') return error('يوجد طلب إضافة من نفس النوع معلق بالفعل', 409);
     if (createError) throw createError;
 
-    return success({ request: inserted, total_amount_usd: (inserted as any)?.total_amount_usd }, 201);
+    return success({ request: inserted, total_amount_usd: (inserted as Row)?.total_amount_usd }, 201);
   } catch (e) {
     return handleApiError(e);
   }

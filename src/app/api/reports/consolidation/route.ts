@@ -3,6 +3,8 @@ import { success, error, requireModulePermission, handleApiError } from '@/lib/a
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
 
@@ -35,15 +37,15 @@ export async function GET(request: NextRequest) {
       assets: [] as ConsolidatedItem[], liabilities: [] as ConsolidatedItem[],
       equity: [] as ConsolidatedItem[], revenue: [] as ConsolidatedItem[], expenses: [] as ConsolidatedItem[],
     };
-    for (const row of data || []) {
-      const debit = number((row as any).debit);
-      const credit = number((row as any).credit);
-      const type = String((row as any).account_type);
+    for (const row of (data ?? []) as Row[]) {
+      const debit = number((row as Row).debit);
+      const credit = number((row as Row).credit);
+      const type = String((row as Row).account_type);
       const balance = ['asset', 'expense'].includes(type) ? debit - credit : credit - debit;
       if (Math.abs(balance) < 0.0001) continue;
       const item: ConsolidatedItem = {
-        companyId: auth.companyId, accountId: (row as any).account_id,
-        accountCode: (row as any).account_code, accountName: (row as any).account_name,
+        companyId: auth.companyId, accountId: String(row.account_id),
+        accountCode: String(row.account_code), accountName: String(row.account_name),
         accountType: type, balance,
       };
       const bucket = type === 'asset' ? 'assets' : type === 'liability' ? 'liabilities'

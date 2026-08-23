@@ -2,8 +2,9 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { deliveryUuid, progressBillingUpdateSchema } from '@/lib/project-delivery-validation';
+import type { Row } from '@/lib/types';
 
-async function findClaim(companyId: string, id: string) {
+async function findClaim(companyId: string, id: string): Promise<null | (Row & { total_amount: number })> {
   const { data, error: queryError } = await getSupabase().from('progress_billing')
     .select('id,project_id,claim_number,date,description,gross_amount,retention_rate,retention_amount,net_amount,tax_rate,tax_amount,status,is_final,created_at,updated_at,projects(name)')
     .eq('id', id).eq('company_id', companyId).maybeSingle();

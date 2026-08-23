@@ -4,6 +4,8 @@ import { createHash, randomBytes } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -37,15 +39,15 @@ export async function GET(req: NextRequest) {
     const { data: codes, error: err } = await queryBuilder.limit(500);
     if (err) throw err;
 
-    const companyIds = (codes || []).map((c: any) => c.target_company_id || c.used_by).filter(Boolean);
+    const companyIds = (codes || []).map((c: Row) => c.target_company_id || c.used_by).filter(Boolean);
     const companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
       const { data: companies, error: companiesError } = await s.from('companies').select('id, name').in('id', [...new Set(companyIds)]);
       if (companiesError) throw companiesError;
-      (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
+      (companies || []).forEach((c: Row) => { companyMap[String(c.id)] = String(c.name); });
     }
 
-    const result = (codes || []).map((c: any) => ({
+    const result = (codes || []).map((c: Row) => ({
       id: c.id,
       // Never return a redeemable secret from a list endpoint. The plaintext
       // is shown exactly once in the POST response.
@@ -59,8 +61,8 @@ export async function GET(req: NextRequest) {
       used_by: c.used_by,
       used_at: c.used_at,
       target_company_id: c.target_company_id,
-      target_company_name: c.target_company_id ? companyMap[c.target_company_id] : null,
-      used_company_name: c.used_by ? companyMap[c.used_by] : null,
+      target_company_name: c.target_company_id ? companyMap[String(c.target_company_id)] : null,
+      used_company_name: c.used_by ? companyMap[String(c.used_by)] : null,
       notes: c.notes || null,
       created_at: c.created_at,
     }));

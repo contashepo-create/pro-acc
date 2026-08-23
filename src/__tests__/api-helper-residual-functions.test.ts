@@ -4,6 +4,7 @@ const getCompanySubscription = jest.fn();
 const assertSubscriptionAccess = jest.fn(async () => undefined);
 const hasModulePermission = jest.fn(async () => true);
 const hitRateLimit = jest.fn(() => ({ allowed: true, retryAfterSeconds: 0 }));
+const hitSharedRateLimit = jest.fn(async () => ({ allowed: true, retryAfterSeconds: 0 }));
 let userResult: any = { data: { company_id: 'c1', is_active: true, role: 'admin', token_version: 0 }, error: null };
 let companyResult: any = { data: { is_active: true }, error: null };
 
@@ -20,6 +21,7 @@ jest.mock('@/lib/subscription', () => ({ getCompanySubscription }));
 jest.mock('@/lib/subscription-guard', () => ({ assertSubscriptionAccess }));
 jest.mock('@/lib/permissions', () => ({ hasModulePermission }));
 jest.mock('@/lib/memory-rate-limit', () => ({ hitRateLimit, READ_LIMIT: 100, WRITE_LIMIT: 20 }));
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit }));
 
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
@@ -118,11 +120,39 @@ describe('remaining API helper functions', () => {
       expect(body.success).toBe(false);
     }
     (process.env as any).NODE_ENV = 'production';
-    // Real error message surfaces in production too (not a generic placeholder).
+    // The client never sees the real message — generic + correlation id only,
+    // in every environment (production included).
     const prodBody = await serverError(new Error('secret')).json();
-    expect(prodBody.message).toBe('secret');
+    expect(prodBody.message).toBe('حدث خطأ في الخادم');
     expect(prodBody.errorId).toMatch(/^[a-z0-9]+$/);
+    expect(JSON.stringify(prodBody)).not.toContain('secret');
     (process.env as any).NODE_ENV = oldEnv;
+  });
+
+  test('a Postgres-shaped error never leaks constraint/table names to the client', async () => {
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const pgError = {
+      message: 'update or delete on table "journal_lines" violates foreign key constraint "journal_lines_entry_fkey" on table "invoices"',
+      code: '23503',
+      details: 'Key (journal_entry_id)=(0192d) is still referenced from table "invoices"',
+      hint: 'Consider using a different value, or use CASCADE.',
+    };
+    const body = await serverError(pgError).json();
+    expect(body.success).toBe(false);
+    expect(body.message).toBe('حدث خطأ في الخادم');
+    expect(body.errorId).toMatch(/^[a-z0-9]+$/);
+    const payload = JSON.stringify(body);
+    expect(payload).not.toContain('journal_lines');
+    expect(payload).not.toContain('journal_lines_entry_fkey');
+    expect(payload).not.toContain('is still referenced');
+    expect(payload).not.toContain('CASCADE');
+    expect(body.details).toBeUndefined();
+    // ...but the full detail must still be captured in the server log.
+    expect(log).toHaveBeenCalled();
+    const logged = log.mock.calls.map((c) => JSON.stringify(c)).join('');
+    expect(logged).toContain('journal_lines_entry_fkey');
+    expect(logged).toContain('CASCADE');
+    log.mockRestore();
   });
 
   test('rejects every authentication identity failure branch', async () => {
@@ -161,10 +191,18 @@ describe('remaining API helper functions', () => {
   });
 
   test('covers rate-limit, body, csrf and pagination edge branches', async () => {
+    // Local fast path allows -> the shared (DB) budget is consulted and allows.
     hitRateLimit.mockReturnValueOnce({ allowed: true, retryAfterSeconds: 0 });
+    hitSharedRateLimit.mockResolvedValueOnce({ allowed: true, retryAfterSeconds: 0 });
     await expect(enforceRateLimit(null as any, 'u')).resolves.toBeUndefined();
+    // Local fast path blocks -> rejected before the shared store is touched.
     hitRateLimit.mockReturnValueOnce({ allowed: false, retryAfterSeconds: 9 });
     await expect(enforceRateLimit(request('POST'), 'u')).rejects.toBeInstanceOf(RateLimitExceeded);
+    // Local allows but the authoritative shared budget blocks -> 429 with the
+    // shared store's retry-after.
+    hitRateLimit.mockReturnValueOnce({ allowed: true, retryAfterSeconds: 0 });
+    hitSharedRateLimit.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 11 });
+    await expect(enforceRateLimit(request('POST'), 'u')).rejects.toMatchObject({ retryAfterSeconds: 11 });
     for (const value of [null, [], 'x']) await expect(parseBody(request('POST', value))).rejects.toBeInstanceOf(ValidationFailure);
     const oldBypass = process.env.CSRF_BYPASS; process.env.CSRF_BYPASS = 'true';
     expect(() => requireCsrf({ ...request('POST'), headers: new Headers() })).not.toThrow();

@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function GET(
@@ -15,8 +17,8 @@ export async function GET(
 
     // Do NOT select a non-existent `reference` column — the schema uses
     // reference_type / reference_id. A failed GET left the edit form empty.
-    let entryRes: any = null;
-    let entryErr: any = null;
+    let entryRes: unknown = null;
+    let entryErr: unknown = null;
     const primary = await s.from('journal_entries')
       .select('id, company_id, number, date, type, description, reference_type, reference_id, created_by, created_at')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
@@ -38,14 +40,14 @@ export async function GET(
       .eq('company_id', auth.companyId)
       .order('id');
 
-    const lines = (linesRes || []).map((l: any) => ({
-      id: l.id, account_code: l.account_code, account_name: (l.accounts as any)?.name || null,
-      account_type: (l.accounts as any)?.type || null, debit: parseFloat(l.debit) || 0,
-      credit: parseFloat(l.credit) || 0, description: l.description,
+    const lines = (linesRes || []).map((l: Row) => ({
+      id: l.id, account_code: l.account_code, account_name: (l.accounts as Row)?.name || null,
+      account_type: (l.accounts as Row)?.type || null, debit: parseFloat(String(l.debit)) || 0,
+      credit: parseFloat(String(l.credit)) || 0, description: l.description,
     }));
 
-    const totalDebit = lines.reduce((s: number, l: any) => s + l.debit, 0);
-    const totalCredit = lines.reduce((s: number, l: any) => s + l.credit, 0);
+    const totalDebit = lines.reduce((s: number, l) => s + l.debit, 0);
+    const totalCredit = lines.reduce((s: number, l) => s + l.credit, 0);
 
     return success({ ...entryRes, totalDebit, totalCredit, lines });
   } catch (err) {
@@ -83,7 +85,7 @@ export async function DELETE(
     const { postReversalEntry } = await import('@/lib/voucher-utils');
     const reversal = await postReversalEntry(auth.companyId, {
       journalEntryId: id, referenceType: 'manual_journal_reversal', referenceId: id,
-      description: `عكس القيد رقم ${(entry as any).number}: ${(entry as any).description || ''}`,
+      description: `عكس القيد رقم ${(entry as Row).number}: ${(entry as Row).description || ''}`,
       userId: auth.userId,
     });
     if (reversal.error) throw reversal.error;

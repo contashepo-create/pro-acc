@@ -137,6 +137,7 @@ describe('private storage references', () => {
     const createSignedUrl = jest.fn();
     const client = { storage: { from: jest.fn(() => ({ createSignedUrl })) } };
     await expect(signPrivateReceiptReference(client, null)).resolves.toBeNull();
+    await expect(signPrivateReceiptReference({} as never, 'c1/file.png')).resolves.toBeNull();
     await expect(signPrivateReceiptReference(client, 'https://legacy.test/file')).resolves.toBe('https://legacy.test/file');
     for (const unsafe of ['../secret', '/absolute', 'folder\\file']) {
       await expect(signPrivateReceiptReference(client, unsafe)).resolves.toBeNull();

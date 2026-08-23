@@ -6,6 +6,8 @@ import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
 import { isValidDate } from '@/lib/utils';
 import { assertOpenFiscalPeriod } from '@/lib/fiscal-guard';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const INVOICE_STATUSES = new Set(['unpaid', 'partial', 'paid', 'cancelled']);
@@ -42,17 +44,17 @@ export async function GET(request: NextRequest) {
       .range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
 
-    const contactIds = [...new Set((data || []).map((invoice: any) => invoice.contact_id).filter(Boolean))] as string[];
+    const contactIds = [...new Set((data || []).map((invoice: Row) => invoice.contact_id).filter(Boolean))] as string[];
     const contactNames: Record<string, string> = {};
     if (contactIds.length) {
       const { data: contacts, error: contactsError } = await s.from('contacts')
         .select('id, name').eq('company_id', auth.companyId).in('id', contactIds);
       if (contactsError) throw contactsError;
-      for (const contact of contacts || []) contactNames[(contact as any).id] = (contact as any).name;
+      for (const contact of (contacts ?? []) as Row[]) contactNames[String(contact.id)] = String(contact.name);
     }
-    const invoices = (data || []).map((invoice: any) => ({
+    const invoices = (data || []).map((invoice: Row) => ({
       ...invoice,
-      client_name: contactNames[invoice.contact_id] || '',
+      client_name: contactNames[String(invoice.contact_id)] || '',
     }));
     return success({
       invoices,
@@ -128,7 +130,7 @@ export async function POST(request: NextRequest) {
       try {
         const { data: companyRow } = await s.from('companies')
           .select('vat_rate').eq('id', auth.companyId).maybeSingle();
-        const companyVatRate = Number((companyRow as Record<string, any> | null)?.vat_rate);
+        const companyVatRate = Number((companyRow as Row | null)?.vat_rate);
         const configured = Number.isFinite(companyVatRate) && companyVatRate > 0 && companyVatRate <= 1
           ? companyVatRate : 0.15;
         const allowedRates = [0, configured];
@@ -164,7 +166,7 @@ export async function POST(request: NextRequest) {
       p_user_id: auth.userId,
     });
     if (createError) throw createError;
-    const invoice = created as Record<string, any>;
+    const invoice = created as Row;
 
     const { data: itemsRes, error: itemsError } = await s.from('invoice_items')
       .select('id, description, quantity, unit_price, total')
@@ -176,8 +178,8 @@ export async function POST(request: NextRequest) {
     // creation remains committed even when seller tax metadata is incomplete.
     let zatcaQRData: string | null = null;
     try {
-      const taxSnapshot = invoice.tax_snapshot as Record<string, any> | undefined;
-      const seller = taxSnapshot?.seller as Record<string, any> | undefined;
+      const taxSnapshot = invoice.tax_snapshot as Row | undefined;
+      const seller = taxSnapshot?.seller as Row | undefined;
       const sellerName = typeof seller?.name === 'string' ? seller.name.trim() : '';
       const vatNumber = typeof seller?.vat_number === 'string' ? seller.vat_number.trim() : '';
       const createdAt = new Date(String(invoice.created_at));
@@ -207,7 +209,7 @@ export async function POST(request: NextRequest) {
       const { logAudit } = await import('@/lib/audit');
       await logAudit({
         company_id: auth.companyId, user_id: auth.userId, entity_type: 'invoice',
-        entity_id: invoice.id, action: 'create',
+        entity_id: String(invoice.id), action: 'create',
         after: {
           id: invoice.id, number: invoice.number, date, total: invoice.total,
           subtotal: invoice.subtotal, vat_amount: invoice.vat_amount, status: invoice.status,

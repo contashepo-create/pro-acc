@@ -7,6 +7,8 @@
  */
 import { HEADER_ACCOUNT_CODES } from '@/lib/account-resolve';
 
+import type { Row, SupabaseLike } from './types';
+
 export interface DefaultAccount {
   code: string;
   name: string;
@@ -96,18 +98,18 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '5400', name: 'مصروفات إدارية وعمومية', nameEn: 'General & Admin Expenses', type: 'expense', parentCode: '5000' },
 ];
 
-async function insertAccount(supabase: any, row: Record<string, unknown>) {
+async function insertAccount(supabase: SupabaseLike, row: Record<string, unknown>) {
   const first = await supabase.from('accounts').insert(row).select('id').single();
   if (!first.error && first.data) return first;
   const msg = `${first.error?.message || ''} ${first.error?.code || ''}`;
   if (/is_header|42703|Could not find/i.test(msg)) {
-    const { is_header: _drop, ...rest } = row as any;
+    const { is_header: _drop, ...rest } = row as Row;
     return supabase.from('accounts').insert(rest).select('id').single();
   }
   return first;
 }
 
-export async function ensureDefaultCashSafe(supabase: any, companyId: string, cashAccountId?: string | null) {
+export async function ensureDefaultCashSafe(supabase: SupabaseLike, companyId: string, cashAccountId?: string | null) {
   const { data: existing } = await supabase
     .from('banks_safes')
     .select('id')
@@ -126,7 +128,7 @@ export async function ensureDefaultCashSafe(supabase: any, companyId: string, ca
       .eq('company_id', companyId)
       .eq('code', '1110')
       .maybeSingle();
-    accountId = cash?.id || null;
+    accountId = cash?.id == null ? null : String(cash.id);
   }
   if (!accountId) return null;
 
@@ -146,7 +148,7 @@ export async function ensureDefaultCashSafe(supabase: any, companyId: string, ca
   return created?.id || null;
 }
 
-export async function createDefaultChartOfAccounts(supabase: any, companyId: string) {
+export async function createDefaultChartOfAccounts(supabase: SupabaseLike, companyId: string) {
   const accountMap = new Map<string, string>(); // code -> id
 
   // First pass: create all accounts without parent
@@ -160,7 +162,7 @@ export async function createDefaultChartOfAccounts(supabase: any, companyId: str
         .maybeSingle();
 
       if (existing) {
-        accountMap.set(acc.code, existing.id);
+        accountMap.set(String(acc.code), String(existing.id));
         const shouldHeader = !!acc.isHeader || HEADER_ACCOUNT_CODES.has(acc.code);
         if (shouldHeader) {
           await supabase
@@ -185,7 +187,7 @@ export async function createDefaultChartOfAccounts(supabase: any, companyId: str
       });
 
       if (!error && data) {
-        accountMap.set(acc.code, data.id);
+        accountMap.set(String(acc.code), String(data.id));
       }
     } catch (e) {
       console.warn(`Failed to create account ${acc.code}:`, e);

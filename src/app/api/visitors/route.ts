@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     if (existing) {
       await s.from('visitor_stats')
         .update({
-          visits: existing.visits + 1,
+          visits: Number(existing.visits || 0) + 1,
           unique_visitors: uniqueCount || 1,
           updated_at: new Date().toISOString(),
         })

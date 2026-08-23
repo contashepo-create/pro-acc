@@ -3,6 +3,8 @@ import { success, error, handleApiError, requireModulePermission } from '@/lib/a
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const number = (value: unknown) => Number(value) || 0;
 function bucketFor(days: number) {
   if (days <= 30) return '0-30';
@@ -25,7 +27,7 @@ export async function GET(req: NextRequest) {
       p_company_id: auth.companyId, p_type: type, p_as_of: asOf,
     });
     if (queryError) throw queryError;
-    const aging = (data || []).map((row: any) => {
+    const aging = ((data ?? []) as Row[]).map((row: Row) => {
       const openInvoices = number(row.open_amount);
       const unapplied = number(row.unapplied);
       const days = number(row.max_days_overdue);
@@ -39,14 +41,14 @@ export async function GET(req: NextRequest) {
           '61-90': number(row.bucket_61_90), '90+': number(row.bucket_90_plus),
         },
       };
-    }).sort((a: any, b: any) => b.balance - a.balance);
-    const totals = aging.reduce((acc: any, row: any) => {
+    }).sort((a: Row, b: Row) => number(b.balance) - number(a.balance));
+    const totals = aging.reduce((acc: Record<string, number>, row) => {
       acc.balance += row.balance;
       if (type === 'ar') {
-        acc.open_invoices += row.open_invoices;
-        acc.unapplied += row.unapplied;
+        acc.open_invoices += row.open_invoices ?? 0;
+        acc.unapplied += row.unapplied ?? 0;
       }
-      for (const bucket of ['0-30', '31-60', '61-90', '90+']) acc[bucket] += row.buckets[bucket];
+      for (const bucket of ['0-30', '31-60', '61-90', '90+']) acc[bucket] += number((row.buckets as Row)[bucket]);
       return acc;
     }, { balance: 0, open_invoices: 0, unapplied: 0, '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 });
     return success({ aging, totals, type, asOf });

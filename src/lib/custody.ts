@@ -6,14 +6,35 @@
  */
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from './types';
+
 const sb = () => getSupabase();
 export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export const OPEN_STATUSES = new Set(['open', 'partially_settled']);
 
-export async function loadCustodyFile(companyId: string, id: string) {
+export async function loadCustodyFile(
+  companyId: string,
+  id: string,
+): Promise<
+  | null
+  | (Row & {
+      employee_name: string;
+      project_name: string | null;
+      bank_name: string | null;
+      transactions: Row[];
+      deposits: Row[];
+      expenses: Row[];
+      other: Row[];
+      total_received: number;
+      total_expenses: number;
+      remaining_amount: number;
+      computed_status: string;
+      is_closed: boolean;
+    })
+> {
   const s = sb();
-  let row: any = null;
+  let row: Row | null = null;
   const primary = await s.from('custodies')
     .select('*, employees(name), projects(name), banks_safes(name)')
     .eq('id', id).eq('company_id', companyId).maybeSingle();
@@ -26,20 +47,20 @@ export async function loadCustodyFile(companyId: string, id: string) {
   }
   if (!row) return null;
 
-  let txs: any[] = [];
+  let txs: Row[] = [];
   const t = await s.from('custody_transactions')
     .select('*').eq('custody_id', id).eq('company_id', companyId).order('created_at', { ascending: true });
   if (!t.error) txs = t.data || [];
 
   const deposits = txs.filter((x) => x.type === 'addition' || x.type === 'deposit' || x.type === 'open');
   const expenses = txs.filter((x) => x.type === 'expense');
-  const other = txs.filter((x) => !['addition', 'deposit', 'open', 'expense'].includes(x.type));
+  const other = txs.filter((x) => !['addition', 'deposit', 'open', 'expense'].includes(String(x.type)));
 
   const totalReceived = round2(
-    deposits.reduce((sum, x) => sum + (parseFloat(x.amount) || 0), 0)
-    || parseFloat(row.total_received) || parseFloat(row.amount) || 0,
+    deposits.reduce((sum, x) => sum + (parseFloat(String(x.amount)) || 0), 0)
+    || parseFloat(String(row.total_received)) || parseFloat(String(row.amount)) || 0,
   );
-  const totalExpenses = round2(expenses.reduce((sum, x) => sum + (parseFloat(x.amount) || 0), 0));
+  const totalExpenses = round2(expenses.reduce((sum, x) => sum + (parseFloat(String(x.amount)) || 0), 0));
   const status = row.status === 'settled' || row.status === 'closed'
     ? 'settled'
     : totalExpenses > 0 ? 'partially_settled' : 'open';
@@ -49,9 +70,9 @@ export async function loadCustodyFile(companyId: string, id: string) {
 
   return {
     ...row,
-    employee_name: (row as any).employees?.name || '',
-    project_name: (row as any).projects?.name || null,
-    bank_name: (row as any).banks_safes?.name || null,
+    employee_name: String(((row.employees ?? null) as Row | null)?.name || ''),
+    project_name: String(((row.projects ?? null) as Row | null)?.name || '') || null,
+    bank_name: String(((row.banks_safes ?? null) as Row | null)?.name || '') || null,
     transactions: txs,
     deposits,
     expenses,
@@ -64,8 +85,9 @@ export async function loadCustodyFile(companyId: string, id: string) {
   };
 }
 
-export function assertFileOpen(file: { status?: string }) {
-  if (file.status === 'settled' || file.status === 'closed') {
+export function assertFileOpen(file: Row) {
+  const st = file.status;
+  if (st === 'settled' || st === 'closed') {
     throw new Error('ملف العهدة مغلق — لا يمكن تسجيل حركات عليه');
   }
 }

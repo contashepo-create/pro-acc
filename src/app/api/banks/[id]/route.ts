@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -31,8 +32,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       p_company_id: auth.companyId, p_bank_safe_ids: [id],
     });
     if (balanceError) throw balanceError;
-    const balance = Number((balances || [])[0]?.current_balance) || 0;
-    const opening = Number((balances || [])[0]?.opening_balance) || 0;
+    const balance = Number(((balances ?? []) as Row[])[0]?.current_balance) || 0;
+    const opening = Number(((balances ?? []) as Row[])[0]?.opening_balance) || 0;
     const row = data as Record<string, unknown>;
     return success({
       ...row,

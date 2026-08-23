@@ -5,6 +5,8 @@ import { createHmac } from 'crypto';
 import { getBackupSecret } from '@/lib/backup-integrity';
 import { recordsToCsv } from '@/lib/csv-export';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
@@ -26,17 +28,17 @@ export async function GET(request: NextRequest) {
       'inventory_items', 'employees', 'payroll'
     ];
 
-    const backupData: any = {
+    const backupData: { metadata: Record<string, unknown>; data: Row } = {
       metadata: {
         company_id: auth.companyId,
-        company_name: (company as Record<string, any>).name,
-        email: (company as Record<string, any>).email,
-        phone: (company as Record<string, any>).phone,
+        company_name: (company as Row).name,
+        email: (company as Row).email,
+        phone: (company as Row).phone,
         exported_at: new Date().toISOString(),
         version: '1.0',
         format,
       },
-      data: {} as any
+      data: {} as Row
     };
 
     // Fetch data for each table.

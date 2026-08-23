@@ -25,6 +25,8 @@
 import { getSupabase } from '@/lib/supabase-client';
 import { AuthError } from '@/lib/api-helpers';
 
+import type { Row } from './types';
+
 const sb = () => getSupabase();
 
 export type SubscriptionStatus =
@@ -190,9 +192,9 @@ export async function getSubscriptionAccess(companyId: string): Promise<Subscrip
     };
   }
 
-  const subr = sub as Record<string, any>;
-  const plan = subr.subscription_plans as Record<string, any> | null;
-  const endDateStr: string | null = subr.end_date || null;
+  const subr = sub as Row;
+  const plan = subr.subscription_plans as Row | null;
+  const endDateStr: string | null = subr.end_date == null ? null : String(subr.end_date);
   const endDate = endDateStr ? new Date(endDateStr) : null;
   const daysRemaining = endDate
     ? Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
@@ -248,8 +250,8 @@ export async function getSubscriptionAccess(companyId: string): Promise<Subscrip
   return {
     allowed: !isExpired,
     status,
-    planCode: plan?.code || subr.plan_code || null,
-    planName: plan?.name || null,
+    planCode: plan?.code != null ? String(plan.code) : subr.plan_code != null ? String(subr.plan_code) : null,
+    planName: plan?.name != null ? String(plan.name) : null,
     endDate: endDateStr,
     daysRemaining,
     features,
@@ -292,7 +294,7 @@ export async function assertSubscriptionAccess(
   // purchase_invoices/purchase_orders resolve to the umbrella 'purchases'
   // flag so fine-grained permissions don't accidentally lock out a plan
   // that has purchases enabled.
-  let moduleId = moduleForPath(pathname);
+  const moduleId = moduleForPath(pathname);
   if (moduleId && !ALWAYS_AVAILABLE_MODULES.has(moduleId)) {
     // Sub-modules like nested /purchases/invoices are covered by the
     // umbrella '/api/purchases' prefix; no alias map needed because our

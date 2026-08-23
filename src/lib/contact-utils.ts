@@ -1,5 +1,6 @@
 /** Authoritative customer/supplier balances from control-account ledger lines. */
 
+import type { Row } from './types';
 import { getSupabase } from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
@@ -34,7 +35,7 @@ export async function getContactBalances(
     p_contact_ids: contactIds,
   });
   if (error) throw error;
-  for (const row of data || []) {
+  for (const row of (data ?? []) as Row[]) {
     const id = String((row as Record<string, unknown>).contact_id || '');
     const balance = Number((row as Record<string, unknown>).balance);
     if (id && Number.isFinite(balance)) map[id] = balance;

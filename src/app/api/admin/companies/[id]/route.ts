@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { success, error, notFound, parseBody } from '@/lib/api-helpers';
 import { verifyMasterPassword } from '@/lib/admin-auth';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -72,7 +74,7 @@ export async function PATCH(
     const { id } = await paramsPromise;
     if (!UUID.test(id)) return error('معرّف الشركة غير صالح', 400);
 
-    const body = await parseBody<any>(request);
+    const body = await parseBody<Row>(request);
 
     const s = sb();
     const { data: company, error: companyError } = await s.from('companies')
@@ -161,7 +163,7 @@ export async function PATCH(
       if (!sub) return error('لا يوجد اشتراك');
 
       const { error: cancelError } = await s.rpc('restrict_subscription_atomic', {
-        p_subscription_id: (sub as any).id,
+        p_subscription_id: (sub as Row).id,
         p_admin_id: __admin.adminId,
         p_status: 'cancelled',
         p_end_date: null,

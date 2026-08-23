@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, requireApiAuth, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -36,10 +38,10 @@ export async function GET(request: NextRequest) {
     }
 
     // حساب أرصدة الحسابات
-    const issues: any[] = [];
+    const issues: Row[] = [];
 
     for (const acc of accounts) {
-      const a = acc as any;
+      const a = acc as Row;
 
       // حساب الرصيد من journal_lines
       const { data: lines } = await s.from('journal_lines')
@@ -47,10 +49,10 @@ export async function GET(request: NextRequest) {
         .eq('company_id', auth.companyId)
         .eq('account_id', a.id);
 
-      const totalDebit = (lines || []).reduce((sum: number, l: any) => 
-        sum + (parseFloat(l.debit) || 0), 0);
-      const totalCredit = (lines || []).reduce((sum: number, l: any) => 
-        sum + (parseFloat(l.credit) || 0), 0);
+      const totalDebit = (lines || []).reduce((sum: number, l: Row) => 
+        sum + (parseFloat(String(l.debit)) || 0), 0);
+      const totalCredit = (lines || []).reduce((sum: number, l: Row) => 
+        sum + (parseFloat(String(l.credit)) || 0), 0);
 
       // الرصيد = مدين - دائن
       const balance = totalDebit - totalCredit;
@@ -64,7 +66,7 @@ export async function GET(request: NextRequest) {
         case 'asset':
           // الأصول يجب أن يكون رصيدها >= 0 (مدين)
           // ما عدا حسابات contra مثل مجمع الإهلاك
-          if (a.code === '1290' || a.code.startsWith('129')) {
+          if (String(a.code) === '1290' || String(a.code).startsWith('129')) {
             // مجمع الإهلاك: يجب أن يكون رصيد دائن (<= 0)
             if (balance > 0.01) {
               isValid = false;
@@ -142,7 +144,7 @@ export async function GET(request: NextRequest) {
     });
 
     return success({
-      accounts: accounts.map((a: any) => ({
+      accounts: accounts.map((a: Row) => ({
         id: a.id,
         code: a.code,
         name: a.name,
@@ -150,8 +152,8 @@ export async function GET(request: NextRequest) {
       })),
       issues,
       totalIssues: issues.length,
-      highSeverity: issues.filter((i: any) => i.severity === 'high').length,
-      mediumSeverity: issues.filter((i: any) => i.severity === 'medium').length,
+      highSeverity: issues.filter((i: Row) => i.severity === 'high').length,
+      mediumSeverity: issues.filter((i: Row) => i.severity === 'medium').length,
       checkedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -188,7 +190,7 @@ export async function POST(request: NextRequest) {
       return error('الحساب غير موجود');
     }
 
-    const acc = account as any;
+    const acc = account as Row;
 
     // حساب الرصيد الحالي
     const { data: lines } = await s.from('journal_lines')
@@ -196,10 +198,10 @@ export async function POST(request: NextRequest) {
       .eq('company_id', auth.companyId)
       .eq('account_id', accountId);
 
-    const totalDebit = (lines || []).reduce((sum: number, l: any) => 
-      sum + (parseFloat(l.debit) || 0), 0);
-    const totalCredit = (lines || []).reduce((sum: number, l: any) => 
-      sum + (parseFloat(l.credit) || 0), 0);
+    const totalDebit = (lines || []).reduce((sum: number, l: Row) => 
+      sum + (parseFloat(String(l.debit)) || 0), 0);
+    const totalCredit = (lines || []).reduce((sum: number, l: Row) => 
+      sum + (parseFloat(String(l.credit)) || 0), 0);
 
     const currentBalance = totalDebit - totalCredit;
 
@@ -212,7 +214,7 @@ export async function POST(request: NextRequest) {
 
     switch (acc.type) {
       case 'asset':
-        if (acc.code !== '1290' && !acc.code.startsWith('129')) {
+        if (String(acc.code) !== '1290' && !String(acc.code).startsWith('129')) {
           if (proposedBalance < -0.01) {
             isValid = false;
             warning = `الرصيد المقترح للأصل سيكون سالب: ${proposedBalance.toFixed(2)}`;

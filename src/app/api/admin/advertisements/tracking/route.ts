@@ -3,6 +3,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { success, error } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 function sanitizeId(v: unknown): string | null {
@@ -46,15 +48,15 @@ export async function GET(req: NextRequest) {
     return success({
       ad,
       statistics: {
-        totalViews: (ad as any).views || 0,
-        totalClicks: (ad as any).clicks || 0,
-        totalNotifications: (ad as any).notifications_sent || 0,
+        totalViews: (ad as Row).views || 0,
+        totalClicks: (ad as Row).clicks || 0,
+        totalNotifications: (ad as Row).notifications_sent || 0,
         viewEvents: viewCount || 0,
         clickEvents: clickCount || 0,
         notificationEvents: notifCount || 0,
       },
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     return adminJsonError(e);
   }
 }

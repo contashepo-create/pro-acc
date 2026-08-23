@@ -40,7 +40,7 @@ export async function GET(
     if (e.status !== 'ready' || !e.download_url) {
       return error('الملف غير جاهز بعد', 409);
     }
-    if (e.expires_at && new Date(e.expires_at).getTime() < Date.now()) {
+    if (e.expires_at && new Date(String(e.expires_at)).getTime() < Date.now()) {
       return error('انتهت صلاحية رابط التحميل. اطلب تصديراً جديداً.', 410);
     }
 
@@ -49,6 +49,7 @@ export async function GET(
       if (!objectPath.startsWith(`${auth.companyId}/`) || objectPath.includes('..')) {
         return error('مرجع ملف التصدير غير صالح', 500);
       }
+      if (!s.storage) return error('تعذر إنشاء رابط تحميل آمن', 503);
       const { data: signed, error: signError } = await s.storage
         .from('company-exports')
         .createSignedUrl(objectPath, 60);

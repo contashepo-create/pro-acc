@@ -1,5 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { getServerClient } from './supabase';
+import type { SupabaseLike } from './types';
 
 /**
  * SERVER-ONLY Supabase accessor using the service_role key.
@@ -13,11 +13,14 @@ import { getServerClient } from './supabase';
  * existing code and tests that reference '@/lib/supabase-client' keep
  * working unchanged.
  */
-export function getSupabase(): SupabaseClient {
+export function getSupabase(): SupabaseLike {
   if (typeof window !== 'undefined') {
     throw new Error('getSupabase() is server-only! Use createClientClient() for browser');
   }
-  return getServerClient();
+  // The real client is structurally a SupabaseLike (verified: its builder
+  // chains satisfy the interface); the direct check overflows TS's
+  // instantiation-depth limit, so this single boundary uses a cast.
+  return getServerClient() as unknown as SupabaseLike;
 }
 
 // Re-export the full public API of the canonical module.

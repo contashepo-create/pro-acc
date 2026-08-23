@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, requireManagerOrAbove, handleApiError, parseBody, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -20,12 +22,12 @@ export async function GET(request: NextRequest) {
       .select('key, value')
       .eq('company_id', auth.companyId);
 
-    const settingsMap: Record<string, any> = {};
-    (settings || []).forEach((item: any) => {
+    const settingsMap: Record<string, unknown> = {};
+    (settings || []).forEach((item: Row) => {
       try {
-        settingsMap[item.key] = JSON.parse(item.value);
+        settingsMap[String(item.key)] = JSON.parse(String(item.value));
       } catch {
-        settingsMap[item.key] = item.value;
+        settingsMap[String(item.key)] = item.value;
       }
     });
 
@@ -88,28 +90,29 @@ export async function PUT(request: NextRequest) {
       }
 
       const { getCountryConfig } = await import('@/lib/countries');
-      const companyUpdate: any = {};
+      const company = body.company as Row;
+      const companyUpdate: Row = {};
 
-      if (body.company.name !== undefined) {
-        if (typeof body.company.name !== 'string' || !body.company.name.trim()) {
+      if (company.name !== undefined) {
+        if (typeof company.name !== 'string' || !company.name.trim()) {
           return error('اسم الشركة غير صالح', 400);
         }
-        companyUpdate.name = body.company.name.trim();
+        companyUpdate.name = (company.name as string).trim();
       }
-      if (body.company.tax_number !== undefined) companyUpdate.tax_number = body.company.tax_number;
-      if (body.company.commercial_registration !== undefined) companyUpdate.commercial_registration = body.company.commercial_registration;
-      if (body.company.phone !== undefined) companyUpdate.phone = body.company.phone;
-      if (body.company.email !== undefined) {
-        if (body.company.email !== '' && !EMAIL_RE.test(body.company.email)) {
+      if (company.tax_number !== undefined) companyUpdate.tax_number = company.tax_number;
+      if (company.commercial_registration !== undefined) companyUpdate.commercial_registration = company.commercial_registration;
+      if (company.phone !== undefined) companyUpdate.phone = company.phone;
+      if (company.email !== undefined) {
+        if (String(company.email) !== '' && !EMAIL_RE.test(String(company.email))) {
           return error('صيغة البريد الإلكتروني غير صحيحة', 400);
         }
-        companyUpdate.email = body.company.email;
+        companyUpdate.email = company.email;
       }
-      if (body.company.address !== undefined) companyUpdate.address = body.company.address;
+      if (company.address !== undefined) companyUpdate.address = company.address;
 
       // Country change updates currency/vat automatically
-      if (body.company.country_code !== undefined) {
-        const cc = getCountryConfig(body.company.country_code);
+      if (company.country_code !== undefined) {
+        const cc = getCountryConfig(String(company.country_code));
         companyUpdate.country = cc.name;
         companyUpdate.country_code = cc.code;
         companyUpdate.currency_code = cc.currencyCode;
@@ -120,8 +123,8 @@ export async function PUT(request: NextRequest) {
 
       // Allow manual override of vat_rate — must be a valid fraction [0, 1]
       // (تُخزَّن ككسر لأن فواتير المبيعات تضرب بها: subtotal × vat_rate)
-      if (body.company.vat_rate !== undefined) {
-        const v = Number(body.company.vat_rate);
+      if (company.vat_rate !== undefined) {
+        const v = Number(company.vat_rate);
         if (!Number.isFinite(v) || v < 0 || v > 1) {
           return error('نسبة الضريبة غير صالحة — يجب أن تكون كسراً بين 0 و 1 (مثلاً 0.15 لـ 15%)', 400);
         }

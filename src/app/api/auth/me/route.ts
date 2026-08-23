@@ -4,6 +4,8 @@ import { applyCacheHeaders } from '@/lib/cache';
 import { hashPassword, verifyPassword } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -34,12 +36,12 @@ export async function GET(request: NextRequest) {
       applyCacheHeaders(resp, { cache: 'no-store' });
       return resp;
     }
-    const u = user as Record<string, any>;
+    const u = user as Row;
 
     const { data: company } = await s.from('companies')
       .select('id, name, commercial_registration, tax_number, address, phone, email, is_active')
       .eq('id', auth.companyId).maybeSingle();
-    const c = company as Record<string, any> | null;
+    const c = company as Row | null;
 
     const resp = success({
       user: {
@@ -78,7 +80,7 @@ export async function PUT(request: NextRequest) {
       .eq('id', auth.userId).single();
 
     if (userErr || !user) return error('المستخدم غير موجود', 404);
-    const u = user as Record<string, any>;
+    const u = user as Row;
     if (!u.is_active) return error('هذا الحساب غير نشط', 403);
 
     const storedVersion = Number(u.token_version) || 0;
@@ -92,7 +94,7 @@ export async function PUT(request: NextRequest) {
       if (!body.old_password || !body.new_password) {
         return error('يجب إدخال كلمة المرور الحالية والجديدة');
       }
-      if (!u.password_hash || !(await verifyPassword(String(body.old_password), u.password_hash))) {
+      if (!u.password_hash || !(await verifyPassword(String(body.old_password), String(u.password_hash)))) {
         return error('كلمة المرور الحالية غير صحيحة');
       }
       if (String(body.new_password).length < MIN_PASSWORD_LENGTH) {
@@ -128,7 +130,7 @@ export async function PUT(request: NextRequest) {
         // must be proven before it can be used to sign in (anti-hijack).
         const { data: emailExists } = await s.from('users')
           .select('id').ilike('email', newEmail).limit(1);
-        if (emailExists && emailExists.length > 0 && String((emailExists[0] as Record<string, any>).id) !== u.id) {
+        if (emailExists && emailExists.length > 0 && String((emailExists[0] as Row).id) !== u.id) {
           return error('هذا البريد الإلكتروني مستخدم بالفعل من حساب آخر', 409);
         }
         emailChanged = true;
@@ -169,7 +171,7 @@ export async function PUT(request: NextRequest) {
         .eq('id', u.id)
         .single();
       if (readErr || !updated) throw readErr || new Error('تعذر قراءة الملف الشخصي بعد التحديث');
-      const uu = updated as Record<string, any>;
+      const uu = updated as Row;
       const safeUser = { id: uu.id, name: uu.name, email: uu.email, role: uu.role, isActive: uu.is_active };
 
       return NextResponse.json(
@@ -194,7 +196,7 @@ export async function PUT(request: NextRequest) {
       throw updErr;
     }
 
-    const uu = updated as Record<string, any>;
+    const uu = updated as Row;
     const safeUser = { id: uu.id, name: uu.name, email: uu.email, role: uu.role, isActive: uu.is_active };
 
     return NextResponse.json(

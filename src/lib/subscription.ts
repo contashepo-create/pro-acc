@@ -34,23 +34,23 @@ export async function getCompanySubscription(companyId: string): Promise<Subscri
       .select('name')
       .eq('id', sub.plan_id)
       .single();
-    if (plan) planName = plan.name;
+    if (plan) planName = String(plan.name);
   }
 
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const endDate = new Date(sub.end_date);
+  const endDate = new Date(String(sub.end_date));
   const diffTime = endDate.getTime() - today.getTime();
   const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
   return {
-    id: sub.id,
-    company_id: sub.company_id,
-    plan_code: sub.plan_code,
+    id: String(sub.id),
+    company_id: String(sub.company_id),
+    plan_code: String(sub.plan_code),
     plan_name: planName,
-    status: sub.status,
-    start_date: sub.start_date,
-    end_date: sub.end_date,
+    status: String(sub.status),
+    start_date: String(sub.start_date),
+    end_date: String(sub.end_date),
     days_remaining: daysRemaining,
     is_expired: daysRemaining <= 0,
     is_expiring_soon: daysRemaining > 0 && daysRemaining <= 7,

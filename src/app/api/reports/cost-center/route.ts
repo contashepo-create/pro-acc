@@ -3,6 +3,8 @@ import { success, error, requireModulePermission, handleApiError } from '@/lib/a
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const number = (value: unknown) => Number(value) || 0;
 
 export async function GET(request: NextRequest) {
@@ -16,7 +18,7 @@ export async function GET(request: NextRequest) {
       p_company_id: auth.companyId, p_from: from, p_to: to,
     });
     if (queryError) throw queryError;
-    const costCenters = (data || []).map((row: any) => {
+    const costCenters = ((data ?? []) as Row[]).map((row: Row) => {
       const revenue = number(row.revenue);
       const expenses = number(row.expenses);
       const profit = revenue - expenses;

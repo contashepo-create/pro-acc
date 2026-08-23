@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { errorText } from '@/lib/errors';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -158,6 +161,7 @@ export async function processPendingExports(companyId?: string) {
       const payload = Buffer.from(json, 'utf8');
       const size = payload.byteLength;
       const objectPath = `${exp.company_id}/${exp.id}.json`;
+      if (!s.storage) throw new Error('Storage unavailable');
       const { error: uploadError } = await s.storage.from('company-exports').upload(
         objectPath,
         payload,
@@ -175,13 +179,13 @@ export async function processPendingExports(companyId?: string) {
         expires_at: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
       }).eq('id', exp.id).eq('company_id', exp.company_id);
       if (readyError) {
-        await s.storage.from('company-exports').remove([objectPath]);
+        if (s.storage) await s.storage.from('company-exports').remove([objectPath]);
         throw readyError;
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       await s.from('company_data_exports').update({
         status: 'failed',
-        error_message: e?.message || 'unknown error',
+        error_message: errorText(e) || 'unknown error',
       }).eq('id', exp.id).eq('company_id', exp.company_id);
     }
   }
@@ -198,16 +202,16 @@ const EXPORT_TABLES = [
   'budgets', 'cost_centers', 'notifications', 'settings', 'tax_returns',
 ];
 
-async function buildCompanyDump(companyId: string): Promise<Record<string, any[]>> {
+async function buildCompanyDump(companyId: string): Promise<Record<string, Row[]>> {
   const s = sb();
-  const out: Record<string, any[]> = {};
+  const out: Record<string, Row[]> = {};
   for (const table of EXPORT_TABLES) {
     // A data-portability export must be complete. Previously every table was
     // capped at 10,000 rows and ANY error became an empty array, so a churning
     // customer could be handed a silently truncated copy of their own data and
     // never know. Missing tables are still tolerated (the schema evolves), but
     // a real read failure now fails the export so it is retried/reported.
-    const rows: any[] = [];
+    const rows: Row[] = [];
     const pageSize = 1000;
     for (let offset = 0; ; offset += pageSize) {
       const { data, error: pageError } = await s.from(table)
@@ -222,7 +226,7 @@ async function buildCompanyDump(companyId: string): Promise<Record<string, any[]
         if (missingTable) { rows.length = 0; break; }
         throw new Error(`تعذر تصدير الجدول ${table}: ${pageError.message}`);
       }
-      const page = (data || []) as any[];
+      const page = (data || []) as Row[];
       rows.push(...page);
       if (page.length < pageSize) break;
     }

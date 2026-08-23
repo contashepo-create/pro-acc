@@ -3,9 +3,11 @@ import { success, error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { SupabaseQuery, Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
-function applySearch(query: any, search: string) {
+function applySearch(query: SupabaseQuery, search: string) {
   if (!search) return query;
   const cleaned = search.replace(/[(),".:;%]/g, ' ').trim().slice(0, 80);
   if (!cleaned) return query;
@@ -55,9 +57,9 @@ export async function GET(request: NextRequest) {
     if (dataErr) throw dataErr;
 
     return success({
-      logs: (logs || []).map((row: any) => ({
+      logs: (logs || []).map((row: Row) => ({
         id: row.id,
-        timestamp: new Date(row.created_at).toLocaleString('ar-SA'),
+        timestamp: new Date(String(row.created_at)).toLocaleString('ar-SA'),
         action: row.action,
         details: row.details || '',
         ip: row.ip_address || '',

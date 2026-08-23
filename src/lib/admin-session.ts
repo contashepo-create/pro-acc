@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from './types';
+
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const NONCE_RE = /^[0-9a-f]{64}$/i;
@@ -56,7 +58,7 @@ export async function getSession(pointer: string): Promise<AdminSessionData | nu
     .eq('id', parsed.adminId)
     .single();
 
-  if (error || !data || !(data as any).is_active) return null;
+  if (error || !data || !(data as Row).is_active) return null;
   const session = data.login_session_data as AdminSessionData;
   if (!session || !NONCE_RE.test(session.sessionId || '') || !equalSecret(session.sessionId, parsed.sessionId)) return null;
 

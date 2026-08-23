@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 
+import type { Row } from '@/lib/types';
+
 const CODE = /^[a-z0-9][a-z0-9_-]{1,49}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LIMITS: Record<string, number> = {
@@ -96,7 +98,7 @@ export async function PUT(req: NextRequest) {
       p_payload: patch,
     });
     if (updateError) throw updateError;
-    if ((data as any)?.not_found) return error('طريقة الدفع غير موجودة', 404);
+    if ((data as Row)?.not_found) return error('طريقة الدفع غير موجودة', 404);
     return success(data);
   } catch (err) {
     return adminJsonError(err);
@@ -116,7 +118,7 @@ export async function DELETE(req: NextRequest) {
       p_payload: {},
     });
     if (deactivateError) throw deactivateError;
-    if ((data as any)?.not_found) return error('طريقة الدفع غير موجودة', 404);
+    if ((data as Row)?.not_found) return error('طريقة الدفع غير موجودة', 404);
     return success({ deleted: true, deactivated: true });
   } catch (err) {
     return adminJsonError(err);

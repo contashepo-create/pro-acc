@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 
+import type { Row } from '@/lib/types';
+
 const AD_TYPES = new Set(['announcement','banner','promotion','upgrade','alert','info','feature','premium']);
 const DISPLAY_MODES = new Set(['top_bar','banner','popup','modal','inline']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -52,7 +54,7 @@ export async function GET(req: NextRequest) {
     let result = ads || [];
     const needle = q.replace(/[%_]/g, '').toLowerCase().slice(0, 64);
     if (needle) {
-      result = result.filter((ad: any) =>
+      result = result.filter((ad: Row) =>
         String(ad.title || '').toLowerCase().includes(needle) ||
         String(ad.body || '').toLowerCase().includes(needle)
       );
@@ -164,7 +166,7 @@ export async function PATCH(req: NextRequest) {
       p_payload: patch,
     });
     if (updateError) throw updateError;
-    if ((data as any)?.not_found) return error('الإعلان غير موجود', 404);
+    if ((data as Row)?.not_found) return error('الإعلان غير موجود', 404);
     return success(data);
   } catch (err) {
     return adminJsonError(err);
@@ -184,7 +186,7 @@ export async function DELETE(req: NextRequest) {
       p_payload: {},
     });
     if (deleteError) throw deleteError;
-    if ((data as any)?.not_found) return error('الإعلان غير موجود', 404);
+    if ((data as Row)?.not_found) return error('الإعلان غير موجود', 404);
     return success({ deleted: true });
   } catch (err) {
     return adminJsonError(err);

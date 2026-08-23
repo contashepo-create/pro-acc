@@ -1,6 +1,7 @@
-import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireManagerOrAbove, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, notFound, requireManagerOrAbove, handleApiError, parseBody, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -45,7 +46,7 @@ export async function PUT(
 
     if (!existing) return notFound();
 
-    const updateData: any = {};
+    const updateData: Row = {};
     if (body.name !== undefined) updateData.name = body.name;
     if (body.type !== undefined) updateData.type = body.type;
 

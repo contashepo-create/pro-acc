@@ -1,3 +1,5 @@
+import type { Row } from './types';
+
 export function formatCurrency(amount: number, locale?: string, symbol?: string): string {
   if (!Number.isFinite(amount)) return '0.00';
   const isNegative = amount < 0;
@@ -70,7 +72,7 @@ export function generateCode(length: number = 8): string {
   return code;
 }
 
-export function debounce<T extends (...args: any[]) => any>(
+export function debounce<T extends (...args: Row[]) => unknown>(
   fn: T,
   ms: number
 ): (...args: Parameters<T>) => void {
@@ -90,7 +92,7 @@ export function cn(
   return classes.filter(Boolean).join(' ');
 }
 
-export function groupBy<T extends Record<string, any>>(
+export function groupBy<T extends Record<string, unknown>>(
   arr: T[],
   key: keyof T
 ): Record<string, T[]> {

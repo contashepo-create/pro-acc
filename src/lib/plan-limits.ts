@@ -13,6 +13,8 @@
 
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from './types';
+
 const sb = () => getSupabase();
 
 export interface PlanLimits {
@@ -49,8 +51,8 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
     .maybeSingle();
   if (subscriptionError) throw subscriptionError;
   if (!sub) return null;
-  const subr = sub as Record<string, any>;
-  const plan = subr.subscription_plans as Record<string, any> | null;
+  const subr = sub as Row;
+  const plan = (subr.subscription_plans ?? null) as Row | null;
 
   const baseUsers = Number(plan?.max_users ?? 1);
   const extraUsers = Number(subr.extra_users ?? 0);
@@ -60,7 +62,7 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
   // fall back to the addons_json value so old data keeps working until migration 036 runs.
   let effectiveExtraGb = extraStorageGb;
   if (!effectiveExtraGb && subr.addons_json && typeof subr.addons_json === 'object') {
-    const legacy = Number((subr.addons_json as any).extra_storage_gb_paid ?? 0);
+    const legacy = Number((subr.addons_json as Row).extra_storage_gb_paid ?? 0);
     if (legacy > 0) effectiveExtraGb = legacy;
   }
   const baseStorageMb = Number(plan?.max_storage_mb ?? 0);
@@ -82,14 +84,14 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
     : {};
 
   return {
-    planCode: plan?.code || subr.plan_code || null,
+    planCode: (plan?.code as string | null | undefined) || (subr.plan_code as string | null | undefined) || null,
     max_users: baseUsers + extraUsers,
-    max_projects: plan?.max_projects ?? null,
-    max_clients: plan?.max_clients ?? null,
-    max_suppliers: plan?.max_suppliers ?? null,
-    max_employees: plan?.max_employees ?? null,
-    max_invoices_per_month: plan?.max_invoices_per_month ?? null,
-    max_quotations_per_month: plan?.max_quotations_per_month ?? null,
+    max_projects: plan?.max_projects == null ? null : Number(plan.max_projects),
+    max_clients: plan?.max_clients == null ? null : Number(plan.max_clients),
+    max_suppliers: plan?.max_suppliers == null ? null : Number(plan.max_suppliers),
+    max_employees: plan?.max_employees == null ? null : Number(plan.max_employees),
+    max_invoices_per_month: plan?.max_invoices_per_month == null ? null : Number(plan.max_invoices_per_month),
+    max_quotations_per_month: plan?.max_quotations_per_month == null ? null : Number(plan.max_quotations_per_month),
     max_storage_mb: maxStorageMb,
     max_branches: maxBranches,
     max_warehouses: maxBranches,
@@ -138,7 +140,7 @@ export async function checkPlanLimit(
     warehouses: limits.max_warehouses,
   };
 
-  let limit = planLimitMap[resource];
+  const limit = planLimitMap[resource];
   // NULL means unlimited for invoices/quotations/clients/etc.
   if (limit === null || limit === undefined) return { allowed: true, limit: null, current: 0 };
 
@@ -235,7 +237,7 @@ export async function countUsedStorageBytes(companyId: string): Promise<number> 
     let offset = 0;
     const pageSize = 1000;
     while (true) {
-      // @ts-ignore supabase-js storage types
+      if (!s.storage) break;
       const { data: files, error } = await s.storage.from(bucket).list(directory, {
         limit: pageSize,
         offset,
@@ -247,7 +249,7 @@ export async function countUsedStorageBytes(companyId: string): Promise<number> 
         throw error;
       }
       if (!files?.length) break;
-      for (const file of files as any[]) {
+      for (const file of files) {
         const size = Number(file.metadata?.size);
         if (Number.isFinite(size) && size > 0) total += size;
         // Contract documents are grouped as company/contract/file. Supabase

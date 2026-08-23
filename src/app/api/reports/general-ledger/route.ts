@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 import { parseReportPagination } from '@/lib/report-validation';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -26,7 +28,7 @@ export async function GET(request: NextRequest) {
     if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
     if ((accountId && !uuid.test(accountId)) || (costCenterId && !uuid.test(costCenterId)) || (branchId && !uuid.test(branchId))) return error('معرّف المرشح غير صالح');
 
-    let account: any = null;
+    let account: Row | null = null;
     if (accountId || accountCode) {
       let query = s.from('accounts').select('id, code, name, type').eq('company_id', auth.companyId);
       query = accountId ? query.eq('id', accountId) : query.eq('code', accountCode!);
@@ -48,7 +50,7 @@ export async function GET(request: NextRequest) {
       if (!data) return error('الفرع غير موجود', 404);
     }
 
-    const calls: any[] = [s.rpc('get_general_ledger', {
+    const calls = [s.rpc('get_general_ledger', {
       p_company_id: auth.companyId, p_account_id: account?.id || null,
       p_from: from, p_to: to, p_cost_center_id: costCenterId, p_branch_id: branchId,
       p_limit: pageSize, p_offset: (page - 1) * pageSize,
@@ -60,12 +62,12 @@ export async function GET(request: NextRequest) {
     const [ledgerResult, openingResult] = await Promise.all(calls);
     if (ledgerResult.error) throw ledgerResult.error;
     if (openingResult?.error) throw openingResult.error;
-    const rows = ledgerResult.data || [];
+    const rows = (ledgerResult.data ?? []) as Row[];
     const openingBalance = openingResult ? number(openingResult.data) : (rows.length ? number(rows[0].opening_balance) : 0);
     const totalDebit = rows.length ? number(rows[0].total_debit) : 0;
     const totalCredit = rows.length ? number(rows[0].total_credit) : 0;
     const total = rows.length ? number(rows[0].total_count) : 0;
-    const transactions = rows.map((row: any) => ({
+    const transactions = rows.map((row: Row) => ({
       id: row.line_id, date: row.entry_date, number: row.entry_number,
       description: row.entry_description || row.line_description,
       reference_type: row.reference_type, reference_id: row.reference_id,
@@ -74,7 +76,7 @@ export async function GET(request: NextRequest) {
       cost_center_id: row.cost_center_id, branch_id: row.branch_id,
     }));
     const closingBalance = account
-      ? openingBalance + (['asset', 'expense'].includes(account.type) ? totalDebit - totalCredit : totalCredit - totalDebit)
+      ? openingBalance + (['asset', 'expense'].includes(String(account.type)) ? totalDebit - totalCredit : totalCredit - totalDebit)
       : totalDebit - totalCredit;
 
     return success({

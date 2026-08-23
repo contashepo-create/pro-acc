@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -59,7 +60,7 @@ export async function GET(
     for (const result of [summaryResult, linesResult, purchasesResult, disbursementsResult]) if (result.error) throw result.error;
 
     const summary = (summaryResult.data || {}) as Record<string, unknown>;
-    const entries = (linesResult.data || []).map((line: Record<string, unknown>) => {
+    const entries = ((linesResult.data ?? []) as Row[]).map((line: Row) => {
       const debit = number(line.debit);
       const credit = number(line.credit);
       return {

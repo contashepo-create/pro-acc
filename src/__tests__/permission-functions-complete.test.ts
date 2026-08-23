@@ -56,6 +56,13 @@ describe('remaining permission functions', () => {
     await expect(hasModulePermission('u1', 'c1', 'journal', 'nonsense')).resolves.toBe(false);
   });
 
+  test('falls back to supervisor defaults when the user row has no role', async () => {
+    user = { id: 'u1' };
+    await expect(hasModulePermission('u1', 'c1', 'journal', 'read')).resolves.toBe(true);
+    permissions = [{ module: 'journal', permissions: ['export'] }];
+    await expect(hasModulePermission('u1', 'c1', 'journal', 'read')).resolves.toBe(false);
+  });
+
   test('returns role defaults alongside all custom permissions', async () => {
     permissions = [{ module: 'journal', permissions: ['read'], bypass_telegram_confirmation: false }];
     user = { id: 'u1', role: 'accountant' };

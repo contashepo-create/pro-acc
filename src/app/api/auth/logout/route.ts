@@ -3,6 +3,8 @@ import { success, serverError, clearAuthCookie } from '@/lib/api-helpers';
 import { verifyToken, extractToken } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
@@ -18,7 +20,7 @@ export async function POST(request: NextRequest) {
             .select('token_version')
             .eq('id', payload.userId)
             .maybeSingle();
-          const nextVersion = (Number((cur as Record<string, any>)?.token_version) || 0) + 1;
+          const nextVersion = (Number((cur as Row)?.token_version) || 0) + 1;
           await sb().from('users')
             .update({ token_version: nextVersion })
             .eq('id', payload.userId);

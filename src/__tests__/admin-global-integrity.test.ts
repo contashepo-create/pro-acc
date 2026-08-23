@@ -53,14 +53,17 @@ beforeEach(() => {
 });
 
 describe('admin error boundary', () => {
-  test('surfaces the real error message while keeping a correlation id', async () => {
+  test('keeps internal error details out of the response while logging them', async () => {
     const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const res = adminJsonError({ message: 'column secret_hash does not exist', details: 'SQL statement' });
     const body = await res.json();
     expect(res.status).toBe(500);
-    expect(body.message).toBe('column secret_hash does not exist');
+    expect(body.message).toBe('حدث خطأ غير متوقع');
     expect(body.errorId).toMatch(/^[a-z0-9]+$/);
-    expect(JSON.stringify(body)).toContain('secret_hash');
+    // No schema/column/table name may leak to the client.
+    const payload = JSON.stringify(body);
+    expect(payload).not.toContain('secret_hash');
+    expect(payload).not.toContain('SQL statement');
     expect(log).toHaveBeenCalled();
     log.mockRestore();
   });

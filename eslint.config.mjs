@@ -11,6 +11,7 @@ const eslintConfig = defineConfig([
       // Legacy code predates these rules. Keep findings visible without making
       // the existing codebase block CI; new code should still avoid them.
       "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "ignoreRestSiblings": true }],
       "@typescript-eslint/no-require-imports": "warn",
       "@typescript-eslint/ban-ts-comment": "warn",
       "react-hooks/set-state-in-effect": "warn",

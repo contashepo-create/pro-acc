@@ -6,6 +6,8 @@ import { receiptVoucherCreateSchema } from '@/lib/validation';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
 import { checkApprovalThreshold, sendApprovalRequestNotification, type ApprovalThresholdResult } from '@/lib/notifications';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -143,7 +145,7 @@ export async function POST(request: NextRequest) {
       p_user_id: auth.userId,
     });
     if (createErr) throw createErr;
-    const voucher = data as Record<string, any>;
+    const voucher = data as Row;
     try {
       const { logAudit } = await import('@/lib/audit');
       await logAudit({
@@ -164,8 +166,8 @@ export async function POST(request: NextRequest) {
         notificationSent = true;
         try {
           await sendApprovalRequestNotification(
-            auth.companyId, amount, 'voucher_receipt', voucher.id,
-            auth.userId, voucher.approval_id,
+            auth.companyId, amount, 'voucher_receipt', String(voucher.id),
+            auth.userId, String(voucher.approval_id),
           );
         } catch (notifyErr) {
           notificationSent = false;

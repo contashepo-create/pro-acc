@@ -5,6 +5,8 @@ import { loginSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
 import { checkRateLimit } from '@/lib/rate-limit';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
@@ -128,16 +130,19 @@ export async function POST(request: NextRequest) {
       throw e;
     }
 
-    const token = createToken(u.id, u.role, Number((u as any).token_version) || 0);
+    const token = createToken(u.id, u.role, Number((u as Row).token_version) || 0);
     const { password_hash: _, ...safeUser } = u;
 
+    // SECURITY: the session JWT travels ONLY in the HttpOnly cookie. Embedding
+    // it in the JSON body would let any XSS read it and fully neutralize the
+    // httpOnly protection, so the response must never carry a token field.
     const response = success({
       user: safeUser,
       company: {
         id: c.id, name: c.name,
-        registrationNumber: (c as any).commercial_registration,
-        taxNumber: (c as any).tax_number, vatNumber: (c as any).vat_number || (c as any).tax_number,
-        address: (c as any).address, phone: (c as any).phone, email: (c as any).email, logo: null,
+        registrationNumber: (c as Row).commercial_registration,
+        taxNumber: (c as Row).tax_number, vatNumber: (c as Row).vat_number || (c as Row).tax_number,
+        address: (c as Row).address, phone: (c as Row).phone, email: (c as Row).email, logo: null,
       },
       subscription: {
         status: subscriptionStatus,
@@ -146,7 +151,6 @@ export async function POST(request: NextRequest) {
         end_date: endDateStr,
         days_remaining: daysRemaining,
       },
-      token,
     });
 
     setAuthCookie(response, 'token', token, 86400 * 7);

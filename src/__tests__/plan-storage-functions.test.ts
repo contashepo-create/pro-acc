@@ -43,6 +43,13 @@ describe('storage accounting and module entitlement helpers', () => {
     await expect(countUsedStorageBytes('c1')).rejects.toThrow('safe scan limit');
   });
 
+  test('returns zero when the client has no storage surface', async () => {
+    const storageRef = (db as { storage?: unknown }).storage;
+    delete (db as { storage?: unknown }).storage;
+    await expect(countUsedStorageBytes('c1')).resolves.toBe(0);
+    (db as { storage?: unknown }).storage = storageRef;
+  });
+
   test('defaults unknown modules to enabled and honors explicit feature flags', async () => {
     await expect(hasModule('c1', 'inventory')).resolves.toBe(true);
     subscription = {

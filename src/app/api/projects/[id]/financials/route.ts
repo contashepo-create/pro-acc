@@ -3,6 +3,8 @@ import { success, error, handleApiError, requireModulePermission } from '@/lib/a
 import { getSupabase } from '@/lib/supabase-client';
 import { deliveryUuid } from '@/lib/project-delivery-validation';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -32,8 +34,8 @@ export async function GET(
     if (projectError) throw projectError;
     if (!project) return error('المشروع غير موجود', 404);
 
-    const p = project as any;
-    const contractValue = parseFloat(p.contract_value) || 0;
+    const p = project as Row;
+    const contractValue = parseFloat(String(p.contract_value)) || 0;
 
     // Invoices for this project
     const { data: invoices, error: invoicesError } = await s.from('invoices')
@@ -42,9 +44,9 @@ export async function GET(
       .neq('status', 'cancelled').order('date');
     if (invoicesError) throw invoicesError;
 
-    const invoicedNet = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.subtotal) || 0), 0);
-    const invoicedGross = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.total) || 0), 0);
-    const paidAmount = (invoices || []).reduce((sum: number, inv: any) => sum + (parseFloat(inv.paid_amount) || 0), 0);
+    const invoicedNet = (invoices || []).reduce((sum: number, inv: Row) => sum + (parseFloat(String(inv.subtotal)) || 0), 0);
+    const invoicedGross = (invoices || []).reduce((sum: number, inv: Row) => sum + (parseFloat(String(inv.total)) || 0), 0);
+    const paidAmount = (invoices || []).reduce((sum: number, inv: Row) => sum + (parseFloat(String(inv.paid_amount)) || 0), 0);
 
     // Credit notes for this project
     const { data: creditNotes, error: creditNotesError } = await s.from('credit_notes')
@@ -53,7 +55,7 @@ export async function GET(
       .neq('status', 'cancelled').order('date');
     if (creditNotesError) throw creditNotesError;
 
-    const creditNoteAmount = (creditNotes || []).reduce((sum: number, cn: any) => sum + (parseFloat(cn.total) || 0), 0);
+    const creditNoteAmount = (creditNotes || []).reduce((sum: number, cn: Row) => sum + (parseFloat(String(cn.total)) || 0), 0);
 
     const { sumProjectJournal } = await import('@/lib/project-costs');
     const journal = await sumProjectJournal(auth.companyId, id);
@@ -74,7 +76,7 @@ export async function GET(
       .order('date');
     if (billingError) throw billingError;
 
-    const progressTotal = (progressBilling || []).reduce((sum: number, pb: any) => sum + (parseFloat(pb.gross_amount) || 0), 0);
+    const progressTotal = (progressBilling || []).reduce((sum: number, pb: Row) => sum + (parseFloat(String(pb.gross_amount)) || 0), 0);
 
     // Calculations
     const netInvoiced = invoicedNet - creditNoteAmount;
@@ -95,7 +97,7 @@ export async function GET(
       project: {
         id: p.id,
         name: p.name,
-        client_name: p.contacts?.name || null,
+        client_name: p.contacts ? String((p.contacts as Row).name) || null : null,
         contract_value: contractValue,
         status: p.status,
         tax_enabled: p.tax_enabled,

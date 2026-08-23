@@ -4,6 +4,8 @@ import { success, error, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { signPrivateReceiptReference } from '@/lib/storage-references';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -27,9 +29,9 @@ export async function GET(req: NextRequest) {
     if (status !== 'all') query = query.eq('status', status);
     const { data, error: queryError } = await query;
     if (queryError) throw queryError;
-    const requests = await Promise.all((data || []).map(async (row: any) => ({
+    const requests = await Promise.all((data || []).map(async (row: Row) => ({
       ...row,
-      receipt_image_url: await signPrivateReceiptReference(sb(), row.receipt_image_url),
+      receipt_image_url: await signPrivateReceiptReference(sb(), row.receipt_image_url == null ? null : String(row.receipt_image_url)),
     })));
     return success({ requests });
   } catch (err) {

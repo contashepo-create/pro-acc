@@ -4,9 +4,11 @@ import { getSupabase } from '@/lib/supabase-client';
 import { loadReportJournalEntries, loadReportJournalLines } from '@/lib/report-journal';
 import { isValidDate } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const number = (value: unknown) => Number(value) || 0;
 
-type Bucket = { inflows: any[]; outflows: any[] };
+type Bucket = { inflows: Row[]; outflows: Row[] };
 
 /** Direct-method cash flow, based only on cash/bank ledger movements. */
 export async function GET(request: NextRequest) {
@@ -26,24 +28,24 @@ export async function GET(request: NextRequest) {
     const { data: accounts, error: accountsError } = await s.from('accounts')
       .select('id, code, name, type').eq('company_id', auth.companyId);
     if (accountsError) throw accountsError;
-    const accountMap = new Map((accounts || []).map((account: any) => [account.id, account]));
+    const accountMap = new Map<string, Row>((accounts || []).map((account: Row) => [String(account.id), account]));
 
     let openingBalance = 0;
     if (from) {
       const priorEntries = await loadReportJournalEntries(s, auth.companyId, { to: previousDate(from) });
-      const priorLines = await loadReportJournalLines(s, auth.companyId, priorEntries.map((entry) => entry.id));
-      openingBalance = priorLines.filter((line: any) => cashIds.has(line.account_id))
-        .reduce((sum: number, line: any) => sum + number(line.debit) - number(line.credit), 0);
+      const priorLines = await loadReportJournalLines(s, auth.companyId, priorEntries.map((entry) => String(entry.id)));
+      openingBalance = priorLines.filter((line: Row) => cashIds.has(String(line.account_id)))
+        .reduce((sum: number, line: Row) => sum + number(line.debit) - number(line.credit), 0);
     }
 
     const entries = await loadReportJournalEntries(s, auth.companyId, { from, to });
-    const entryMap = new Map(entries.map((entry) => [entry.id, entry]));
-    const allLines = await loadReportJournalLines(s, auth.companyId, entries.map((entry) => entry.id));
-    const linesByEntry = new Map<string, any[]>();
+    const entryMap = new Map(entries.map((entry) => [String(entry.id), entry]));
+    const allLines = await loadReportJournalLines(s, auth.companyId, entries.map((entry) => String(entry.id)));
+    const linesByEntry = new Map<string, Row[]>();
     for (const line of allLines) {
-      const list = linesByEntry.get(line.journal_entry_id) || [];
+      const list = linesByEntry.get(String(line.journal_entry_id)) || [];
       list.push(line);
-      linesByEntry.set(line.journal_entry_id, list);
+      linesByEntry.set(String(line.journal_entry_id), list);
     }
 
     const buckets: Record<'operating' | 'investing' | 'financing', Bucket> = {
@@ -51,17 +53,17 @@ export async function GET(request: NextRequest) {
     };
     for (const [entryId, lines] of linesByEntry) {
       const entry = entryMap.get(entryId);
-      const cashLines = lines.filter((line: any) => cashIds.has(line.account_id));
-      const counterpartLines = lines.filter((line: any) => !cashIds.has(line.account_id));
-      const cashDebit = cashLines.reduce((sum: number, line: any) => sum + number(line.debit), 0);
-      const cashCredit = cashLines.reduce((sum: number, line: any) => sum + number(line.credit), 0);
+      const cashLines = lines.filter((line: Row) => cashIds.has(String(line.account_id)));
+      const counterpartLines = lines.filter((line: Row) => !cashIds.has(String(line.account_id)));
+      const cashDebit = cashLines.reduce((sum: number, line: Row) => sum + number(line.debit), 0);
+      const cashCredit = cashLines.reduce((sum: number, line: Row) => sum + number(line.credit), 0);
       if (cashDebit > 0) allocate(counterpartLines, 'credit', cashDebit, entry, buckets, 'inflows', accountMap);
       if (cashCredit > 0) allocate(counterpartLines, 'debit', cashCredit, entry, buckets, 'outflows', accountMap);
     }
 
     const format = (bucket: Bucket) => {
-      const totalInflows = bucket.inflows.reduce((sum, item) => sum + item.amount, 0);
-      const totalOutflows = bucket.outflows.reduce((sum, item) => sum + item.amount, 0);
+      const totalInflows = bucket.inflows.reduce((sum: number, item: Row) => sum + number(item.amount), 0);
+      const totalOutflows = bucket.outflows.reduce((sum: number, item: Row) => sum + number(item.amount), 0);
       return { ...bucket, total_inflows: totalInflows, total_outflows: totalOutflows, net: totalInflows - totalOutflows };
     };
     const operating = format(buckets.operating);
@@ -78,14 +80,14 @@ export async function GET(request: NextRequest) {
 }
 
 function allocate(
-  lines: any[], side: 'debit' | 'credit', cashTotal: number, entry: any,
-  buckets: Record<'operating' | 'investing' | 'financing', Bucket>, flow: 'inflows' | 'outflows', accountMap: Map<any, any>,
+  lines: Row[], side: 'debit' | 'credit', cashTotal: number, entry: Row | undefined,
+  buckets: Record<'operating' | 'investing' | 'financing', Bucket>, flow: 'inflows' | 'outflows', accountMap: Map<string, Row>,
 ) {
   const eligible = lines.filter((line) => number(line[side]) > 0);
   const counterpartTotal = eligible.reduce((sum, line) => sum + number(line[side]), 0);
   if (!counterpartTotal) return;
   for (const line of eligible) {
-    const account = accountMap.get(line.account_id);
+    const account = accountMap.get(String(line.account_id));
     const code = String(line.account_code || account?.code || '');
     const activity = classify(code);
     buckets[activity][flow].push({

@@ -1,3 +1,5 @@
+import type { Row } from './types';
+
 /** حقول الطرف (عميل/مورد) التي يرسلها النموذج ويجب أن تُحفظ فعلياً. */
 export const CONTACT_TEXT_FIELDS = [
   'name', 'type', 'phone', 'email', 'address',
@@ -10,8 +12,8 @@ export const CONTACT_TEXT_FIELDS = [
 
 export const CONTACT_NUMBER_FIELDS = ['credit_limit'] as const;
 
-export function pickContactFields(body: Record<string, any>, { requireName = false } = {}) {
-  const out: Record<string, any> = {};
+export function pickContactFields(body: Record<string, unknown>, { requireName = false } = {}) {
+  const out: Record<string, unknown> = {};
   for (const key of CONTACT_TEXT_FIELDS) {
     if (body[key] === undefined) continue;
     const v = body[key];
@@ -24,7 +26,7 @@ export function pickContactFields(body: Record<string, any>, { requireName = fal
     out[key] = Number.isFinite(n) ? n : 0;
   }
   if (requireName && (!out.name || String(out.name).trim() === '')) {
-    return { error: 'اسم الطرف مطلوب', data: null as Record<string, any> | null };
+    return { error: 'اسم الطرف مطلوب', data: null as Row | null };
   }
   if (out.email && typeof out.email === 'string' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(out.email)) {
     return { error: 'البريد الإلكتروني غير صالح', data: null };

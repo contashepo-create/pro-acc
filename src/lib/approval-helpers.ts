@@ -28,7 +28,7 @@ export async function getTransactionApprovalStatus(
     .select('id,status').eq('company_id', companyId).eq('transaction_type', transactionType)
     .eq('transaction_id', transactionId).order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (approvalError) throw approvalError;
-  if (approval) return { status: approval.status, approvalId: approval.id };
+  if (approval) return { status: String(approval.status), approvalId: approval.id == null ? null : String(approval.id) };
   const tableMap: Record<string, string> = {
     voucher_disbursement: 'voucher_disbursements', voucher_receipt: 'voucher_receipts',
     cash_transaction: 'cash_transactions', journal_entry: 'journal_entries',
@@ -38,5 +38,5 @@ export async function getTransactionApprovalStatus(
   const { data, error } = await sb().from(table).select('status').eq('id', transactionId)
     .eq('company_id', companyId).maybeSingle();
   if (error) throw error;
-  return { status: data?.status || 'not_found', approvalId: null };
+  return { status: String(data?.status || 'not_found'), approvalId: null };
 }

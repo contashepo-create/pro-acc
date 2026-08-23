@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireAdmin, handleApiError, error, success, enforceRateLimit } from '@/lib/api-helpers';
+
+import type { Row } from '@/lib/types';
 import {
   parseBackupUploadBody, checkBackupOwnership, checkBackupSignature,
   validateBackupPayload, BackupValidationError, RESTORE_TABLES,
@@ -37,9 +39,9 @@ export async function POST(request: NextRequest) {
     const { data: company } = await s.from('companies')
       .select('id, name, email, phone').eq('id', auth.companyId).single();
     if (!company) return error('Company not found', 404);
-    const c = company as Record<string, any>;
+    const c = company as Row;
 
-    const ownership = checkBackupOwnership(backupData, auth.companyId, c.email);
+    const ownership = checkBackupOwnership(backupData, auth.companyId, String(c.email));
     if (!ownership.ok) return error(ownership.message, ownership.status);
     if (backupData.metadata?.phone && backupData.metadata.phone !== c.phone) {
       console.warn(`Phone mismatch for backup: ${backupData.metadata.phone} vs ${c.phone}`);

@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, notFound, requireModulePermission, handleApiError, parseBody} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -34,9 +36,9 @@ export async function PUT(
     const { data: existing } = await s.from('fiscal_years')
       .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return notFound();
-    if ((existing as any).status === 'closed') return error('لا يمكن تعديل سنة مالية مقفلة');
+    if ((existing as Row).status === 'closed') return error('لا يمكن تعديل سنة مالية مقفلة');
 
-    const updateData: any = {};
+    const updateData: Row = {};
     if (body.name !== undefined) updateData.name = body.name;
     if (body.start_date !== undefined) updateData.start_date = body.start_date;
     if (body.end_date !== undefined) updateData.end_date = body.end_date;
@@ -67,8 +69,8 @@ export async function DELETE(
     const { data: existing } = await s.from('fiscal_years')
       .select('id, status').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return notFound();
-    if ((existing as any).status === 'closed') return error('لا يمكن حذف سنة مالية مقفلة');
-    if ((existing as any).status === 'open') return error('لا يمكن حذف سنة مالية مفتوحة — يجب إقفالها أولاً', 409);
+    if ((existing as Row).status === 'closed') return error('لا يمكن حذف سنة مالية مقفلة');
+    if ((existing as Row).status === 'open') return error('لا يمكن حذف سنة مالية مفتوحة — يجب إقفالها أولاً', 409);
 
     const { error: delErr } = await s.from('fiscal_years').delete().eq('id', id).eq('company_id', auth.companyId);
     if (delErr) throw delErr;

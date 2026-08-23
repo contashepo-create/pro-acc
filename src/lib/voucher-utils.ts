@@ -12,6 +12,8 @@
 
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row, SupabaseLike } from './types';
+
 const sb = () => getSupabase();
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -20,20 +22,21 @@ export type VoucherKind = 'receipt' | 'disbursement';
 
 /** إن فشل embed الأسماء، املأها من جداول الأطراف. */
 export async function hydratePartyNames(
-  supabase: any,
+  supabase: SupabaseLike,
   companyId: string,
-  rows: any[],
+  rows: Row[],
   opts: { contacts?: boolean; employees?: boolean } = {},
-): Promise<any[]> {
+): Promise<Row[]> {
   if (!rows.length) return rows;
   if (opts.contacts) {
     const ids = [...new Set(rows.map((r) => r.contact_id).filter(Boolean))];
     if (ids.length) {
       const { data } = await supabase.from('contacts').select('id, name').eq('company_id', companyId).in('id', ids);
-      const map = new Map((data || []).map((c: any) => [c.id, c.name]));
+      const map = new Map((data || []).map((c: Row) => [c.id, c.name]));
       for (const r of rows) {
         if (!r.contacts && r.contact_id) r.contacts = { name: map.get(r.contact_id) || '' };
-        r.contact_name = r.contacts?.name || map.get(r.contact_id) || '';
+        const contact = (r.contacts ?? null) as Row | null;
+    r.contact_name = contact?.name || map.get(String(r.contact_id)) || '';
       }
     }
   }
@@ -41,10 +44,11 @@ export async function hydratePartyNames(
     const ids = [...new Set(rows.map((r) => r.employee_id).filter(Boolean))];
     if (ids.length) {
       const { data } = await supabase.from('employees').select('id, name').eq('company_id', companyId).in('id', ids);
-      const map = new Map((data || []).map((e: any) => [e.id, e.name]));
+      const map = new Map((data || []).map((e: Row) => [e.id, e.name]));
       for (const r of rows) {
         if (!r.employees && r.employee_id) r.employees = { name: map.get(r.employee_id) || '' };
-        r.employee_name = r.employees?.name || map.get(r.employee_id) || '';
+        const employee = (r.employees ?? null) as Row | null;
+    r.employee_name = employee?.name || map.get(String(r.employee_id)) || '';
       }
     }
   }
@@ -62,7 +66,7 @@ export async function resolveAccountId(companyId: string, code: string): Promise
     .eq('company_id', companyId)
     .eq('code', code)
     .maybeSingle();
-  return data?.id || null;
+  return data?.id == null ? null : String(data.id);
 }
 
 /**
@@ -78,7 +82,7 @@ export async function postReversalEntry(
     description: string;
     userId: string;
   }
-): Promise<{ error: any | null }> {
+): Promise<{ error: unknown | null }> {
   const s = sb();
   const { data, error } = await s.rpc('post_journal_reversal', {
     p_company_id: companyId,
@@ -145,8 +149,8 @@ export async function applyInvoiceAllocations(
       return { error: 'الفاتورة المخصصة لا تخص نفس الطرف المحدد في السند', applied: 0 };
     }
 
-    const total = round2(parseFloat(invoice.total) || 0);
-    const paid = round2(parseFloat(invoice.paid_amount) || 0);
+    const total = round2(parseFloat(String(invoice.total)) || 0);
+    const paid = round2(parseFloat(String(invoice.paid_amount)) || 0);
     const remaining = round2(total - paid);
     if (remaining <= 0) return { error: 'الفاتورة مسددة بالكامل', applied: 0 };
 
@@ -198,7 +202,7 @@ export async function revertInvoiceAllocations(
     .eq(linkVoucherCol, voucherId);
 
   for (const link of links || []) {
-    const invoiceId = (link as Record<string, any>)[linkInvoiceCol];
+    const invoiceId = (link as Row)[linkInvoiceCol];
     const { data: invoice } = await s.from(invoiceTable)
       .select('id, total, paid_amount, status')
       .eq('id', invoiceId)
@@ -206,8 +210,8 @@ export async function revertInvoiceAllocations(
       .maybeSingle();
     if (!invoice || invoice.status === 'cancelled') continue;
 
-    const total = round2(parseFloat(invoice.total) || 0);
-    const newPaid = round2(Math.max(0, (parseFloat(invoice.paid_amount) || 0) - (parseFloat(link.amount) || 0)));
+    const total = round2(parseFloat(String(invoice.total)) || 0);
+    const newPaid = round2(Math.max(0, (parseFloat(String(invoice.paid_amount)) || 0) - (parseFloat(String(link.amount)) || 0)));
     const newStatus = newPaid <= 0 ? 'unpaid' : (newPaid >= total - 0.005 ? 'paid' : 'partial');
 
     await s.from(invoiceTable)
@@ -244,12 +248,12 @@ export async function allocateOldestUnpaidInvoices(
   let remaining = round2(amount);
   for (const inv of invoices || []) {
     if (remaining <= 0.005) break;
-    const total = round2(parseFloat(inv.total) || 0);
-    const paid = round2(parseFloat(inv.paid_amount) || 0);
+    const total = round2(parseFloat(String(inv.total)) || 0);
+    const paid = round2(parseFloat(String(inv.paid_amount)) || 0);
     const due = round2(total - paid);
     if (due <= 0) continue;
     const take = round2(Math.min(remaining, due));
-    allocations.push({ invoice_id: inv.id, amount: take });
+    allocations.push({ invoice_id: String(inv.id), amount: take });
     remaining = round2(remaining - take);
   }
   if (allocations.length === 0) return { error: null, applied: 0 };

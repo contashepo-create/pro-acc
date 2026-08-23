@@ -24,7 +24,7 @@ export async function resolveSalesAccounts(companyId: string): Promise<{
     vat = (await s.from('accounts').select('id').eq('company_id', companyId).eq('code', '2120').maybeSingle()).data;
   }
   if (!ar || !rev) throw new Error('حسابات الذمم أو الإيراد مفقودة');
-  return { arId: ar.id, revenueId: rev.id, vatId: vat?.id || null };
+  return { arId: String(ar.id), revenueId: String(rev.id), vatId: vat?.id == null ? null : String(vat.id) };
 }
 
 export async function postSalesInvoiceJournal(opts: {

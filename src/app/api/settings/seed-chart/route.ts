@@ -1,7 +1,7 @@
-import { NextRequest } from 'next/server';
-import { success, error, requireAdmin, handleApiError } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
-import { createDefaultChartOfAccounts } from '@/lib/default-accounts';
+import {NextRequest} from 'next/server';
+import {success, requireAdmin, handleApiError} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+import {createDefaultChartOfAccounts} from '@/lib/default-accounts';
 
 const sb = () => getSupabase();
 

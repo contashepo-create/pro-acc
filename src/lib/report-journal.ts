@@ -1,10 +1,12 @@
+import type { Row, SupabaseLike } from './types';
+
 const MISSING_COL = /deleted_at|is_header|42703|Could not find/i;
 const CHUNK = 200;
 const PAGE = 1000;
 
-export async function loadReportAccounts(supabase: any, companyId: string) {
+export async function loadReportAccounts(supabase: SupabaseLike, companyId: string) {
   const load = async (full: boolean) => {
-    const out: any[] = [];
+    const out: Row[] = [];
     for (let from = 0; ; from += PAGE) {
       const select = full ? 'id, code, name, type, is_header, is_active' : 'id, code, name, type, is_active';
       const res = await supabase.from('accounts').select(select).eq('company_id', companyId)
@@ -24,12 +26,12 @@ export async function loadReportAccounts(supabase: any, companyId: string) {
 }
 
 export async function loadReportJournalEntries(
-  supabase: any,
+  supabase: SupabaseLike,
   companyId: string,
   opts: { from?: string | null; to?: string | null } = {},
 ) {
   const load = async (withDeleted: boolean) => {
-    const out: any[] = [];
+    const out: Row[] = [];
     for (let offset = 0; ; offset += PAGE) {
       let query = supabase.from('journal_entries')
         .select('id, date, number, description, reference_type, reference_id, status, reversed_by')
@@ -54,11 +56,11 @@ export async function loadReportJournalEntries(
 }
 
 export async function loadReportJournalLines(
-  supabase: any,
+  supabase: SupabaseLike,
   companyId: string,
   journalEntryIds: string[],
 ) {
-  const out: any[] = [];
+  const out: Row[] = [];
   for (let i = 0; i < journalEntryIds.length; i += CHUNK) {
     const chunk = journalEntryIds.slice(i, i + CHUNK);
     for (let offset = 0; ; offset += PAGE) {

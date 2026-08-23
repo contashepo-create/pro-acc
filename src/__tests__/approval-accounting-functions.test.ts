@@ -99,6 +99,10 @@ describe('approval helpers', () => {
     await expect(getTransactionApprovalStatus('c1', 'voucher_receipt', 'v1'))
       .resolves.toEqual({ status: 'pending', approvalId: 'a1' });
 
+    tableRows.approval_requests = [{ id: null, company_id: 'c1', transaction_type: 'voucher_receipt', transaction_id: 'v1', status: 'pending' }];
+    await expect(getTransactionApprovalStatus('c1', 'voucher_receipt', 'v1'))
+      .resolves.toEqual({ status: 'pending', approvalId: null });
+
     tableRows.approval_requests = [];
     tableRows.voucher_receipts = [{ id: 'v1', company_id: 'c1', status: 'approved' }];
     await expect(getTransactionApprovalStatus('c1', 'voucher_receipt', 'v1'))

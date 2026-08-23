@@ -6,6 +6,8 @@ import { checkApprovalThreshold, sendApprovalRequestNotification, type ApprovalT
 import { hydratePartyNames } from '@/lib/voucher-utils';
 import { canBypassTelegramConfirmation } from '@/lib/permissions';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -92,7 +94,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireManagerOrAbove(request);
     const s = sb();
-    const body = await parseBody<any>(request);
+    const body = await parseBody<Row>(request);
 
     // توافقية مزدوجة: camelCase → snake_case قبل التحقق
     const normalized = {
@@ -145,7 +147,7 @@ export async function POST(request: NextRequest) {
       p_auto_fifo: autoFifo,
     });
     if (createErr) throw createErr;
-    const voucher = data as Record<string, any>;
+    const voucher = data as Row;
     try {
       const { logAudit } = await import('@/lib/audit');
       await logAudit({
@@ -164,8 +166,8 @@ export async function POST(request: NextRequest) {
         notificationSent = true;
         try {
           await sendApprovalRequestNotification(
-            auth.companyId, amount, 'voucher_disbursement', voucher.id,
-            auth.userId, voucher.approval_id,
+            auth.companyId, amount, 'voucher_disbursement', String(voucher.id),
+            auth.userId, String(voucher.approval_id),
           );
         } catch (notifyErr) {
           notificationSent = false;

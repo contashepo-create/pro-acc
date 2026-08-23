@@ -3,6 +3,8 @@ import { success, error, parseBody, getPaginationParams, requireModulePermission
 import { getSupabase } from '@/lib/supabase-client';
 import { custodyUuid, openCustodySchema } from '@/lib/custody-validation';
 
+import type { Row } from '@/lib/types';
+
 const CUSTODY_COLUMNS = `id,employee_id,amount,remaining_amount,total_received,total_expenses,date,reason,
   description,status,project_id,bank_safe_id,file_number,notes,settlement_amount,settlement_date,
   settlement_description,journal_entry_id,created_at,updated_at,employees(name),projects(name)`;
@@ -27,10 +29,10 @@ export async function GET(req: NextRequest) {
     const { data, error: queryError, count } = await query
       .order('date', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const custodies = (data || []).map((custody: any) => ({
+    const custodies = (data || []).map((custody: Row) => ({
       ...custody,
-      employee_name: custody.employees?.name || '',
-      project_name: custody.projects?.name || null,
+      employee_name: custody.employees ? String((custody.employees as Row).name) || '' : '',
+      project_name: custody.projects ? String((custody.projects as Row).name) || null : null,
       employees: undefined,
       projects: undefined,
     }));

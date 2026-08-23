@@ -5,6 +5,8 @@ import { updateSession, parseAdminSessionPointer } from '@/lib/admin-session';
 import { randomInt, createHash } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const OTP_TTL_MS = 5 * 60_000;
 
 /** Reissues a fresh, short-lived OTP for the existing step-1 session. */
@@ -32,7 +34,7 @@ export async function POST(request: NextRequest) {
       p_otp_expires_ms: now + OTP_TTL_MS,
     });
     if (prepareErr) throw prepareErr;
-    const status = String((data as Record<string, any>)?.status || 'invalid_session');
+    const status = String((data as Row)?.status || 'invalid_session');
     if (status === 'cooldown') return error('يرجى الانتظار دقيقة قبل إعادة الإرسال', 429);
     if (status !== 'prepared') return error('حالة الجلسة غير صالحة', 401);
 

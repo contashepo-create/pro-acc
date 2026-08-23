@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import type { Row } from '@/lib/types';
 import { Plus, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -205,7 +206,7 @@ export default function PurchaseInvoicesPage() {
       notes: src.notes || '',
       tax_percent: Math.round((Number(src.tax_rate) || 0) * 100),
       status: src.status || 'unpaid',
-      items: src.items?.length ? src.items : [{ ...emptyItem }],
+      items: src.items && (src.items as Row[]).length ? src.items : [{ ...emptyItem }],
     }, ['date']));
     setShowModal(true);
   };

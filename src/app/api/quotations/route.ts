@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, requireModulePermission, handleApiError } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -23,7 +25,7 @@ export async function GET(req: NextRequest) {
 
     if (queryError) throw queryError;
 
-    const quotations = (data || []).map((q: any) => ({ ...q, contact_name: q.contacts?.name || null }));
+    const quotations = ((data ?? []) as Row[]).map((q: Row) => ({ ...q, contact_name: q.contacts ? String((q.contacts as Row).name) || null : null } as Row));
 
     for (const q of quotations) {
       const { data: items, error: itemsErr } = await s.from('quotation_items').select('*')
@@ -58,7 +60,7 @@ export async function POST(req: NextRequest) {
       .select('id').eq('id', contact_id).eq('company_id', auth.companyId).maybeSingle();
     if (!contact) return error('العميل غير موجود', 404);
 
-    if (!Array.isArray(items) || items.length>1000 || items.some((item:any) =>
+    if (!Array.isArray(items) || items.length>1000 || items.some((item: Row) =>
       typeof item?.description!=='string' || !item.description.trim() || item.description.length>1000
       || !Number.isFinite(Number(item.quantity)) || Number(item.quantity)<=0
       || !Number.isFinite(Number(item.unit_price)) || Number(item.unit_price)<0
@@ -68,7 +70,7 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(rate) || rate<0 || rate>1 || Math.abs(rate*10000-Math.round(rate*10000))>1e-8) return error('نسبة الضريبة غير صالحة');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date)) || (valid_until && (!/^\d{4}-\d{2}-\d{2}$/.test(String(valid_until)) || valid_until<date))) return error('التاريخ غير صالح');
     if (notes!==undefined && (typeof notes!=='string' || notes.length>5000)) return error('الملاحظات غير صالحة');
-    const normalizedItems=items.map((item:any)=>({description:item.description.trim(),quantity:Number(item.quantity),unit_price:Number(item.unit_price)}));
+    const normalizedItems=items.map((item: Row)=>({description:String(item.description),quantity:Number(item.quantity),unit_price:Number(item.unit_price)}));
     const { data: result, error: rpcErr } = await s.rpc('create_quotation', {
       p_company_id:auth.companyId,p_date:date,p_contact_id:contact_id,p_items:normalizedItems,
       p_notes:typeof notes==='string'?notes.trim():'',p_tax_rate:rate,p_valid_until:valid_until||null,p_created_by:auth.userId,

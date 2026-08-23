@@ -1,12 +1,10 @@
-import { getSupabase } from '@/lib/supabase-client';
+import {getSupabase} from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
 // Type definitions for fallback queries
 interface SequenceRow { last_number: number }
 interface NumberRow { number: number }
-interface InvoiceNumberRow { invoice_number: number }
-interface PONumberRow { po_number: number }
 
 /**
  * Atomic number generation to prevent race conditions
@@ -159,5 +157,4 @@ export async function getNextQuotationNumber(companyId: string): Promise<number>
   }
 }
 
-type VoucherTable = 'voucher_receipts' | 'voucher_disbursements';
 

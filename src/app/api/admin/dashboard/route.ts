@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server';
 import { success } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 type QueryResult = { error: unknown };
@@ -39,7 +41,7 @@ export async function GET(request: NextRequest) {
     [companiesResult, usersResult, subscriptionsResult, recentCompaniesResult,
       recentSubscriptionsResult, plansResult, codesResult, activityResult].forEach(assertQuery);
 
-    const activity = (activityResult.data || []).map((entry: any) => ({
+    const activity = (activityResult.data || []).map((entry: Row) => ({
       action: entry.action,
       details: entry.details,
       timestamp: entry.created_at,

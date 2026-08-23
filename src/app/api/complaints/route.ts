@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { extractToken } from '@/lib/auth';
 import { communicationUuid, publicComplaintSchema, tenantComplaintSchema } from '@/lib/communication-validation';
 
+import type { Row } from '@/lib/types';
+
 export async function GET(request: NextRequest) {
   try {
     const trackingId = request.nextUrl.searchParams.get('tracking_id');
@@ -23,7 +25,7 @@ export async function GET(request: NextRequest) {
       .select('id,type,subject,body,status,admin_reply,created_at,updated_at,user_id,users(name)')
       .eq('company_id', auth.companyId).is('deleted_at', null).order('created_at', { ascending: false }).limit(50);
     if (queryError) throw queryError;
-    return success({ complaints: (data || []).map((row: any) => ({ ...row, user_name: row.users?.name || null, users: undefined })) });
+    return success({ complaints: ((data ?? []) as Row[]).map((row: Row) => ({ ...row, user_name: row.users ? String((row.users as Row).name) || null : null, users: undefined })) });
   } catch (cause) {
     return handleApiError(cause);
   }

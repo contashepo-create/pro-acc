@@ -9,6 +9,8 @@
 
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from './types';
+
 const sb = () => getSupabase();
 
 // تعريف الوحدات المتاحة في النظام
@@ -154,7 +156,7 @@ export async function canBypassTelegramConfirmation(
     .maybeSingle();
   if (userPermErr) return false;
 
-  if (userPerm && (userPerm as any).bypass_telegram_confirmation === true) {
+  if (userPerm && (userPerm as Row).bypass_telegram_confirmation === true) {
     return true;
   }
 
@@ -166,7 +168,7 @@ export async function canBypassTelegramConfirmation(
     .maybeSingle();
   if (userErr) return false;
 
-  if (user && (user as any).role === 'admin') {
+  if (user && (user as Row).role === 'admin') {
     return true;
   }
 
@@ -193,7 +195,7 @@ export async function hasModulePermission(
 
   if (userErr || !user) return false;
 
-  const role = (user as any).role;
+  const role = String((user as Row).role || 'supervisor');
 
   // ثانياً: التحقق من الصلاحيات المخصصة للمستخدم
   const { data: customPerm, error: customPermErr } = await s.from('user_permissions')
@@ -206,7 +208,7 @@ export async function hasModulePermission(
 
   // إذا كانت هناك صلاحيات مخصصة، استخدمها
   if (customPerm) {
-    const perms = (customPerm as any).permissions as string[];
+    const perms = (customPerm as Row).permissions as string[];
     return perms.includes(action) || perms.includes('*');
   }
 
@@ -245,8 +247,8 @@ export async function getUserPermissions(userId: string, companyId: string) {
   if (userErr) throw userErr;
   if (!user) throw new Error('User does not belong to company');
 
-  const role = (user as any).role || 'supervisor';
-  const defaultPerms = DEFAULT_ROLE_PERMISSIONS[role] || {};
+  const role = String((user as Row).role || 'supervisor');
+  const defaultPerms = DEFAULT_ROLE_PERMISSIONS[role] || {} as Record<string, string[]>;
 
   return {
     role,
@@ -303,16 +305,16 @@ export async function getCompanyUsersWithPermissions(companyId: string) {
     .eq('company_id', companyId);
   if (permsErr) throw permsErr;
 
-  const permsMap = new Map<string, any[]>();
+  const permsMap = new Map<string, Row[]>();
   for (const p of perms || []) {
-    const uid = (p as any).user_id;
+    const uid = String((p as Row).user_id);
     if (!permsMap.has(uid)) permsMap.set(uid, []);
     permsMap.get(uid)!.push(p);
   }
 
-  return (users as any[]).map(u => ({
+  return (users as Row[]).map(u => ({
     ...u,
-    permissions: permsMap.get(u.id) || [],
+    permissions: permsMap.get(String(u.id)) || [],
   }));
 }
 

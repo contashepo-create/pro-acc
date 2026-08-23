@@ -1,4 +1,6 @@
-import { scryptSync, randomBytes, timingSafeEqual, createHmac } from 'crypto';
+import {scryptSync, randomBytes, timingSafeEqual, createHmac} from 'crypto';
+
+import type { RequestLike, Row } from './types';
 
 function cleanEnv(s: string): string {
   return (s || '').replace(/^\uFEFF/, '').trim();
@@ -153,7 +155,7 @@ export async function getCompanyContext(
   try {
     const authHeader = request.headers.get('authorization') || '';
     const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    const token = bearerToken || (request as Record<string, any>).cookies?.get?.('token')?.value || '';
+    const token = bearerToken || (request as RequestLike).cookies?.get?.('token')?.value || '';
 
     if (!token) return null;
 
@@ -169,16 +171,17 @@ export async function getCompanyContext(
       [payload.userId]
     );
     if (res.rows.length === 0) return null;
+    const row = res.rows[0] as Row;
 
     // Reject stale tokens after logout/password changes. The database role is
     // authoritative as roles can be downgraded while a JWT remains valid.
-    const storedVersion = Number(res.rows[0].token_version) || 0;
+    const storedVersion = Number(row.token_version) || 0;
     if (payload.ver !== storedVersion) return null;
 
     return {
-      companyId: res.rows[0].company_id,
+      companyId: String(row.company_id),
       userId: payload.userId,
-      role: res.rows[0].role,
+      role: String(row.role),
     };
   } catch {
     return null;
@@ -190,7 +193,7 @@ export function extractToken(request: Request): string | null {
   if (authHeader.startsWith('Bearer ')) return authHeader.slice(7);
 
   // Also check cookie
-  const cookie = (request as Record<string, any>).cookies?.get?.('token')?.value;
+  const cookie = (request as RequestLike).cookies?.get?.('token')?.value;
   if (cookie) return cookie;
 
   return null;

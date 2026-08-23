@@ -31,7 +31,7 @@ export function detectDuplicateInvoices(
   windowDays = 30
 ): AnomalyFinding[] {
   const findings: AnomalyFinding[] = [];
-  const sorted = [...invoices].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const sorted = [...invoices].sort((a, b) => new Date(String(a.date)).getTime() - new Date(String(b.date)).getTime());
 
   for (let i = 0; i < sorted.length; i++) {
     for (let j = i + 1; j < sorted.length; j++) {
@@ -45,7 +45,7 @@ export function detectDuplicateInvoices(
         b.contact_id != null &&
         (a.contact_id || null) === (b.contact_id || null);
       const withinWindow =
-        new Date(b.date).getTime() - new Date(a.date).getTime() <= windowDays * 86400000;
+        new Date(String(b.date)).getTime() - new Date(String(a.date)).getTime() <= windowDays * 86400000;
       if (sameAmount && sameParty && withinWindow) {
         findings.push({
           code: 'DUPLICATE_INVOICE',

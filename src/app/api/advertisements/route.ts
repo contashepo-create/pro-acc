@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, serverError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 /**
  * Public advertisements endpoint (unauthenticated).
  * Only returns active, non-expired ads for a requested display_mode.
@@ -35,9 +37,9 @@ export async function GET(req: NextRequest) {
 
     // Keep a defensive application-level check in case a legacy database
     // adapter ignores one of the PostgREST date predicates.
-    const filtered = (data || []).filter((ad: any) => {
-      if (ad.expires_at && new Date(ad.expires_at) < now) return false;
-      if (ad.starts_at && new Date(ad.starts_at) > now) return false;
+    const filtered = (data || []).filter((ad: Row) => {
+      if (ad.expires_at && new Date(String(ad.expires_at)) < now) return false;
+      if (ad.starts_at && new Date(String(ad.starts_at)) > now) return false;
       return true;
     });
 

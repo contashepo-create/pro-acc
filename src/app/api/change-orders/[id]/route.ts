@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { changeOrderUpdateSchema } from '@/lib/validation';
 import { deliveryUuid } from '@/lib/project-delivery-validation';
 
+import type { Row } from '@/lib/types';
+
 async function findOrder(companyId: string, id: string) {
   const { data, error: queryError } = await getSupabase().from('change_orders')
     .select('id,project_id,number,title,description,status,change_amount,base_contract_amount,new_contract_amount,created_by,approved_by,approved_at,created_at,updated_at,projects(name)')
@@ -34,8 +36,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const current = await findOrder(auth.companyId, id);
     if (!current) return error('أمر التغيير غير موجود', 404);
     const patch = Object.fromEntries(Object.entries(parsed.data).filter(([key, value]) => {
-      if (key === 'change_amount') return Number(value) !== Number((current as any)[key]);
-      return (value ?? null) !== ((current as any)[key] ?? null);
+      if (key === 'change_amount') return Number(value) !== Number((current as Row)[key]);
+      return (value ?? null) !== ((current as Row)[key] ?? null);
     }));
     if (!Object.keys(patch).length) return error('لا توجد تغييرات');
     const { data, error: rpcError } = await getSupabase().rpc('update_change_order_atomic', {

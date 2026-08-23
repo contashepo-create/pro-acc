@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { loadCustodyFile, assertFileOpen } from '@/lib/custody';
 import { custodyUuid, settleCustodySchema } from '@/lib/custody-validation';
 
+import type { Row } from '@/lib/types';
+
 /** Confirmed closure: returned cash goes back to its safe and any remaining
  * shortage becomes an employee advance, atomically with the closing entry. */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -32,7 +34,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       p_created_by: auth.userId,
     });
     if (rpcError) throw rpcError;
-    const result = settled as Record<string, any>;
+    const result = settled as Row;
     return success({
       ...result,
       message: Number(result.shortage) > 0

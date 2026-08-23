@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 import { adminSupportPatchSchema } from '@/lib/communication-validation';
 
+import type { Row } from '@/lib/types';
+
 const VALID_STATUS = new Set(['open','in_progress','resolved','closed']);
 
 export async function GET(req: NextRequest) {
@@ -40,7 +42,7 @@ export async function PUT(req: NextRequest) {
       p_notes_set: parsed.data.admin_notes !== undefined,
     });
     if (updateError) throw updateError;
-    if ((data as any)?.not_found) return error('التذكرة غير موجودة', 404);
+    if ((data as Row)?.not_found) return error('التذكرة غير موجودة', 404);
     return success({ ticket: data });
   } catch (err) {
     return adminJsonError(err);

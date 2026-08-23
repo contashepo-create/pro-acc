@@ -1,3 +1,6 @@
+import type { SupabaseLike } from './types';
+
+
 /**
  * رموز الحسابات: الأب 4 أرقام ثم تسلسل الفرع.
  * الشكل المخزَّن: 1110-0001 (الأب أولاً). في واجهة RTL بدون عزل الاتجاه
@@ -63,7 +66,7 @@ export function nextChildAccountCode(parentCode: string, existingCodes: string[]
 }
 
 export async function findAccountByCode(
-  supabase: any,
+  supabase: SupabaseLike,
   companyId: string,
   rawCode: string,
 ): Promise<{ id: string; code: string; name?: string; is_header?: boolean } | null> {
@@ -75,7 +78,7 @@ export async function findAccountByCode(
       .eq('company_id', companyId)
       .eq('code', code)
       .maybeSingle();
-    if (data) return data;
+    if (data) return data as { id: string; code: string; name?: string; is_header?: boolean };
   }
   return null;
 }

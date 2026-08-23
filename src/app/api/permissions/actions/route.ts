@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, requireAdmin, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -119,7 +121,7 @@ export async function DELETE(request: NextRequest) {
 
     if (!actionData) return error('العملية غير موجودة');
 
-    if ((actionData as any).is_system) {
+    if ((actionData as Row).is_system) {
       return error('لا يمكن حذف عملية نظامية');
     }
 
@@ -153,7 +155,7 @@ export async function PUT(request: NextRequest) {
 
     if (!id) return error('معرف العملية مطلوب');
 
-    const updateData: any = {};
+    const updateData: Row = {};
     if (name !== undefined) updateData.name = name.trim();
     if (name_en !== undefined) updateData.name_en = name_en;
     if (icon !== undefined) updateData.icon = icon;

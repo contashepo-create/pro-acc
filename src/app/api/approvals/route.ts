@@ -3,6 +3,8 @@ import { success, error, handleApiError, getPaginationParams, requireModulePermi
 import { getSupabase } from '@/lib/supabase-client';
 import { approvalCreateSchema } from '@/lib/communication-validation';
 
+import type { Row } from '@/lib/types';
+
 const APPROVAL_COLUMNS = `id,entity_type,entity_id,transaction_type,transaction_id,amount,description,message,status,
   requester_id,approver_id,approved_by,approver_chat_id,approved_at,approval_comments,created_at,updated_at,
   requester:users!requester_id(name),approver:users!approver_id(name)`;
@@ -25,9 +27,9 @@ export async function GET(request: NextRequest) {
     const offset = (page - 1) * pageSize;
     const { data, error: queryError, count } = await query.order('created_at', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const requests = (data || []).map((row: any) => ({
-      ...row, requester_name: row.requester?.name || 'Unknown', approver_name: row.approver?.name || 'Unknown',
-      requester: undefined, approver: undefined, urgency: calculateUrgency(row.created_at, row.entity_type || row.transaction_type),
+    const requests = (data || []).map((row: Row) => ({
+      ...row, requester_name: row.requester ? String((row.requester as Row).name) || 'Unknown' : 'Unknown', approver_name: row.approver ? String((row.approver as Row).name) || 'Unknown' : 'Unknown',
+      requester: undefined, approver: undefined, urgency: calculateUrgency(String(row.created_at), String(row.entity_type || row.transaction_type)),
     }));
     return success({ requests, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) });
   } catch (cause) {

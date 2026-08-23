@@ -1,6 +1,9 @@
-import { NextRequest } from 'next/server';
-import { getSupabase } from '@/lib/supabase-client';
-import { success, error, parseBody, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import {NextRequest} from 'next/server';
+import {getSupabase} from '@/lib/supabase-client';
+import {success, error, parseBody, handleApiError, getPaginationParams, requireModulePermission} from '@/lib/api-helpers';
+
+import type { Row } from '@/lib/types';
+import {errorText} from '@/lib/errors';
 
 const sb = () => getSupabase();
 
@@ -19,9 +22,9 @@ export async function GET(req: NextRequest) {
 
     if (err) throw err;
 
-    const branches = (data || []).map((b: any) => ({
+    const branches = (data || []).map((b: Row) => ({
       ...b,
-      manager_name: b.users?.name || null,
+      manager_name: b.users ? String((b.users as Row).name) || null : null,
     }));
 
     return success({ branches, total: count || 0, page, pageSize });
@@ -51,8 +54,9 @@ export async function POST(req: NextRequest) {
           403
         );
       }
-    } catch (e: any) {
-      if (e?.message?.includes('غير مُضمَّنة') || e?.message?.includes('انتهت')) throw e;
+    } catch (e: unknown) {
+      const msg = errorText(e);
+      if (msg.includes('غير مُضمَّنة') || msg.includes('انتهت')) throw e;
       console.warn('[branches] limit check failed:', e);
     }
 
@@ -69,7 +73,7 @@ export async function POST(req: NextRequest) {
     const { data, error: err } = await s.from('branches')
       .insert({
         company_id: auth.companyId,
-        code: code.toUpperCase(),
+        code: String(code).toUpperCase(),
         name,
         address: address || null,
         phone: phone || null,
@@ -86,7 +90,7 @@ export async function POST(req: NextRequest) {
       user_id: auth.userId,
       action: 'create_branch',
       table_name: 'branches',
-      record_id: data.id,
+      record_id: String(data?.id ?? ''),
       new_values: data,
     });
 

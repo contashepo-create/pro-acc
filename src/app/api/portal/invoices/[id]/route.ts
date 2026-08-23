@@ -3,6 +3,8 @@ import { error, handleApiError, success } from '@/lib/api-helpers';
 import { verifyPortalToken } from '@/lib/portal-auth';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -54,12 +56,13 @@ export async function GET(
       .maybeSingle();
     if (companyError) throw companyError;
     if (!company) throw new Error('Invoice company is missing');
-    const seller = ((invoice as any).tax_snapshot?.seller || {}) as Record<string, unknown>;
+    const snapshot = (invoice as Row).tax_snapshot as Row | null | undefined;
+    const seller = (snapshot?.seller as Record<string, unknown> | undefined) || {};
     const historicalCompany = {
       ...company,
-      name: seller.name || (company as any).name,
-      tax_number: seller.vat_number || (company as any).tax_number,
-      address: seller.address || (company as any).address,
+      name: seller.name || (company as Row).name,
+      tax_number: seller.vat_number || (company as Row).tax_number,
+      address: seller.address || (company as Row).address,
     };
 
     return success({ ...invoice, items: items || [], company: historicalCompany });

@@ -83,7 +83,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
       ? (data as { storage_paths: unknown[] }).storage_paths.filter((path): path is string =>
           typeof path === 'string' && path.startsWith(`${auth.companyId}/${id}/`) && !path.includes('..'))
       : [];
-    if (paths.length) {
+    if (paths.length && s.storage) {
       const { error: storageError } = await s.storage.from('contract-documents').remove(paths);
       if (storageError) console.error('Orphan contract document cleanup failed:', storageError);
     }
@@ -123,6 +123,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const extension = body.content_type === 'application/pdf' ? 'pdf' : body.content_type === 'image/png' ? 'png' : 'jpg';
     const objectPath = `${auth.companyId}/${id}/${randomUUID()}.${extension}`;
     const s = sb();
+    if (!s.storage) throw new Error('Storage unavailable');
     const { error: uploadError } = await s.storage.from('contract-documents')
       .upload(objectPath, buffer, { contentType: body.content_type, upsert: false });
     if (uploadError) throw uploadError;
@@ -138,7 +139,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       p_user_id: auth.userId,
     });
     if (metadataError) {
-      await s.storage.from('contract-documents').remove([objectPath]);
+      if (s.storage) await s.storage.from('contract-documents').remove([objectPath]);
       if (String(metadataError.message || '').includes('غير صالحة')) return error('العقد غير موجود أو بيانات المستند غير صالحة', 404);
       throw metadataError;
     }

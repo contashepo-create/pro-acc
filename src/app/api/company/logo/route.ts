@@ -3,6 +3,8 @@ import { success, error, requireApiAuth, requireAdmin, handleApiError, parseBody
 import { safeHttpsUrl } from '@/lib/safe-input';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -16,7 +18,7 @@ export async function GET(request: NextRequest) {
     const { data: company } = await s.from('companies')
       .select('logo_url, name')
       .eq('id', auth.companyId).maybeSingle();
-    return success({ logo_url: (company as any)?.logo_url || null, name: (company as any)?.name || '' });
+    return success({ logo_url: (company as Row)?.logo_url || null, name: (company as Row)?.name || '' });
   } catch (err) {
     return handleApiError(err);
   }

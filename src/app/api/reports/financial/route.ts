@@ -3,6 +3,8 @@ import { success, error, requireModulePermission, handleApiError } from '@/lib/a
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const amount = (value: unknown) => Number(value) || 0;
 
 /**
@@ -28,11 +30,23 @@ export async function GET(request: NextRequest) {
       p_to: to || null,
     });
     if (queryError) throw queryError;
-    const rows = (data || []).map((row: any) => ({
-      id: row.account_id,
-      code: row.account_code,
-      name: row.account_name,
-      type: row.account_type,
+    interface StatementRow {
+      id: string | null;
+      code: string | null;
+      name: string | null;
+      type: string | null;
+      openingDebit: number;
+      openingCredit: number;
+      periodDebit: number;
+      periodCredit: number;
+      cumulativeDebit: number;
+      cumulativeCredit: number;
+    }
+    const rows: StatementRow[] = ((data ?? []) as Row[]).map((row) => ({
+      id: row.account_id as string | null,
+      code: row.account_code as string | null,
+      name: row.account_name as string | null,
+      type: row.account_type as string | null,
       openingDebit: amount(row.opening_debit),
       openingCredit: amount(row.opening_credit),
       periodDebit: amount(row.period_debit),
@@ -42,9 +56,9 @@ export async function GET(request: NextRequest) {
     }));
 
     if (type === 'trial_balance') {
-      const accounts = rows.map((row: any) => {
+      const accounts = rows.map((row) => {
         const balance = row.cumulativeDebit - row.cumulativeCredit;
-        const normalDebit = ['asset', 'expense'].includes(row.type);
+        const normalDebit = ['asset', 'expense'].includes(row.type ?? '');
         return {
           id: row.id, code: row.code, name: row.name, type: row.type,
           opening_debit: row.openingDebit,
@@ -57,20 +71,20 @@ export async function GET(request: NextRequest) {
       });
       return success({
         accounts,
-        total_debit: accounts.reduce((sum: number, row: any) => sum + row.total_debit, 0),
-        total_credit: accounts.reduce((sum: number, row: any) => sum + row.total_credit, 0),
+        total_debit: accounts.reduce((sum, row) => sum + row.total_debit, 0),
+        total_credit: accounts.reduce((sum, row) => sum + row.total_credit, 0),
       });
     }
 
     if (type === 'income_statement') {
-      const revenue = rows.filter((row: any) => row.type === 'revenue').map((row: any) => ({
+      const revenue = rows.filter((row) => row.type === 'revenue').map((row) => ({
         id: row.id, code: row.code, name: row.name, amount: row.periodCredit - row.periodDebit,
-      })).filter((row: any) => Math.abs(row.amount) >= 0.005);
-      const expenses = rows.filter((row: any) => row.type === 'expense').map((row: any) => ({
+      })).filter((row) => Math.abs(row.amount) >= 0.005);
+      const expenses = rows.filter((row) => row.type === 'expense').map((row) => ({
         id: row.id, code: row.code, name: row.name, amount: row.periodDebit - row.periodCredit,
-      })).filter((row: any) => Math.abs(row.amount) >= 0.005);
-      const totalRevenue = revenue.reduce((sum: number, row: any) => sum + row.amount, 0);
-      const totalExpenses = expenses.reduce((sum: number, row: any) => sum + row.amount, 0);
+      })).filter((row) => Math.abs(row.amount) >= 0.005);
+      const totalRevenue = revenue.reduce((sum, row) => sum + row.amount, 0);
+      const totalExpenses = expenses.reduce((sum, row) => sum + row.amount, 0);
       return success({
         revenue, expenses,
         total_revenue: totalRevenue,
@@ -79,19 +93,19 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const assets = rows.filter((row: any) => row.type === 'asset').map((row: any) => ({
+    const assets = rows.filter((row) => row.type === 'asset').map((row) => ({
       id: row.id, code: row.code, name: row.name, balance: row.cumulativeDebit - row.cumulativeCredit,
-    })).filter((row: any) => Math.abs(row.balance) >= 0.005);
-    const liabilities = rows.filter((row: any) => row.type === 'liability').map((row: any) => ({
+    })).filter((row) => Math.abs(row.balance) >= 0.005);
+    const liabilities = rows.filter((row) => row.type === 'liability').map((row) => ({
       id: row.id, code: row.code, name: row.name, balance: row.cumulativeCredit - row.cumulativeDebit,
-    })).filter((row: any) => Math.abs(row.balance) >= 0.005);
-    const equity = rows.filter((row: any) => row.type === 'equity').map((row: any) => ({
+    })).filter((row) => Math.abs(row.balance) >= 0.005);
+    const equity = rows.filter((row) => row.type === 'equity').map((row) => ({
       id: row.id, code: row.code, name: row.name, balance: row.cumulativeCredit - row.cumulativeDebit,
-    })).filter((row: any) => Math.abs(row.balance) >= 0.005);
-    const cumulativeRevenue = rows.filter((row: any) => row.type === 'revenue')
-      .reduce((sum: number, row: any) => sum + row.cumulativeCredit - row.cumulativeDebit, 0);
-    const cumulativeExpenses = rows.filter((row: any) => row.type === 'expense')
-      .reduce((sum: number, row: any) => sum + row.cumulativeDebit - row.cumulativeCredit, 0);
+    })).filter((row) => Math.abs(row.balance) >= 0.005);
+    const cumulativeRevenue = rows.filter((row) => row.type === 'revenue')
+      .reduce((sum, row) => sum + row.cumulativeCredit - row.cumulativeDebit, 0);
+    const cumulativeExpenses = rows.filter((row) => row.type === 'expense')
+      .reduce((sum, row) => sum + row.cumulativeDebit - row.cumulativeCredit, 0);
     const equityWithNetIncome = [...equity, {
       id: 'virtual-current-year-net-income', code: '3300-V',
       name: 'الأرباح (الخسائر) المتراكمة حتى تاريخ التقرير',
@@ -99,9 +113,9 @@ export async function GET(request: NextRequest) {
     }];
     return success({
       assets, liabilities, equity: equityWithNetIncome,
-      total_assets: assets.reduce((sum: number, row: any) => sum + row.balance, 0),
-      total_liabilities: liabilities.reduce((sum: number, row: any) => sum + row.balance, 0),
-      total_equity: equityWithNetIncome.reduce((sum: number, row: any) => sum + row.balance, 0),
+      total_assets: assets.reduce((sum, row) => sum + row.balance, 0),
+      total_liabilities: liabilities.reduce((sum, row) => sum + row.balance, 0),
+      total_equity: equityWithNetIncome.reduce((sum, row) => sum + row.balance, 0),
     });
   } catch (err) {
     return handleApiError(err);

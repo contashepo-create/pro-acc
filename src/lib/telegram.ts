@@ -7,7 +7,6 @@ export function getBotToken(): string {
   return clean(process.env.TELEGRAM_BOT_TOKEN || '');
 }
 
-const BOT_TOKEN = getBotToken();
 const ADMIN_CHAT_ID = clean(process.env.TELEGRAM_ADMIN_CHAT_ID || '');
 
 const TELEGRAM_API = 'https://api.telegram.org';

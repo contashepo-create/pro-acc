@@ -5,6 +5,8 @@ import { ACCOUNT_CODES } from '@/lib/constants';
 import { loadCustodyFile, assertFileOpen } from '@/lib/custody';
 import { custodyExpenseSchema, custodyUuid } from '@/lib/custody-validation';
 
+import type { Row } from '@/lib/types';
+
 /** Posts an expense against account 1150; any explicitly approved excess is
  * accrued to the employee and is not paid in cash a second time. */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -21,14 +23,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     assertFileOpen(file);
     const s = getSupabase();
 
-    let projectId: string | null = file.project_id;
+    let projectId: string | null | undefined = file.project_id as string | null | undefined;
     if (input.link_to_project === false) {
       projectId = null;
     } else if (input.project_id) {
       const { data: project } = await s.from('projects').select('id').eq('id', input.project_id)
         .eq('company_id', auth.companyId).maybeSingle();
       if (!project) return error('المشروع غير موجود', 404);
-      projectId = project.id;
+      projectId = String(project.id);
     }
 
     const expenseCode = input.expense_account_code || ACCOUNT_CODES.DIRECT_COSTS;
@@ -50,7 +52,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       p_created_by: auth.userId,
     });
     if (rpcError) throw rpcError;
-    const result = updated as Record<string, any>;
+    const result = updated as Row;
     return success({
       ...result,
       message: Number(result.excess) > 0

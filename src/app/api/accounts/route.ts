@@ -1,7 +1,9 @@
-import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, requireModulePermission, handleApiError, parseBody } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
-import { accountSchema } from '@/lib/validation';
+import {NextRequest} from 'next/server';
+import {success, error, requireModulePermission, handleApiError, parseBody} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+import {accountSchema} from '@/lib/validation';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -21,7 +23,7 @@ export async function GET(request: NextRequest) {
         .select('id, code, name, name_en, type, parent_id, is_active, created_at')
         .eq('company_id', auth.companyId)
         .order('code');
-      data = fallback.data as any;
+      data = fallback.data || [];
       queryError = fallback.error;
     }
 
@@ -29,7 +31,7 @@ export async function GET(request: NextRequest) {
 
     // AUTO-SEED: إذا لم تكن شجرة الحسابات موجودة للشركة، أنشئ الشجرة الافتراضية تلقائياً
     const { DEFAULT_CHART_OF_ACCOUNTS, createDefaultChartOfAccounts, ensureDefaultCashSafe } = await import('@/lib/default-accounts');
-    const existingCodes = new Set((data || []).map((a: any) => a.code));
+    const existingCodes = new Set((data || []).map((a: Row) => a.code));
     const missingDefaults = DEFAULT_CHART_OF_ACCOUNTS.some((a) => !existingCodes.has(a.code));
 
     if (!data || data.length === 0 || missingDefaults) {
@@ -45,17 +47,23 @@ export async function GET(request: NextRequest) {
     }
 
     const { HEADER_ACCOUNT_CODES } = await import('@/lib/account-resolve');
-    const accounts: any[] = (data || []).map((a: any) => ({
+    interface AccountNode extends Row {
+      children: Row[];
+    }
+    const accounts: AccountNode[] = (data || []).map((a: Row) => ({
       ...a,
-      is_header: a.is_header === true || HEADER_ACCOUNT_CODES.has(a.code),
-      children: [] as any[],
+      is_header: a.is_header === true || HEADER_ACCOUNT_CODES.has(String(a.code)),
+      children: [] as Row[],
     }));
-    const accountMap = new Map(accounts.map((a: any) => [a.id, a]));
-    const roots: any[] = [];
+    const accountMap = new Map<string, AccountNode>(
+      accounts.map((a: AccountNode) => [String(a.id), a])
+    );
+    const roots: AccountNode[] = [];
 
     for (const acc of accounts) {
-      if (acc.parent_id && accountMap.has(acc.parent_id)) {
-        accountMap.get(acc.parent_id)!.children.push(acc);
+      const parentId = acc.parent_id == null ? null : String(acc.parent_id);
+      if (parentId && accountMap.has(parentId)) {
+        accountMap.get(parentId)!.children.push(acc);
       } else {
         roots.push(acc);
       }
@@ -98,13 +106,13 @@ export async function POST(request: NextRequest) {
       let depth = 1;
       let currentParent: string | null = parentId;
       while (currentParent) {
-        const { data: p }: any = await s.from('accounts')
+        const { data: p } = await s.from('accounts')
           .select('parent_id')
           .eq('id', currentParent)
           .eq('company_id', auth.companyId)
           .maybeSingle();
         if (!p) break;
-        currentParent = p.parent_id;
+        currentParent = p.parent_id == null ? null : String(p.parent_id);
         depth++;
         if (depth > depthLimit) {
           return error(`لا يمكن تجاوز ${depthLimit} مستويات في شجرة الحسابات`);

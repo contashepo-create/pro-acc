@@ -3,6 +3,8 @@ import { success, error, notFound, parseBody, requireModulePermission, requireMa
 import { getSupabase } from '@/lib/supabase-client';
 import { employeeUpdateSchema, hrUuid } from '@/lib/hr-validation';
 
+import type { Row } from '@/lib/types';
+
 const EMPLOYEE_COLUMNS = 'id,name,phone,email,salary,department,position,hire_date,is_active,branch_id,cost_center_id,created_at';
 
 async function findEmployee(companyId: string, id: string) {
@@ -52,7 +54,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     if (!hrUuid.safeParse(id).success) return error('معرف الموظف غير صالح');
     const existing = await findEmployee(auth.companyId, id);
     if (!existing) return notFound();
-    if ((existing as any).is_active === false) return error('الموظف غير نشط بالفعل', 409);
+    if ((existing as Row).is_active === false) return error('الموظف غير نشط بالفعل', 409);
     const { data, error: rpcError } = await getSupabase().rpc('deactivate_employee_atomic', {
       p_company_id: auth.companyId,
       p_employee_id: id,

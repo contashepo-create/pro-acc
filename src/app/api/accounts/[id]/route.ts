@@ -1,7 +1,9 @@
-import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
-import { accountUpdateSchema } from '@/lib/validation';
+import {NextRequest} from 'next/server';
+import {success, error, notFound, requireModulePermission, requireManagerOrAbove, handleApiError, parseBody} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+import {accountUpdateSchema} from '@/lib/validation';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -28,7 +30,7 @@ export async function GET(
       .eq('company_id', auth.companyId)
       .order('code');
 
-    return success({ ...(data as Record<string, any>), children: children || [] });
+    return success({ ...(data as Row), children: children || [] });
   } catch (err) {
     return handleApiError(err);
   }
@@ -70,7 +72,7 @@ export async function PUT(
     }
 
     const isActive = fields.is_active ?? fields.isActive;
-    const updateData: Record<string, any> = { updated_at: new Date().toISOString() };
+    const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (fields.code !== undefined) updateData.code = fields.code;
     if (fields.name !== undefined) updateData.name = fields.name;
     if (fields.nameEn !== undefined) updateData.name_en = fields.nameEn;
@@ -94,7 +96,7 @@ export async function PUT(
         .eq('account_id', id)
         .limit(1);
       if (used && used.length > 0) {
-        const linePatch: Record<string, any> = {};
+        const linePatch: Record<string, unknown> = {};
         if (fields.code !== undefined) linePatch.account_code = fields.code;
         if (fields.name !== undefined) linePatch.account_name = fields.name;
         await s.from('journal_lines')
