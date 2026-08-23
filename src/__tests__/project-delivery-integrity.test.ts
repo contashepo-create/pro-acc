@@ -5,17 +5,19 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 // store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
 jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; mut?: string; ops: Array<{ col: string; val: any }> }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const calls: Array<{ table: string; mut?: string; ops: Array<{ col: string; val: unknown }> }> = [];
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
   const from = (table: string) => {
-    const call = { table, mut: undefined as string | undefined, ops: [] as Array<{ col: string; val: any }> }; calls.push(call);
+    const call = { table, mut: undefined as string | undefined, ops: [] as Array<{ col: string; val: unknown }> }; calls.push(call);
     const rows = () => (db[table] || []).filter((row) => call.ops.every((op) => row[op.col] === op.val));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { call.ops.push({ col, val }); return api; },
+      eq: (col: string, val: unknown) => { call.ops.push({ col, val }); return api; },
       in: () => api, gte: () => api, lte: () => api, neq: () => api,
       order: () => api, range: () => api, limit: () => api,
       insert: () => { call.mut = 'insert'; return api; },
@@ -23,13 +25,16 @@ function makeDb(db: Record<string, Row[]>) {
       delete: () => { call.mut = 'delete'; return api; },
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
   return {
     from, calls, rpcCalls,
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
       rpcCalls.push({ name, params });
       return { data: { id: RESULT, status: name.includes('cancel') ? 'cancelled' : 'active' }, error: null };
     },
@@ -107,11 +112,11 @@ function seed() {
     ],
   } as Record<string, Row[]>;
 }
-function request(body?: any, method = 'POST') {
+function request(body?: Row, method = 'POST') {
   const token = createToken(USER, 'admin');
   return { url: 'http://localhost/api/test', method,
     headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 const context = (id: string) => ({ params: Promise.resolve({ id }) });
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);
