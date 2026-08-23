@@ -1,9 +1,9 @@
-let primary: any = { data: null, error: null };
-let fallback: any = { data: null, error: null };
-let transactions: any = { data: [], error: null };
+let primary: { data: unknown; error: unknown } = { data: null, error: null };
+let fallback: { data: unknown; error: unknown } = { data: null, error: null };
+let transactions: { data: unknown[] | null; error: unknown } = { data: [], error: null };
 let custodyCalls = 0;
 const db = { from: jest.fn((table: string) => {
-  const api: any = {
+  const api = {
     select: () => api, eq: () => api,
     maybeSingle: async () => table === 'custodies' ? (++custodyCalls === 1 ? primary : fallback) : { data: null, error: null },
     order: async () => transactions,
