@@ -33,6 +33,50 @@ import type {
   SupabaseStorage,
 } from '@/lib/types';
 
+export interface TestQueryResult {
+  data: unknown;
+  error: unknown;
+  count?: number | null;
+}
+
+/**
+ * Typed stand-in for the legacy `const api: any` self-referencing builders
+ * used by hand-rolled `makeDb` test mocks. Method signatures are loose
+ * (`unknown`) on purpose: each test file keeps its own filtering semantics,
+ * this only removes the `any` annotations while staying structurally a
+ * PromiseLike (via `then`) so awaited chains type-check.
+ */
+export interface TestBuilder {
+  select?(columns?: string, options?: Row): TestBuilder;
+  insert?(values: Row | Row[], options?: Row): TestBuilder;
+  update?(values: Row, options?: Row): TestBuilder;
+  upsert?(values: Row | Row[], options?: Row): TestBuilder;
+  delete?(): TestBuilder;
+  eq?(column: string, value: unknown): TestBuilder;
+  neq?(column: string, value: unknown): TestBuilder;
+  gt?(column: string, value: unknown): TestBuilder;
+  gte?(column: string, value: unknown): TestBuilder;
+  lt?(column: string, value: unknown): TestBuilder;
+  lte?(column: string, value: unknown): TestBuilder;
+  is?(column: string, value: unknown): TestBuilder;
+  not?(column: string, filter: string, value?: unknown): TestBuilder;
+  in?(column: string, values: readonly unknown[]): TestBuilder;
+  contains?(column: string, value: unknown): TestBuilder;
+  like?(column: string, value: string): TestBuilder;
+  ilike?(column: string, value: string): TestBuilder;
+  or?(expression: string, options?: Row): TestBuilder;
+  order?(column?: string, options?: Row): TestBuilder;
+  limit?(count: number, options?: Row): TestBuilder;
+  range?(from: number, to: number): TestBuilder;
+  maybeSingle?(): PromiseLike<TestQueryResult>;
+  single?(): PromiseLike<TestQueryResult>;
+  then<TResult1 = TestQueryResult, TResult2 = never>(
+    onfulfilled?: ((value: TestQueryResult) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2>;
+}
+
+
 export interface QueryOutcome {
   data?: unknown;
   /** Raw rejection value surfaced to the caller (QueryError, Error, or a

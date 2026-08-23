@@ -16,10 +16,12 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 process.env.ADMIN_TOKEN_SECRET = 'test-admin-secret-key-for-unit-tests-32chars!';
 process.env.TELEGRAM_TOKEN_KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
 import { createAdminToken, hashPassword } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
-type Call = { table: string; ops: Op[]; payload: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
+type Call = { table: string; ops: Op[]; payload: Row | Row[] | null };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Call[] = [];
@@ -32,18 +34,21 @@ function makeDb(db: Record<string, Row[]>) {
         ops.every((o) => (o.op === 'eq' ? r[o.col!] === o.val : true))
       );
     }
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      update: (p: any) => { call.payload = p; return api; },
-      insert: (p: any) => {
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      update: (p: Row) => { call.payload = p; return api; },
+      insert: (p: Row | Row[]) => {
         call.payload = p;
-        db[table] = [...(db[table] || []), p];
+        db[table] = [...(db[table] || []), ...(Array.isArray(p) ? p : [p])];
         return api;
       },
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: null }),
-      then: (ok: any, fail: any) => Promise.resolve({ data: null, error: null }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: null, error: null }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   }
@@ -67,7 +72,7 @@ beforeAll(async () => {
   masterHash = await hashPassword(MASTER);
 });
 
-function baseDb(token: any = null) {
+function baseDb(token: string | null = null) {
   mockDb = makeDb({
     admin_users: [{
       id: A1,
@@ -83,7 +88,7 @@ function baseDb(token: any = null) {
   });
 }
 
-function makeReq(opts: { admin?: boolean; master?: string | null; body?: any } = {}) {
+function makeReq(opts: { admin?: boolean; master?: string | null; body?: Row } = {}) {
   const headers = new Headers({ 'content-type': 'application/json' });
   if (opts.master != null) headers.set('x-master-password', opts.master);
   return {
@@ -96,7 +101,7 @@ function makeReq(opts: { admin?: boolean; master?: string | null; body?: any } =
     headers,
     nextUrl: new URL('http://localhost/api/admins/x/telegram-token'),
     json: async () => opts.body ?? {},
-  } as any;
+  } as unknown as NextRequest;
 }
 
 const idOf = A1;
@@ -105,28 +110,28 @@ const params = () => Promise.resolve({ id: idOf });
 describe('GET', () => {
   test('401 without an admin session', async () => {
     baseDb();
-    const res = await GET(makeReq({ admin: false }) as any, { params: params() });
+    const res = await GET(makeReq({ admin: false }), { params: params() });
     expect(res.status).toBe(401);
   });
 
   test('400 for a malformed id, 404 for an unknown one', async () => {
     baseDb();
-    expect((await GET(makeReq() as any, { params: Promise.resolve({ id: 'nope' }) })).status).toBe(400);
-    expect((await GET(makeReq() as any, { params: Promise.resolve({ id: UNKNOWN_ID }) })).status).toBe(404);
+    expect((await GET(makeReq(), { params: Promise.resolve({ id: 'nope' }) })).status).toBe(400);
+    expect((await GET(makeReq(), { params: Promise.resolve({ id: UNKNOWN_ID }) })).status).toBe(404);
   });
 
   test('reports configured=false for NULL or legacy plaintext, true only for enc:v1:', async () => {
     baseDb(null);
-    let res = await GET(makeReq() as any, { params: params() });
+    let res = await GET(makeReq(), { params: params() });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ success: true, data: { configured: false } });
 
     baseDb('some-legacy-plaintext');
-    res = await GET(makeReq() as any, { params: params() });
+    res = await GET(makeReq(), { params: params() });
     expect((await res.json()).data.configured).toBe(false);
 
     baseDb(KAT_ENVELOPE);
-    res = await GET(makeReq() as any, { params: params() });
+    res = await GET(makeReq(), { params: params() });
     expect((await res.json()).data.configured).toBe(true);
   });
 });
@@ -134,27 +139,27 @@ describe('GET', () => {
 describe('PUT', () => {
   test('401 without an admin session or without the master password', async () => {
     baseDb();
-    expect((await PUT(makeReq({ admin: false, body: { token: TOKEN } }) as any, { params: params() })).status).toBe(401);
-    expect((await PUT(makeReq({ body: { token: TOKEN } }) as any, { params: params() })).status).toBe(401);
+    expect((await PUT(makeReq({ admin: false, body: { token: TOKEN } }), { params: params() })).status).toBe(401);
+    expect((await PUT(makeReq({ body: { token: TOKEN } }), { params: params() })).status).toBe(401);
   });
 
   test('401 with a wrong master password', async () => {
     baseDb();
-    const res = await PUT(makeReq({ master: 'wrong', body: { token: TOKEN } }) as any, { params: params() });
+    const res = await PUT(makeReq({ master: 'wrong', body: { token: TOKEN } }), { params: params() });
     expect(res.status).toBe(401);
   });
 
   test('400 for an empty or malformed token', async () => {
     baseDb();
-    expect((await PUT(makeReq({ master: MASTER, body: { token: '' } }) as any, { params: params() })).status).toBe(400);
-    expect((await PUT(makeReq({ master: MASTER, body: {} }) as any, { params: params() })).status).toBe(400);
-    expect((await PUT(makeReq({ master: MASTER, body: { token: 'not-a-telegram-token' } }) as any, { params: params() })).status).toBe(400);
+    expect((await PUT(makeReq({ master: MASTER, body: { token: '' } }), { params: params() })).status).toBe(400);
+    expect((await PUT(makeReq({ master: MASTER, body: {} }), { params: params() })).status).toBe(400);
+    expect((await PUT(makeReq({ master: MASTER, body: { token: 'not-a-telegram-token' } }), { params: params() })).status).toBe(400);
     expect((await PUT(makeReq({ master: MASTER, body: { token: '1234567:AA' + 'x'.repeat(20) } }) as any, { params: params() })).status).toBe(400);
   });
 
   test('stores the AES-256-GCM envelope (never plaintext) and never leaks the token', async () => {
     baseDb();
-    const res = await PUT(makeReq({ master: MASTER, body: { token: TOKEN } }) as any, { params: params() });
+    const res = await PUT(makeReq({ master: MASTER, body: { token: TOKEN } }), { params: params() });
     expect(res.status).toBe(200);
 
     const body = await res.json();
@@ -163,7 +168,7 @@ describe('PUT', () => {
 
     const updates = mockDb.calls.filter((c) => c.table === 'admin_users' && c.payload);
     expect(updates).toHaveLength(1);
-    const stored = updates[0].payload.telegram_bot_token;
+    const stored = (updates[0].payload as Row).telegram_bot_token;
     expect(stored).toMatch(/^enc:v1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
     expect(stored).not.toBe(TOKEN);
 
@@ -184,7 +189,7 @@ describe('PUT', () => {
     const saved = process.env.TELEGRAM_TOKEN_KEY;
     baseDb();
     delete process.env.TELEGRAM_TOKEN_KEY;
-    let res = await PUT(makeReq({ master: MASTER, body: { token: TOKEN } }) as any, { params: params() });
+    let res = await PUT(makeReq({ master: MASTER, body: { token: TOKEN } }), { params: params() });
     expect(res.status).toBe(500);
     let body = await res.json();
     expect(body.success).toBe(false);
@@ -192,7 +197,7 @@ describe('PUT', () => {
     expect(JSON.stringify(body)).not.toContain('TELEGRAM_TOKEN_KEY');
 
     process.env.TELEGRAM_TOKEN_KEY = 'invalid-hex';
-    res = await PUT(makeReq({ master: MASTER, body: { token: TOKEN } }) as any, { params: params() });
+    res = await PUT(makeReq({ master: MASTER, body: { token: TOKEN } }), { params: params() });
     expect(res.status).toBe(500);
     body = await res.json();
     expect(body.errorId).toBeTruthy();
@@ -203,12 +208,12 @@ describe('PUT', () => {
 describe('DELETE', () => {
   test('401 without the master password', async () => {
     baseDb();
-    expect((await DELETE(makeReq() as any, { params: params() })).status).toBe(401);
+    expect((await DELETE(makeReq(), { params: params() })).status).toBe(401);
   });
 
   test('clears the token (NULL) and audits the removal', async () => {
     baseDb(KAT_ENVELOPE);
-    const res = await DELETE(makeReq({ master: MASTER }) as any, { params: params() });
+    const res = await DELETE(makeReq({ master: MASTER }), { params: params() });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data).toMatchObject({ configured: false });

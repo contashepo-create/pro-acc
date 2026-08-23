@@ -31,36 +31,38 @@ process.env.BACKUP_SECRET = randomBytes(32).toString('hex');
 
 import { createHmac } from 'crypto';
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
-  const rpcResults = new Map<string, { data: any; error: any }>();
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
+  const rpcResults = new Map<string, { data: unknown; error: unknown }>();
   const tableErrors = new Map<string, { message: string; code?: string }>();
 
   const from = (table: string) => {
-    const ops: Op[] = []; const mut: any = {}; calls.push({ table, ops, mut });
+    const ops: Op[] = []; const mut: { kind?: string; payload?: Row | Row[] } = {}; calls.push({ table, ops, mut });
     let rangeBounds: { from: number; to: number } | null = null;
     const filtered = () => (db[table] || []).filter((row) => ops.every((op) => {
       if (op.op === 'eq') return row[op.col!] === op.val;
-      if (op.op === 'in') return op.val.includes(row[op.col!]);
+      if (op.op === 'in') return (op.val as unknown[]).includes(row[op.col!]);
       if (op.op === 'neq') return row[op.col!] !== op.val;
       return true;
     }));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
       neq: () => api, is: () => api, or: () => api, not: () => api,
       gte: () => api, lte: () => api, lt: () => api, order: () => api, limit: () => api,
       // PostgREST range() bounds are inclusive.
       range: (start: number, end: number) => { rangeBounds = { from: start, to: end }; return api; },
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
-      upsert: (payload: any) => { mut.kind = 'upsert'; mut.payload = payload; return api; },
+      insert: (payload: Row | Row[]) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      upsert: (payload: Row | Row[]) => { mut.kind = 'upsert'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: filtered()[0] || null, error: tableErrors.get(table) || null }),
       single: async () => {
@@ -68,12 +70,15 @@ function makeDb(db: Record<string, Row[]>) {
         const row = filtered()[0] || null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (ok: any, fail: any) => {
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => {
         const tableError = tableErrors.get(table);
-        if (tableError) return Promise.resolve({ data: null, error: tableError, count: 0 }).then(ok, fail);
+        if (tableError) return Promise.resolve({ data: null, error: tableError, count: 0 }).then(ok ?? undefined, fail ?? undefined);
         const all = filtered();
         const page = rangeBounds ? all.slice(rangeBounds.from, rangeBounds.to + 1) : all;
-        return Promise.resolve({ data: page, error: null, count: all.length }).then(ok, fail);
+        return Promise.resolve({ data: page, error: null, count: all.length }).then(ok ?? undefined, fail ?? undefined);
       },
     };
     return api;
@@ -88,7 +93,7 @@ function makeDb(db: Record<string, Row[]>) {
         createSignedUrl: async () => ({ data: { signedUrl: 'https://signed.example/x' }, error: null }),
       }),
     },
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
       rpcCalls.push({ name, params });
       return rpcResults.get(name) || { data: { ok: true }, error: null };
     },
@@ -122,17 +127,17 @@ function baseDb(): Record<string, Row[]> {
   };
 }
 
-function adminRequest(method = 'GET', body?: any, url = 'http://localhost/api/test') {
+function adminRequest(method = 'GET', body?: Row, url = 'http://localhost/api/test') {
   const token = createToken(ADMIN, 'admin');
   return {
     url, method,
     headers: { get: (key: string) => (key === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
     json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
 
-function webhookRequest(payload: any, secret: string | null = process.env.TELEGRAM_WEBHOOK_SECRET!) {
+function webhookRequest(payload: Row, secret: string | null = process.env.TELEGRAM_WEBHOOK_SECRET!) {
   return {
     url: 'http://localhost/api/telegram/webhook',
     method: 'POST',
@@ -140,12 +145,12 @@ function webhookRequest(payload: any, secret: string | null = process.env.TELEGR
       get: (key: string) => (key.toLowerCase() === 'x-telegram-bot-api-secret-token' ? secret : null),
     },
     json: async () => payload,
-  } as any;
+  } as unknown as NextRequest;
 }
 
 beforeEach(() => {
   mockDb = makeDb(baseDb());
-  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as any;
+  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as unknown as typeof fetch;
 });
 
 describe('backup download completeness', () => {
@@ -176,7 +181,7 @@ describe('backup download completeness', () => {
 
     const response = await backupDownloadGET(adminRequest());
     const payload = JSON.parse(await response.text());
-    expect(payload.data.invoices.map((row: any) => row.id)).toEqual(['i-1']);
+    expect(payload.data.invoices.map((row: Row) => row.id)).toEqual(['i-1']);
     for (const call of mockDb.calls.filter((entry) => entry.table === 'invoices')) {
       expect(call.ops).toEqual(expect.arrayContaining([{ op: 'eq', col: 'company_id', val: C1 }]));
     }
@@ -203,8 +208,8 @@ describe('backup download completeness', () => {
     expect(log).toBeDefined();
     expect(log!.mut.payload).toMatchObject({ company_id: C1, user_id: ADMIN });
     // The HMAC signature is what makes tamper detection possible on restore.
-    expect(typeof log!.mut.payload.hmac_signature).toBe('string');
-    expect(log!.mut.payload.hmac_signature.length).toBeGreaterThan(0);
+    expect(typeof (log!.mut.payload as Row).hmac_signature).toBe('string');
+    expect(String((log!.mut.payload as Row).hmac_signature).length).toBeGreaterThan(0);
     expect(response.headers.get('Content-Disposition')).toContain('attachment');
   });
 });
@@ -224,11 +229,11 @@ function backupUploadRequest(payload: unknown, path = '/api/backup/upload') {
     },
     cookies: { get: () => undefined },
     text: async () => JSON.stringify(payload),
-  } as any;
+  } as unknown as NextRequest;
 }
 
 /** Build a backup file exactly like the download endpoint produces it. */
-function makeSignedBackupFile(overrides?: { data?: Record<string, any>; metadata?: Record<string, any> }) {
+function makeSignedBackupFile(overrides?: { data?: Record<string, unknown>; metadata?: Record<string, unknown> }) {
   const backupData = {
     metadata: {
       company_id: C1,
@@ -312,7 +317,7 @@ describe('company backup restore safety', () => {
     expect(response.status).toBe(200);
     const payload = JSON.parse(await response.text());
     expect(payload.data.valid).toBe(false);
-    expect(payload.data.issues.some((issue: any) => issue.code === 'CROSS_COMPANY')).toBe(true);
+    expect(payload.data.issues.some((issue: Row) => issue.code === 'CROSS_COMPANY')).toBe(true);
   });
 
   test('the dry-run rejects a file for another company', async () => {
@@ -334,8 +339,8 @@ describe('company backup restore safety', () => {
     expect(response.status).toBe(200);
     const restoreCall = mockDb.rpcCalls.find((call) => call.name === 'restore_company_backup_atomic');
     expect(restoreCall).toBeDefined();
-    expect(restoreCall!.params.p_company_id).toBe(C1);
-    expect(restoreCall!.params.p_hmac_signature).toBe(file.hmac);
+    expect((restoreCall!.params as Row).p_company_id).toBe(C1);
+    expect((restoreCall!.params as Row).p_hmac_signature).toBe(file.hmac);
   });
 
   test('the restore refuses to touch data before the RPC when a foreign row is present', async () => {
@@ -372,7 +377,7 @@ describe('company backup restore safety', () => {
       headers: { get: (key: string) => (key === 'authorization' ? `Bearer ${nonAdmin}` : null) },
       cookies: { get: () => undefined },
       text: async () => JSON.stringify({ backupData: file.backupData, fileHash: file.fileHash }),
-    } as any;
+    } as unknown as NextRequest;
     const response = await backupUploadPOST(request);
     expect(response.status).toBe(401);
     expect(mockDb.rpcCalls).toHaveLength(0);
@@ -467,7 +472,7 @@ describe('telegram webhook security', () => {
           ? process.env.TELEGRAM_WEBHOOK_SECRET! : null),
       },
       json: async () => { throw new Error('invalid json'); },
-    } as any);
+    } as unknown as NextRequest);
     // Acknowledging is deliberate: a 5xx would make Telegram replay the update
     // indefinitely against an endpoint that can never parse it.
     expect(response.status).toBe(200);

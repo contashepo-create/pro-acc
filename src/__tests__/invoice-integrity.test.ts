@@ -21,19 +21,21 @@ jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({
 import * as fs from 'fs';
 import * as path from 'path';
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { generateUBLInvoice } from '@/lib/zatca';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row } }> = [];
   let insertCounter = 0;
 
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: { kind?: string; payload?: any } = {};
-    const call: any = { table, ops, mut };
+    const mut: { kind?: string; payload?: Row } = {};
+    const call = { table, ops, mut };
     calls.push(call);
 
     const applyFilters = () =>
@@ -41,26 +43,26 @@ function makeDb(db: Record<string, Row[]>) {
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
           if (o.op === 'neq') return r[o.col!] !== o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
           return true;
         })
       );
 
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
       or: () => api,
       gte: () => api,
       lte: () => api,
       order: () => api,
       limit: () => api,
       range: () => api,
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      insert: (payload: Row) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
       single: async () => {
@@ -75,17 +77,26 @@ function makeDb(db: Record<string, Row[]>) {
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) =>
-        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
+      then: <T1 = { data: unknown; error: null }, T2 = never>(
+        onF?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+        onR?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: applyFilters(), error: null }).then(onF ?? undefined, onR ?? undefined),
     };
     return api;
   };
 
-  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
-  db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `Could not find the function ${name}` } });
-  db_.rpc = (name: string, params: any) => {
-    db_.rpcCalls.push({ name, params });
-    return db_.rpcImpl(name, params);
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
+  const rpcImpl = async (name: string, _params?: Row): Promise<{ data: unknown; error: unknown }> =>
+    ({ data: null, error: { message: `Could not find the function ${name}` } });
+  const db_ = {
+    from,
+    calls,
+    rpcCalls,
+    rpcImpl,
+    rpc: (name: string, params?: Row) => {
+      rpcCalls.push({ name, params });
+      return db_.rpcImpl(name, params);
+    },
   };
   return db_;
 }
@@ -152,18 +163,18 @@ journal_sequences: [] as Row[],
   } as Record<string, Row[]>;
 }
 
-function authedRequest(body?: any) {
+function authedRequest(body?: Row) {
   const token = createToken('u1', 'admin');
   return {
     headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
     json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
 
 const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
 
-function invoiceBody(overrides: any = {}) {
+function invoiceBody(overrides: Row = {}) {
   return {
     clientId: CLIENT,
     date: '2026-08-01',
@@ -181,7 +192,7 @@ function invoiceBody(overrides: any = {}) {
 }
 
 function insertsOf(table: string) {
-  return mockDb.calls.filter((c: any) => c.mut.kind === 'insert' && c.table === table);
+  return mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === table);
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +215,7 @@ describe('POST /api/invoices — atomic financial boundary', () => {
   });
 
   test('returns a clear reason when the covering fiscal year is closed', async () => {
-    (mockDb as any).calls.length = 0;
+    mockDb.calls.length = 0;
     const fiscalYear = (baseDb().fiscal_years as Row[])[0];
     fiscalYear.status = 'closed';
     mockDb = makeDb({ ...baseDb(), fiscal_years: [fiscalYear] });
@@ -367,8 +378,6 @@ describe('GET /api/invoices/[id]/zatca — immutable tenant tax document', () =>
 });
 
 describe('SQL invoice_items inserts always list company_id', () => {
-  const fs = require('fs') as typeof import('fs');
-  const path = require('path') as typeof import('path');
   test('create_invoice_with_journal and 023 write company_id on invoice_items', () => {
     const dir = path.join(__dirname, '../migrations');
     for (const file of ['014-atomic-invoice-creation.sql', '022-fix-journal-lines-company-id.sql', '023-fix-child-rows-company-id.sql']) {
@@ -430,16 +439,17 @@ describe('ZATCA UBL — XML injection safety', () => {
   });
 
   test('tolerates null/undefined text fields without crashing', () => {
-    const xml = generateUBLInvoice({
+    const data: Record<string, unknown> = {
       uuid: 'uuid-1', number: 1, issueDate: '2026-08-01', issueTime: '10:00:00',
       invoiceTypeCode: '388', currencyCode: 'SAR',
-      seller: { name: undefined as any, vatNumber: undefined as any },
-      buyer: { name: null as any },
-      items: [{ id: '1', description: undefined as any, quantity: 1, unitPrice: 100, vatRate: 0.15, total: 100 }],
+      seller: { name: undefined, vatNumber: undefined },
+      buyer: { name: null },
+      items: [{ id: '1', description: undefined, quantity: 1, unitPrice: 100, vatRate: 0.15, total: 100 }],
       amounts: { lineExtensionAmount: 100, taxExclusiveAmount: 100, taxInclusiveAmount: 115, taxAmount: 15 },
       vatRate: 0.15,
-      notes: [undefined as any],
-    });
+      notes: [undefined],
+    };
+    const xml = generateUBLInvoice(data as unknown as Parameters<typeof generateUBLInvoice>[0]);
     expect(xml).toContain('<Invoice');
     expect(xml).toContain('</Invoice>');
   });

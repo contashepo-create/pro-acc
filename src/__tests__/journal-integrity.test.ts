@@ -20,6 +20,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { journalEntrySchema } from '@/lib/validation';
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { insertJournalLines } from '@/lib/journal-utils';
 import { getNextJournalNumber } from '@/lib/numbering';
 
@@ -27,18 +29,16 @@ import { getNextJournalNumber } from '@/lib/numbering';
 // Chainable Supabase mock (with rpc support)
 // ---------------------------------------------------------------------------
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
   let insertCounter = 0;
-  const api_holders: any = {};
-
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: { kind?: string; payload?: any } = {};
-    const call: any = { table, ops, mut };
+    const mut: { kind?: string; payload?: Row | Row[] } = {};
+    const call = { table, ops, mut };
     calls.push(call);
 
     const rows = () => db[table] || [];
@@ -47,24 +47,24 @@ function makeDb(db: Record<string, Row[]>) {
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
           if (o.op === 'neq') return r[o.col!] !== o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           return true;
         })
       );
 
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
       or: () => api,
       gte: () => api,
       lte: () => api,
       order: () => api,
       limit: () => api,
       range: () => api,
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      insert: (payload: Row | Row[]) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
       single: async () => {
@@ -76,25 +76,26 @@ function makeDb(db: Record<string, Row[]>) {
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) =>
-        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
+      then: <T1 = { data: unknown; error: null }, T2 = never>(
+        onF?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+        onR?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: applyFilters(), error: null }).then(onF ?? undefined, onR ?? undefined),
     };
     return api;
   };
 
-  const db_ = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> } as {
-    from: (table: string) => any;
-    calls: typeof calls;
-    rpcCalls: Array<{ name: string; params: any }>;
-    [key: string]: any;
-  };
-  db_.rpcImpl = async (_name: string, _params: any) => ({
-    data: null,
-    error: { message: `Could not find the function ${_name}` },
-  });
-  db_.rpc = (name: string, params: any) => {
-    db_.rpcCalls.push({ name, params });
-    return db_.rpcImpl(name, params);
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
+  const rpcImpl = async (_name: string, _params?: Row): Promise<{ data: unknown; error: unknown }> =>
+    ({ data: null, error: { message: `Could not find the function ${_name}` } });
+  const db_ = {
+    from,
+    calls,
+    rpcCalls,
+    rpcImpl,
+    rpc: (name: string, params?: Row) => {
+      rpcCalls.push({ name, params });
+      return db_.rpcImpl(name, params);
+    },
   };
   return db_;
 }
@@ -143,14 +144,14 @@ journal_sequences: [] as Row[],
   } as Record<string, Row[]>;
 }
 
-function authedRequest(body?: any) {
+function authedRequest(body?: Row) {
   const token = createToken('u1', 'admin');
   return {
     headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
     json: async () => body,
     nextUrl: new URL('http://localhost/api/journal'),
-  } as any;
+  } as unknown as NextRequest;
 }
 
 const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -162,7 +163,7 @@ const balancedBody = {
   lines: [
     { accountCode: '1110', debit: 1150, credit: 0 },
     { accountCode: '4100', debit: 0, credit: 1000 },
-    { accountCode: '2120' , debit: 0, credit: 150 } as any,
+    { accountCode: '2120' , debit: 0, credit: 150 },
   ],
 };
 
@@ -275,8 +276,6 @@ describe('journalEntrySchema — double-entry rules', () => {
 // ---------------------------------------------------------------------------
 
 describe('SQL journal RPCs write company_id', () => {
-  const fs = require('fs') as typeof import('fs');
-  const path = require('path') as typeof import('path');
 
   test('hardened journal RPC binds every account and related entity to its tenant', () => {
     const sql = fs.readFileSync(path.join(__dirname, '../migrations/047-harden-atomic-journal-entry.sql'), 'utf8');
@@ -373,7 +372,7 @@ describe('getNextJournalNumber fallback parity with RPC semantics', () => {
     const n = await getNextJournalNumber(C1, 2026);
     expect(n).toBe(8);
     const upd = mockDb.calls.find((c) => c.mut.kind === 'update' && c.table === 'journal_sequences');
-    expect(upd!.mut.payload.last_number).toBe(8);
+    expect((upd!.mut.payload as Row).last_number).toBe(8);
     expect(upd!.ops.some((o) => o.col === 'year' && o.val === 2026)).toBe(true);
   });
 });
@@ -424,9 +423,9 @@ describe('POST /api/journal — atomic posting boundary', () => {
       name: 'create_journal_entry',
       params: { p_company_id: C1, p_created_by: 'u1', p_date: '2026-08-01', p_type: 'general' },
     });
-    const rpcLines = mockDb.rpcCalls[0].params.p_lines;
+    const rpcLines = (mockDb.rpcCalls[0].params?.p_lines ?? []) as Row[];
     expect(rpcLines).toHaveLength(3);
-    expect(rpcLines.every((line: any) => line.accountId)).toBe(true);
+    expect(rpcLines.every((line) => line.accountId)).toBe(true);
     expect(mockDb.calls.find((call) => call.mut.kind === 'insert' && call.table === 'journal_entries')).toBeUndefined();
   });
 
