@@ -8,17 +8,17 @@ import { createAdminToken, hashPassword } from '@/lib/auth';
 
 const sendTelegramCodeMock = jest.fn();
 jest.mock('@/lib/telegram', () => ({
-  sendTelegramCode: (...a: any[]) => sendTelegramCodeMock(...a),
+  sendTelegramCode: (...a: unknown[]) => sendTelegramCodeMock(...a),
   sendAdminNotification: jest.fn(async () => true),
   escapeTelegramHtml: (s: string) => s,
 }));
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
@@ -26,25 +26,27 @@ function makeDb(db: Record<string, Row[]>) {
       (db[table] || []).filter((r) =>
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'gte') return String(r[o.col!]) >= String(o.val);
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
       or: () => api, order: () => api, limit: () => api, range: () => api, is: () => api, neq: () => api,
-      lt: () => api, gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
+      lt: () => api, gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
       lte: () => api, contains: () => api,
-      insert: (payload: any) => { db[table] = [...(db[table] || []), payload]; return api; },
-      update: (payload: any) => { const r = (db[table] || [])[0]; if (r) Object.assign(r, payload); return api; },
+      insert: (payload: Row | Row[]) => { db[table] = [...(db[table] || []), ...(Array.isArray(payload) ? payload : [payload])]; return api; },
+      update: (payload: Row) => { const r = (db[table] || [])[0]; if (r) Object.assign(r, payload); return api; },
       delete: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found', code: 'PGRST116' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
@@ -58,6 +60,8 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { POST as loginPOST } from '@/app/api/admin/login/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { POST as verifyTelegramPOST } from '@/app/api/admin/verify-telegram/route';
 import { POST as verifyMasterPOST } from '@/app/api/admin/verify-master/route';
 import { POST as sendCodePOST } from '@/app/api/admin/send-telegram-code/route';
@@ -86,10 +90,10 @@ beforeAll(async () => {
 });
 beforeEach(() => { sendTelegramCodeMock.mockReset(); mockDb = makeDb(baseDb()); });
 
-function req(method = 'POST', url = 'http://localhost/x', body?: any, session?: string, adminToken?: string, extraHeaders: Record<string, string> = {}) {
+function req(method = 'POST', url = 'http://localhost/x', body?: Row, session?: string, adminToken?: string, extraHeaders: Record<string, string> = {}) {
   return { url, method, nextUrl: new URL(url), headers: { get: (k: string) => extraHeaders[k] ?? null },
     cookies: { get: (name: string) => name === 'admin_session' && session ? { value: session } : (name === 'admin_token' && adminToken ? { value: adminToken } : undefined) },
-    json: async () => body, text: async () => JSON.stringify(body) } as any;
+    json: async () => body, text: async () => JSON.stringify(body) } as unknown as NextRequest;
 }
 
 describe('admin/login POST', () => {

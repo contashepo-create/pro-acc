@@ -11,31 +11,32 @@
  *  - The complaints edit form offered statuses the company could not actually
  *    set (only 'closed' is allowed), so "changing status" appeared broken.
  */
-import { randomBytes } from 'crypto';
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { buildRecordEntries } from '@/components/ui/RecordViewModal';
 
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
 
 function makeDb(db: Record<string, Row[]>) {
   const selectArgs: string[] = [];
-  const muts: Array<{ table: string; kind: string; payload?: any }> = [];
+  const muts: Array<{ table: string; kind: string; payload?: Row | Row[] }> = [];
 
   const from = (table: string) => {
-    const filters: Array<{ kind: string; col: string; val: any }> = [];
+    const filters: Array<{ kind: string; col: string; val: unknown }> = [];
     let limitCount: number | null = null;
     let head = false;
-    let mut: { kind?: string; payload?: any } = {};
+    let mut: { kind?: string; payload?: Row | Row[] } = {};
 
     const filtered = () => (db[table] || []).filter((row) =>
       filters.every((f) => {
         if (f.kind === 'eq') return row[f.col] === f.val;
         if (f.kind === 'or') {
           // 'user_id.is.null,user_id.eq.X'
-          const [isNull, eqUser] = String(f.val).split(',');
+          const [, eqUser] = String(f.val).split(',');
           const eqVal = eqUser.replace(/^user_id\.eq\./, '');
           return row.user_id === null || row.user_id === eqVal;
         }
@@ -43,26 +44,29 @@ function makeDb(db: Record<string, Row[]>) {
       })
     );
 
-    const api: any = {
+    const api: TestBuilder = {
       select: (cols: string, opts?: Record<string, unknown>) => {
         selectArgs.push(String(cols));
         head = opts?.head === true;
         return api;
       },
-      eq: (col: string, val: any) => { filters.push({ kind: 'eq', col, val }); return api; },
+      eq: (col: string, val: unknown) => { filters.push({ kind: 'eq', col, val }); return api; },
       or: (expr: string) => { filters.push({ kind: 'or', col: '', val: expr }); return api; },
       order: () => api,
       limit: (n: number) => { limitCount = n; return api; },
       is: () => api,
       maybeSingle: async () => ({ data: filtered()[0] || null, error: null }),
       single: async () => ({ data: filtered()[0] || null, error: filtered()[0] ? null : { message: 'not found' } }),
-      insert: (payload: any) => { mut = { kind: 'insert', payload }; return api; },
-      update: (payload: any) => { mut = { kind: 'update', payload }; return api; },
+      insert: (payload: Row | Row[]) => { mut = { kind: 'insert', payload }; return api; },
+      update: (payload: Row) => { mut = { kind: 'update', payload }; return api; },
       delete: () => { mut = { kind: 'delete' }; return api; },
-      then: (resolve: any, reject: any) => {
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        resolve?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => {
         if (mut.kind) { muts.push({ table, kind: mut.kind, payload: mut.payload }); }
         if (mut.kind === 'update' || mut.kind === 'delete' || mut.kind === 'insert') {
-          return Promise.resolve({ data: mut.payload ?? null, error: null }).then(resolve, reject);
+          return Promise.resolve({ data: mut.payload ?? null, error: null }).then(resolve ?? undefined, reject ?? undefined);
         }
         const rows = filtered();
         const page = limitCount != null ? rows.slice(0, limitCount) : rows;
@@ -70,7 +74,7 @@ function makeDb(db: Record<string, Row[]>) {
           data: head ? null : page,
           count: rows.length,
           error: null,
-        }).then(resolve, reject);
+        }).then(resolve ?? undefined, reject ?? undefined);
       },
     };
     return api;
@@ -112,7 +116,7 @@ function baseDb(): Record<string, Row[]> {
   };
 }
 
-function req(method: string, body?: any, path = '/api/test') {
+function req(method: string, body?: Row, path = '/api/test') {
   const token = createToken(ADMIN, 'admin');
   return {
     url: `http://localhost${path}`,
@@ -120,12 +124,12 @@ function req(method: string, body?: any, path = '/api/test') {
     headers: { get: (key: string) => (key.toLowerCase() === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
     json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
 
 beforeEach(() => {
   mockDb = makeDb(baseDb());
-  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as any;
+  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as unknown as typeof fetch;
 });
 
 describe('notifications route regression', () => {
@@ -142,7 +146,7 @@ describe('notifications route regression', () => {
     const response = await notificationsGET(req('GET', undefined, '/api/notifications?unread_only=true'));
     expect(response.status).toBe(200);
     const payload = await response.json();
-    expect(payload.data.notifications.every((n: any) => n.is_read === false)).toBe(true);
+    expect(payload.data.notifications.every((n: Row) => n.is_read === false)).toBe(true);
     expect(payload.data.notifications.length).toBe(2);
     expect(payload.data.unreadCount).toBe(2);
   });
