@@ -5,12 +5,12 @@
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error?: unknown } | null>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
@@ -18,21 +18,23 @@ function makeDb(db: Record<string, Row[]>) {
       (db[table] || []).filter((r) =>
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
       order: () => api, limit: () => api, range: () => api, is: () => api, neq: () => api,
       or: () => api, lt: () => api, gte: () => api, lte: () => api,
       insert: () => api, update: () => api, delete: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
@@ -46,16 +48,18 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET as messageGET, PATCH as messagePATCH, DELETE as messageDELETE } from '@/app/api/messages/[id]/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { GET as tgTestGET, POST as tgTestPOST } from '@/app/api/settings/telegram/test/route';
 import { resetRateLimits } from '@/lib/memory-rate-limit';
 
 const C1 = 'company-1';
 const MID = '00000000-0000-4000-8000-00000000b001';
 
-function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: any) {
+function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: Row) {
   const token = createToken('u1', role, 0);
   return { url, method, nextUrl: new URL(url), headers: { get: (k: string) => k === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 
 function baseDb() {
@@ -168,9 +172,9 @@ describe('settings/telegram/test POST', () => {
 
   test('sends the interactive message and returns 201 when telegram succeeds', async () => {
     process.env.TELEGRAM_BOT_TOKEN = 'bot-token';
-    const fetchMock = jest.spyOn(global as any, 'fetch').mockResolvedValue({
+    const fetchMock = jest.spyOn(globalThis as { fetch: typeof fetch }, 'fetch').mockResolvedValue({
       ok: true, status: 200, json: async () => ({ ok: true }),
-    });
+    } as unknown as Response);
     try {
       mockDb.rpcResults.set('create_telegram_test_run_atomic', { data: { id: MID, chat_id: '12345' }, error: null });
       const res = await tgTestPOST(req('admin', 'POST', 'http://localhost/api/settings/telegram/test'));
@@ -182,9 +186,9 @@ describe('settings/telegram/test POST', () => {
 
   test('returns 502 when the telegram HTTP call fails', async () => {
     process.env.TELEGRAM_BOT_TOKEN = 'bot-token';
-    const fetchMock = jest.spyOn(global as any, 'fetch').mockResolvedValue({
+    const fetchMock = jest.spyOn(globalThis as { fetch: typeof fetch }, 'fetch').mockResolvedValue({
       ok: false, status: 400, json: async () => ({ ok: false, description: 'bad request' }),
-    });
+    } as unknown as Response);
     try {
       mockDb.rpcResults.set('create_telegram_test_run_atomic', { data: { id: MID, chat_id: '12345' }, error: null });
       mockDb.rpcResults.set('expire_telegram_test_run_atomic', { data: null, error: null });
