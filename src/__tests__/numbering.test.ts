@@ -3,8 +3,8 @@
  */
 
 // Create a chainable mock builder
-function createChainableMock(finalReturn: any = { data: null, error: null }) {
-  const chain: any = {};
+function createChainableMock(finalReturn: { data: unknown; error: unknown } = { data: null, error: null }) {
+  const chain: Record<string, jest.Mock> = {};
   const methods = ['select', 'eq', 'order', 'limit', 'maybeSingle', 'update', 'insert'];
   
   for (const method of methods) {
@@ -17,7 +17,7 @@ function createChainableMock(finalReturn: any = { data: null, error: null }) {
 }
 
 let mockRpc: jest.Mock;
-let mockChain: any;
+let mockChain: Record<string, jest.Mock>;
 
 jest.mock('../lib/supabase-client', () => ({
   getSupabase: () => ({
@@ -96,8 +96,6 @@ describe('Invoice Numbering', () => {
     mockChain.maybeSingle.mockResolvedValue({ data: null });
     mockChain.insert = jest.fn().mockResolvedValue({ error: null });
     // Need to make insert chainable too
-    const origFrom = jest.requireMock('../lib/supabase-client').getSupabase;
-    
     const num = await getNextInvoiceNumber(TEST_COMPANY_ID, 2026);
     // With null data, it should fallback to 0 + 1 = 1
     expect(num).toBe(1);

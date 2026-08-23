@@ -130,19 +130,19 @@ describe('portal/invoices/[id] GET', () => {
   const portalToken = createPortalToken({ contactId: CONTACT, companyId: C1, email: EMAIL });
 
   test('rejects an invalid portal token', async () => {
-    const res = await portalInvoiceGET({ url: 'http://localhost/x', headers: { get: () => null } } as any, { params: Promise.resolve({ id: INV }) });
+    const res = await portalInvoiceGET({ url: 'http://localhost/x', headers: { get: () => null } } as unknown as NextRequest, { params: Promise.resolve({ id: INV }) });
     expect(res.status).toBe(401);
   });
 
   test('rejects a malformed invoice id', async () => {
     mockDb = makeDb({ ...baseDb(), contacts: [{ id: CONTACT, email: EMAIL, company_id: C1, is_active: true, deleted_at: null, companies: { is_active: true } }] });
-    const res = await portalInvoiceGET({ url: 'http://localhost/x', headers: { get: (k: string) => k === 'x-portal-token' ? portalToken : null } } as any, { params: Promise.resolve({ id: 'bad' }) });
+    const res = await portalInvoiceGET({ url: 'http://localhost/x', headers: { get: (k: string) => k === 'x-portal-token' ? portalToken : null } } as unknown as NextRequest, { params: Promise.resolve({ id: 'bad' }) });
     expect(res.status).toBe(400);
   });
 
   test('returns 404 for an unknown invoice', async () => {
     mockDb = makeDb({ ...baseDb(), contacts: [{ id: CONTACT, email: EMAIL, company_id: C1, is_active: true, deleted_at: null, companies: { is_active: true } }] });
-    const res = await portalInvoiceGET({ url: 'http://localhost/x', headers: { get: (k: string) => k === 'x-portal-token' ? portalToken : null } } as any, { params: Promise.resolve({ id: INV }) });
+    const res = await portalInvoiceGET({ url: 'http://localhost/x', headers: { get: (k: string) => k === 'x-portal-token' ? portalToken : null } } as unknown as NextRequest, { params: Promise.resolve({ id: INV }) });
     expect(res.status).toBe(404);
   });
 
@@ -151,7 +151,7 @@ describe('portal/invoices/[id] GET', () => {
       invoices: [{ id: INV, company_id: C1, contact_id: CONTACT, number: 'INV-1', status: 'paid', tax_snapshot: { seller: { name: 'شركة س', vat_number: '123' } } }],
       invoice_items: [{ id: 'it1', invoice_id: INV, company_id: C1, description: 'x', quantity: 1, unit_price: 5, total: 5 }],
       companies: [{ id: C1, is_active: true, name: 'شركة', tax_number: '0', address: 'a', phone: '1', logo_url: null }] });
-    const res = await portalInvoiceGET({ url: 'http://localhost/x', headers: { get: (k: string) => k === 'x-portal-token' ? portalToken : null } } as any, { params: Promise.resolve({ id: INV }) });
+    const res = await portalInvoiceGET({ url: 'http://localhost/x', headers: { get: (k: string) => k === 'x-portal-token' ? portalToken : null } } as unknown as NextRequest, { params: Promise.resolve({ id: INV }) });
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.data.items).toHaveLength(1);

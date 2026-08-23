@@ -1,7 +1,7 @@
-let queryData: any = [];
-let queryError: any = null;
-let singleResult: any = { data: null, error: null };
-const db = { from: jest.fn(() => { const api: any = {
+let queryData: unknown[] | null = [];
+let queryError: Error | null = null;
+let singleResult: { data: unknown; error: unknown } = { data: null, error: null };
+const db = { from: jest.fn(() => { const api = {
   select: () => api, or: () => api, eq: () => api, gte: () => api,
   order: async () => ({ data: queryData, error: queryError }),
   insert: () => api, single: async () => singleResult,

@@ -4,11 +4,11 @@
  */
 import { hitSharedRateLimit } from '@/lib/shared-rate-limit';
 
-let rpcImpl: (name: string, params: any) => Promise<{ data: any; error: any }> = async () => ({ data: null, error: null });
+let rpcImpl: (name: string, params?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }> = async () => ({ data: null, error: null });
 
 jest.mock('@/lib/supabase-client', () => ({
   getSupabase: () => ({
-    rpc: (name: string, params: any) => rpcImpl(name, params),
+    rpc: (name: string, params?: Record<string, unknown>) => rpcImpl(name, params),
   }),
 }));
 
