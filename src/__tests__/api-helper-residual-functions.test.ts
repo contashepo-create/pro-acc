@@ -5,12 +5,12 @@ const assertSubscriptionAccess = jest.fn(async () => undefined);
 const hasModulePermission = jest.fn(async () => true);
 const hitRateLimit = jest.fn(() => ({ allowed: true, retryAfterSeconds: 0 }));
 const hitSharedRateLimit = jest.fn(async () => ({ allowed: true, retryAfterSeconds: 0 }));
-let userResult: any = { data: { company_id: 'c1', is_active: true, role: 'admin', token_version: 0 }, error: null };
-let companyResult: any = { data: { is_active: true }, error: null };
+let userResult: { data: unknown; error: unknown } = { data: { company_id: 'c1', is_active: true, role: 'admin', token_version: 0 }, error: null };
+let companyResult: { data: unknown; error: unknown } = { data: { is_active: true }, error: null };
 
 const db = {
   from: jest.fn((table: string) => {
-    const api: any = { select: () => api, eq: () => api, single: async () => table === 'users' ? userResult : companyResult };
+    const api: TestBuilder = { select: () => api, eq: () => api, single: async () => table === 'users' ? userResult : companyResult };
     return api;
   }),
 };
@@ -24,6 +24,9 @@ jest.mock('@/lib/memory-rate-limit', () => ({ hitRateLimit, READ_LIMIT: 100, WRI
 jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit }));
 
 import { z } from 'zod';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
+import type { RequestLike } from '@/lib/types';
 import { NextResponse } from 'next/server';
 import {
   success, error, serverError, unauthorized, validationError, requireApiAuth, requireApiAuthWithSubscription,
@@ -37,7 +40,7 @@ const request = (method = 'GET', body: unknown = {}) => ({
   headers: new Headers({ 'x-csrf-token': 'secret' }),
   cookies: { get: (name: string) => name === 'csrf_token' ? { value: 'secret' } : undefined },
   json: async () => body,
-}) as any;
+}) as unknown as NextRequest;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -66,15 +69,15 @@ describe('remaining API helper functions', () => {
   test('handles subscription guard AuthErrors, production write failures and read fail-open', async () => {
     assertSubscriptionAccess.mockRejectedValueOnce(new AuthError('blocked', 403));
     await expect(requireApiAuth(request(), {})).rejects.toThrow('blocked');
-    const saved = process.env.NODE_ENV; (process.env as any).NODE_ENV = 'production';
+    const saved = process.env.NODE_ENV; Reflect.set(process.env, 'NODE_ENV', 'production');
     assertSubscriptionAccess.mockRejectedValueOnce(new Error('guard down'));
     await expect(requireApiAuth(request('POST'), {})).rejects.toMatchObject({ status: 503 });
-    const noMethod = request('POST'); noMethod.method = '';
+    const noMethod = { ...request('POST'), method: '' } as unknown as NextRequest;
     assertSubscriptionAccess.mockRejectedValueOnce(new Error('guard down'));
     await expect(requireApiAuth(noMethod, {})).resolves.toMatchObject({ companyId: 'c1' });
     assertSubscriptionAccess.mockRejectedValueOnce(new Error('guard down'));
     await expect(requireApiAuth(request('GET'), {})).resolves.toMatchObject({ companyId: 'c1' });
-    (process.env as any).NODE_ENV = saved;
+    Reflect.set(process.env, 'NODE_ENV', saved);
   });
 
   test('executes the legacy expiry-only subscription branch when explicitly requested', async () => {
@@ -98,7 +101,7 @@ describe('remaining API helper functions', () => {
   test('escapes HTML and enforces matching CSRF tokens', () => {
     expect(escapeHtml(`<a x="1">Tom & 'A'</a>`)).toBe('&lt;a x=&quot;1&quot;&gt;Tom &amp; &#39;A&#39;&lt;/a&gt;');
     expect(() => requireCsrf(request('POST'))).not.toThrow();
-    const bad = request('POST'); bad.headers = new Headers({ 'x-csrf-token': 'wrong' });
+    const bad = { ...request('POST'), headers: new Headers({ 'x-csrf-token': 'wrong' }) } as unknown as NextRequest;
     expect(() => requireCsrf(bad)).toThrow(AuthError);
   });
 
@@ -114,19 +117,19 @@ describe('remaining API helper functions', () => {
     expect(success({ ok: true }, 201, { cache: 'public', maxAge: 10 }).status).toBe(201);
     expect(error('bad', 418).status).toBe(418);
     const oldEnv = process.env.NODE_ENV;
-    (process.env as any).NODE_ENV = 'test';
+    Reflect.set(process.env, 'NODE_ENV', 'test');
     for (const cause of [new Error('E1'), { message: 'E2', details: 'D' }, { msg: 'E3', hint: 'H' }, { error: { message: 'E4' } }, { error: { message: '' } }, null]) {
       const body = await serverError(cause).json();
       expect(body.success).toBe(false);
     }
-    (process.env as any).NODE_ENV = 'production';
+    Reflect.set(process.env, 'NODE_ENV', 'production');
     // The client never sees the real message — generic + correlation id only,
     // in every environment (production included).
     const prodBody = await serverError(new Error('secret')).json();
     expect(prodBody.message).toBe('حدث خطأ في الخادم');
     expect(prodBody.errorId).toMatch(/^[a-z0-9]+$/);
     expect(JSON.stringify(prodBody)).not.toContain('secret');
-    (process.env as any).NODE_ENV = oldEnv;
+    Reflect.set(process.env, 'NODE_ENV', oldEnv);
   });
 
   test('a Postgres-shaped error never leaks constraint/table names to the client', async () => {
@@ -156,9 +159,9 @@ describe('remaining API helper functions', () => {
   });
 
   test('rejects every authentication identity failure branch', async () => {
-    extractToken.mockReturnValueOnce(null as any);
+    extractToken.mockReturnValueOnce(null as unknown as string);
     await expect(requireApiAuth(request())).rejects.toMatchObject({ status: 401 });
-    verifyToken.mockReturnValueOnce(null as any);
+    verifyToken.mockReturnValueOnce(null as unknown as { userId: string; ver: number });
     await expect(requireApiAuth(request())).rejects.toMatchObject({ status: 401 });
     userResult = { data: null, error: new Error('user') };
     await expect(requireApiAuth(request())).rejects.toThrow('المستخدم غير موجود');
@@ -194,7 +197,7 @@ describe('remaining API helper functions', () => {
     // Local fast path allows -> the shared (DB) budget is consulted and allows.
     hitRateLimit.mockReturnValueOnce({ allowed: true, retryAfterSeconds: 0 });
     hitSharedRateLimit.mockResolvedValueOnce({ allowed: true, retryAfterSeconds: 0 });
-    await expect(enforceRateLimit(null as any, 'u')).resolves.toBeUndefined();
+    await expect(enforceRateLimit(null as unknown as RequestLike, 'u')).resolves.toBeUndefined();
     // Local fast path blocks -> rejected before the shared store is touched.
     hitRateLimit.mockReturnValueOnce({ allowed: false, retryAfterSeconds: 9 });
     await expect(enforceRateLimit(request('POST'), 'u')).rejects.toBeInstanceOf(RateLimitExceeded);
@@ -205,13 +208,13 @@ describe('remaining API helper functions', () => {
     await expect(enforceRateLimit(request('POST'), 'u')).rejects.toMatchObject({ retryAfterSeconds: 11 });
     for (const value of [null, [], 'x']) await expect(parseBody(request('POST', value))).rejects.toBeInstanceOf(ValidationFailure);
     const oldBypass = process.env.CSRF_BYPASS; process.env.CSRF_BYPASS = 'true';
-    expect(() => requireCsrf({ ...request('POST'), headers: new Headers() })).not.toThrow();
+    expect(() => requireCsrf({ ...request('POST'), headers: new Headers() } as unknown as NextRequest)).not.toThrow();
     if (oldBypass === undefined) delete process.env.CSRF_BYPASS; else process.env.CSRF_BYPASS = oldBypass;
-    const missing = request('POST'); missing.headers = new Headers(); missing.cookies = { get: () => undefined };
+    const missing = { ...request('POST'), headers: new Headers(), cookies: { get: () => undefined } } as unknown as NextRequest;
     expect(() => requireCsrf(missing)).toThrow();
-    const noCookies = request('POST'); noCookies.cookies = undefined;
+    const noCookies = { ...request('POST'), cookies: undefined } as unknown as NextRequest;
     expect(() => requireCsrf(noCookies)).toThrow();
-    const unequal = request('POST'); unequal.headers = new Headers({ 'x-csrf-token': 'long' });
+    const unequal = { ...request('POST'), headers: new Headers({ 'x-csrf-token': 'long' }) } as unknown as NextRequest;
     expect(() => requireCsrf(unequal)).toThrow();
     expect(getPaginationParams(new URL('http://x?page=2&pageSize=999'))).toEqual({ page: 2, pageSize: 500 });
     expect(getPaginationParams('http://x?page=bad&pageSize=-1')).toEqual({ page: 1, pageSize: 1 });
