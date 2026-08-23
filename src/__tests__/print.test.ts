@@ -8,8 +8,28 @@
  */
 import { openPrintWindow, printCurrentPage } from '@/lib/print';
 
+interface FakeDocument {
+  readyState: string;
+  open: jest.Mock;
+  write: jest.Mock;
+  close: jest.Mock;
+  images: Array<Record<string, unknown>>;
+  fonts: unknown;
+}
+
+interface FakeWin {
+  opener: unknown;
+  setTimeout: (fn: () => void) => number;
+  requestAnimationFrame: (fn: () => void) => number;
+  focus: jest.Mock;
+  print: jest.Mock;
+  open: jest.Mock;
+  addEventListener: (event: string, callback: () => void) => void;
+  document: FakeDocument;
+}
+
 function installFakeWindow(openImpl?: () => unknown) {
-  const fakeWin: any = {
+  const fakeWin: FakeWin = {
     opener: { irrelevant: true },
     setTimeout: (fn: () => void) => {
       fn();
@@ -22,7 +42,7 @@ function installFakeWindow(openImpl?: () => unknown) {
     focus: jest.fn(),
     print: jest.fn(),
     open:
-      openImpl ??
+      (openImpl as unknown as jest.Mock) ??
       jest.fn(function open(this: unknown) {
         return fakeWin;
       }),
@@ -36,15 +56,15 @@ function installFakeWindow(openImpl?: () => unknown) {
       fonts: undefined,
     },
   };
-  (global as any).window = fakeWin;
-  (global as any).document = fakeWin.document;
+  (globalThis as { window?: unknown; document?: unknown }).window = fakeWin;
+  (globalThis as { window?: unknown; document?: unknown }).document = fakeWin.document;
   return fakeWin;
 }
 
 describe('openPrintWindow', () => {
   afterEach(() => {
-    delete (global as any).window;
-    delete (global as any).document;
+    delete (globalThis as { window?: unknown; document?: unknown }).window;
+    delete (globalThis as { window?: unknown; document?: unknown }).document;
   });
 
   it('opens without noopener/noreferrer, writes the document and prints', () => {
@@ -89,8 +109,8 @@ describe('openPrintWindow', () => {
 
 describe('printCurrentPage', () => {
   afterEach(() => {
-    delete (global as any).window;
-    delete (global as any).document;
+    delete (globalThis as { window?: unknown; document?: unknown }).window;
+    delete (globalThis as { window?: unknown; document?: unknown }).document;
   });
 
   it('prints the current page after fonts and images are ready', async () => {

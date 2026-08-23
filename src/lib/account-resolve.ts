@@ -22,7 +22,7 @@ export function isHeaderAccount(acc: {
   code?: string | null;
   is_header?: boolean | null;
   children?: unknown[] | null;
-}): boolean {
+} | null): boolean {
   if (acc?.is_header === true) return true;
   if (Array.isArray(acc?.children) && acc.children.length > 0) return true;
   if (acc?.code && HEADER_ACCOUNT_CODES.has(String(acc.code))) return true;
