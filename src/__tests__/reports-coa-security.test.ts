@@ -1,5 +1,6 @@
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+import type { NextRequest } from 'next/server';
 import { HEADER_ACCOUNT_CODES, isHeaderAccount, isCashOrBankCode } from '@/lib/account-resolve';
 import { GET as diagnosticsGET } from '@/app/api/diagnostics/route';
 import { GET as cleanupGET } from '@/app/api/auth/cleanup-inactive/route';
@@ -22,7 +23,7 @@ describe('Diagnostics is no longer public', () => {
     const res = await diagnosticsGET({
       headers: { get: () => null },
       cookies: { get: () => undefined },
-    } as any);
+    } as unknown as NextRequest);
     expect(res.status).toBe(401);
   });
 });
@@ -38,7 +39,7 @@ describe('cleanup-inactive refuses an unset secret', () => {
     delete process.env.CRON_SECRET;
     const res = await cleanupGET({
       headers: { get: (k: string) => (k === 'x-cron-secret' ? 'anything' : null) },
-    } as any);
+    } as unknown as NextRequest);
     expect(res.status).toBe(401);
     const json = await res.json();
     expect(json.message).toMatch(/CRON_SECRET|غير مصرح/);
@@ -48,7 +49,7 @@ describe('cleanup-inactive refuses an unset secret', () => {
     process.env.CRON_SECRET = 'expected-secret-value-32chars!!!!';
     const res = await cleanupGET({
       headers: { get: (k: string) => (k === 'x-cron-secret' ? 'wrong-secret-value-32chars!!!!!!' : null) },
-    } as any);
+    } as unknown as NextRequest);
     expect(res.status).toBe(401);
   });
 });

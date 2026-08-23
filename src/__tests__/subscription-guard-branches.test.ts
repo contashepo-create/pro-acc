@@ -1,12 +1,19 @@
-let subscription: any = null;
-const db = { from: jest.fn(() => { const api: any = { select: () => api, eq: () => api, order: () => api, limit: () => api, maybeSingle: async () => ({ data: subscription, error: null }) }; return api; }) };
+type SubRow = {
+  status: string;
+  end_date: string | null;
+  plan_code: string | null;
+  subscription_plans: { code: string | null; name: string | null; features_modules: Record<string, unknown> | string | null } | null;
+};
+let subscription: SubRow | null = null;
+const db = { from: jest.fn(() => { const api: TestBuilder = { select: () => api, eq: () => api, order: () => api, limit: () => api, maybeSingle: async () => ({ data: subscription, error: null }) }; return api; }) };
+import type { TestBuilder } from './mocks';
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
 
 import { getSubscriptionAccess, assertSubscriptionAccess, isSubscriptionReadOnlyMethod } from '@/lib/subscription-guard';
 
 const future = () => { const d = new Date(); d.setDate(d.getDate() + 10); return d.toISOString().slice(0, 10); };
 const past = () => { const d = new Date(); d.setDate(d.getDate() - 10); return d.toISOString().slice(0, 10); };
-const sub = (status: string, end_date: string | null = future(), features: any = { invoices: true }) => ({ status, end_date, plan_code: 'fallback', subscription_plans: { code: 'pro', name: 'Pro', features_modules: features } });
+const sub = (status: string, end_date: string | null = future(), features: Record<string, unknown> | string | null = { invoices: true }): SubRow => ({ status, end_date, plan_code: 'fallback', subscription_plans: { code: 'pro', name: 'Pro', features_modules: features } });
 
 beforeEach(() => { jest.clearAllMocks(); subscription = null; });
 

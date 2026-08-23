@@ -33,13 +33,14 @@ jest.mock('@/lib/rate-limit', () => ({
 
 import { POST as verifyPOST } from '@/app/api/auth/verify-email/route';
 import { POST as resendPOST } from '@/app/api/auth/resend-verification/route';
+import type { NextRequest } from 'next/server';
 
-function req(body: any) {
+function req(body: Record<string, unknown>) {
   return {
     json: async () => body,
     headers: { get: () => null },
     nextUrl: { origin: 'http://localhost' },
-  } as any;
+  } as unknown as NextRequest;
 }
 
 describe('verify-email — one-time RPC boundary', () => {
@@ -86,10 +87,10 @@ describe('resend-verification', () => {
     expect(j.data.message).toContain('إذا كان البريد الإلكتروني مسجلاً');
 
     const update = findOp('users', 'update')!;
-    const data = update.args[0] as any;
+    const data = update.args[0] as Record<string, unknown>;
     // Fresh 256-bit token (64 hex) + 24h expiry
-    expect(data.email_verification_token).toMatch(/^[0-9a-f]{64}$/);
-    const exp = new Date(data.email_verification_expires).getTime();
+    expect(String(data.email_verification_token)).toMatch(/^[0-9a-f]{64}$/);
+    const exp = new Date(String(data.email_verification_expires)).getTime();
     expect(exp).toBeGreaterThan(Date.now());
     expect(exp).toBeLessThan(Date.now() + 2 * 24 * 3600 * 1000);
   });

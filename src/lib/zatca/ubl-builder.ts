@@ -18,7 +18,7 @@ interface UBLInvoiceItem {
   total: number;
 }
 
-interface UBLInvoiceData {
+export interface UBLInvoiceData {
   /** Invoice UUID */
   uuid: string;
   /** Invoice number */

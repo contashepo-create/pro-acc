@@ -5,10 +5,11 @@
  * (anti-XSS/injection), and hash generation.
  */
 
+import type { UBLInvoiceData } from '@/lib/zatca/ubl-builder';
 import { generateUBLInvoice, generateInvoiceHash } from '@/lib/zatca/ubl-builder';
 
 /* ── helpers ── */
-function validInvoiceData(overrides: Record<string, any> = {}) {
+function validInvoiceData(overrides: Record<string, unknown> = {}): UBLInvoiceData {
   return {
     uuid: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
     number: 1,
@@ -155,8 +156,8 @@ describe('generateUBLInvoice', () => {
 
   test('defaults to SA country when not specified', () => {
     const data = validInvoiceData();
-    data.seller.address = {} as any;
-    data.buyer.address = {} as any;
+    data.seller.address = {};
+    data.buyer.address = {};
     const xml = generateUBLInvoice(data);
     expect(xml).toContain('<cbc:IdentificationCode>SA</cbc:IdentificationCode>');
   });
