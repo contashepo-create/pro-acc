@@ -79,7 +79,6 @@ export default function NewJournalPage() {
         })
         .catch(() => toast.error('تعذر تحميل القيد للتعديل'));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const updateLine = (i: number, field: string, value: any) => {
