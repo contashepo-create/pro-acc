@@ -7,18 +7,20 @@ import {
   resolveInvoiceTitle 
 } from '@/lib/invoice-templates';
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
   let insertCounter = 0;
 
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: { kind?: string; payload?: any } = {};
-    const call: any = { table, ops, mut };
+    const mut: { kind?: string; payload?: Row | Row[] } = {};
+    const call = { table, ops, mut };
     calls.push(call);
 
     const applyFilters = () =>
@@ -26,42 +28,44 @@ function makeDb(db: Record<string, Row[]>) {
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
           if (o.op === 'neq') return r[o.col!] !== o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
-          if (o.op === 'gte') return r[o.col!] >= o.val;
-          if (o.op === 'lte') return r[o.col!] <= o.val;
-          if (o.op === 'lt') return r[o.col!] < o.val;
+          if (o.op === 'gte') return (r[o.col!] as string) >= (o.val as string);
+          if (o.op === 'lte') return (r[o.col!] as string) <= (o.val as string);
+          if (o.op === 'lt') return (r[o.col!] as string) < (o.val as string);
           return true;
         })
       );
 
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
-      lt: (col: string, val: any) => { ops.push({ op: 'lt', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
+      lt: (col: string, val: unknown) => { ops.push({ op: 'lt', col, val }); return api; },
       order: () => api,
       limit: () => api,
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      insert: (payload: Row | Row[]) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
       single: async () => {
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) =>
-        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
+      then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+        onF?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+        onR?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: applyFilters(), error: null }).then(onF ?? undefined, onR ?? undefined),
     };
     return api;
   };
 
-  const rpcCalls: Array<{ name: string; params: any }> = [];
-  const rpc = async (name: string, params: any) => {
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
+  const rpc = async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
     rpcCalls.push({ name, params });
     if (name === 'get_equity_changes_summary') return {
       data: { periodRevenue: 50000, periodExpenses: 30000 }, error: null,
@@ -126,7 +130,7 @@ function authedRequest(qs = '') {
     url: `http://localhost/api/test${qs}`,
     headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
-  } as any;
+  } as unknown as NextRequest;
 }
 
 describe('Invoice Templates & ZATCA classification logic', () => {

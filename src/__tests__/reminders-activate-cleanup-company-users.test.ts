@@ -17,21 +17,28 @@ jest.mock('@/lib/messaging', () => ({
   TEMPLATES: { invoice_overdue_ar: { body: 'مرحباً {customer_name}، المبلغ {amount}' } },
 }));
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
     const rows = () =>
       (db[table] || []).filter((r) =>
         ops.every((o) => {
-          const get = (col: string) => col.split('.').reduce((acc, k) => (acc == null ? acc : (acc as any)[k]), r);
+          const get = (col: string): unknown => {
+            let cur: unknown = r;
+            for (const k of col.split('.')) {
+              if (cur == null) break;
+              cur = (cur as Record<string, unknown>)[k];
+            }
+            return cur;
+          };
           if (o.op === 'eq') return get(o.col!) === o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(get(o.col!));
+          if (o.op === 'in') return (o.val as unknown[]).includes(get(o.col!));
           if (o.op === 'lt') return String(get(o.col!)) < String(o.val);
           if (o.op === 'gte') return String(get(o.col!)) >= String(o.val);
           if (o.op === 'lte') return String(get(o.col!)) <= String(o.val);
@@ -39,21 +46,23 @@ function makeDb(db: Record<string, Row[]>) {
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      ilike: (col: string, val: any) => { ops.push({ op: 'ilike', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      ilike: (col: string, val: unknown) => { ops.push({ op: 'ilike', col, val }); return api; },
       order: () => api, limit: () => api, range: () => api, is: () => api, neq: () => api,
-      or: () => api, lt: (col: string, val: any) => { ops.push({ op: 'lt', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
-      insert: (payload: any) => { db[table] = [...(db[table] || []), payload]; return api; },
+      or: () => api, lt: (col: string, val: unknown) => { ops.push({ op: 'lt', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
+      insert: (payload: Row | Row[]) => { db[table] = [...(db[table] || []), ...(Array.isArray(payload) ? payload : [payload])]; return api; },
       update: () => api, delete: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
@@ -73,15 +82,17 @@ import { GET as compUsersGET } from '@/app/api/company/users/route';
 import { GET as compUserGET, PUT as compUserPUT } from '@/app/api/company/users/[id]/route';
 import { POST as resetPOST, DELETE as resetDELETE } from '@/app/api/company/reset/route';
 import { resetRateLimits } from '@/lib/memory-rate-limit';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
 const C1 = 'company-1';
 const U1 = '00000000-0000-4000-8000-00000000d0d1';
 const U2 = '00000000-0000-4000-8000-00000000d0e1';
 
-function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: any, extraHeaders: Record<string, string> = {}) {
+function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: Row, extraHeaders: Record<string, string> = {}) {
   const token = createToken('u1', role, 0);
   return { url, method, nextUrl: new URL(url), headers: { get: (k: string) => k === 'authorization' ? `Bearer ${token}` : (extraHeaders[k] ?? null) },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 
 function baseDb() {
@@ -98,7 +109,6 @@ beforeEach(() => { resetRateLimits(); sendOverdueMock.mockReset(); sendSingleMoc
 
 describe('reminders GET', () => {
   test('returns overdue, upcoming, and recent reminders', async () => {
-    const today = new Date().toISOString().split('T')[0];
     mockDb = makeDb({ ...baseDb(), invoices: [
       { id: 'i1', company_id: C1, number: 1, total: 100, due_date: new Date(Date.now() - 86400000).toISOString().split('T')[0], status: 'unpaid', contacts: { name: 'عميل', phone: '05', email: 'c@e.com' } },
     ], reminder_log: [{ id: 'r1', company_id: C1, sent_at: '2026-01-01' }] });
@@ -190,7 +200,7 @@ describe('auth/cleanup-inactive', () => {
   function cronReq(method = 'GET', secret?: string) {
     return { url: 'http://localhost/x', method, nextUrl: new URL('http://localhost/x'),
       headers: { get: (k: string) => k === 'x-cron-secret' ? (secret ?? null) : (k === 'authorization' ? null : null) },
-      cookies: { get: () => undefined }, json: async () => undefined } as any;
+      cookies: { get: () => undefined }, json: async () => undefined } as unknown as NextRequest;
   }
 
   test('GET deactivates expired companies when authorized', async () => {
