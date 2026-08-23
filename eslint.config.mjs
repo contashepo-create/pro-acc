@@ -29,6 +29,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated coverage output (lcov HTML/JS) is not project source:
+    "coverage/**",
   ]),
 ]);
 
