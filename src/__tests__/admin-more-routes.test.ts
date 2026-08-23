@@ -7,12 +7,12 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 process.env.ADMIN_TOKEN_SECRET = 'test-admin-secret-key-for-unit-tests-32chars!';
 import { createAdminToken, hashPassword } from '@/lib/auth';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error?: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
@@ -23,17 +23,19 @@ function makeDb(db: Record<string, Row[]>) {
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
       in: () => api, order: () => api, limit: () => api, range: () => api, is: () => api, neq: () => api,
       or: () => api, lt: () => api, gte: () => api, lte: () => api,
-      insert: (payload: any) => { db[table] = [...(db[table] || []), payload]; return api; },
+      insert: (payload: Row | Row[]) => { db[table] = [...(db[table] || []), ...(Array.isArray(payload) ? payload : [payload])]; return api; },
       update: () => api, delete: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
@@ -47,6 +49,8 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET as pmGET, POST as pmPOST, PUT as pmPUT, DELETE as pmDELETE } from '@/app/api/admin/payment-methods/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { PUT as settingsPUT, DELETE as settingsDELETE } from '@/app/api/admin/app-settings/[key]/route';
 import { PUT as planPUT, DELETE as planDELETE } from '@/app/api/admin/subscription-plans/[id]/route';
 
@@ -54,11 +58,11 @@ const A1 = '00000000-0000-4000-8000-0000000000a1';
 const PID = '00000000-0000-4000-8000-0000000000b1';
 let masterHash = '';
 
-function adminReq(method = 'GET', url = 'http://localhost/x', body?: any, master?: string) {
+function adminReq(method = 'GET', url = 'http://localhost/x', body?: Row, master?: string) {
   const token = createAdminToken(A1, 0);
   return { url, method, nextUrl: new URL(url), headers: { get: (k: string) => k === 'x-master-password' ? (master ?? null) : null },
     cookies: { get: (name: string) => name === 'admin_token' ? { value: token } : undefined },
-    json: async () => body, text: async () => JSON.stringify(body) } as any;
+    json: async () => body, text: async () => JSON.stringify(body) } as unknown as NextRequest;
 }
 
 function baseDb() {

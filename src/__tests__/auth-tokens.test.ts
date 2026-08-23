@@ -17,9 +17,10 @@ process.env.ADMIN_TOKEN_SECRET = 'test-admin-separate-secret-32chars!';
 
 import { getTokenSecret, createToken, verifyToken, createAdminToken, verifyAdminToken as verifyAdminJwt, extractToken } from '@/lib/auth';
 import { createHash, randomBytes, createHmac } from 'crypto';
+import type { RequestLike } from '@/lib/types';
 
 // Re-export for backwards compat with existing assertions below
-const verifyAdminToken = async (req: any) => {
+const verifyAdminToken = async (req: { cookies?: { get?: (k: string) => { value: string } | undefined } }) => {
   const token = req?.cookies?.get?.('admin_token')?.value;
   if (!token) return null;
   return verifyAdminJwt(token);
@@ -35,12 +36,12 @@ function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
 }
 
-function makeAdminRequest(token?: string) {
+function makeAdminRequest(token?: string): { cookies: { get: (k: string) => { value: string } | undefined } } {
   return {
     cookies: {
       get: (k: string) => (k === 'admin_token' && token ? { value: token } : undefined),
     },
-  } as any;
+  };
 }
 
 describe('Auth JWT', () => {
@@ -73,10 +74,10 @@ describe('Auth JWT', () => {
     nowSpy.mockRestore();
   });
   test('extracts bearer/cookie tokens and handles missing cookie APIs', () => {
-    expect(extractToken({ headers: new Headers({ authorization: 'Bearer abc' }) } as any)).toBe('abc');
-    expect(extractToken({ headers: new Headers(), cookies: { get: () => ({ value: 'cookie' }) } } as any)).toBe('cookie');
-    expect(extractToken({ headers: new Headers(), cookies: { get: () => undefined } } as any)).toBeNull();
-    expect(extractToken({ headers: new Headers() } as any)).toBeNull();
+    expect(extractToken({ headers: new Headers({ authorization: 'Bearer abc' }) } as unknown as RequestLike)).toBe('abc');
+    expect(extractToken({ headers: new Headers(), cookies: { get: () => ({ value: 'cookie' }) } } as unknown as RequestLike)).toBe('cookie');
+    expect(extractToken({ headers: new Headers(), cookies: { get: () => undefined } } as unknown as RequestLike)).toBeNull();
+    expect(extractToken({ headers: new Headers() } as unknown as RequestLike)).toBeNull();
   });
 
   test('creates a well-formed 3-part token and verifies round-trip', () => {
@@ -176,20 +177,20 @@ describe('token_version invalidation semantics', () => {
 describe('Admin token (superadmin JWT)', () => {
   test('production fails closed when the separate admin secret is absent', () => {
     const saved = process.env.ADMIN_TOKEN_SECRET; const savedEnv = process.env.NODE_ENV;
-    delete process.env.ADMIN_TOKEN_SECRET; (process.env as any).NODE_ENV = 'production';
+    delete process.env.ADMIN_TOKEN_SECRET; Reflect.set(process.env, 'NODE_ENV', 'production');
     expect(() => createAdminToken('admin', 0)).toThrow('ADMIN_TOKEN_SECRET');
-    process.env.ADMIN_TOKEN_SECRET = saved; (process.env as any).NODE_ENV = savedEnv;
+    process.env.ADMIN_TOKEN_SECRET = saved; Reflect.set(process.env, 'NODE_ENV', savedEnv);
   });
 
   test('development fallback signs admin JWTs with TOKEN_SECRET when admin secret is absent', () => {
     const saved = process.env.ADMIN_TOKEN_SECRET;
     const savedEnv = process.env.NODE_ENV;
     delete process.env.ADMIN_TOKEN_SECRET;
-    (process.env as any).NODE_ENV = 'test';
+    Reflect.set(process.env, 'NODE_ENV', 'test');
     const token = createAdminToken('fallback-admin', 0);
     expect(verifyToken(token)?.role).toBe('superadmin');
     process.env.ADMIN_TOKEN_SECRET = saved;
-    (process.env as any).NODE_ENV = savedEnv;
+    Reflect.set(process.env, 'NODE_ENV', savedEnv);
   });
 
   test('accepts a valid superadmin admin_token (signed with ADMIN_TOKEN_SECRET)', () => {

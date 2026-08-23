@@ -6,29 +6,30 @@ const insertJournalHeader = jest.fn();
 const insertJournalLines = jest.fn();
 const createDefaultChartOfAccounts = jest.fn();
 
-let tableRows: Record<string, any[]> = {};
+let tableRows: Record<string, Row[]> = {};
+type Row = Record<string, unknown>;
 let tableErrors: Record<string, Error> = {};
 let insertErrors: Record<string, Error> = {};
-const operations: Array<{ table: string; operation: string; payload?: any; filters: any[] }> = [];
+const operations: Array<{ table: string; operation: string; payload?: Row; filters: Array<[string, string, unknown]> }> = [];
 
 function makeQuery(table: string) {
-  const filters: any[] = [];
+  const filters: Array<[string, string, unknown]> = [];
   let operation = 'select';
-  let payload: any;
+  let payload: Row | undefined;
   const matching = () => (tableRows[table] || []).filter((row) => filters.every(([kind, col, value]) =>
     kind !== 'eq' || row[col] === value));
-  const api: any = {
+  const api: TestBuilder = {
     select: () => api,
     eq: (col: string, value: unknown) => { filters.push(['eq', col, value]); return api; },
     order: () => api,
     limit: () => api,
-    insert: (value: any) => { operation = 'insert'; payload = value; return api; },
-    update: (value: any) => { operation = 'update'; payload = value; return api; },
+    insert: (value: Row) => { operation = 'insert'; payload = value; return api; },
+    update: (value: Row) => { operation = 'update'; payload = value; return api; },
     delete: () => { operation = 'delete'; return api; },
     maybeSingle: async () => {
       operations.push({ table, operation, payload, filters: [...filters] });
       if (operation === 'insert') {
-        const row = { id: 'new-account', ...payload };
+        const row = { id: 'new-account', ...(payload ?? {}) };
         tableRows[table] = [...(tableRows[table] || []), row];
         return { data: row, error: null };
       }
@@ -44,15 +45,19 @@ function makeQuery(table: string) {
       }
       return { data: matching()[0] || null, error: null };
     },
-    then: (resolve: any, reject: any) => {
+    then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+      resolve?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+      reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+    ) => {
       operations.push({ table, operation, payload, filters: [...filters] });
       if (operation === 'delete') tableRows[table] = (tableRows[table] || []).filter((row) => !matching().includes(row));
-      return Promise.resolve({ data: matching(), error: null }).then(resolve, reject);
+      return Promise.resolve({ data: matching(), error: null }).then(resolve ?? undefined, reject ?? undefined);
     },
   };
   return api;
 }
 
+import type { TestBuilder } from './mocks';
 const db = { from: jest.fn((table: string) => makeQuery(table)) };
 
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
