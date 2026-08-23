@@ -1,12 +1,14 @@
 import { ensureDefaultCashSafe, createDefaultChartOfAccounts, DEFAULT_CHART_OF_ACCOUNTS } from '@/lib/default-accounts';
 import { wrapSupabase } from './mocks';
+import type { TestBuilder } from './mocks';
+type Row = Record<string, unknown>;
 
-function makeEnsureDb(opts: { existing?: any; cash?: any; created?: any }) {
+function makeEnsureDb(opts: { existing?: Row; cash?: Row; created?: Row | null }) {
   return wrapSupabase({ from: (table: string) => {
-    let mode = 'select'; let insertPayload: any;
-    const api: any = {
+    let mode = 'select'; let insertPayload: Row | Row[] | undefined;
+    const api: TestBuilder = {
       select: () => api, eq: () => api, limit: () => api,
-      insert: (payload: any) => { mode = 'insert'; insertPayload = payload; return api; },
+      insert: (payload: Row | Row[]) => { mode = 'insert'; insertPayload = payload; return api; },
       maybeSingle: async () => ({ data: table === 'banks_safes' ? opts.existing || null : opts.cash || null, error: null }),
       single: async () => ({ data: mode === 'insert' ? opts.created || null : null, error: null }),
     };
@@ -28,27 +30,30 @@ describe('default cash safe branches', () => {
 
 describe('chart bootstrap compatibility/error branches', () => {
   test('retries inserts without is_header on legacy schemas', async () => {
-    const stored: any[] = [];
+    const stored: Row[] = [];
     let insertCount = 0;
     const db = wrapSupabase({ from: (table: string) => {
-      let mode = 'select'; let payload: any; const filters: Record<string, any> = {};
-      const api: any = {
+      let mode = 'select'; let payload: Row | Row[] | undefined; const filters: Record<string, unknown> = {};
+      const api: TestBuilder = {
         select: () => api,
-        eq: (field: string, value: any) => { filters[field] = value; return api; }, limit: () => api,
+        eq: (field: string, value: unknown) => { filters[field] = value; return api; }, limit: () => api,
         maybeSingle: async () => ({ data: table === 'accounts' ? stored.find((r) => r.code === filters.code) || null : null, error: null }),
-        insert: (value: any) => { mode = 'insert'; payload = value; return api; },
+        insert: (value: Row | Row[]) => { mode = 'insert'; payload = value; return api; },
         update: () => { mode = 'update'; return api; },
         single: async () => {
           if (table === 'accounts' && mode === 'insert') {
             insertCount++;
             if (insertCount === 1) return { data: null, error: { code: '42703' } };
             if (insertCount === 3) return { data: null, error: { message: 'column is_header missing' } };
-            const row = { ...payload, id: `a${insertCount}` }; stored.push(row); return { data: row, error: null };
+            const row = { ...(payload as Row), id: `a${insertCount}` }; stored.push(row); return { data: row, error: null };
           }
           if (table === 'banks_safes' && mode === 'insert') return { data: { id: 'safe' }, error: null };
           return { data: null, error: null };
         },
-        then: (resolve: any, reject: any) => Promise.resolve({ data: null, error: null }).then(resolve, reject),
+        then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+          resolve?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+          reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+        ) => Promise.resolve({ data: null, error: null }).then(resolve ?? undefined, reject ?? undefined),
       };
       return api;
     } });
@@ -60,7 +65,7 @@ describe('chart bootstrap compatibility/error branches', () => {
     const db = wrapSupabase({ from: (table: string) => {
       if (table === 'banks_safes') throw new Error('safe');
       let code = '';
-      const api: any = {
+      const api: TestBuilder = {
         select: () => api,
         eq: (field: string, value: string) => { if (field === 'code') code = value; return api; },
         maybeSingle: async () => ({ data: { id: `existing-${code}` }, error: null }),
@@ -74,7 +79,7 @@ describe('chart bootstrap compatibility/error branches', () => {
   test('continues after account lookup/parent/safe failures', async () => {
     let calls = 0;
     const db = wrapSupabase({ from: (_table: string) => {
-      const api: any = {
+      const api: TestBuilder = {
         select: () => api, eq: () => api, limit: () => api,
         maybeSingle: async () => { calls++; if (calls === 1) throw new Error('lookup'); return { data: null, error: null }; },
         insert: () => api, update: () => { throw new Error('update'); },

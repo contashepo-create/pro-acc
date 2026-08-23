@@ -70,7 +70,8 @@ export interface TestBuilder {
   range?(from: number, to: number): TestBuilder;
   maybeSingle?(): PromiseLike<TestQueryResult>;
   single?(): PromiseLike<TestQueryResult>;
-  then<TResult1 = TestQueryResult, TResult2 = never>(
+  /** Optional: minimal builders used in branch tests are never awaited directly. */
+  then?<TResult1 = TestQueryResult, TResult2 = never>(
     onfulfilled?: ((value: TestQueryResult) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
   ): Promise<TResult1 | TResult2>;
