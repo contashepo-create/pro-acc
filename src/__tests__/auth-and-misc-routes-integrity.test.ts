@@ -5,12 +5,12 @@
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error?: unknown } | null>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
@@ -18,23 +18,25 @@ function makeDb(db: Record<string, Row[]>) {
       (db[table] || []).filter((r) =>
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'neq') return r[o.col!] !== o.val;
           if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
       gte: () => api, lte: () => api, or: () => api, order: () => api, limit: () => api, range: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
@@ -48,6 +50,8 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET as csrfGET } from '@/app/api/csrf-token/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { GET as meGET } from '@/app/api/auth/me/route';
 import { GET as auditGET } from '@/app/api/financial-audit/route';
 import { GET as anomaliesGET } from '@/app/api/reports/anomalies/route';
@@ -57,7 +61,7 @@ const C1 = 'company-1';
 function req(role = 'admin', url = 'http://localhost/x') {
   const token = createToken('u1', role, 0);
   return { url, method: 'GET', headers: { get: (k: string) => k === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined } } as any;
+    cookies: { get: () => undefined } } as unknown as NextRequest;
 }
 
 function baseDb() {
@@ -90,7 +94,7 @@ describe('auth/me', () => {
   });
 
   test('returns 401 when unauthenticated', async () => {
-    const noAuth = { url: 'http://localhost/x', method: 'GET', headers: { get: () => null }, cookies: { get: () => undefined } } as any;
+    const noAuth = { url: 'http://localhost/x', method: 'GET', headers: { get: () => null }, cookies: { get: () => undefined } } as unknown as NextRequest;
     const res = await meGET(noAuth);
     expect(res.status).toBe(401);
   });
