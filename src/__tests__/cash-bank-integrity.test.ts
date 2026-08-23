@@ -9,40 +9,43 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[]; mut?: string }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
-  const rpcResults = new Map<string, { data: any; error: any }>();
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
+  const rpcResults = new Map<string, { data: unknown; error: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = []; const call = { table, ops, mut: undefined as string | undefined }; calls.push(call);
     const rows = () => (db[table] || []).filter((row) => ops.every((op) => {
       if (op.op === 'eq') return row[op.col!] === op.val;
-      if (op.op === 'in') return op.val.includes(row[op.col!]);
+      if (op.op === 'in') return (op.val as unknown[]).includes(row[op.col!]);
       if (op.op === 'gte') return String(row[op.col!]) >= String(op.val);
       if (op.op === 'neq') return row[op.col!] !== op.val;
       return true;
     }));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any[]) => { ops.push({ op: 'in', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
       is: () => api, or: () => api, lte: () => api, order: () => api, range: () => api, limit: () => api,
       insert: () => { call.mut = 'insert'; return api; },
       update: () => { call.mut = 'update'; return api; },
       delete: () => { call.mut = 'delete'; return api; },
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
   return {
     from, calls, rpcCalls, rpcResults,
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
       rpcCalls.push({ name, params });
       return rpcResults.get(name) || { data: { id: RESULT }, error: null };
     },
@@ -53,6 +56,8 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { POST as cashPOST } from '@/app/api/cash/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { GET as cashGET, PUT as cashPUT, DELETE as cashDELETE } from '@/app/api/cash/[id]/route';
 import { PUT as bankPUT } from '@/app/api/banks/[id]/route';
 import { POST as reconciliationPOST } from '@/app/api/bank-reconciliation/route';
@@ -89,11 +94,11 @@ function baseDb() {
     ],
   } as Record<string, Row[]>;
 }
-function request(body?: any, method = 'POST') {
+function request(body?: Row, method = 'POST') {
   const token = createToken(USER, 'admin');
   return { url: 'http://localhost/api/test', method,
     headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);

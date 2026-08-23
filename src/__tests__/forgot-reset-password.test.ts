@@ -145,10 +145,11 @@ describe('reset-password — atomic token consumption', () => {
     const res = await resetPOST(req({ token: raw, password: 'NewStr0ng!Pass' }));
     expect(res.status).toBe(200);
     const call = getRpcCalls()[0];
+    const params = call.params as { p_token_hash: string; p_password_hash: string };
     expect(call.name).toBe('consume_password_reset_token');
-    expect(call.params.p_token_hash).toBe(createHash('sha256').update(raw).digest('hex'));
-    expect(call.params.p_token_hash).not.toBe(raw);
-    expect(call.params.p_password_hash).toContain(':');
+    expect(params.p_token_hash).toBe(createHash('sha256').update(raw).digest('hex'));
+    expect(params.p_token_hash).not.toBe(raw);
+    expect(params.p_password_hash).toContain(':');
     expect(findOp('users', 'update')).toBeNull();
     expect(findOp('password_reset_tokens', 'update')).toBeNull();
   });

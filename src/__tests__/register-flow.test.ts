@@ -134,15 +134,19 @@ describe('register — atomic company bootstrap', () => {
     expect(res.status).toBe(201);
     expect(getRpcCalls()).toHaveLength(1);
     const call = getRpcCalls()[0];
+    const params = call.params as {
+      p_company_name: string; p_email: string; p_user_name: string;
+      p_password_hash: string; p_verification_hash: string; p_accounts: unknown[];
+    };
     expect(call.name).toBe('register_company');
-    expect(call.params.p_company_name).toBe(validBody.companyName);
-    expect(call.params.p_email).toBe(validBody.email.toLowerCase());
-    expect(call.params.p_user_name).toBe(validBody.name);
-    expect(call.params.p_password_hash).toContain(':');
-    expect(call.params.p_password_hash).not.toContain(validBody.password);
-    expect(call.params.p_verification_hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(Array.isArray(call.params.p_accounts)).toBe(true);
-    expect(call.params.p_accounts.length).toBeGreaterThan(0);
+    expect(params.p_company_name).toBe(validBody.companyName);
+    expect(params.p_email).toBe(validBody.email.toLowerCase());
+    expect(params.p_user_name).toBe(validBody.name);
+    expect(params.p_password_hash).toContain(':');
+    expect(params.p_password_hash).not.toContain(validBody.password);
+    expect(params.p_verification_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(Array.isArray(params.p_accounts)).toBe(true);
+    expect(params.p_accounts.length).toBeGreaterThan(0);
 
     expect(findOp('companies', 'insert')).toBeNull();
     expect(findOp('users', 'insert')).toBeNull();

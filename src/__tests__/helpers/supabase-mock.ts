@@ -14,17 +14,17 @@
 
 interface RecordedCall {
   table: string;
-  ops: { op: string; args: any[] }[];
+  ops: { op: string; args: unknown[] }[];
 }
 
 type TerminalOp = 'single' | 'maybeSingle' | 'insert' | 'update' | 'upsert' | 'delete' | 'select';
 
-const results = new Map<string, any[]>();
-const rpcResults = new Map<string, any[]>();
+const results = new Map<string, unknown[]>();
+const rpcResults = new Map<string, unknown[]>();
 let calls: RecordedCall[] = [];
-let rpcCalls: Array<{ name: string; params: any }> = [];
+let rpcCalls: Array<{ name: string; params: unknown }> = [];
 
-function terminalOp(ops: { op: string; args: any[] }[]): TerminalOp {
+function terminalOp(ops: { op: string; args: unknown[] }[]): TerminalOp {
   const terminals = ['single', 'maybeSingle', 'insert', 'update', 'upsert', 'delete'];
   // Use the LAST terminal op in the chain: e.g. `.insert(...).select(...).single()`
   // ends with `.single()`, which is what is awaited and shapes the result.
@@ -38,31 +38,33 @@ function terminalOp(ops: { op: string; args: any[] }[]): TerminalOp {
 }
 
 export const mockClient = {
-  async rpc(name: string, params: any) {
+  async rpc(name: string, params: unknown) {
     rpcCalls.push({ name, params });
     const queue = rpcResults.get(name);
     if (queue && queue.length > 0) {
       const value = queue.shift();
-      return value && typeof value === 'object' && ('data' in value || 'error' in value)
-        ? { data: value.data ?? null, error: value.error ?? null }
-        : { data: value, error: null };
+      if (value && typeof value === 'object') {
+        const obj = value as { data?: unknown; error?: unknown };
+        if ('data' in value || 'error' in value) return { data: obj.data ?? null, error: obj.error ?? null };
+      }
+      return { data: value, error: null };
     }
     return { data: null, error: { message: `missing mock RPC result for ${name}` } };
   },
 
   from(table: string) {
-    const ops: { op: string; args: any[] }[] = [];
+    const ops: { op: string; args: unknown[] }[] = [];
     const builder = new Proxy(
       {},
       {
-        get(_target, prop) {
+        get(_target: object, prop: string | symbol) {
           if (prop === 'then') {
-            return (resolve: (value: any) => void) => {
+            return (resolve: (value: unknown) => void) => {
               resolve(mockClient.__resolve(table, ops));
             };
           }
-          return (...args: any[]) => {
-            ops.push({ op: prop as string, args });
+          return (...args: unknown[]) => {
+            ops.push({ op: String(prop), args });
             return builder;
           };
         },
@@ -71,7 +73,7 @@ export const mockClient = {
     return builder;
   },
 
-  __resolve(table: string, ops: { op: string; args: any[] }[]) {
+  __resolve(table: string, ops: { op: string; args: unknown[] }[]) {
     calls.push({ table, ops: [...ops] });
     const terminal = terminalOp(ops);
     const key = `${table}:${terminal}`;
@@ -134,24 +136,24 @@ export function resetMock() {
 }
 
 /** Configure a single response for a table + terminal op. */
-export function setResult(table: string, op: TerminalOp, value: any) {
+export function setResult(table: string, op: TerminalOp, value: unknown) {
   results.set(`${table}:${op}`, [value]);
 }
 
 /** Configure a queue of responses consumed in order across successive calls. */
-export function setResults(table: string, op: TerminalOp, queue: any[]) {
+export function setResults(table: string, op: TerminalOp, queue: unknown[]) {
   results.set(`${table}:${op}`, [...queue]);
 }
 
-export function setRpcResult(name: string, value: any) {
+export function setRpcResult(name: string, value: unknown) {
   rpcResults.set(name, [value]);
 }
 
-export function setRpcResults(name: string, queue: any[]) {
+export function setRpcResults(name: string, queue: unknown[]) {
   rpcResults.set(name, [...queue]);
 }
 
-export function getRpcCalls(): Array<{ name: string; params: any }> {
+export function getRpcCalls(): Array<{ name: string; params: unknown }> {
   return rpcCalls;
 }
 
@@ -160,7 +162,7 @@ export function getCalls(): RecordedCall[] {
 }
 
 /** Find the first op on a table (e.g. the update/insert object in args[0]). */
-export function findOp(table: string, op: string): { op: string; args: any[] } | null {
+export function findOp(table: string, op: string): { op: string; args: unknown[] } | null {
   for (const call of calls) {
     for (const o of call.ops) {
       if (o.op === op && call.table === table) return o;
