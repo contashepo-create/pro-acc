@@ -1,43 +1,52 @@
-let rows: Record<string, any[]> = {};
+type Row = Record<string, unknown>;
+let rows: Record<string, Row[]> = {};
 import { wrapSupabase } from './mocks';
+import type { TestBuilder } from './mocks';
+import type { SupabaseLike, SupabaseTableBuilder } from '@/lib/types';
 const rpc = jest.fn();
 let failUpdateTable: string | null = null;
 let failInsertTable: string | null = null;
 let nullTables = new Set<string>();
 
 function query(table: string) {
-  const filters: Array<[string, string, any]> = [];
-  let mode = 'select'; let payload: any;
-  const matches = () => (rows[table] || []).filter((row) => filters.every(([op, col, value]) => op === 'eq' ? row[col] === value : op === 'neq' ? row[col] !== value : op === 'in' ? value.includes(row[col]) : true));
-  const api: any = {
+  const filters: Array<[string, string, unknown]> = [];
+  let mode = 'select'; let payload: Row | Row[] | undefined;
+  const matches = () => (rows[table] || []).filter((row) => filters.every(([op, col, value]) => op === 'eq' ? row[col] === value : op === 'neq' ? row[col] !== value : op === 'in' ? (value as unknown[]).includes(row[col]) : true));
+  const api: TestBuilder = {
     select: () => api,
-    eq: (col: string, val: any) => { filters.push(['eq', col, val]); return api; },
-    neq: (col: string, val: any) => { filters.push(['neq', col, val]); return api; },
-    in: (col: string, val: any[]) => { filters.push(['in', col, val]); return api; },
+    eq: (col: string, val: unknown) => { filters.push(['eq', col, val]); return api; },
+    neq: (col: string, val: unknown) => { filters.push(['neq', col, val]); return api; },
+    in: (col: string, val: unknown) => { filters.push(['in', col, val]); return api; },
     order: () => api,
-    insert: (value: any) => { mode = 'insert'; payload = value; return api; },
-    update: (value: any) => { mode = 'update'; payload = value; return api; },
+    insert: (value: Row | Row[]) => { mode = 'insert'; payload = value; return api; },
+    update: (value: Row) => { mode = 'update'; payload = value; return api; },
     delete: () => { mode = 'delete'; return api; },
     maybeSingle: async () => {
       if (mode === 'update') {
         if (failUpdateTable === table) return { data: null, error: new Error('update') };
-        const target = matches()[0]; if (target) Object.assign(target, payload);
+        const target = matches()[0]; if (target && payload != null) Object.assign(target, payload as Row);
         return { data: target ? { id: target.id } : null, error: null };
       }
       return { data: matches()[0] || null, error: null };
     },
-    then: (resolve: any, reject: any) => {
+    then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+      resolve?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+      reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+    ) => {
       let error: Error | null = null;
       if (mode === 'insert' && failInsertTable === table) error = new Error('insert');
-      else if (mode === 'insert') rows[table] = [...(rows[table] || []), payload];
-      if (mode === 'update') for (const target of matches()) Object.assign(target, payload);
+      else if (mode === 'insert' && payload != null) rows[table] = [...(rows[table] || []), ...(Array.isArray(payload) ? payload : [payload])];
+      if (mode === 'update' && payload != null) for (const target of matches()) Object.assign(target, payload as Row);
       if (mode === 'delete') rows[table] = (rows[table] || []).filter((r) => !matches().includes(r));
-      return Promise.resolve({ data: nullTables.has(table) ? null : matches(), error }).then(resolve, reject);
+      return Promise.resolve({ data: nullTables.has(table) ? null : matches(), error }).then(resolve ?? undefined, reject ?? undefined);
     },
   };
   return api;
 }
-const db = { from: jest.fn((table: string) => query(table)), rpc };
+const db: SupabaseLike = {
+  from: jest.fn((table: string) => query(table)) as unknown as (table: string) => SupabaseTableBuilder,
+  rpc,
+};
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
 
 import {
@@ -75,7 +84,7 @@ describe('voucher helper functions', () => {
     rows.employees = [{ id: 'e1', company_id: 'co', name: 'Mapped Employee' }];
     await hydratePartyNames(db, 'co', fallbackRows, { contacts: true, employees: true });
     expect(fallbackRows[0]).toMatchObject({ contact_name: 'Mapped Client', employee_name: 'Mapped Employee' });
-    const nullDataDb = wrapSupabase({ from: () => { const api: any = { select: () => api, eq: () => api, in: async () => ({ data: null }) }; return api; } });
+    const nullDataDb = wrapSupabase({ from: () => { const api = { select: () => api, eq: () => api, in: async () => ({ data: null }) }; return api; } });
     await expect(hydratePartyNames(nullDataDb, 'co', [{ contact_id: 'x' }], { contacts: true })).resolves.toBeTruthy();
     await expect(hydratePartyNames(nullDataDb, 'co', [{ employee_id: 'x' }], { employees: true })).resolves.toBeTruthy();
   });

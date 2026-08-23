@@ -7,7 +7,7 @@ import { createHmac } from 'crypto';
 import {
   parseBackupUploadBody, checkBackupSignature, checkBackupOwnership,
   validateBackupPayload, BackupValidationError, ALLOWED_BACKUP_TABLES,
-  RESTORE_TABLES,
+  RESTORE_TABLES, BackupPayload,
 } from '@/lib/backup-validation';
 
 process.env.BACKUP_SECRET = randomBytes(32).toString('hex');
@@ -49,7 +49,7 @@ describe('parseBackupUploadBody', () => {
   test('parses a valid body', async () => {
     const payload = makeSigned(validBackup());
     const parsed = await parseBackupUploadBody(bodyRequest(JSON.stringify(payload)));
-    expect((parsed.backupData.metadata as any).company_id).toBe(C1);
+    expect(parsed.backupData.metadata?.company_id).toBe(C1);
     expect(parsed.fileHash.length).toBe(16);
   });
 
@@ -73,7 +73,7 @@ describe('parseBackupUploadBody', () => {
 describe('checkBackupSignature', () => {
   test('accepts the exact signature produced for the content', () => {
     const payload = makeSigned(validBackup());
-    expect(checkBackupSignature(payload.backupData as any, payload.fileHash).ok).toBe(true);
+    expect(checkBackupSignature(payload.backupData as BackupPayload, payload.fileHash).ok).toBe(true);
   });
 
   test('rejects a single-character modification', () => {
@@ -91,7 +91,7 @@ describe('checkBackupOwnership', () => {
 
   test('rejects another or missing company id', () => {
     expect(checkBackupOwnership(validBackup(), C2, 'co@example.com').ok).toBe(false);
-    expect(checkBackupOwnership({ data: {} } as any, C1).ok).toBe(false);
+    expect(checkBackupOwnership({ data: {} }, C1).ok).toBe(false);
   });
 
   test('rejects mismatched email but permits absent optional emails', () => {
@@ -100,7 +100,7 @@ describe('checkBackupOwnership', () => {
     expect(checkBackupOwnership(backup, C1, 'new@example.com').ok).toBe(false);
     expect(checkBackupOwnership(backup, C1, null).ok).toBe(true);
     expect(checkBackupOwnership(backup, C1, '').ok).toBe(true);
-    delete (backup.metadata as any).email;
+    if (backup.metadata) delete (backup.metadata as { email?: string }).email;
     expect(checkBackupOwnership(backup, C1, 'new@example.com').ok).toBe(true);
   });
 });
@@ -114,49 +114,49 @@ describe('validateBackupPayload', () => {
   });
 
   test('rejects an unknown table', () => {
-    const backup = validBackup() as any;
-    backup.data.users = [{ id: ROW_ID, company_id: C1 }];
+    const backup = validBackup() as BackupPayload;
+    backup.data!.users = [{ id: ROW_ID, company_id: C1 }];
     const report = validateBackupPayload(backup, C1);
     expect(report.valid).toBe(false);
     expect(report.issues.some((issue) => issue.code === 'UNKNOWN_TABLE')).toBe(true);
   });
 
   test('rejects a row carrying another company id', () => {
-    const backup = validBackup() as any;
-    backup.data.accounts = [{ id: ROW_ID, company_id: C2 }];
+    const backup = validBackup() as BackupPayload;
+    backup.data!.accounts = [{ id: ROW_ID, company_id: C2 }];
     const report = validateBackupPayload(backup, C1);
     expect(report.valid).toBe(false);
     expect(report.issues.some((issue) => issue.code === 'CROSS_COMPANY')).toBe(true);
   });
 
   test('rejects malformed row ids (injection-shaped input)', () => {
-    const backup = validBackup() as any;
-    backup.data.accounts = [{ id: "x' OR '1'='1", company_id: C1 }];
+    const backup = validBackup() as BackupPayload;
+    backup.data!.accounts = [{ id: "x' OR '1'='1", company_id: C1 }];
     const report = validateBackupPayload(backup, C1);
     expect(report.valid).toBe(false);
     expect(report.issues.some((issue) => issue.code === 'BAD_ID')).toBe(true);
   });
 
   test('rejects rows that are not objects', () => {
-    const backup = validBackup() as any;
-    backup.data.accounts = ['not-an-object'];
+    const backup = validBackup() as BackupPayload;
+    backup.data!.accounts = ['not-an-object'];
     const report = validateBackupPayload(backup, C1);
     expect(report.valid).toBe(false);
   });
 
   test('handles missing data, nonarray tables, and enforces per-table/total caps', () => {
-    expect(validateBackupPayload({ metadata: { company_id: C1 } } as any, C1).valid).toBe(true);
-    const nonarray = validBackup() as any; nonarray.data.accounts = {};
+    expect(validateBackupPayload({ metadata: { company_id: C1 } }, C1).valid).toBe(true);
+    const nonarray = validBackup() as BackupPayload; nonarray.data!.accounts = {};
     expect(validateBackupPayload(nonarray, C1).issues.some((issue) => issue.code === 'NOT_ARRAY')).toBe(true);
-    const backup = validBackup() as any;
-    backup.data.accounts = Array.from({ length: 3 }, (_, i) => ({
+    const backup = validBackup() as BackupPayload;
+    backup.data!.accounts = Array.from({ length: 3 }, (_, i) => ({
       id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`, company_id: C1,
     }));
-    backup.data.invoices = [
+    backup.data!.invoices = [
       { id: '00000000-0000-4000-8000-000000000010', company_id: C1 },
       { id: '00000000-0000-4000-8000-000000000011', company_id: C1 },
     ];
-    backup.data.contacts = [
+    backup.data!.contacts = [
       { id: '00000000-0000-4000-8000-000000000012', company_id: C1 },
       { id: '00000000-0000-4000-8000-000000000013', company_id: C1 },
     ];
