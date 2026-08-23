@@ -24,47 +24,52 @@ jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({
 import { createToken } from '@/lib/auth';
 import { parseReportPagination } from '@/lib/report-validation';
 import { computeWip } from '@/lib/construction';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any; args?: any[] };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown; args?: unknown[] };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
-  const rpcResults = new Map<string, { data: any; error: any }>();
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
+  const rpcResults = new Map<string, { data: unknown; error: unknown }>();
   const from = (table: string) => {
-    const ops: Op[] = []; const mut: any = {}; calls.push({ table, ops, mut });
+    const ops: Op[] = []; const mut: { kind?: string; payload?: Row | Row[] } = {}; calls.push({ table, ops, mut });
     const rows = () => (db[table] || []).filter((row) => ops.every((op) => {
       if (op.op === 'eq') return row[op.col!] === op.val;
-      if (op.op === 'in') return op.val.includes(row[op.col!]);
+      if (op.op === 'in') return (op.val as unknown[]).includes(row[op.col!]);
       if (op.op === 'neq') return row[op.col!] !== op.val;
       if (op.op === 'gte') return String(row[op.col!]) >= String(op.val);
       if (op.op === 'lte') return String(row[op.col!]) <= String(op.val);
       return true;
     }));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
       not: () => api, or: () => api, order: () => api,
-      limit: (...args: any[]) => { ops.push({ op: 'limit', args }); return api; },
-      range: (...args: any[]) => { ops.push({ op: 'range', args }); return api; },
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      limit: (...args: unknown[]) => { ops.push({ op: 'limit', args }); return api; },
+      range: (...args: unknown[]) => { ops.push({ op: 'range', args }); return api; },
+      insert: (payload: Row | Row[]) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
   return {
     from, calls, rpcCalls, rpcResults,
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
       rpcCalls.push({ name, params });
       return rpcResults.get(name) || { data: [], error: null };
     },
@@ -105,7 +110,7 @@ function request(url: string) {
     headers: { get: (key: string) => (key === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
     nextUrl: new URL(url),
-  } as any;
+  } as unknown as NextRequest;
 }
 
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);
@@ -156,13 +161,13 @@ describe('aging report regression', () => {
     const payload = (await body(response)).data;
 
     // AR balance is net of unapplied receipts on account.
-    const oldest = payload.aging.find((row: any) => row.id === 'c-1');
+    const oldest = payload.aging.find((row: Row) => row.id === 'c-1');
     expect(oldest.balance).toBe(750);
     expect(oldest.bucket).toBe('90+');
     // 12 days overdue must land in the first bucket, not merely "not overdue".
-    expect(payload.aging.find((row: any) => row.id === 'c-2').bucket).toBe('0-30');
+    expect(payload.aging.find((row: Row) => row.id === 'c-2').bucket).toBe('0-30');
     // Rows are ordered by exposure so the biggest debtor is actionable first.
-    expect(payload.aging.map((row: any) => row.id)).toEqual(['c-1', 'c-2']);
+    expect(payload.aging.map((row: Row) => row.id)).toEqual(['c-1', 'c-2']);
     // Bucket totals must reconcile to the sum of the per-contact buckets.
     expect(payload.totals['0-30']).toBe(700);
     expect(payload.totals['90+']).toBe(400);

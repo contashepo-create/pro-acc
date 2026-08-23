@@ -19,12 +19,14 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 // store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
 jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
   let insertCounter = 0;
   // Lets a test simulate a database rejecting a write, to prove the route
   // reports the failure instead of answering {updated:true}.
@@ -32,8 +34,8 @@ function makeDb(db: Record<string, Row[]>) {
 
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: { kind?: string; payload?: any } = {};
-    const call: any = { table, ops, mut };
+    const mut: { kind?: string; payload?: Row | Row[] } = {};
+    const call = { table, ops, mut };
     calls.push(call);
 
     const applyFilters = () =>
@@ -41,18 +43,18 @@ function makeDb(db: Record<string, Row[]>) {
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
           if (o.op === 'neq') return r[o.col!] !== o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
           return true;
         })
       );
 
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
       or: () => api,
       gte: () => api,
       lte: () => api,
@@ -60,9 +62,9 @@ function makeDb(db: Record<string, Row[]>) {
       order: () => api,
       limit: () => api,
       range: () => api,
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
-      upsert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      insert: (payload: Row | Row[]) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      upsert: (payload: Row | Row[]) => { mut.kind = 'insert'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
       single: async () => {
@@ -80,23 +82,31 @@ function makeDb(db: Record<string, Row[]>) {
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) => {
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        onF?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        onR?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => {
         const failure = tableErrors.get(table);
-        if (failure) return Promise.resolve({ data: null, count: 0, error: failure }).then(onF, onR);
-        return Promise.resolve({ data: applyFilters(), count: applyFilters().length, error: null }).then(onF, onR);
+        if (failure) return Promise.resolve({ data: null, count: 0, error: failure }).then(onF ?? undefined, onR ?? undefined);
+        return Promise.resolve({ data: applyFilters(), count: applyFilters().length, error: null }).then(onF ?? undefined, onR ?? undefined);
       },
     };
     return api;
   };
 
-  const db_: any = {
-    from, calls, rpcCalls: [] as Array<{ name: string; params: any }>,
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
+  const rpcImpl = async (_name: string, _params?: Row): Promise<{ data: unknown; error: unknown }> =>
+    ({ data: null, error: { message: `missing ${_name}` } });
+  const db_ = {
+    from,
+    calls,
+    rpcCalls,
+    rpcImpl,
     failTable: (table: string, error: { message: string; code?: string }) => tableErrors.set(table, error),
-  };
-  db_.rpcImpl = async (name: string) => ({ data: null, error: { message: `missing ${name}` } });
-  db_.rpc = (name: string, params: any) => {
-    db_.rpcCalls.push({ name, params });
-    return db_.rpcImpl(name, params);
+    rpc: (name: string, params?: Row) => {
+      rpcCalls.push({ name, params });
+      return db_.rpcImpl(name, params);
+    },
   };
   return db_;
 }
@@ -135,7 +145,7 @@ function baseDb() {
   } as Record<string, Row[]>;
 }
 
-function authedAs(userId: string, role: string, body?: any, method = 'PUT') {
+function authedAs(userId: string, role: string, body?: Row, method = 'PUT') {
   const token = createToken(userId, role);
   return {
     url: 'http://localhost/api/test',
@@ -143,13 +153,13 @@ function authedAs(userId: string, role: string, body?: any, method = 'PUT') {
     headers: { get: (k: string) => (k === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
     json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
 const urlOf = (qs = '') => `http://localhost/api/test${qs}`;
-const withUrl = (req: any, qs = '') => ({ ...req, url: urlOf(qs) });
+const withUrl = (req: NextRequest, qs = '') => ({ ...req, url: urlOf(qs) } as NextRequest);
 const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
-const updatesOf = (t: string) => mockDb.calls.filter((c: any) => c.mut.kind === 'update' && c.table === t);
-const insertsOf = (t: string) => mockDb.calls.filter((c: any) => c.mut.kind === 'insert' && c.table === t);
+const updatesOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'update' && c.table === t);
+const insertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === t);
 
 // ---------------------------------------------------------------------------
 
@@ -182,8 +192,8 @@ describe('settings PUT — privilege escalation fix', () => {
     const res = await settingsPUT(authedAs('u-admin', 'admin', { company: { name: 'شركة جديدة', vat_rate: 0.15 } }));
     expect(res.status).toBe(200);
     const upd = updatesOf('companies')[0];
-    expect(upd.mut.payload.vat_rate).toBe(0.15);
-    expect(upd.mut.payload.name).toBe('شركة جديدة');
+    expect((upd.mut.payload as Row).vat_rate).toBe(0.15);
+    expect((upd.mut.payload as Row).name).toBe('شركة جديدة');
   });
 
   test('the company update is filtered by id only — companies has no company_id column', async () => {
@@ -195,7 +205,7 @@ describe('settings PUT — privilege escalation fix', () => {
     // .eq('company_id', ...) made PostgREST reject the statement (42703), and
     // because the error was ignored the route still answered {updated:true} —
     // so changing the tax number or VAT rate silently did nothing.
-    const cols = upd.ops.filter((o: any) => o.op === 'eq').map((o: any) => o.col);
+    const cols = upd.ops.filter((o: Op) => o.op === 'eq').map((o: Op) => o.col);
     expect(cols).toContain('id');
     expect(cols).not.toContain('company_id');
   });

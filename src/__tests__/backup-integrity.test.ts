@@ -19,23 +19,25 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createHmac } from 'crypto';
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: { kind?: string; payload?: any } = {};
-    const call: any = { table, ops, mut };
+    const mut: { kind?: string; payload?: Row | Row[] } = {};
+    const call = { table, ops, mut };
     calls.push(call);
     const applyFilters = () =>
       (db[table] || []).filter((r) =>
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
           if (o.op === 'neq') return r[o.col!] !== o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'is') return o.val === null ? r[o.col!] == null : r[o.col!] === o.val;
           return true;
         })
@@ -44,15 +46,15 @@ function makeDb(db: Record<string, Row[]>) {
     // readers such as the backup exporter terminate instead of re-reading the
     // first page forever.
     let rangeBounds: { from: number; to: number } | null = null;
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
       neq: () => api, in: () => api, is: () => api, or: () => api,
       gte: () => api, lte: () => api, order: () => api, limit: () => api,
       range: (from: number, to: number) => { rangeBounds = { from, to }; ops.push({ op: 'range', val: [from, to] }); return api; },
-      insert: (p: any) => { mut.kind = 'insert'; mut.payload = p; return api; },
-      update: (p: any) => { mut.kind = 'update'; mut.payload = p; return api; },
-      upsert: (p: any) => { mut.kind = 'upsert'; mut.payload = p; return api; },
+      insert: (p: Row | Row[]) => { mut.kind = 'insert'; mut.payload = p; return api; },
+      update: (p: Row) => { mut.kind = 'update'; mut.payload = p; return api; },
+      upsert: (p: Row | Row[]) => { mut.kind = 'upsert'; mut.payload = p; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
       single: async () => {
@@ -60,18 +62,26 @@ function makeDb(db: Record<string, Row[]>) {
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) => {
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        onF?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        onR?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => {
         const all = applyFilters();
         const page = rangeBounds ? all.slice(rangeBounds.from, rangeBounds.to + 1) : all;
-        return Promise.resolve({ data: page, count: all.length, error: null }).then(onF, onR);
+        return Promise.resolve({ data: page, count: all.length, error: null }).then(onF ?? undefined, onR ?? undefined);
       },
     };
     return api;
   };
-  const db_: any = { from, calls, rpcCalls: [] as Array<{ name: string; params: any }> };
-  db_.rpc = async (name: string, params: any) => {
-    db_.rpcCalls.push({ name, params });
-    return { data: { restored: true }, error: null };
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
+  const db_ = {
+    from,
+    calls,
+    rpcCalls,
+    rpc: async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
+      rpcCalls.push({ name, params });
+      return { data: { restored: true }, error: null };
+    },
   };
   return db_;
 }
@@ -106,7 +116,7 @@ function baseDb() {
   } as Record<string, Row[]>;
 }
 
-function authedAs(userId: string, role: string, body?: any, method = 'GET') {
+function authedAs(userId: string, role: string, body?: Row, method = 'GET') {
   const token = createToken(userId, role);
   return {
     url: 'http://localhost/api/test',
@@ -115,12 +125,12 @@ function authedAs(userId: string, role: string, body?: any, method = 'GET') {
     cookies: { get: () => undefined },
     json: async () => body,
     text: async () => JSON.stringify(body),
-  } as any;
+  } as unknown as NextRequest;
 }
-const insertsOf = (t: string) => mockDb.calls.filter((c: any) => c.mut.kind === 'insert' && c.table === t);
-const upsertsOf = (t: string) => mockDb.calls.filter((c: any) => c.mut.kind === 'upsert' && c.table === t);
+const insertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === t);
+const upsertsOf = (t: string) => mockDb.calls.filter((c) => c.mut.kind === 'upsert' && c.table === t);
 
-function sign(backupData: any) {
+function sign(backupData: unknown) {
   const json = JSON.stringify(backupData, null, 2);
   return createHmac('sha256', process.env.TOKEN_SECRET!).update(json).digest('hex');
 }
@@ -140,8 +150,8 @@ describe('backup download — admin-only', () => {
     const res = await backupDownloadGET(authedAs('u-admin', 'admin', undefined, 'GET'));
     expect(res.status).toBe(200);
     // only this company's data is exported (tenant scoping on each table query)
-    const accountsQuery = mockDb.calls.find((c: any) => c.table === 'accounts');
-    expect(accountsQuery!.ops.some((o: any) => o.op === 'eq' && o.col === 'company_id' && o.val === C1)).toBe(true);
+    const accountsQuery = mockDb.calls.find((c) => c.table === 'accounts');
+    expect(accountsQuery!.ops.some((o: Op) => o.op === 'eq' && o.col === 'company_id' && o.val === C1)).toBe(true);
     expect(insertsOf('backup_logs').length).toBeGreaterThan(0);
     expect(insertsOf('security_audit_log').length).toBeGreaterThan(0);
   });
