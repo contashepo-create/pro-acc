@@ -19,22 +19,25 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { DEFAULT_CHART_OF_ACCOUNTS, createDefaultChartOfAccounts } from '@/lib/default-accounts';
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
+import type { SupabaseLike } from '@/lib/types';
 
 // ---------------------------------------------------------------------------
 // Chainable Supabase mock
 // ---------------------------------------------------------------------------
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row } }> = [];
   let insertCounter = 0;
 
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: { kind?: string; payload?: any } = {};
-    const call: any = { table, ops, mut };
+    const mut: { kind?: string; payload?: Row } = {};
+    const call = { table, ops, mut };
     calls.push(call);
 
     const rows = () => (db[table] || []);
@@ -43,35 +46,38 @@ function makeDb(db: Record<string, Row[]>) {
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
           if (o.op === 'neq') return r[o.col!] !== o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           return true;
         })
       );
 
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
       or: () => api,
       gte: () => api,
       order: () => api,
       limit: () => api,
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      insert: (payload: Row) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: applyFilters()[0] ?? null, error: null }),
       single: async () => {
         if (mut.kind === 'insert') {
-          mut.payload.id = mut.payload.id ?? `id-${++insertCounter}`;
-          (db[table] = db[table] || []).push(mut.payload);
-          return { data: mut.payload, error: null };
+          const payload = mut.payload as Row;
+          payload.id = payload.id ?? `id-${++insertCounter}`;
+          (db[table] = db[table] || []).push(payload);
+          return { data: payload, error: null };
         }
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onF: any, onR: any) =>
-        Promise.resolve({ data: applyFilters(), error: null }).then(onF, onR),
+      then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+        onF?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+        onR?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: applyFilters(), error: null }).then(onF ?? undefined, onR ?? undefined),
     };
     return api;
   };
@@ -109,7 +115,7 @@ function authedRequest(body?: any) {
     },
     cookies: { get: () => undefined },
     json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
 
 const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
@@ -187,28 +193,28 @@ describe('createDefaultChartOfAccounts', () => {
     const db = baseDb();
     mockDb = makeDb(db);
 
-    const created = await createDefaultChartOfAccounts(mockDb as any, C1);
+    const created = await createDefaultChartOfAccounts(mockDb as unknown as SupabaseLike, C1);
 
     expect(created).toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
     const accountInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'accounts');
     expect(accountInserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length);
-    for (const c of accountInserts) expect(c.mut.payload.company_id).toBe(C1);
+    for (const c of accountInserts) expect((c.mut.payload as Row).company_id).toBe(C1);
 
     const cashSafe = mockDb.calls.find((c) => c.mut.kind === 'insert' && c.table === 'banks_safes');
     expect(cashSafe).toBeDefined();
-    expect(cashSafe!.mut.payload.type).toBe('safe');
-    expect(cashSafe!.mut.payload.name).toBe('الخزينة الرئيسية');
+    expect((cashSafe!.mut.payload as Row).type).toBe('safe');
+    expect((cashSafe!.mut.payload as Row).name).toBe('الخزينة الرئيسية');
 
     const inserts = accountInserts;
     // Parent linking: 1110's update must point at the id that 1100 got
     const insertId = (code: string) =>
-      inserts.find((c) => c.mut.payload.code === code)!.mut.payload.id;
+      (inserts.find((c) => (c.mut.payload as Row).code === code)?.mut.payload as Row).id;
     const updates = mockDb.calls.filter((c) => c.mut.kind === 'update');
     const childUpdate = updates.find((c) =>
       c.ops.some((o) => o.col === 'id' && o.val === insertId('1110'))
     );
     expect(childUpdate).toBeDefined();
-    expect(childUpdate!.mut.payload.parent_id).toBe(insertId('1100'));
+    expect((childUpdate!.mut.payload as Row).parent_id).toBe(insertId('1100'));
     // updates are tenant-scoped
     for (const u of updates) {
       expect(u.ops.some((o) => o.op === 'eq' && o.col === 'company_id' && o.val === C1)).toBe(true);
@@ -227,7 +233,7 @@ describe('createDefaultChartOfAccounts', () => {
 
     const accountInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'accounts');
     expect(accountInserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length - 2);
-    expect(accountInserts.find((c) => c.mut.payload.code === '1000')).toBeUndefined();
+    expect(accountInserts.find((c) => (c.mut.payload as Row).code === '1000')).toBeUndefined();
     expect(created).toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
   });
 });
@@ -276,8 +282,8 @@ describe('POST /api/accounts', () => {
     }));
     expect(res.status).toBe(201);
     const insert = mockDb.calls.find((c) => c.mut.kind === 'insert' && c.table === 'accounts');
-    expect(insert!.mut.payload.company_id).toBe(C1);
-    expect(insert!.mut.payload.code).toBe('5999');
+    expect((insert!.mut.payload as Row).company_id).toBe(C1);
+    expect((insert!.mut.payload as Row).code).toBe('5999');
   });
 });
 
@@ -303,7 +309,7 @@ describe('PUT /api/accounts/[id]', () => {
 
     expect(res.status).toBe(200);
     const upd = mockDb.calls.find((c) => c.mut.kind === 'update' && c.table === 'accounts');
-    expect(upd!.mut.payload.name).toBe('اسم جديد');
+    expect((upd!.mut.payload as Row).name).toBe('اسم جديد');
     expect(upd!.mut.payload).not.toHaveProperty('type');
     expect(upd!.mut.payload).not.toHaveProperty('parentId');
     expect(upd!.mut.payload).not.toHaveProperty('parent_id');
