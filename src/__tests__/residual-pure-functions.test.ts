@@ -1,4 +1,5 @@
 import { isHeaderAccount, isCashOrBankCode, resolvePaymentAccountId, listCashBankAccountIds } from '@/lib/account-resolve';
+import { wrapSupabase } from './mocks';
 import { getCountryConfig, getCountriesList, COUNTRIES } from '@/lib/countries';
 import { safeInternalPath, safeHttpsUrl } from '@/lib/safe-input';
 import { telegramConfigSchema, pushSubscriptionSchema, pushQueueSchema, complaintPatchSchema, adminComplaintPatchSchema, adminSupportPatchSchema } from '@/lib/communication-validation';
@@ -13,7 +14,7 @@ import { boqCreateSchema, projectCreateSchema, projectExpenseCreateSchema, equip
 import { custodyExpenseSchema } from '@/lib/custody-validation';
 
 function dbFor(data: Record<string, any[]>) {
-  return {
+  return wrapSupabase({
     from: (table: string) => {
       const filters: Array<[string, unknown]> = [];
       const rows = () => (data[table] || []).filter((row) => filters.every(([col, val]) => row[col] === val));
@@ -26,7 +27,7 @@ function dbFor(data: Record<string, any[]>) {
       };
       return api;
     },
-  };
+  });
 }
 
 const UUID1 = '90000000-0000-4000-8000-000000000001';
@@ -63,7 +64,7 @@ describe('remaining account and country helper functions', () => {
     db = dbFor({ accounts: [{ id: 'bank-parent', company_id: 'c1', code: '1120' }] });
     await expect(resolvePaymentAccountId(db, 'c1')).resolves.toBe('bank-parent');
     await expect(resolvePaymentAccountId(dbFor({}), 'c1')).resolves.toBeNull();
-    const nullDb = { from: () => { const api: any = { select: () => api, eq: () => api, order: async () => ({ data: null }), maybeSingle: async () => ({ data: null }), then: (resolve: any) => resolve({ data: null }) }; return api; } };
+    const nullDb = wrapSupabase({ from: () => { const api: any = { select: () => api, eq: () => api, order: async () => ({ data: null }), maybeSingle: async () => ({ data: null }), then: (resolve: any) => resolve({ data: null }) }; return api; } });
     await expect(resolvePaymentAccountId(nullDb, 'c1')).resolves.toBeNull();
     await expect(listCashBankAccountIds(nullDb, 'c1')).resolves.toEqual([]);
   });

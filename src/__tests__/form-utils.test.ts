@@ -28,7 +28,7 @@ describe('unwrapData and form record helpers', () => {
     expect(unwrapData({ success: true, data: { id: 1 } })).toEqual({ id: 1 });
     expect(unwrapData({ id: 2 })).toEqual({ id: 2 });
     expect(unwrapData({ success: false, message: 'x' })).toBeNull();
-    expect(unwrapData(null)).toBeNull();
+    expect(unwrapData(null as never)).toBeNull();
   });
 
   test('normalizes only requested date fields without mutating input', () => {

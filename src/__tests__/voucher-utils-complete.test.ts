@@ -1,4 +1,5 @@
 let rows: Record<string, any[]> = {};
+import { wrapSupabase } from './mocks';
 const rpc = jest.fn();
 let failUpdateTable: string | null = null;
 let failInsertTable: string | null = null;
@@ -74,7 +75,7 @@ describe('voucher helper functions', () => {
     rows.employees = [{ id: 'e1', company_id: 'co', name: 'Mapped Employee' }];
     await hydratePartyNames(db, 'co', fallbackRows, { contacts: true, employees: true });
     expect(fallbackRows[0]).toMatchObject({ contact_name: 'Mapped Client', employee_name: 'Mapped Employee' });
-    const nullDataDb = { from: () => { const api: any = { select: () => api, eq: () => api, in: async () => ({ data: null }) }; return api; } };
+    const nullDataDb = wrapSupabase({ from: () => { const api: any = { select: () => api, eq: () => api, in: async () => ({ data: null }) }; return api; } });
     await expect(hydratePartyNames(nullDataDb, 'co', [{ contact_id: 'x' }], { contacts: true })).resolves.toBeTruthy();
     await expect(hydratePartyNames(nullDataDb, 'co', [{ employee_id: 'x' }], { employees: true })).resolves.toBeTruthy();
   });

@@ -132,7 +132,7 @@ describe('Rate-limit email sanitization (PostgREST injection)', () => {
 
 describe('Stateless math CAPTCHA', () => {
   async function makeChallenge() {
-    const res = await registerGET({} as any);
+    const res = await registerGET();
     const json = await res.json();
     return json.data;
   }
@@ -196,7 +196,7 @@ describe('Register route — CAPTCHA mandatory', () => {
   });
 
   test('rejects registration with a wrong CAPTCHA answer', async () => {
-    const { challengeId } = await (await registerGET({} as any)).json().then((j: any) => j.data);
+    const { challengeId } = await (await registerGET()).json().then((j: any) => j.data);
     const res = await registerPOST(fakeRequest({
       companyName: 'شركة الاختبار',
       name: 'مستخدم',

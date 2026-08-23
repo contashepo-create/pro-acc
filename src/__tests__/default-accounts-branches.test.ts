@@ -1,7 +1,8 @@
 import { ensureDefaultCashSafe, createDefaultChartOfAccounts, DEFAULT_CHART_OF_ACCOUNTS } from '@/lib/default-accounts';
+import { wrapSupabase } from './mocks';
 
 function makeEnsureDb(opts: { existing?: any; cash?: any; created?: any }) {
-  return { from: (table: string) => {
+  return wrapSupabase({ from: (table: string) => {
     let mode = 'select'; let insertPayload: any;
     const api: any = {
       select: () => api, eq: () => api, limit: () => api,
@@ -10,7 +11,7 @@ function makeEnsureDb(opts: { existing?: any; cash?: any; created?: any }) {
       single: async () => ({ data: mode === 'insert' ? opts.created || null : null, error: null }),
     };
     return api;
-  } };
+  } });
 }
 
 describe('default cash safe branches', () => {
@@ -29,7 +30,7 @@ describe('chart bootstrap compatibility/error branches', () => {
   test('retries inserts without is_header on legacy schemas', async () => {
     const stored: any[] = [];
     let insertCount = 0;
-    const db = { from: (table: string) => {
+    const db = wrapSupabase({ from: (table: string) => {
       let mode = 'select'; let payload: any; const filters: Record<string, any> = {};
       const api: any = {
         select: () => api,
@@ -50,13 +51,13 @@ describe('chart bootstrap compatibility/error branches', () => {
         then: (resolve: any, reject: any) => Promise.resolve({ data: null, error: null }).then(resolve, reject),
       };
       return api;
-    } };
+    } });
     await expect(createDefaultChartOfAccounts(db, 'c')).resolves.toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
     expect(stored[0]).not.toHaveProperty('is_header');
   });
 
   test('catches parent-link and default-safe failures after loading existing chart', async () => {
-    const db = { from: (table: string) => {
+    const db = wrapSupabase({ from: (table: string) => {
       if (table === 'banks_safes') throw new Error('safe');
       let code = '';
       const api: any = {
@@ -66,13 +67,13 @@ describe('chart bootstrap compatibility/error branches', () => {
         update: () => { throw new Error('parent'); },
       };
       return api;
-    } };
+    } });
     await expect(createDefaultChartOfAccounts(db, 'c')).resolves.toBe(DEFAULT_CHART_OF_ACCOUNTS.length);
   });
 
   test('continues after account lookup/parent/safe failures', async () => {
     let calls = 0;
-    const db = { from: (_table: string) => {
+    const db = wrapSupabase({ from: (_table: string) => {
       const api: any = {
         select: () => api, eq: () => api, limit: () => api,
         maybeSingle: async () => { calls++; if (calls === 1) throw new Error('lookup'); return { data: null, error: null }; },
@@ -80,7 +81,7 @@ describe('chart bootstrap compatibility/error branches', () => {
         single: async () => ({ data: null, error: null }),
       };
       return api;
-    } };
+    } });
     await expect(createDefaultChartOfAccounts(db, 'c')).resolves.toBe(0);
   });
 });

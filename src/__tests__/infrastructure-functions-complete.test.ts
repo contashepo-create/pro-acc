@@ -1,4 +1,6 @@
 /** Unit coverage for shared API, cache, subscription, project and storage helpers. */
+import type { SupabaseStorage } from '@/lib/types';
+import { wrapSupabase } from './mocks';
 
 const rpc = jest.fn();
 const subscriptionSingle = jest.fn();
@@ -135,7 +137,10 @@ describe('project journal helpers', () => {
 describe('private storage references', () => {
   test('handles missing, legacy, unsafe, failed and successful references', async () => {
     const createSignedUrl = jest.fn();
-    const client = { storage: { from: jest.fn(() => ({ createSignedUrl })) } };
+    const client = wrapSupabase({
+      from: () => ({}),
+      storage: { from: jest.fn(() => ({ createSignedUrl })) as unknown as SupabaseStorage['from'] },
+    });
     await expect(signPrivateReceiptReference(client, null)).resolves.toBeNull();
     await expect(signPrivateReceiptReference({} as never, 'c1/file.png')).resolves.toBeNull();
     await expect(signPrivateReceiptReference(client, 'https://legacy.test/file')).resolves.toBe('https://legacy.test/file');

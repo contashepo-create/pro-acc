@@ -327,7 +327,7 @@ describe('insertJournalLines', () => {
       journal_entry_id: 'je-1', account_id: A2, debit: 0, credit: 100,
     }]);
     expect(error).toBeTruthy();
-    expect(String(error.message)).toContain('تعذر العثور');
+    expect(String((error as { message?: string }).message)).toContain('تعذر العثور');
     expect(mockDb.calls.find((c) => c.mut.kind === 'insert' && c.table === 'journal_lines')).toBeUndefined();
   });
 

@@ -43,7 +43,7 @@ describe('remaining journal helper functions', () => {
     await expect(insertJournalHeader('c1', { date: '2026-08-20', type: 'general' })).resolves.toMatchObject({ data: null, error: { code: 'other' } });
     headerResults = Array.from({ length: 8 }, () => ({ data: null, error: { code: '23505' } }));
     const exhausted = await insertJournalHeader('c1', { date: '2026-08-20', type: 'general' });
-    expect(exhausted.error.code).toBe('23505');
+    expect((exhausted.error as { code?: string })?.code).toBe('23505');
   });
 
   test('gets tenant-scoped account balances and handles errors/context', async () => {
@@ -67,17 +67,17 @@ describe('remaining journal helper functions', () => {
       base({ debit: 1.001, credit: 0 }, { debit: 0, credit: 1.001 }),
       base({ debit: 1, credit: 0 }, { debit: 0, credit: 1.001 }),
     ]) expect((await insertJournalLines('c1', lines)).error).toBeTruthy();
-    expect((await insertJournalLines('c1', base({ debit: 2, credit: 0 }, { debit: 0, credit: 1 }))).error?.message).toContain('غير متزن');
-    expect((await insertJournalLines('c1', [
+    expect(((await insertJournalLines('c1', base({ debit: 2, credit: 0 }, { debit: 0, credit: 1 }))).error as { message?: string } | null)?.message).toContain('غير متزن');
+    expect(((await insertJournalLines('c1', [
       { journal_entry_id: 'j', account_id: 'a1', debit: 1, credit: 0 },
       { journal_entry_id: 'j', account_id: 'a1', debit: 0, credit: 1 },
-    ])).error?.message).toContain('الحساب نفسه');
+    ])).error as { message?: string } | null)?.message).toContain('الحساب نفسه');
     accountsError = new Error('accounts');
     await expect(insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).resolves.toEqual({ error: accountsError });
     accountsError = null; accounts = null;
-    expect((await insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).error?.message).toContain('العثور');
+    expect(((await insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).error as { message?: string } | null)?.message).toContain('العثور');
     accounts = [{ id: 'a1', code: '1000', name: 'Header', is_header: true }, { id: 'a2', code: '2', name: 'B' }];
-    expect((await insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).error?.message).toContain('رئيسي');
+    expect(((await insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).error as { message?: string } | null)?.message).toContain('رئيسي');
   });
 
   test('creates a complete journal and executes line mapping callback', async () => {

@@ -11,7 +11,7 @@ beforeEach(() => { jest.clearAllMocks(); result = { data: null, error: null }; t
 
 describe('central admin guard branches', () => {
   test('rejects missing cookies/token and invalid JWT', async () => {
-    await expect(requireAdmin(null)).rejects.toBeInstanceOf(AdminAuthError);
+    await expect(requireAdmin(null as never)).rejects.toBeInstanceOf(AdminAuthError);
     await expect(requireAdmin(req(undefined, false))).rejects.toBeInstanceOf(AdminAuthError);
     await expect(requireAdmin(req())).rejects.toBeInstanceOf(AdminAuthError);
     verifyAdminToken.mockReturnValueOnce(null);
