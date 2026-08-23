@@ -82,18 +82,18 @@ function baseDb() {
     purchase_orders: [], purchase_order_items: [],
   } as Record<string, Row[]>;
 }
-function request(body?: any, method = 'POST', url = 'http://localhost/api/test') {
+function request(body?: Row, method = 'POST', url = 'http://localhost/api/test') {
   const token = createToken(USER, 'admin');
   return { url, method, headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
     cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);
-const invoiceBody = (overrides: any = {}) => ({
+const invoiceBody = (overrides: Record<string, unknown> = {}) => ({
   date: '2026-08-01', supplier_id: SUPPLIER,
   items: [{ description: 'حديد', quantity: 2, unit_price: 100 }], tax_rate: 0.15, notes: 'اختبار', ...overrides,
 });
-const orderBody = (overrides: any = {}) => ({
+const orderBody = (overrides: Record<string, unknown> = {}) => ({
   date: '2026-08-01', supplier_id: SUPPLIER,
   items: [{ description: 'حديد', quantity: 2, unit_price: 100 }], notes: 'اختبار', ...overrides,
 });

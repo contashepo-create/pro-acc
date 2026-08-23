@@ -7,13 +7,13 @@ process.env.CRON_SECRET = 'cron-secret-123';
 import { createToken } from '@/lib/auth';
 
 const sendVerificationEmailMock = jest.fn();
-jest.mock('@/lib/email', () => ({ sendVerificationEmail: (...a: any[]) => sendVerificationEmailMock(...a) }));
+jest.mock('@/lib/email', () => ({ sendVerificationEmail: (...a: unknown[]) => sendVerificationEmailMock(...a) }));
 const sendOverdueMock = jest.fn();
 const sendSingleMock = jest.fn();
 jest.mock('@/lib/messaging', () => ({
   renderTemplate: (tpl: string) => String(tpl).replace('{customer_name}', 'عميل').replace('{amount}', '100.00'),
-  sendOverdueReminders: (...a: any[]) => sendOverdueMock(...a),
-  sendInvoiceReminder: (...a: any[]) => sendSingleMock(...a),
+  sendOverdueReminders: (...a: unknown[]) => sendOverdueMock(...a),
+  sendInvoiceReminder: (...a: unknown[]) => sendSingleMock(...a),
   TEMPLATES: { invoice_overdue_ar: { body: 'مرحباً {customer_name}، المبلغ {amount}' } },
 }));
 

@@ -46,12 +46,13 @@ jest.mock('@/lib/rate-limit', () => ({
 
 import { registerSchema } from '@/lib/validation';
 import { POST as registerPOST } from '@/app/api/auth/register/route';
+import type { NextRequest } from 'next/server';
 
-function req(body: any) {
+function req(body: Record<string, unknown>) {
   return {
     json: async () => body,
     headers: { get: () => null },
-  } as any;
+  } as unknown as NextRequest;
 }
 
 const validBody = {
@@ -171,7 +172,7 @@ describe('register — atomic company bootstrap', () => {
     // In non-production a session is issued — it must live only in the
     // HttpOnly cookie, never in the JSON body (XSS would read a body token).
     expect(body.data.token).toBeUndefined();
-    const cookieValue = (res as any).cookies?.get?.('token')?.value as string | undefined;
+    const cookieValue = (res as unknown as { cookies?: { get?: (k: string) => { value?: string } | undefined } }).cookies?.get?.('token')?.value;
     if (cookieValue) {
       expect(JSON.stringify(body.data)).not.toContain(cookieValue);
     }

@@ -1,6 +1,6 @@
 /** Unit coverage for shared API, cache, subscription, project and storage helpers. */
 import type { SupabaseStorage } from '@/lib/types';
-import { wrapSupabase } from './mocks';
+import { wrapSupabase, type TestBuilder } from './mocks';
 
 const rpc = jest.fn();
 const subscriptionSingle = jest.fn();
@@ -8,7 +8,7 @@ const planSingle = jest.fn();
 const mockSupabase = {
   rpc,
   from: jest.fn((table: string) => {
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api, eq: () => api, order: () => api, limit: () => api,
       single: table === 'subscriptions' ? subscriptionSingle : planSingle,
     };
@@ -37,7 +37,7 @@ beforeEach(() => {
 describe('apiFetch', () => {
   test('cache-busts GET and applies safe fetch defaults', async () => {
     const response = new Response('{}');
-    global.fetch = jest.fn(async () => response) as any;
+    global.fetch = jest.fn(async () => response) as unknown as typeof fetch;
     jest.spyOn(Date, 'now').mockReturnValue(12345);
     await expect(apiFetch('/api/items')).resolves.toBe(response);
     expect(global.fetch).toHaveBeenCalledWith('/api/items?_ts=12345', { credentials: 'same-origin', cache: 'no-store' });
@@ -47,7 +47,7 @@ describe('apiFetch', () => {
   });
 
   test('does not alter write URLs and lets explicit options override defaults', async () => {
-    global.fetch = jest.fn(async () => new Response()) as any;
+    global.fetch = jest.fn(async () => new Response()) as unknown as typeof fetch;
     await apiFetch('/api/items', { method: 'post', credentials: 'include', cache: 'reload' });
     expect(global.fetch).toHaveBeenCalledWith('/api/items', expect.objectContaining({ method: 'post', credentials: 'include', cache: 'reload' }));
   });
