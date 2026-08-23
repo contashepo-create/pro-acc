@@ -12,14 +12,14 @@ process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: any = {};
+    const mut: { kind?: string; payload?: Row | Row[] } = {};
     calls.push({ table, ops, mut });
     const rows = () =>
       (db[table] || []).filter((r) =>
@@ -29,20 +29,22 @@ function makeDb(db: Record<string, Row[]>) {
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
       order: () => api,
       range: () => api,
       limit: () => api,
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      insert: (payload: Row | Row[]) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
@@ -54,6 +56,8 @@ jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET, POST } from '@/app/api/projects/overhead/route';
 import { PUT, DELETE } from '@/app/api/projects/overhead/[id]/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
 const C1 = 'company-1';
 const RULE = '00000000-0000-4000-8000-000000000001';
@@ -68,17 +72,17 @@ function token(role: string): string {
   return tokenCache[role];
 }
 function authHeader(role: string): { get: (k: string) => string | null } {
-  const h = { authorization: `Bearer ${token(role)}` };
-  return { get: (key: string) => (h as any)[key] ?? null };
+  const h: Record<string, string> = { authorization: `Bearer ${token(role)}` };
+  return { get: (key: string) => h[key] ?? null };
 }
-function requestAs(role: string, body?: any, method = 'GET', url = 'http://localhost/api/projects/overhead') {
+function requestAs(role: string, body?: Row, method = 'GET', url = 'http://localhost/api/projects/overhead') {
   return {
     method,
     url,
     headers: authHeader(role),
     cookies: { get: () => undefined },
     json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
 
 function baseDb() {
@@ -151,7 +155,7 @@ describe('overhead routes — security & tenant isolation', () => {
   });
 
   test('PUT/DELETE reject a non-UUID id before querying', async () => {
-    const p = { params: Promise.resolve({ id: 'not-a-uuid' }) } as any;
+    const p = { params: Promise.resolve({ id: 'not-a-uuid' }) };
     const put = await PUT(requestAs('admin', { name: 'y' }, 'PUT'), p);
     expect(put.status).toBe(400);
     const del = await DELETE(requestAs('admin'), p);
@@ -170,7 +174,7 @@ describe('overhead routes — accounting validation', () => {
   });
 
   test('PUT updates allowed fields and rejects empty updates', async () => {
-    const p = { params: Promise.resolve({ id: RULE }) } as any;
+    const p = { params: Promise.resolve({ id: RULE }) };
     const res = await PUT(requestAs('admin', { rate: 0.3 }, 'PUT'), p);
     expect(res.status).toBe(200);
     const upd = mockDb.calls.find((c) => c.mut.kind === 'update');
