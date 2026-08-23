@@ -9,9 +9,10 @@
  * Reference: ZATCA E-Invoice Data Dictionary + OASIS UBL 2.1
  */
 
+import type { UBLInvoiceData } from '@/lib/zatca/ubl-builder';
 import { generateUBLInvoice, generateInvoiceHash } from '@/lib/zatca/ubl-builder';
 
-function makeStandardInvoice() {
+function makeStandardInvoice(): UBLInvoiceData {
   return {
     uuid: 'b1c2d3e4-f5a6-7890-bcde-fa1234567890',
     number: 42,
@@ -210,10 +211,10 @@ describe('ZATCA UBL structural validation', () => {
   // ─── Simplified invoice variant ───
   test('simplified invoice (B2C) uses type name 0200000', () => {
     const simplified = makeStandardInvoice();
-    (simplified as any).invoiceTypeName = '0200000';
+    simplified.invoiceTypeName = '0200000';
     // Remove buyer VAT (simplified doesn't require it)
-    delete (simplified.buyer as any).vatNumber;
-    const simplifiedXml = generateUBLInvoice(simplified as any);
+    delete simplified.buyer.vatNumber;
+    const simplifiedXml = generateUBLInvoice(simplified);
     expect(simplifiedXml).toContain('name="0200000"');
   });
 });

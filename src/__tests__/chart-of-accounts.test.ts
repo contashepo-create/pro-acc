@@ -107,7 +107,7 @@ function baseDb() {
   };
 }
 
-function authedRequest(body?: any) {
+function authedRequest(body?: Row) {
   const token = createToken('u1', 'admin');
   return {
     headers: {
@@ -229,7 +229,7 @@ describe('createDefaultChartOfAccounts', () => {
     );
     mockDb = makeDb(db);
 
-    const created = await createDefaultChartOfAccounts(mockDb as any, C1);
+    const created = await createDefaultChartOfAccounts(mockDb as unknown as SupabaseLike, C1);
 
     const accountInserts = mockDb.calls.filter((c) => c.mut.kind === 'insert' && c.table === 'accounts');
     expect(accountInserts).toHaveLength(DEFAULT_CHART_OF_ACCOUNTS.length - 2);
