@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { 
-  User, Building2, Phone, Mail, Calendar, Shield, 
-  Clock, CheckCircle, XCircle, Settings, ArrowRight,
-  Users as UsersIcon, Activity, Crown
+  User, Building2, Shield, 
+  CheckCircle, XCircle, ArrowRight,
+  Activity, Crown
 } from 'lucide-react';
 
 interface UserProfile {
@@ -78,11 +78,7 @@ export default function UserProfilePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    loadUserData();
-  }, [userId]);
-
-  const loadUserData = async () => {
+  const loadUserData = useCallback(async () => {
     try {
       setLoading(true);
       const res = await fetch(`/api/admin/users?user_id=${userId}`);
@@ -94,12 +90,17 @@ export default function UserProfilePage() {
       } else {
         setError(data.message || 'فشل تحميل البيانات');
       }
-    } catch (err) {
+    } catch {
       setError('خطأ في الاتصال');
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
+    loadUserData();
+  }, [loadUserData]);
 
   if (loading) {
     return (

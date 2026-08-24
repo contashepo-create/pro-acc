@@ -16,7 +16,37 @@ import { toast } from '@/components/ui/Toast';
 import { openPrintWindow } from '@/lib/print';
 import { escapeHtml } from '@/lib/utils';
 
-const emptySupplier = {
+interface SupplierRow {
+  id: string;
+  name: string;
+  type?: string;
+  phone?: string;
+  email?: string;
+  tax_number?: string;
+  commercial_registration?: string;
+  address?: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  postal_code?: string;
+  website?: string;
+  contact_person?: string;
+  contact_person_phone?: string;
+  contact_person_email?: string;
+  bank_name?: string;
+  iban?: string;
+  swift_code?: string;
+  payment_terms?: string;
+  category?: string;
+  notes?: string;
+}
+type SupplierForm = Record<
+  | 'name' | 'phone' | 'email' | 'tax_number' | 'commercial_registration' | 'address'
+  | 'city' | 'region' | 'country' | 'postal_code' | 'website' | 'contact_person'
+  | 'contact_person_phone' | 'contact_person_email' | 'bank_name' | 'iban'
+  | 'swift_code' | 'payment_terms' | 'category' | 'notes', string>;
+
+const emptySupplier: SupplierForm = {
   name: '', phone: '', email: '', tax_number: '', commercial_registration: '',
   address: '', city: '', region: '', country: '', postal_code: '', website: '',
   contact_person: '', contact_person_phone: '', contact_person_email: '',
@@ -24,17 +54,17 @@ const emptySupplier = {
 };
 
 export default function SuppliersPage() {
-  const [rows, setRows] = useState<any[]>([]);
+  const [rows, setRows] = useState<SupplierRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editing, setEditing] = useState<any>(null);
+  const [editing, setEditing] = useState<SupplierRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [total, setTotal] = useState(0);
-  const [form, setForm] = useState<any>({ ...emptySupplier });
+  const [form, setForm] = useState<SupplierForm>({ ...emptySupplier });
 
   const fetchData = useCallback(async () => {
     try {
@@ -78,13 +108,13 @@ export default function SuppliersPage() {
     finally { setSaving(false); }
   };
 
-  const handleEdit = (row: any) => {
+  const handleEdit = (row: SupplierRow) => {
     setEditing(row);
-    setForm(Object.fromEntries(Object.keys(emptySupplier).map((key) => [key, row[key] || ''])));
+    setForm(Object.fromEntries(Object.keys(emptySupplier).map((key) => [key, row[key as keyof SupplierRow] ?? ''])) as SupplierForm);
     setShowModal(true);
   };
 
-  const handleDelete = async (row: any) => {
+  const handleDelete = async (row: SupplierRow) => {
     try {
       const res = await fetch(`/api/contacts/${row.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -96,7 +126,7 @@ export default function SuppliersPage() {
     } catch { toast.error('خطأ في الاتصال'); }
   };
 
-  const handlePrint = (supplier: any) => {
+  const handlePrint = (supplier: SupplierRow) => {
     const fields: Array<[string, unknown]> = [
       ['اسم المورد', supplier.name], ['الهاتف', supplier.phone], ['البريد الإلكتروني', supplier.email],
       ['الرقم الضريبي', supplier.tax_number], ['السجل التجاري', supplier.commercial_registration],
@@ -118,11 +148,11 @@ export default function SuppliersPage() {
 
   const columns = [
     { key: 'name', label: 'اسم المورد', sortable: true },
-    { key: 'phone', label: 'الجوال', render: (r: any) => <span dir="ltr">{r.phone || '—'}</span> },
-    { key: 'email', label: 'البريد', render: (r: any) => <span dir="ltr">{r.email || '—'}</span> },
+    { key: 'phone', label: 'الجوال', render: (r: SupplierRow) => <span dir="ltr">{r.phone || '—'}</span> },
+    { key: 'email', label: 'البريد', render: (r: SupplierRow) => <span dir="ltr">{r.email || '—'}</span> },
     { key: 'tax_number', label: 'الرقم الضريبي' },
     { key: 'notes', label: 'ملاحظات' },
-    { key: 'actions', label: 'إجراءات', render: (r: any) => (
+    { key: 'actions', label: 'إجراءات', render: (r: SupplierRow) => (
       <div className="flex items-center gap-1">
         <a href={`/suppliers/${r.id}/statement`} target="_blank" rel="noopener noreferrer">
           <Button variant="ghost" size="sm" title="كشف حساب"><FileText size={16} className="text-blue-600" /></Button>

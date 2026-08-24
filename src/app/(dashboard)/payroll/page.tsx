@@ -13,9 +13,18 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 
+interface PayrollRecord {
+  date?: string;
+  employee_name?: string;
+  basic_salary: number;
+  advance_deduction: number;
+  net_pay: number;
+}
+interface EmployeeOption { id: string; }
+
 export default function PayrollPage() {
-  const [records, setRecords] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
+  const [records, setRecords] = useState<PayrollRecord[]>([]);
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showProcess, setShowProcess] = useState(false);
@@ -40,6 +49,7 @@ export default function PayrollPage() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
   useEffect(() => { fetchData(); }, []);
 
   const handleProcess = async () => {
@@ -70,15 +80,15 @@ export default function PayrollPage() {
   };
 
   const columns = [
-    { key: 'date', label: 'الشهر', sortable: true, render: (row: any) => row.date?.substring(0, 7) },
+    { key: 'date', label: 'الشهر', sortable: true, render: (row: PayrollRecord) => row.date?.substring(0, 7) },
     { key: 'employee_name', label: 'الموظف', sortable: true },
-    { key: 'basic_salary', label: 'الراتب الأساسي', sortable: true, render: (row: any) => formatCurrency(row.basic_salary) },
-    { key: 'advance_deduction', label: 'خصم السلف', sortable: true, render: (row: any) => formatCurrency(row.advance_deduction) },
-    { key: 'net_pay', label: 'صافي الراتب', sortable: true, render: (row: any) => formatCurrency(row.net_pay) },
+    { key: 'basic_salary', label: 'الراتب الأساسي', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.basic_salary) },
+    { key: 'advance_deduction', label: 'خصم السلف', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.advance_deduction) },
+    { key: 'net_pay', label: 'صافي الراتب', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.net_pay) },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => <ActionButtons item={{ ...row, date: formatDate(row.date) }} />,
+      render: (row: PayrollRecord) => <ActionButtons item={{ ...row, date: formatDate(row.date) }} />,
     },
   ];
 
