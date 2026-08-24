@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Gift, Image, Crown, AlertTriangle, Info, Zap, Star, X } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 interface Ad {
   id: string;
@@ -10,10 +11,11 @@ interface Ad {
   type: string;
   link_url: string | null;
   link_text: string | null;
+  show_until?: string | null;
   priority: number;
 }
 
-const TYPE_ICONS: Record<string, { icon: any; color: string; bg: string }> = {
+const TYPE_ICONS: Record<string, { icon: LucideIcon; color: string; bg: string }> = {
   announcement: { icon: Gift, color: 'text-blue-600', bg: 'bg-blue-100' },
   promotion: { icon: Gift, color: 'text-green-600', bg: 'bg-green-100' },
   banner: { icon: Image, color: 'text-purple-600', bg: 'bg-purple-100' },
@@ -89,6 +91,7 @@ export function AdPopup() {
       })
       .catch(() => {});
     
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
     setDismissed(getDismissedPopups());
   }, []);
 
@@ -113,7 +116,7 @@ export function AdPopup() {
   const Icon = typeInfo.icon;
 
   const handleClose = () => {
-    dismissPopup(ad.id, (ad as any).show_until);
+    dismissPopup(ad.id, ad.show_until);
     setDismissed((prev) => new Set([...prev, ad.id]));
     setShowPopup(false);
   };

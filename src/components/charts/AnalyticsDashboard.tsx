@@ -20,7 +20,6 @@ interface AnalyticsData {
 // Simple SVG-based chart components (no external dependency)
 function BarChart({ data, height = 200 }: { data: Array<{ label: string; value: number; color?: string }>; height?: number }) {
   const max = Math.max(...data.map(d => d.value), 1);
-  const barWidth = Math.floor(100 / data.length);
 
   return (
     <div className="w-full" style={{ height }}>
@@ -53,7 +52,11 @@ function BarChart({ data, height = 200 }: { data: Array<{ label: string; value: 
 
 function DonutChart({ segments, size = 120 }: { segments: Array<{ value: number; color: string; label: string }>; size?: number }) {
   const total = segments.reduce((s, seg) => s + seg.value, 0) || 1;
-  let cumulativePercent = 0;
+  const values = segments.map((seg) => seg.value / total);
+  const arcs = values.map((percent, i) => {
+    const start = values.slice(0, i).reduce((sum, x) => sum + x, 0);
+    return { seg: segments[i], start, end: start + percent };
+  });
 
   function getCoordinatesForPercent(percent: number) {
     const x = Math.cos(2 * Math.PI * percent);
@@ -64,11 +67,10 @@ function DonutChart({ segments, size = 120 }: { segments: Array<{ value: number;
   return (
     <div className="flex items-center gap-4">
       <svg width={size} height={size} viewBox="-1 -1 2 2" style={{ transform: 'rotate(-90deg)' }}>
-        {segments.map((seg, i) => {
-          const percent = seg.value / total;
-          const [startX, startY] = getCoordinatesForPercent(cumulativePercent);
-          cumulativePercent += percent;
-          const [endX, endY] = getCoordinatesForPercent(cumulativePercent);
+        {arcs.map(({ seg, start, end }, i) => {
+          const percent = end - start;
+          const [startX, startY] = getCoordinatesForPercent(start);
+          const [endX, endY] = getCoordinatesForPercent(end);
           const largeArcFlag = percent > 0.5 ? 1 : 0;
           const pathData = `M ${startX} ${startY} A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY} L 0 0`;
           return <path key={i} d={pathData} fill={seg.color} />;
@@ -88,32 +90,9 @@ function DonutChart({ segments, size = 120 }: { segments: Array<{ value: number;
   );
 }
 
-function SparkLine({ data, color = '#2563eb', height = 40 }: { data: number[]; color?: string; height?: number }) {
-  if (data.length < 2) return null;
-  const max = Math.max(...data);
-  const min = Math.min(...data);
-  const range = max - min || 1;
-  const width = 200;
-  const points = data.map((v, i) => {
-    const x = (i / (data.length - 1)) * width;
-    const y = height - ((v - min) / range) * (height - 4) - 2;
-    return `${x},${y}`;
-  }).join(' ');
-
-  return (
-    <svg width={width} height={height} className="w-full" style={{ height }}>
-      <polyline points={points} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 export default function AnalyticsDashboard() {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchAnalytics();
-  }, []);
 
   const fetchAnalytics = async () => {
     try {
@@ -129,6 +108,11 @@ export default function AnalyticsDashboard() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
+    fetchAnalytics();
+  }, []);
 
   if (loading) {
     return (
