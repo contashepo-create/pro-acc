@@ -19,9 +19,20 @@ type ReconciliationItem = { transactionType: string; amount: string; date: strin
 const emptyItem = (): ReconciliationItem => ({ transactionType: '', amount: '', date: '', isCleared: false });
 const initialForm = () => ({ bankSafeId: '', date: new Date().toISOString().slice(0, 10), closingBalance: '', items: [emptyItem()] });
 
+interface BankReconciliationRow {
+  id: string;
+  number?: string | number;
+  bank_safe_name?: string;
+  date?: string;
+  closing_balance?: string | number;
+  difference?: string | number;
+  status?: string;
+}
+interface BankOption { id: string; name?: string; is_active?: boolean; }
+
 export default function BankReconciliationPage() {
-  const [reconciliations, setReconciliations] = useState<any[]>([]);
-  const [banks, setBanks] = useState<any[]>([]);
+  const [reconciliations, setReconciliations] = useState<BankReconciliationRow[]>([]);
+  const [banks, setBanks] = useState<BankOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -41,7 +52,7 @@ export default function BankReconciliationPage() {
       if (!reconciliationJson.success) throw new Error(reconciliationJson.message || 'فشل تحميل المطابقات');
       if (!bankJson.success) throw new Error(bankJson.message || 'فشل تحميل البنوك');
       setReconciliations(reconciliationJson.data || []);
-      setBanks((bankJson.data?.banks || []).filter((bank: any) => bank.is_active));
+      setBanks((bankJson.data?.banks || []).filter((bank: BankOption) => bank.is_active));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'فشل تحميل البيانات');
     } finally {
@@ -49,6 +60,8 @@ export default function BankReconciliationPage() {
     }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const updateItem = (index: number, patch: Partial<ReconciliationItem>) => {
@@ -93,7 +106,7 @@ export default function BankReconciliationPage() {
     }
   };
 
-  const handleComplete = async (row: any) => {
+  const handleComplete = async (row: BankReconciliationRow) => {
     try {
       setError('');
       const response = await fetch(`/api/bank-reconciliation/${row.id}`, {
@@ -107,7 +120,7 @@ export default function BankReconciliationPage() {
     }
   };
 
-  const handleDelete = async (row: any) => {
+  const handleDelete = async (row: BankReconciliationRow) => {
     try {
       setError('');
       const response = await fetch(`/api/bank-reconciliation/${row.id}`, { method: 'DELETE' });
@@ -120,19 +133,19 @@ export default function BankReconciliationPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('bank_reconciliation', row.number) },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: BankReconciliationRow) => formatDocumentNumber('bank_reconciliation', row.number) },
     { key: 'bank_safe_name', label: 'البنك/الخزينة', sortable: true },
-    { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
-    { key: 'closing_balance', label: 'الرصيد الختامي', sortable: true, render: (row: any) => formatCurrency(Number(row.closing_balance) || 0) },
-    { key: 'difference', label: 'الفروقات', render: (row: any) => {
+    { key: 'date', label: 'التاريخ', sortable: true, render: (row: BankReconciliationRow) => formatDate(row.date) },
+    { key: 'closing_balance', label: 'الرصيد الختامي', sortable: true, render: (row: BankReconciliationRow) => formatCurrency(Number(row.closing_balance) || 0) },
+    { key: 'difference', label: 'الفروقات', render: (row: BankReconciliationRow) => {
       const difference = Number(row.difference) || 0;
       return <span className={Math.abs(difference) < 0.005 ? 'text-green-600' : 'text-red-600'}>
         {Math.abs(difference) < 0.005 ? '✓ مطابق' : `${formatCurrency(difference)} غير مطابق`}
       </span>;
     } },
-    { key: 'status', label: 'الحالة', render: (row: any) => row.status === 'completed'
+    { key: 'status', label: 'الحالة', render: (row: BankReconciliationRow) => row.status === 'completed'
       ? <Badge variant="success">مغلقة</Badge> : <Badge variant="warning">معلقة</Badge> },
-    { key: 'actions', label: 'إجراءات', render: (row: any) => (
+    { key: 'actions', label: 'إجراءات', render: (row: BankReconciliationRow) => (
       <div className="flex items-center gap-2">
         {row.status === 'pending' && Math.abs(Number(row.difference) || 0) < 0.005 && (
           <Button size="sm" variant="secondary" onClick={() => handleComplete(row)}>إغلاق المطابقة</Button>
@@ -160,7 +173,7 @@ export default function BankReconciliationPage() {
         footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ التسوية'}</Button></div>}>
         <div className="space-y-4">
           <Select label="البنك/الخزينة" value={form.bankSafeId} onChange={(value) => setForm({ ...form, bankSafeId: value })}
-            options={[{ value: '', label: 'اختر' }, ...banks.map((bank) => ({ value: bank.id, label: bank.name }))]} />
+            options={[{ value: '', label: 'اختر' }, ...banks.map((bank) => ({ value: bank.id, label: bank.name || '' }))]} />
           <Input label="تاريخ التسوية" type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} />
           <Input label="الرصيد الختامي حسب كشف الحساب" type="number" step="0.01" value={form.closingBalance}
             onChange={(event) => setForm({ ...form, closingBalance: event.target.value })} />

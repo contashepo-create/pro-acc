@@ -14,13 +14,25 @@ import { Button } from '@/components/ui/Button';
 import { formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 
+interface ComplaintRow {
+  id: string;
+  subject?: string;
+  body?: string;
+  type?: string;
+  user_name?: string;
+  created_at?: string;
+  status?: string;
+  admin_reply?: string;
+}
+interface ComplaintForm { subject: string; body: string; close: boolean; }
+
 export default function ComplaintsPage() {
-  const [complaints, setComplaints] = useState<any[]>([]);
+  const [complaints, setComplaints] = useState<ComplaintRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [editing, setEditing] = useState<any>(null);
-  const [previewing, setPreviewing] = useState<any>(null);
-  const [form, setForm] = useState<any>({ subject: '', body: '', close: false });
+  const [editing, setEditing] = useState<ComplaintRow | null>(null);
+  const [previewing, setPreviewing] = useState<ComplaintRow | null>(null);
+  const [form, setForm] = useState<ComplaintForm>({ subject: '', body: '', close: false });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
 
@@ -35,9 +47,11 @@ export default function ComplaintsPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
-  const handleEdit = (complaint: any) => {
+  const handleEdit = (complaint: ComplaintRow) => {
     setEditing(complaint);
     setForm({ subject: complaint.subject || '', body: complaint.body || '', close: false });
     setSaveError('');
@@ -46,7 +60,7 @@ export default function ComplaintsPage() {
   const handleSave = async () => {
     if (!editing) return;
     const isPending = editing.status === 'pending';
-    const patch: any = {};
+    const patch: Record<string, unknown> = {};
     if (isPending) {
       patch.subject = form.subject;
       patch.body = form.body;
@@ -81,7 +95,7 @@ export default function ComplaintsPage() {
     }
   };
 
-  const handleDelete = async (complaint: any) => {
+  const handleDelete = async (complaint: ComplaintRow) => {
     try {
       const res = await fetch(`/api/complaints/${complaint.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -118,14 +132,14 @@ export default function ComplaintsPage() {
 
   const columns = [
     { key: 'subject', label: 'الموضوع', sortable: true },
-    { key: 'type', label: 'النوع', render: (row: any) => typeBadge(row.type) },
+    { key: 'type', label: 'النوع', render: (row: ComplaintRow) => typeBadge(row.type || '') },
     { key: 'user_name', label: 'المستخدم', sortable: true },
-    { key: 'created_at', label: 'التاريخ', render: (row: any) => formatDate(row.created_at) },
-    { key: 'status', label: 'الحالة', render: (row: any) => statusBadge(row.status) },
+    { key: 'created_at', label: 'التاريخ', render: (row: ComplaintRow) => formatDate(row.created_at) },
+    { key: 'status', label: 'الحالة', render: (row: ComplaintRow) => statusBadge(row.status || '') },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: ComplaintRow) => (
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" onClick={() => setPreviewing(row)} title="معاينة الشكوى">
             <Eye size={16} className="text-blue-600" />
@@ -161,14 +175,14 @@ export default function ComplaintsPage() {
         title={previewing ? 'معاينة الشكوى' : ''}
         size="lg"
         footer={<div className="flex gap-2 justify-between items-center">
-          <div className="flex items-center gap-2 text-sm text-text-muted">{previewing && statusBadge(previewing.status)}</div>
+          <div className="flex items-center gap-2 text-sm text-text-muted">{previewing && statusBadge(previewing.status || '')}</div>
           <Button variant="ghost" onClick={() => setPreviewing(null)}>إغلاق</Button>
         </div>}
       >
         {previewing && (
           <div className="space-y-4">
             <div className="flex items-center gap-2">
-              {typeBadge(previewing.type)}
+              {typeBadge(previewing.type || '')}
               <span className="text-xs text-text-muted">بتاريخ {formatDate(previewing.created_at)}</span>
             </div>
             <div>
@@ -211,7 +225,7 @@ export default function ComplaintsPage() {
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm">
               <span className="text-text-muted">الحالة الحالية:</span>
-              {statusBadge(editing.status)}
+              {statusBadge(editing.status || '')}
               {editing.status !== 'pending' && (
                 <span className="text-xs text-text-muted">(لا يمكن تعديل النص بعد أن عالجتها الإدارة)</span>
               )}
