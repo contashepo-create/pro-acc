@@ -13,7 +13,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { StatCard } from '@/components/ui/StatCard';
 import { formatCurrency } from '@/lib/utils';
 import { apiFetch } from '@/lib/api-client';
-import { Download, FileText, RefreshCw, TrendingUp, PieChart, Users, DollarSign, ArrowDownRight, ArrowUpRight } from 'lucide-react';
+import { Download, FileText, RefreshCw } from 'lucide-react';
 
 const TYPE_LABELS: Record<string, string> = {
   asset: 'أصل',
@@ -30,6 +30,32 @@ function todayISO() {
 function yearStartISO() {
   return `${new Date().getFullYear()}-01-01`;
 }
+
+interface TrialBalanceAccount { code: string; name: string; type: string; total_debit: number; total_credit: number; balance: number; }
+interface TrialBalanceData { accounts: TrialBalanceAccount[]; total_debit: number; total_credit: number; }
+interface MoneyRow { code: string; name: string; amount: number; balance?: number; }
+interface IncomeStatementData { total_revenue: number; total_expenses: number; net_income: number; revenue: MoneyRow[]; expenses: MoneyRow[]; }
+interface BalanceSheetRow { code: string; name: string; balance: number; }
+interface BalanceSheetData { total_assets: number; total_liabilities: number; total_equity: number; assets: BalanceSheetRow[]; liabilities: BalanceSheetRow[]; equity: BalanceSheetRow[]; }
+interface EquityRow { label: string; capital: number; retained_earnings: number; net_income: number; total: number; }
+interface EquityChangesData { opening: { total: number }; changes: { net_income: number; total_change: number }; ending: { total: number }; rows: EquityRow[]; }
+interface ContactRow { name: string; type: string; phone: string; tax_number?: string; opening_balance: number; period_debit: number; period_credit: number; closing_balance: number; balance_type?: string; }
+interface ContactBalancesData { totals: { opening: number; debit: number; credit: number; closing: number }; contacts: ContactRow[]; }
+interface ExpenseCategory { code: string; name: string; amount: number; percentage: number; }
+interface ExpenseAnalysisData { total_expense: number; count: number; categories: ExpenseCategory[]; }
+interface LedgerAccount { id: string; code: string; name: string; is_header?: boolean; children?: LedgerAccount[]; }
+interface LedgerTransaction { date: string; number: string; account_code: string; description: string; debit: number; credit: number; balance: number; }
+interface LedgerData { opening_balance: number; total_debit: number; total_credit: number; closing_balance: number; transactions: LedgerTransaction[]; }
+interface CashFlowLine { account_name: string; description: string; amount: number; }
+interface CashFlowData { opening_balance: number; closing_balance: number; operating: { net: number; inflows: CashFlowLine[]; outflows: CashFlowLine[] }; investing: { net: number }; }
+interface ProfitabilityProject { name: string; client_name?: string; contract_value: number; revenue: number; total_costs: number; profit: number; profit_margin?: number; }
+interface ProfitabilityData { totals: { contract_value: number; revenue: number; total_costs: number; profit: number }; projects: ProfitabilityProject[]; }
+interface AgingRow { name: string; balance: number; buckets?: Record<string, number>; days_overdue?: number; }
+interface AgingData { totals: Record<string, number>; aging: AgingRow[]; }
+interface VatData { summary: { total_vat_collected: number; total_vat_paid: number; vat_payable: number; total_sales_excluding_vat: number; vat_payable_status?: string }; vat_rate: number; }
+interface OperationalRow { date: string; item_name?: string; project_name?: string; type?: string; quantity?: number; total_value?: number; }
+interface OperationalData { materials?: number; workers?: number; purchases?: number; subcontractors?: number; total?: number; rows?: OperationalRow[]; }
+interface ProjectOption { id: string; name: string; }
 
 function downloadCsv(filename: string, headers: string[], rows: (string | number)[][]) {
   const esc = (v: string | number) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -51,32 +77,31 @@ export default function ReportsPage() {
   const [to, setTo] = useState(todayISO());
 
   // Report Data States
-  const [trialBalance, setTrialBalance] = useState<any>(null);
-  const [incomeStatement, setIncomeStatement] = useState<any>(null);
-  const [balanceSheet, setBalanceSheet] = useState<any>(null);
-  const [equityChanges, setEquityChanges] = useState<any>(null);
-  const [contactBalances, setContactBalances] = useState<any>(null);
+  const [trialBalance, setTrialBalance] = useState<TrialBalanceData | null>(null);
+  const [incomeStatement, setIncomeStatement] = useState<IncomeStatementData | null>(null);
+  const [balanceSheet, setBalanceSheet] = useState<BalanceSheetData | null>(null);
+  const [equityChanges, setEquityChanges] = useState<EquityChangesData | null>(null);
+  const [contactBalances, setContactBalances] = useState<ContactBalancesData | null>(null);
   const [contactTypeFilter, setContactTypeFilter] = useState('all');
-  const [expenseAnalysis, setExpenseAnalysis] = useState<any>(null);
-  const [profitability, setProfitability] = useState<any>(null);
-  const [aging, setAging] = useState<any>(null);
+  const [expenseAnalysis, setExpenseAnalysis] = useState<ExpenseAnalysisData | null>(null);
+  const [profitability, setProfitability] = useState<ProfitabilityData | null>(null);
+  const [aging, setAging] = useState<AgingData | null>(null);
   const [agingType, setAgingType] = useState('ar');
-  const [operational, setOperational] = useState<any>(null);
+  const [operational, setOperational] = useState<OperationalData | null>(null);
   const [opType, setOpType] = useState('project-costs');
-  const [projects, setProjects] = useState<any[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [projectId, setProjectId] = useState('');
-  const [cashFlow, setCashFlow] = useState<any>(null);
-  const [ledger, setLedger] = useState<any>(null);
-  const [ledgerAccounts, setLedgerAccounts] = useState<any[]>([]);
+  const [cashFlow, setCashFlow] = useState<CashFlowData | null>(null);
+  const [ledger, setLedger] = useState<LedgerData | null>(null);
+  const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>([]);
   const [ledgerAccountId, setLedgerAccountId] = useState('');
-  const [vat, setVat] = useState<any>(null);
-
-  const qs = (extra: Record<string, string> = {}) => {
-    const p = new URLSearchParams({ from, to, ...extra });
-    return p.toString();
-  };
+  const [vat, setVat] = useState<VatData | null>(null);
 
   const load = useCallback(async () => {
+    const qs = (extra: Record<string, string> = {}) => {
+      const p = new URLSearchParams({ from, to, ...extra });
+      return p.toString();
+    };
     setLoading(true);
     setError('');
     try {
@@ -138,13 +163,17 @@ export default function ReportsPage() {
         if (!json.success) throw new Error(json.message || 'فشل تحميل التقرير');
         setVat(json.data);
       }
-    } catch (e: any) {
-      setError(e?.message || 'فشل تحميل البيانات');
+    } catch (e) {
+      setError((e instanceof Error ? e.message : '') || 'فشل تحميل البيانات');
     } finally {
       setLoading(false);
     }
   }, [tab, from, to, agingType, opType, projectId, ledgerAccountId, contactTypeFilter]);
 
+  // Standard fetch-on-change effect: load() sets the loading indicator
+  // synchronously before the network round trip so the UI never shows
+  // stale data while refetching.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
@@ -154,8 +183,8 @@ export default function ReportsPage() {
 
     fetch('/api/accounts').then((r) => r.json()).then((j) => {
       if (!j.success) return;
-      const flat: any[] = [];
-      const walk = (nodes: any[]) => {
+      const flat: LedgerAccount[] = [];
+      const walk = (nodes: LedgerAccount[]) => {
         for (const n of nodes || []) {
           if (!n.is_header) flat.push(n);
           if (n.children?.length) walk(n.children);
@@ -169,55 +198,55 @@ export default function ReportsPage() {
   const handleExport = () => {
     if (tab === 'trial_balance' && trialBalance?.accounts) {
       downloadCsv('trial-balance.csv', ['الكود', 'الحساب', 'النوع', 'مدين', 'دائن', 'الرصيد'],
-        trialBalance.accounts.map((a: any) => [a.code, a.name, a.type, a.total_debit, a.total_credit, a.balance]));
+        (trialBalance.accounts || []).map((a: TrialBalanceAccount) => [a.code, a.name, a.type, a.total_debit, a.total_credit, a.balance]));
     } else if (tab === 'income_statement' && incomeStatement) {
       downloadCsv('income-statement.csv', ['الكود', 'الحساب', 'النوع', 'المبلغ'], [
-        ...(incomeStatement.revenue || []).map((r: any) => [r.code, r.name, 'إيراد', r.amount]),
-        ...(incomeStatement.expenses || []).map((r: any) => [r.code, r.name, 'مصروف', r.amount]),
+        ...(incomeStatement.revenue || []).map((r: MoneyRow) => [r.code, r.name, 'إيراد', r.amount]),
+        ...(incomeStatement.expenses || []).map((r: MoneyRow) => [r.code, r.name, 'مصروف', r.amount]),
       ]);
     } else if (tab === 'balance_sheet' && balanceSheet) {
       downloadCsv('balance-sheet.csv', ['القسم', 'الكود', 'الحساب', 'الرصيد'], [
-        ...(balanceSheet.assets || []).map((r: any) => ['أصول', r.code, r.name, r.balance]),
-        ...(balanceSheet.liabilities || []).map((r: any) => ['خصوم', r.code, r.name, r.balance]),
-        ...(balanceSheet.equity || []).map((r: any) => ['ملكية', r.code, r.name, r.balance]),
+        ...(balanceSheet.assets || []).map((r: BalanceSheetRow) => ['أصول', r.code, r.name, r.balance]),
+        ...(balanceSheet.liabilities || []).map((r: BalanceSheetRow) => ['خصوم', r.code, r.name, r.balance]),
+        ...(balanceSheet.equity || []).map((r: BalanceSheetRow) => ['ملكية', r.code, r.name, r.balance]),
       ]);
     } else if (tab === 'equity_changes' && equityChanges?.rows) {
       downloadCsv('equity-changes.csv', ['البيان', 'رأس المال', 'الأرباح المحتجزة', 'صافي دخل الفترة', 'إجمالي حقوق الملكية'],
-        equityChanges.rows.map((r: any) => [r.label, r.capital, r.retained_earnings, r.net_income, r.total]));
+        (equityChanges.rows || []).map((r: EquityRow) => [r.label, r.capital, r.retained_earnings, r.net_income, r.total]));
     } else if (tab === 'contact_balances' && contactBalances?.contacts) {
       downloadCsv('contact-balances.csv', ['الاسم', 'النوع', 'الهاتف', 'الرقم الضريبي', 'رصيد افتتاحي', 'مدين', 'دائن', 'الرصيد الختامي'],
-        contactBalances.contacts.map((c: any) => [c.name, c.type, c.phone, c.tax_number, c.opening_balance, c.period_debit, c.period_credit, c.closing_balance]));
+        (contactBalances.contacts || []).map((c: ContactRow) => [c.name, c.type, c.phone, c.tax_number ?? '', c.opening_balance, c.period_debit, c.period_credit, c.closing_balance]));
     } else if (tab === 'expense_analysis' && expenseAnalysis?.categories) {
       downloadCsv('expense-analysis.csv', ['رمز الحساب', 'اسم الحساب', 'المبلغ', 'النسبة المئوية %'],
-        expenseAnalysis.categories.map((c: any) => [c.code, c.name, c.amount, `${c.percentage.toFixed(1)}%`]));
+        (expenseAnalysis.categories || []).map((c: ExpenseCategory) => [c.code, c.name, c.amount, `${c.percentage.toFixed(1)}%`]));
     } else if (tab === 'profitability' && profitability?.projects) {
       downloadCsv('profitability.csv', ['المشروع', 'التعاقد', 'الإيراد', 'التكلفة', 'الربح', 'الهامش %'],
-        profitability.projects.map((p: any) => [p.name, p.contract_value, p.revenue, p.total_costs, p.profit, p.profit_margin?.toFixed?.(1)]));
+        (profitability.projects || []).map((p: ProfitabilityProject) => [p.name, p.contract_value, p.revenue, p.total_costs, p.profit, p.profit_margin?.toFixed?.(1) ?? '']));
     } else if (tab === 'aging' && aging?.aging) {
       downloadCsv('aging.csv', ['الاسم', 'الرصيد', '0-30', '31-60', '61-90', '90+'],
-        aging.aging.map((r: any) => [r.name, r.balance, r.buckets?.['0-30'], r.buckets?.['31-60'], r.buckets?.['61-90'], r.buckets?.['90+']]));
+        (aging.aging || []).map((r: AgingRow) => [r.name, r.balance, r.buckets?.['0-30'] ?? '', r.buckets?.['31-60'] ?? '', r.buckets?.['61-90'] ?? '', r.buckets?.['90+'] ?? '']));
     }
   };
 
   const tbCols = [
     { key: 'code', label: 'الكود', sortable: true },
     { key: 'name', label: 'الحساب', sortable: true },
-    { key: 'type', label: 'النوع', render: (row: any) => <Badge variant="info">{TYPE_LABELS[row.type] || row.type}</Badge> },
-    { key: 'total_debit', label: 'مجموع مدين', render: (row: any) => formatCurrency(row.total_debit) },
-    { key: 'total_credit', label: 'مجموع دائن', render: (row: any) => formatCurrency(row.total_credit) },
-    { key: 'balance', label: 'الرصيد', render: (row: any) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(row.balance)}</span> },
+    { key: 'type', label: 'النوع', render: (row: TrialBalanceAccount) => <Badge variant="info">{TYPE_LABELS[row.type] || row.type}</Badge> },
+    { key: 'total_debit', label: 'مجموع مدين', render: (row: TrialBalanceAccount) => formatCurrency(row.total_debit) },
+    { key: 'total_credit', label: 'مجموع دائن', render: (row: TrialBalanceAccount) => formatCurrency(row.total_credit) },
+    { key: 'balance', label: 'الرصيد', render: (row: TrialBalanceAccount) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(row.balance)}</span> },
   ];
 
   const moneyCols = [
     { key: 'code', label: 'الكود' },
     { key: 'name', label: 'الحساب' },
-    { key: 'amount', label: 'المبلغ', render: (row: any) => formatCurrency(row.amount ?? row.balance) },
+    { key: 'amount', label: 'المبلغ', render: (row: MoneyRow) => formatCurrency(row.amount ?? row.balance) },
   ];
 
   const bsCols = [
     { key: 'code', label: 'الكود' },
     { key: 'name', label: 'الحساب' },
-    { key: 'balance', label: 'الرصيد', render: (row: any) => formatCurrency(row.balance) },
+    { key: 'balance', label: 'الرصيد', render: (row: BalanceSheetRow) => formatCurrency(row.balance) },
   ];
 
   return (
@@ -234,8 +263,8 @@ export default function ReportsPage() {
       />
 
       <div className="flex flex-wrap gap-4 items-end bg-bg-card border border-border p-4 rounded-xl">
-        <Input label="من تاريخ" type="date" value={from} onChange={(e: any) => setFrom(e.target.value)} />
-        <Input label="إلى تاريخ" type="date" value={to} onChange={(e: any) => setTo(e.target.value)} />
+        <Input label="من تاريخ" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <Input label="إلى تاريخ" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
       </div>
 
       <Tabs items={[
@@ -266,7 +295,7 @@ export default function ReportsPage() {
           {(trialBalance?.accounts || []).length === 0 ? (
             <p className="text-text-muted text-center py-8">لا توجد قيود في الفترة المحددة</p>
           ) : (
-            <Table columns={tbCols} data={trialBalance.accounts} />
+            <Table columns={tbCols} data={trialBalance?.accounts ?? []} />
           )}
         </div>
       )}
@@ -281,8 +310,8 @@ export default function ReportsPage() {
                 <StatCard title="إجمالي المصروفات" value={formatCurrency(incomeStatement.total_expenses || 0)} accentColor="var(--color-danger)" />
                 <StatCard title="صافي الدخل (الربح / الخسارة)" value={formatCurrency(incomeStatement.net_income || 0)} accentColor="var(--color-accent)" />
               </div>
-              <Card title="الإيرادات"><Table columns={moneyCols} data={(incomeStatement.revenue || []).filter((r: any) => r.amount)} /></Card>
-              <Card title="المصروفات"><Table columns={moneyCols} data={(incomeStatement.expenses || []).filter((r: any) => r.amount)} /></Card>
+              <Card title="الإيرادات"><Table columns={moneyCols} data={(incomeStatement.revenue || []).filter((r: MoneyRow) => r.amount)} /></Card>
+              <Card title="المصروفات"><Table columns={moneyCols} data={(incomeStatement.expenses || []).filter((r: MoneyRow) => r.amount)} /></Card>
             </>
           ) : (
             <p className="text-text-muted text-center py-8">لا توجد بيانات</p>
@@ -330,10 +359,10 @@ export default function ReportsPage() {
             <Table
               columns={[
                 { key: 'label', label: 'البيان' },
-                { key: 'capital', label: 'رأس المال', render: (r: any) => formatCurrency(r.capital) },
-                { key: 'retained_earnings', label: 'الأرباح المحتجزة', render: (r: any) => formatCurrency(r.retained_earnings) },
-                { key: 'net_income', label: 'أرباح / (خسائر) الفترة', render: (r: any) => formatCurrency(r.net_income) },
-                { key: 'total', label: 'إجمالي حقوق الملكية', render: (r: any) => <strong className="font-mono">{formatCurrency(r.total)}</strong> },
+                { key: 'capital', label: 'رأس المال', render: (r: EquityRow) => formatCurrency(r.capital) },
+                { key: 'retained_earnings', label: 'الأرباح المحتجزة', render: (r: EquityRow) => formatCurrency(r.retained_earnings) },
+                { key: 'net_income', label: 'أرباح / (خسائر) الفترة', render: (r: EquityRow) => formatCurrency(r.net_income) },
+                { key: 'total', label: 'إجمالي حقوق الملكية', render: (r: EquityRow) => <strong className="font-mono">{formatCurrency(r.total)}</strong> },
               ]}
               data={equityChanges?.rows || []}
             />
@@ -367,12 +396,12 @@ export default function ReportsPage() {
           <Table
             columns={[
               { key: 'name', label: 'الاسم' },
-              { key: 'type', label: 'النوع', render: (r: any) => <Badge variant="info">{r.type}</Badge> },
+              { key: 'type', label: 'النوع', render: (r: ContactRow) => <Badge variant="info">{r.type}</Badge> },
               { key: 'phone', label: 'الهاتف' },
-              { key: 'opening_balance', label: 'رصيد افتتاحي', render: (r: any) => formatCurrency(r.opening_balance) },
-              { key: 'period_debit', label: 'حركات مدينة (+)', render: (r: any) => formatCurrency(r.period_debit) },
-              { key: 'period_credit', label: 'حركات دائنة (-)', render: (r: any) => formatCurrency(r.period_credit) },
-              { key: 'closing_balance', label: 'الرصيد الختامي', render: (r: any) => <strong className={r.closing_balance >= 0 ? 'text-success font-mono' : 'text-danger font-mono'}>{formatCurrency(r.closing_balance)}</strong> },
+              { key: 'opening_balance', label: 'رصيد افتتاحي', render: (r: ContactRow) => formatCurrency(r.opening_balance) },
+              { key: 'period_debit', label: 'حركات مدينة (+)', render: (r: ContactRow) => formatCurrency(r.period_debit) },
+              { key: 'period_credit', label: 'حركات دائنة (-)', render: (r: ContactRow) => formatCurrency(r.period_credit) },
+              { key: 'closing_balance', label: 'الرصيد الختامي', render: (r: ContactRow) => <strong className={r.closing_balance >= 0 ? 'text-success font-mono' : 'text-danger font-mono'}>{formatCurrency(r.closing_balance)}</strong> },
               { key: 'balance_type', label: 'طبيعة الرصيد' },
             ]}
             data={contactBalances?.contacts || []}
@@ -393,11 +422,11 @@ export default function ReportsPage() {
               columns={[
                 { key: 'code', label: 'كود الحساب' },
                 { key: 'name', label: 'بند المصروف' },
-                { key: 'amount', label: 'المبلغ', render: (r: any) => <span className="font-mono font-bold">{formatCurrency(r.amount)}</span> },
+                { key: 'amount', label: 'المبلغ', render: (r: ExpenseCategory) => <span className="font-mono font-bold">{formatCurrency(r.amount)}</span> },
                 { 
                   key: 'percentage', 
                   label: 'النسبة من إجمالي المصروفات %', 
-                  render: (r: any) => (
+                  render: (r: ExpenseCategory) => (
                     <div className="flex items-center gap-2">
                       <div className="flex-1 bg-slate-100 rounded-full h-2 overflow-hidden w-24">
                         <div className="bg-danger h-full rounded-full" style={{ width: `${r.percentage}%` }} />
@@ -434,9 +463,9 @@ export default function ReportsPage() {
               { key: 'number', label: 'رقم القيد' },
               { key: 'account_code', label: 'الحساب' },
               { key: 'description', label: 'البيان' },
-              { key: 'debit', label: 'مدين', render: (r: any) => formatCurrency(r.debit) },
-              { key: 'credit', label: 'دائن', render: (r: any) => formatCurrency(r.credit) },
-              { key: 'balance', label: 'الرصيد', render: (r: any) => formatCurrency(r.balance) },
+              { key: 'debit', label: 'مدين', render: (r: LedgerTransaction) => formatCurrency(r.debit) },
+              { key: 'credit', label: 'دائن', render: (r: LedgerTransaction) => formatCurrency(r.credit) },
+              { key: 'balance', label: 'الرصيد', render: (r: LedgerTransaction) => formatCurrency(r.balance) },
             ]}
             data={ledger?.transactions || []}
           />
@@ -456,14 +485,14 @@ export default function ReportsPage() {
             <Table columns={[
               { key: 'account_name', label: 'الحساب' },
               { key: 'description', label: 'البيان' },
-              { key: 'amount', label: 'المبلغ', render: (r: any) => formatCurrency(r.amount) },
+              { key: 'amount', label: 'المبلغ', render: (r: CashFlowLine) => formatCurrency(r.amount) },
             ]} data={cashFlow?.operating?.inflows || []} />
           </Card>
           <Card title="الأنشطة التشغيلية — مدفوعات">
             <Table columns={[
               { key: 'account_name', label: 'الحساب' },
               { key: 'description', label: 'البيان' },
-              { key: 'amount', label: 'المبلغ', render: (r: any) => formatCurrency(r.amount) },
+              { key: 'amount', label: 'المبلغ', render: (r: CashFlowLine) => formatCurrency(r.amount) },
             ]} data={cashFlow?.operating?.outflows || []} />
           </Card>
         </div>
@@ -482,11 +511,11 @@ export default function ReportsPage() {
             columns={[
               { key: 'name', label: 'المشروع' },
               { key: 'client_name', label: 'العميل' },
-              { key: 'contract_value', label: 'التعاقد', render: (r: any) => formatCurrency(r.contract_value) },
-              { key: 'revenue', label: 'الإيراد', render: (r: any) => formatCurrency(r.revenue) },
-              { key: 'total_costs', label: 'التكلفة', render: (r: any) => formatCurrency(r.total_costs) },
-              { key: 'profit', label: 'الربح', render: (r: any) => <span className={r.profit < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(r.profit)}</span> },
-              { key: 'profit_margin', label: 'الهامش', render: (r: any) => `${(r.profit_margin || 0).toFixed(1)}%` },
+              { key: 'contract_value', label: 'التعاقد', render: (r: ProfitabilityProject) => formatCurrency(r.contract_value) },
+              { key: 'revenue', label: 'الإيراد', render: (r: ProfitabilityProject) => formatCurrency(r.revenue) },
+              { key: 'total_costs', label: 'التكلفة', render: (r: ProfitabilityProject) => formatCurrency(r.total_costs) },
+              { key: 'profit', label: 'الربح', render: (r: ProfitabilityProject) => <span className={r.profit < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(r.profit)}</span> },
+              { key: 'profit_margin', label: 'الهامش', render: (r: ProfitabilityProject) => `${(r.profit_margin || 0).toFixed(1)}%` },
             ]}
             data={profitability?.projects || []}
           />
@@ -515,11 +544,11 @@ export default function ReportsPage() {
           <Table
             columns={[
               { key: 'name', label: 'الاسم' },
-              { key: 'balance', label: 'الرصيد', render: (r: any) => formatCurrency(r.balance) },
-              { key: 'b0', label: '0-30', render: (r: any) => formatCurrency(r.buckets?.['0-30'] || 0) },
-              { key: 'b1', label: '31-60', render: (r: any) => formatCurrency(r.buckets?.['31-60'] || 0) },
-              { key: 'b2', label: '61-90', render: (r: any) => formatCurrency(r.buckets?.['61-90'] || 0) },
-              { key: 'b3', label: '90+', render: (r: any) => formatCurrency(r.buckets?.['90+'] || 0) },
+              { key: 'balance', label: 'الرصيد', render: (r: AgingRow) => formatCurrency(r.balance) },
+              { key: 'b0', label: '0-30', render: (r: AgingRow) => formatCurrency(r.buckets?.['0-30'] || 0) },
+              { key: 'b1', label: '31-60', render: (r: AgingRow) => formatCurrency(r.buckets?.['31-60'] || 0) },
+              { key: 'b2', label: '61-90', render: (r: AgingRow) => formatCurrency(r.buckets?.['61-90'] || 0) },
+              { key: 'b3', label: '90+', render: (r: AgingRow) => formatCurrency(r.buckets?.['90+'] || 0) },
               { key: 'days_overdue', label: 'أيام التأخير' },
             ]}
             data={aging?.aging || []}
@@ -553,7 +582,7 @@ export default function ReportsPage() {
             ]} />
             <Select label="المشروع" value={projectId} onChange={setProjectId} options={[
               { value: '', label: 'كل المشاريع' },
-              ...projects.map((p: any) => ({ value: p.id, label: p.name })),
+              ...projects.map((p) => ({ value: p.id, label: p.name })),
             ]} />
             <Button variant="secondary" leftIcon={<FileText size={16} />} onClick={load}>عرض</Button>
           </div>
@@ -574,7 +603,7 @@ export default function ReportsPage() {
                 { key: 'project_name', label: 'المشروع' },
                 { key: 'type', label: 'النوع' },
                 { key: 'quantity', label: 'الكمية' },
-                { key: 'total_value', label: 'القيمة', render: (r: any) => formatCurrency(r.total_value || 0) },
+                { key: 'total_value', label: 'القيمة', render: (r: OperationalRow) => formatCurrency(r.total_value || 0) },
               ]}
               data={operational.rows}
             />
