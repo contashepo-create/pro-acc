@@ -14,15 +14,26 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatCurrency } from '@/lib/utils';
 
+interface BankRow {
+  id: string;
+  name: string;
+  type: string;
+  account_number?: string;
+  opening_balance?: number;
+  balance: number;
+  is_active?: boolean;
+}
+interface BankForm { name: string; type: string; account_number: string; opening_balance: number; }
+
 export default function BanksPage() {
-  const [banks, setBanks] = useState<any[]>([]);
+  const [banks, setBanks] = useState<BankRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingBank, setEditingBank] = useState<any>(null);
+  const [editingBank, setEditingBank] = useState<BankRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', type: 'bank', account_number: '', opening_balance: 0 });
+  const [form, setForm] = useState<BankForm>({ name: '', type: 'bank', account_number: '', opening_balance: 0 });
 
   const fetchData = async () => {
     try {
@@ -35,6 +46,8 @@ export default function BanksPage() {
     } catch { setError('فشل تحميل البيانات - خطأ في الاتصال'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -64,10 +77,10 @@ export default function BanksPage() {
         setForm({ name: '', type: 'bank', account_number: '', opening_balance: 0 });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e:any) { setSaveError('خطأ في الاتصال: ' + (e.message || '')); } finally { setSaving(false); }
+    } catch (e) { setSaveError('خطأ في الاتصال: ' + (e instanceof Error ? e.message : '')); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (bank: any) => {
+  const handleEdit = async (bank: BankRow) => {
     try {
       const res = await fetch(`/api/banks/${bank.id}`);
       const json = await res.json();
@@ -86,7 +99,7 @@ export default function BanksPage() {
     }
   };
 
-  const handleDelete = async (bank: any) => {
+  const handleDelete = async (bank: BankRow) => {
     try {
       const res = await fetch(`/api/banks/${bank.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -95,22 +108,22 @@ export default function BanksPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
-    { key: 'type', label: 'النوع', render: (row: any) => <Badge variant={row.type === 'bank' ? 'info' : 'accent'}>{row.type === 'bank' ? 'بنك' : 'صندوق'}</Badge> },
+    { key: 'type', label: 'النوع', render: (row: BankRow) => <Badge variant={row.type === 'bank' ? 'info' : 'accent'}>{row.type === 'bank' ? 'بنك' : 'صندوق'}</Badge> },
     { key: 'account_number', label: 'رقم الحساب' },
-    { key: 'opening_balance', label: 'الرصيد الافتتاحي', render: (row: any) => formatCurrency(row.opening_balance) },
-    { key: 'balance', label: 'الرصيد الحالي', render: (row: any) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(row.balance)}</span> },
-    { key: 'is_active', label: 'الحالة', render: (row: any) => <Badge variant={row.is_active ? 'success' : 'danger'}>{row.is_active ? 'نشط' : 'غير نشط'}</Badge> },
+    { key: 'opening_balance', label: 'الرصيد الافتتاحي', render: (row: BankRow) => formatCurrency(row.opening_balance ?? 0) },
+    { key: 'balance', label: 'الرصيد الحالي', render: (row: BankRow) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(row.balance)}</span> },
+    { key: 'is_active', label: 'الحالة', render: (row: BankRow) => <Badge variant={row.is_active ? 'success' : 'danger'}>{row.is_active ? 'نشط' : 'غير نشط'}</Badge> },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: BankRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -130,10 +143,10 @@ export default function BanksPage() {
       {banks.length === 0 ? <EmptyState title="لا توجد بنوك أو خزائن" actionLabel="إضافة بنك/خزينة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={banks} searchable searchKeys={['name', 'account_number']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingBank(null); }} title={editingBank ? `تعديل: ${editingBank.name}` : 'إضافة بنك/خزينة'} size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingBank(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e:any)=>setForm({...form, name: e.target.value})} placeholder="مثلاً: البنك الأهلي - حساب رئيسي" />
+          <Input label="الاسم" className="col-span-2" value={form.name} onChange={(e)=>setForm({...form, name: e.target.value})} placeholder="مثلاً: البنك الأهلي - حساب رئيسي" />
           <Select label="النوع" value={form.type} disabled={!!editingBank} onChange={(value)=>setForm({...form, type: value})} options={[{ value: 'bank', label: 'بنك' }, { value: 'safe', label: 'صندوق' }]} />
-          <Input label="رقم الحساب" value={form.account_number} onChange={(e:any)=>setForm({...form, account_number: e.target.value})} placeholder="1234567890" />
-          <Input label="الرصيد الافتتاحي" type="number" disabled={!!editingBank} value={form.opening_balance} onChange={(e:any)=>setForm({...form, opening_balance: parseFloat(e.target.value) || 0})} placeholder="0" />
+          <Input label="رقم الحساب" value={form.account_number} onChange={(e)=>setForm({...form, account_number: e.target.value})} placeholder="1234567890" />
+          <Input label="الرصيد الافتتاحي" type="number" disabled={!!editingBank} value={form.opening_balance} onChange={(e)=>setForm({...form, opening_balance: parseFloat(e.target.value) || 0})} placeholder="0" />
           {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
