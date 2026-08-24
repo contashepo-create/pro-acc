@@ -19,7 +19,18 @@ import {
   statusMeta, priorityMeta,
 } from '@/lib/gantt-types';
 
-const emptyTask = {
+interface ProjectOption { id: string; name: string; }
+interface TaskForm {
+  name: string;
+  description: string;
+  start_date: string;
+  end_date: string;
+  progress: number;
+  status: string;
+  priority: string;
+}
+
+const emptyTask: TaskForm = {
   name: '', description: '', start_date: '', end_date: '',
   progress: 0, status: 'not_started', priority: 'medium',
 };
@@ -27,7 +38,7 @@ const emptyTask = {
 const zoomLevels = [8, 12, 18, 26, 36];
 
 export default function GanttPage() {
-  const [projects, setProjects] = useState<any[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [projectId, setProjectId] = useState('');
   const [data, setData] = useState<GanttResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,7 +48,7 @@ export default function GanttPage() {
 
   const [taskModal, setTaskModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<any>(emptyTask);
+  const [form, setForm] = useState<TaskForm>(emptyTask);
   const [saving, setSaving] = useState(false);
 
   const [depModal, setDepModal] = useState(false);
@@ -71,6 +82,7 @@ export default function GanttPage() {
     finally { setChartLoading(false); }
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
   useEffect(() => { fetchGantt(projectId); }, [projectId, fetchGantt]);
 
   const tasks = useMemo(() => data?.tasks || [], [data]);
@@ -115,7 +127,7 @@ export default function GanttPage() {
     if (form.start_date > form.end_date) { toast.error('تاريخ نهاية المهمة يسبق بدايتها'); return; }
     try {
       setSaving(true);
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         name: form.name.trim(),
         description: form.description?.trim() || null,
         start_date: form.start_date, end_date: form.end_date,
@@ -432,7 +444,7 @@ export default function GanttPage() {
               options={Object.entries(priorityMeta).map(([value, meta]) => ({ value, label: meta.label }))} />
           </div>
           <Input label="نسبة الإنجاز %" type="number" min={0} max={100} value={form.progress}
-            onChange={(event) => setForm({ ...form, progress: event.target.value })} />
+            onChange={(event) => setForm({ ...form, progress: Number(event.target.value) || 0 })} />
         </div>
       </Modal>
 

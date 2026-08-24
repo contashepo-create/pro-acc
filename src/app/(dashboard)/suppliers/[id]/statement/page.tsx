@@ -20,9 +20,32 @@ const typeLabel: Record<string, string> = {
 };
 
 export default function SupplierStatementPage() {
+interface SupplierStatementEntry {
+  id: string;
+  date: string;
+  type?: string;
+  description?: string;
+  debit: number;
+  credit: number;
+  balance: number;
+}
+interface PurchaseInvoiceChip { id: string; number: string; total: number; }
+interface DisbursementChip { id: string; number: string; amount: number; }
+interface SupplierStatementData {
+  id: string;
+  supplier?: { name?: string };
+  opening_balance: number;
+  total_debit: number;
+  total_credit: number;
+  balance: number;
+  entries?: SupplierStatementEntry[];
+  purchase_invoices: PurchaseInvoiceChip[];
+  disbursements: DisbursementChip[];
+}
+
   const params = useParams();
   const router = useRouter();
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<SupplierStatementData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -45,6 +68,7 @@ export default function SupplierStatementPage() {
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
 
+  if (!data) return null;
   const s = data;
   return (
     <div className="space-y-6">
@@ -90,10 +114,10 @@ export default function SupplierStatementPage() {
           <tbody>
             {s.entries?.length === 0 ? (
               <tr><td colSpan={6} className="p-6 text-center text-text-muted">لا توجد حركات في هذه الفترة</td></tr>
-            ) : (s.entries || []).map((e: any) => (
+            ) : (s.entries || []).map((e) => (
               <tr key={e.id} className="border-b border-border/60 hover:bg-surface-hover/40">
                 <td className="p-3 whitespace-nowrap">{formatDate(e.date)}</td>
-                <td className="p-3"><span className="text-xs bg-surface rounded-md px-2 py-1">{typeLabel[e.type] || e.type}</span></td>
+                <td className="p-3"><span className="text-xs bg-surface rounded-md px-2 py-1">{typeLabel[e.type ?? ''] || e.type}</span></td>
                 <td className="p-3 text-text-muted">{e.description || '—'}</td>
                 <td className="p-3">{e.debit > 0 ? formatCurrency(e.debit) : '—'}</td>
                 <td className="p-3">{e.credit > 0 ? formatCurrency(e.credit) : '—'}</td>
@@ -108,7 +132,7 @@ export default function SupplierStatementPage() {
         <div className="rounded-xl border border-border bg-bg-secondary p-4">
           <h3 className="font-bold mb-3">فواتير الشراء ({s.purchase_invoices.length})</h3>
           <div className="flex flex-wrap gap-2">
-            {s.purchase_invoices.map((inv: any) => (
+            {s.purchase_invoices.map((inv) => (
               <span key={inv.id} className="text-xs bg-surface rounded-md px-2 py-1">
                 {inv.number} — {formatCurrency(inv.total)}
               </span>
@@ -120,7 +144,7 @@ export default function SupplierStatementPage() {
         <div className="rounded-xl border border-border bg-bg-secondary p-4">
           <h3 className="font-bold mb-3">سندات الصرف ({s.disbursements.length})</h3>
           <div className="flex flex-wrap gap-2">
-            {s.disbursements.map((d: any) => (
+            {s.disbursements.map((d) => (
               <span key={d.id} className="text-xs bg-surface rounded-md px-2 py-1">
                 {d.number} — {formatCurrency(d.amount)}
               </span>
