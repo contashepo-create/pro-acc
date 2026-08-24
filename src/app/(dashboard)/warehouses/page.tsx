@@ -12,15 +12,18 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 
+interface WarehouseRow { id: string; name: string; location?: string; is_active?: boolean; }
+interface WarehouseForm { name: string; location: string; }
+
 export default function WarehousesPage() {
-  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [warehouses, setWarehouses] = useState<WarehouseRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingWarehouse, setEditingWarehouse] = useState<any>(null);
+  const [editingWarehouse, setEditingWarehouse] = useState<WarehouseRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', location: '' });
+  const [form, setForm] = useState<WarehouseForm>({ name: '', location: '' });
 
   const fetchData = async () => {
     try {
@@ -33,6 +36,8 @@ export default function WarehousesPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -54,10 +59,10 @@ export default function WarehousesPage() {
         setForm({ name: '', location: '' });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (warehouse: any) => {
+  const handleEdit = async (warehouse: WarehouseRow) => {
     try {
       const res = await fetch(`/api/warehouses/${warehouse.id}`);
       const json = await res.json();
@@ -71,7 +76,7 @@ export default function WarehousesPage() {
     }
   };
 
-  const handleDelete = async (warehouse: any) => {
+  const handleDelete = async (warehouse: WarehouseRow) => {
     try {
       const res = await fetch(`/api/warehouses/${warehouse.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -80,7 +85,7 @@ export default function WarehousesPage() {
       } else {
         alert(json.message || 'فشل التعطيل');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -88,11 +93,11 @@ export default function WarehousesPage() {
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
     { key: 'location', label: 'الموقع' },
-    { key: 'is_active', label: 'الحالة', render: (row: any) => <Badge variant={row.is_active ? 'success' : 'danger'}>{row.is_active ? 'نشط' : 'غير نشط'}</Badge> },
+    { key: 'is_active', label: 'الحالة', render: (row: WarehouseRow) => <Badge variant={row.is_active ? 'success' : 'danger'}>{row.is_active ? 'نشط' : 'غير نشط'}</Badge> },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: WarehouseRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}

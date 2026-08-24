@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation'; // FIXED: Added missing useRouter import for page-level redirection
 import { useAuthStore } from '@/store/auth-store'; // FIXED: Added missing useAuthStore import
-import { Shield, ShieldCheck, ShieldOff, Users, Settings, ChevronDown, ChevronUp, Save, AlertCircle, Check, X, UserCog, Lock, Unlock, Send, Plus, Trash2, Edit3, FolderPlus, Zap, Folder, GripVertical } from 'lucide-react';
+import { ShieldCheck, ShieldOff, Users, Settings, ChevronDown, ChevronUp, AlertCircle, Check, UserCog, Send, Plus, Trash2, FolderPlus, Zap, Folder } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -140,9 +140,18 @@ interface CustomAction {
   is_system: boolean;
 }
 
+interface UserRow {
+  id: string;
+  name: string;
+  email?: string;
+  role: string;
+  is_active?: boolean;
+  permissions?: string[];
+}
+
 export default function PermissionsPage() {
   const router = useRouter(); // FIXED: Declared router hook inside component
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
@@ -156,7 +165,7 @@ export default function PermissionsPage() {
   }, [loggedInUser, authLoading, router]);
   
   // حالة النافذة المنبثقة للصلاحيات
-  const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
   const [permissions, setPermissions] = useState<Record<string, string[]>>({});
   const [bypassTelegram, setBypassTelegram] = useState(false);
@@ -207,6 +216,8 @@ export default function PermissionsPage() {
     }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchAll(); }, []);
 
   // ========== بناء قائمة الأقسام الكاملة (نظامية + مخصصة) ==========
@@ -242,7 +253,7 @@ export default function PermissionsPage() {
   };
 
   // ========== فتح نافذة الصلاحيات ==========
-  const openPermissionsModal = async (user: any) => {
+  const openPermissionsModal = async (user: UserRow) => {
     setSelectedUser(user);
     setSaveMessage('');
     
@@ -352,7 +363,7 @@ export default function PermissionsPage() {
   };
 
   const getModuleActions = (module: string): string[] => {
-    return permissions[module] || ROLE_DEFAULTS[selectedUser?.role] || [];
+    return permissions[module] || ROLE_DEFAULTS[selectedUser?.role ?? ''] || [];
   };
 
   const isModuleCustomized = (module: string): boolean => {
@@ -542,7 +553,7 @@ export default function PermissionsPage() {
         <div className="divide-y">
           {users.map(user => {
             const roleInfo = ROLE_LABELS[user.role] || { label: user.role, color: 'bg-gray-100 text-gray-700' };
-            const hasCustomPerms = user.permissions && user.permissions.length > 0;
+            const hasCustomPerms = !!user.permissions && user.permissions.length > 0;
             
             return (
               <div key={user.id} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
@@ -813,10 +824,10 @@ export default function PermissionsPage() {
           {/* معلومات الدور */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <div className="text-sm text-blue-700">
-              <strong>الدور:</strong> {ROLE_LABELS[selectedUser?.role]?.label || selectedUser?.role}
+              <strong>الدور:</strong> {ROLE_LABELS[selectedUser?.role ?? '']?.label || selectedUser?.role}
               <span className="mx-2">|</span>
               <strong>الافتراضي:</strong>
-              {ROLE_DEFAULTS[selectedUser?.role]?.map(action => {
+              {ROLE_DEFAULTS[selectedUser?.role ?? '']?.map((action: string) => {
                 const actionInfo = allActions.find(a => a.key === action);
                 return actionInfo ? (
                   <span key={action} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs mr-1 ${actionInfo.color}`}>

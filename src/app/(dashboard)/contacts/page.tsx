@@ -14,18 +14,36 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { Pagination } from '@/components/ui/Pagination';
 
+interface ContactRow {
+  id: string;
+  name: string;
+  type: string;
+  phone?: string;
+  email?: string;
+  tax_number?: string;
+  address?: string;
+}
+interface ContactForm {
+  name: string;
+  type: string;
+  phone: string;
+  email: string;
+  tax_number: string;
+  address: string;
+}
+
 export default function ContactsPage() {
-  const [contacts, setContacts] = useState<any[]>([]);
+  const [contacts, setContacts] = useState<ContactRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingContact, setEditingContact] = useState<any>(null);
+  const [editingContact, setEditingContact] = useState<ContactRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [total, setTotal] = useState(0);
-  const [form, setForm] = useState<any>({ name: '', type: 'client', phone: '', email: '', tax_number: '', address: '' });
+  const [form, setForm] = useState<ContactForm>({ name: '', type: 'client', phone: '', email: '', tax_number: '', address: '' });
 
   const fetchData = useCallback(async () => {
     try {
@@ -65,10 +83,10 @@ export default function ContactsPage() {
         setForm({ name: '', type: 'client', phone: '', email: '', tax_number: '', address: '' });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (contact: any) => {
+  const handleEdit = async (contact: ContactRow) => {
     try {
       const res = await fetch(`/api/contacts/${contact.id}`);
       const json = await res.json();
@@ -89,7 +107,7 @@ export default function ContactsPage() {
     }
   };
 
-  const handleDelete = async (contact: any) => {
+  const handleDelete = async (contact: ContactRow) => {
     try {
       const res = await fetch(`/api/contacts/${contact.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -99,7 +117,7 @@ export default function ContactsPage() {
       } else {
         alert(json.message || 'فشل التعطيل');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -116,14 +134,14 @@ export default function ContactsPage() {
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
-    { key: 'type', label: 'النوع', sortable: true, render: (row: any) => typeBadge(row.type) },
+    { key: 'type', label: 'النوع', sortable: true, render: (row: ContactRow) => typeBadge(row.type) },
     { key: 'phone', label: 'الجوال' },
     { key: 'email', label: 'البريد الإلكتروني' },
     { key: 'tax_number', label: 'الرقم الضريبي' },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: ContactRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
