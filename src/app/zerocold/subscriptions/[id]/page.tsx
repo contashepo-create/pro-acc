@@ -1,19 +1,30 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronLeft, Loader2, Save } from 'lucide-react';
 
+interface PlanOption { id: string; name: string; code: string; }
+interface SubscriptionRow {
+  plan_id?: string;
+  status?: string;
+  end_date?: string;
+  extra_users?: number;
+  extra_branches?: number;
+  companies?: { name?: string; email?: string };
+}
+type FormState = Partial<SubscriptionRow>;
+interface MsgState { type: string; text: string; }
+
 export default function SubscriptionDetail() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
-  const [sub, setSub] = useState<any>(null);
-  const [plans, setPlans] = useState<any[]>([]);
+  const [sub, setSub] = useState<SubscriptionRow | null>(null);
+  const [plans, setPlans] = useState<PlanOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<any>({});
-  const [msg, setMsg] = useState<any>(null);
+  const [form, setForm] = useState<FormState>({});
+  const [msg, setMsg] = useState<MsgState | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -99,6 +110,6 @@ export default function SubscriptionDetail() {
   );
 }
 
-function ButtonPrimary({ children, onClick, disabled, leftIcon }: any) {
+function ButtonPrimary({ children, onClick, disabled, leftIcon }: { children: ReactNode; onClick?: () => void; disabled?: boolean; leftIcon?: ReactNode }) {
   return <button onClick={onClick} disabled={disabled} className="px-4 py-2 bg-accent text-white rounded-lg text-sm inline-flex items-center gap-2 disabled:opacity-50">{leftIcon}{children}</button>;
 }
