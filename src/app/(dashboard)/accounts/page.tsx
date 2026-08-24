@@ -15,12 +15,26 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { apiFetch } from '@/lib/api-client';
 
+interface AccountNode {
+  id: string;
+  code: string;
+  name: string;
+  name_en?: string;
+  type: string;
+  parent_id?: string;
+  parent_name?: string;
+  is_header?: boolean;
+  children?: AccountNode[];
+  depth?: number;
+}
+interface FlattenedAccount extends AccountNode { depth: number; parent_name: string; }
+
 export default function AccountsPage() {
-  const [accounts, setAccounts] = useState<any[]>([]);
+  const [accounts, setAccounts] = useState<AccountNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingAccount, setEditingAccount] = useState<any>(null);
+  const [editingAccount, setEditingAccount] = useState<AccountNode | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
 
@@ -57,7 +71,7 @@ export default function AccountsPage() {
     setShowModal(true);
   };
 
-  const handleOpenEdit = (account: any) => {
+  const handleOpenEdit = (account: AccountNode) => {
     setEditingAccount(account);
     setForm({
       code: account.code || '',
@@ -70,7 +84,7 @@ export default function AccountsPage() {
     setShowModal(true);
   };
 
-  const handleDelete = async (account: any) => {
+  const handleDelete = async (account: AccountNode) => {
     try {
       const res = await apiFetch(`/api/accounts/${account.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -133,7 +147,7 @@ export default function AccountsPage() {
     }
   };
 
-  const removeAccountFromTree = (accs: any[], id: string): any[] =>
+  const removeAccountFromTree = (accs: AccountNode[], id: string): AccountNode[] =>
     accs
       .filter((a) => a.id !== id)
       .map((a) => ({
@@ -141,8 +155,8 @@ export default function AccountsPage() {
         children: a.children ? removeAccountFromTree(a.children, id) : [],
       }));
 
-  const flattenAccounts = (accs: any[], depth = 0): any[] => {
-    const result: any[] = [];
+  const flattenAccounts = (accs: AccountNode[], depth = 0): FlattenedAccount[] => {
+    const result: FlattenedAccount[] = [];
     for (const acc of accs) {
       result.push({ ...acc, depth, parent_name: acc.parent_name || '' });
       if (acc.children) result.push(...flattenAccounts(acc.children, depth + 1));
@@ -157,14 +171,14 @@ export default function AccountsPage() {
       key: 'code',
       label: 'الرمز',
       sortable: true,
-      render: (row: any) => (
+      render: (row: FlattenedAccount) => (
         <span dir="ltr" className="font-mono inline-block" style={{ unicodeBidi: 'isolate' }}>
           {row.code}
         </span>
       ),
     },
     { key: 'name', label: 'اسم الحساب', sortable: true,
-      render: (row: any) => (
+      render: (row: FlattenedAccount) => (
         <span style={{ paddingRight: `${(row.depth || 0) * 20}px` }} className="flex items-center gap-2">
           {row.depth > 0 && <FolderTree size={14} className="text-text-muted" />}
           {row.name}
@@ -173,7 +187,7 @@ export default function AccountsPage() {
       ),
     },
     { key: 'type', label: 'النوع', sortable: true,
-      render: (row: any) => <Badge variant={row.type === 'asset' || row.type === 'expense' ? 'info' : 'accent'}>{row.type}</Badge>,
+      render: (row: FlattenedAccount) => <Badge variant={row.type === 'asset' || row.type === 'expense' ? 'info' : 'accent'}>{row.type}</Badge>,
     },
   ];
 
@@ -199,7 +213,7 @@ export default function AccountsPage() {
         <DataTable columns={[...columns, { 
           key: 'actions', 
           label: 'إجراءات', 
-          render: (row:any) => (
+          render: (row: FlattenedAccount) => (
             <ActionButtons
               item={row}
               onEdit={handleOpenEdit}
@@ -212,15 +226,15 @@ export default function AccountsPage() {
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editingAccount ? `تعديل حساب ${editingAccount.code}` : "إضافة حساب جديد"} size="lg"
         footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving} leftIcon={<Save size={16} />}>{saving ? 'جاري الحفظ...' : (editingAccount ? 'تحديث' : 'حفظ')}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input label="رمز الحساب" placeholder="مثال: 1130 أو 1110-0001 (الأب ثم الرقم)" value={form.code} onChange={(e:any)=>setForm({...form, code: e.target.value})} dir="ltr" />
+          <Input label="رمز الحساب" placeholder="مثال: 1130 أو 1110-0001 (الأب ثم الرقم)" value={form.code} onChange={(e)=>setForm({...form, code: e.target.value})} dir="ltr" />
           <Select label="النوع" value={form.type} disabled={!!editingAccount} onChange={(value)=>setForm({...form, type: value})} options={[
             { value: 'asset', label: 'أصل' }, { value: 'liability', label: 'خصم' },
             { value: 'equity', label: 'حق ملكية' }, { value: 'revenue', label: 'إيراد' },
             { value: 'expense', label: 'مصروف' },
           ]} />
-          <Input label="اسم الحساب" placeholder="اسم الحساب بالعربية" className="col-span-2" value={form.name} onChange={(e:any)=>setForm({...form, name: e.target.value})} />
-          <Input label="الاسم الإنجليزي (اختياري)" placeholder="Account name in English" className="col-span-2" value={form.nameEn} onChange={(e:any)=>setForm({...form, nameEn: e.target.value})} />
-          <Select label="الحساب الأب" value={form.parentId} disabled={!!editingAccount} onChange={(value)=>setForm({...form, parentId: value})} options={[{ value: '', label: 'بدون - حساب رئيسي' }, ...flatData.map((a:any)=>({ value: a.id, label: `\u202A${a.code}\u202C — ${a.name}` }))]} className="col-span-2" />
+          <Input label="اسم الحساب" placeholder="اسم الحساب بالعربية" className="col-span-2" value={form.name} onChange={(e)=>setForm({...form, name: e.target.value})} />
+          <Input label="الاسم الإنجليزي (اختياري)" placeholder="Account name in English" className="col-span-2" value={form.nameEn} onChange={(e)=>setForm({...form, nameEn: e.target.value})} />
+          <Select label="الحساب الأب" value={form.parentId} disabled={!!editingAccount} onChange={(value)=>setForm({...form, parentId: value})} options={[{ value: '', label: 'بدون - حساب رئيسي' }, ...flatData.map((a: FlattenedAccount) => ({ value: a.id, label: `\u202A${a.code}\u202C — ${a.name}` }))]} className="col-span-2" />
           {editingAccount && (
             <p className="col-span-2 text-xs text-text-muted">لا يمكن تغيير نوع الحساب أو الحساب الأب بعد الإنشاء (حماية لسلامة القيود المحاسبية).</p>
           )}
