@@ -15,12 +15,23 @@ import { formatDate, formatCurrency } from '@/lib/utils';
 import { apiFetch } from '@/lib/api-client';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface JournalLine { id?: string; account_code?: string; account_name?: string; debit?: number; credit?: number; }
+interface JournalEntryRow {
+  id: string;
+  number?: string;
+  date?: string;
+  description?: string;
+  total_debit?: number;
+  total_credit?: number;
+  lines?: JournalLine[];
+}
+
 export default function JournalPage() {
   const router = useRouter();
-  const [entries, setEntries] = useState<any[]>([]);
+  const [entries, setEntries] = useState<JournalEntryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [viewing, setViewing] = useState<any>(null);
+  const [viewing, setViewing] = useState<JournalEntryRow | null>(null);
 
   const fetchData = async () => {
     try {
@@ -36,9 +47,11 @@ export default function JournalPage() {
     }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
-  const handleDelete = async (entry: any) => {
+  const handleDelete = async (entry: JournalEntryRow) => {
     if (!confirm('هل تريد حذف هذا القيد؟')) return;
     try {
       const res = await apiFetch(`/api/journal/${entry.id}`, { method: 'DELETE' });
@@ -52,15 +65,15 @@ export default function JournalPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('journal', row.number) },
-    { key: 'date', label: 'التاريخ', render: (r: any) => formatDate(r.date) },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: JournalEntryRow) => formatDocumentNumber('journal', row.number) },
+    { key: 'date', label: 'التاريخ', render: (r: JournalEntryRow) => formatDate(r.date) },
     { key: 'description', label: 'البيان' },
-    { key: 'total_debit', label: 'المدين', render: (r: any) => formatCurrency(r.total_debit || 0) },
-    { key: 'total_credit', label: 'الدائن', render: (r: any) => formatCurrency(r.total_credit || 0) },
+    { key: 'total_debit', label: 'المدين', render: (r: JournalEntryRow) => formatCurrency(r.total_debit ?? 0) },
+    { key: 'total_credit', label: 'الدائن', render: (r: JournalEntryRow) => formatCurrency(r.total_credit ?? 0) },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (r: any) => (
+      render: (r: JournalEntryRow) => (
         <ActionButtons
           item={r}
           onView={async () => {
@@ -110,7 +123,7 @@ export default function JournalPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {viewing.lines.map((l: any) => (
+                {(viewing.lines || []).map((l: JournalLine) => (
                   <tr key={l.id}>
                     <td className="p-2"><span dir="ltr" className="font-mono" style={{ unicodeBidi: 'isolate' }}>{l.account_code}</span> — {l.account_name || ''}</td>
                     <td className="p-2 font-mono">{formatCurrency(l.debit || 0)}</td>

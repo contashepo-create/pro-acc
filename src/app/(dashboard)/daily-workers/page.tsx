@@ -15,15 +15,18 @@ import { formatCurrency } from '@/lib/utils';
 import { fetchRecord, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 
+interface WorkerRow { id: string; name: string; phone?: string; daily_wage?: number; is_active?: boolean; }
+interface WorkerForm { name: string; phone: string; daily_wage: number; }
+
 export default function DailyWorkersPage() {
-  const [rows, setRows] = useState<any[]>([]);
+  const [rows, setRows] = useState<WorkerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editing, setEditing] = useState<any>(null);
+  const [editing, setEditing] = useState<WorkerRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', phone: '', daily_wage: 0 });
+  const [form, setForm] = useState<WorkerForm>({ name: '', phone: '', daily_wage: 0 });
 
   const fetchData = async () => {
     try {
@@ -36,6 +39,8 @@ export default function DailyWorkersPage() {
     finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -60,16 +65,16 @@ export default function DailyWorkersPage() {
     finally { setSaving(false); }
   };
 
-  const handleEdit = async (row: any) => {
+  const handleEdit = async (row: WorkerRow) => {
     const { data, error } = await fetchRecord(`/api/daily-workers/${row.id}`);
     const src = recordOrRow(data, row);
     if (!data && error) toast.error(error);
     setEditing(row);
-    setForm({ name: src.name || '', phone: src.phone || '', daily_wage: src.daily_wage ?? 0 });
+    setForm({ name: String(src.name ?? ''), phone: String(src.phone ?? ''), daily_wage: Number(src.daily_wage) || 0 });
     setShowModal(true);
   };
 
-  const handleDelete = async (row: any) => {
+  const handleDelete = async (row: WorkerRow) => {
     if (!confirm(`حذف العامل "${row.name}"؟`)) return;
     try {
       const res = await fetch(`/api/daily-workers/${row.id}`, { method: 'DELETE' });
@@ -81,10 +86,10 @@ export default function DailyWorkersPage() {
 
   const columns = [
     { key: 'name', label: 'اسم العامل', sortable: true },
-    { key: 'phone', label: 'الجوال', render: (r: any) => <span dir="ltr">{r.phone || '—'}</span> },
-    { key: 'daily_wage', label: 'الأجر اليومي', render: (r: any) => formatCurrency(r.daily_wage || 0) },
-    { key: 'is_active', label: 'الحالة', render: (r: any) => <Badge variant={r.is_active ? 'success' : 'danger'}>{r.is_active ? 'نشط' : 'معطّل'}</Badge> },
-    { key: 'actions', label: 'إجراءات', render: (r: any) => <ActionButtons item={r} onEdit={() => handleEdit(r)} onDelete={() => handleDelete(r)} /> },
+    { key: 'phone', label: 'الجوال', render: (r: WorkerRow) => <span dir="ltr">{r.phone || '—'}</span> },
+    { key: 'daily_wage', label: 'الأجر اليومي', render: (r: WorkerRow) => formatCurrency(r.daily_wage ?? 0) },
+    { key: 'is_active', label: 'الحالة', render: (r: WorkerRow) => <Badge variant={r.is_active ? 'success' : 'danger'}>{r.is_active ? 'نشط' : 'معطّل'}</Badge> },
+    { key: 'actions', label: 'إجراءات', render: (r: WorkerRow) => <ActionButtons item={r} onEdit={() => handleEdit(r)} onDelete={() => handleDelete(r)} /> },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
