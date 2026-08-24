@@ -11,12 +11,14 @@ interface Subscription {
   subscriber_number?: number | null;
 }
 
+interface PlanOption { id: string; name: string; }
+
 const statusLabels: Record<string, string> = { active: 'نشط', trial: 'تجريبي', expired: 'منتهي', cancelled: 'ملغي' };
 
 export default function SubscriptionsPage() {
   const router = useRouter();
   const [data, setData] = useState<Subscription[]>([]);
-  const [plans, setPlans] = useState<any[]>([]);
+  const [plans, setPlans] = useState<PlanOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('');
@@ -43,9 +45,10 @@ export default function SubscriptionsPage() {
     finally { setLoading(false); }
   };
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- standard fetch pattern
   useEffect(() => { fetchData(); }, []);
 
-  const doAction = async (sub: Subscription, action: string, extra: any = {}) => {
+  const doAction = async (sub: Subscription, action: string, extra: Record<string, unknown> = {}) => {
     setActionLoading(action + sub.id);
     try {
       const res = await fetch(`/api/admin/companies/${sub.company_id}`, {
@@ -148,7 +151,7 @@ export default function SubscriptionsPage() {
               <div className="p-4 space-y-3">
                 <select className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-amber-600" value={planForm.plan_id} onChange={e => setPlanForm({ ...planForm, plan_id: e.target.value })}>
                   <option value="">— اختر الباقة —</option>
-                  {plans.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 <input type="number" className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary" placeholder="عدد الأيام" value={planForm.duration_days} onChange={e => setPlanForm({ ...planForm, duration_days: parseInt(e.target.value) || 30 })} />
                 <label className="flex items-center gap-2 text-sm text-amber-200"><input type="checkbox" checked={planForm.auto_renew} onChange={e => setPlanForm({ ...planForm, auto_renew: e.target.checked })} /> تجديد تلقائي</label>
