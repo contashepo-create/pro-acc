@@ -67,7 +67,7 @@ describe('hasModulePermission — role defaults', () => {
   });
 
   test('returns false when user does not exist', async () => {
-    db.userRole = '' as any; // no user
+    db.userRole = ''; // no user
     expect(await hasModulePermission(U, C, MODULES.INVOICES, 'read')).toBe(false);
   });
 });

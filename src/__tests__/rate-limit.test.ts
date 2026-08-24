@@ -3,8 +3,8 @@
  */
 
 let capturedFilter = '';
-let mockAttemptsData: any[] | null = [];
-let mockAttemptsError: any = null;
+let mockAttemptsData: Record<string, unknown>[] | null = [];
+let mockAttemptsError: Error | null = null;
 
 jest.mock('../lib/supabase-client', () => ({
   getSupabase: () => ({

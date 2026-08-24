@@ -17,7 +17,7 @@ afterEach(() => {
 describe('Table', () => {
   const columns = [
     { key: 'name', label: 'الاسم' },
-    { key: 'amount', label: 'المبلغ', render: (row: any) => <span>{row.amount}</span> },
+    { key: 'amount', label: 'المبلغ', render: (row: { amount?: unknown }) => <span>{String(row.amount)}</span> },
   ];
   const data = [{ id: '1', name: 'عميل', amount: 100 }];
 

@@ -154,7 +154,7 @@ describe('PUT', () => {
     expect((await PUT(makeReq({ master: MASTER, body: { token: '' } }), { params: params() })).status).toBe(400);
     expect((await PUT(makeReq({ master: MASTER, body: {} }), { params: params() })).status).toBe(400);
     expect((await PUT(makeReq({ master: MASTER, body: { token: 'not-a-telegram-token' } }), { params: params() })).status).toBe(400);
-    expect((await PUT(makeReq({ master: MASTER, body: { token: '1234567:AA' + 'x'.repeat(20) } }) as any, { params: params() })).status).toBe(400);
+    expect((await PUT(makeReq({ master: MASTER, body: { token: '1234567:AA' + 'x'.repeat(20) } }), { params: params() })).status).toBe(400);
   });
 
   test('stores the AES-256-GCM envelope (never plaintext) and never leaks the token', async () => {

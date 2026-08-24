@@ -29,7 +29,7 @@ function makeDb(db: Record<string, Row[]>) {
       select: () => api,
       eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
       in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
       not: () => api, gte: () => api, lte: () => api,
       or: (expr: string) => { ops.push({ op: 'or', col: expr }); return api; },
       is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
@@ -193,7 +193,7 @@ describe('project reads and costs', () => {
     });
     const response = await projectCostsGET(request(undefined, 'GET', `http://localhost/api/projects/costs?projectId=${PROJECT}`));
     const json = await response.json();
-    const byName = Object.fromEntries((json.data.categories || []).map((c: any) => [c.name, c.total]));
+    const byName = Object.fromEntries((json.data.categories || []).map((c: { name: string; total: number }) => [c.name, c.total]));
     expect(byName['المواد']).toBe(40);
     expect(byName['العمالة']).toBe(30);
     expect(byName['مقاولو الباطن']).toBe(20);

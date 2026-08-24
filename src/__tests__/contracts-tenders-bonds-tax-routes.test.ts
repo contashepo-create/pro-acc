@@ -12,7 +12,7 @@ type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error?: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });

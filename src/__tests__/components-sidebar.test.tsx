@@ -103,6 +103,7 @@ describe('Sidebar', () => {
     render(<Sidebar />);
     const accounting = screen.getByRole('button', { name: 'المحاسبة' });
     fireEvent.click(accounting);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional: reaches next/navigation internal router
     const { __router } = require('next/navigation');
     expect(__router.push).toHaveBeenCalledWith('/accounts');
     expect(setActiveMock).toHaveBeenCalledWith('accounts');

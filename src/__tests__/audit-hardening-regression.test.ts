@@ -203,7 +203,6 @@ describe('verifyWebhookSecret — fail-closed policy', () => {
 
 describe('money bounds — reject absurd/overflowing amounts with 422 semantics', () => {
   const huge = 1e308;
-  const overNum = 99999999999999.99; // > NUMERIC(15,2)
   it('moneyAmount rejects NaN/Infinity/huge/3-decimals', () => {
     for (const v of [NaN, Infinity, -Infinity, huge, 1e15, 1.001]) {
       expect(moneyAmount().safeParse(v).success).toBe(false);

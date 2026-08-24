@@ -79,6 +79,6 @@ describe('purchaseInvoiceSchema — other expenses', () => {
   test('omits other expenses when not provided (optional)', () => {
     const parsed = purchaseInvoiceSchema.safeParse(base);
     expect(parsed.success).toBe(true);
-    expect((parsed.data as any).other_expenses).toBeUndefined();
+    expect((parsed.data as { other_expenses?: unknown }).other_expenses).toBeUndefined();
   });
 });

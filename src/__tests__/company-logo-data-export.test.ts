@@ -260,9 +260,9 @@ describe('contracts/[id]/documents/[documentId] GET', () => {
 
   test('streams a stored document', async () => {
     mockDb = makeDb({ ...baseDb(), contract_documents: [{ id: DOC_ID, contract_id: CID, company_id: C1, file_data: `storage:contract-documents/${C1}/${CID}/a.pdf`, filename: 'doc.pdf', content_type: 'application/pdf' }] });
-    const fetchMock = jest.spyOn(global as any, 'fetch').mockResolvedValue({
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true, body: '%PDF-1.4', headers: { get: () => '10' },
-    });
+    } as unknown as Response);
     try {
       const res = await contractDocGET(req('admin', 'GET', 'http://localhost/x'), { params: Promise.resolve({ id: CID, documentId: DOC_ID }) });
       expect(res.status).toBe(200);

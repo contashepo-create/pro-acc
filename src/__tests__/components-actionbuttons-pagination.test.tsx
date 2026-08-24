@@ -8,7 +8,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { Pagination } from '@/components/ui/Pagination';
 
 const openPrintMock = jest.fn();
-jest.mock('@/lib/print', () => ({ openPrintWindow: (...a: any[]) => openPrintMock(...a) }));
+jest.mock('@/lib/print', () => ({ openPrintWindow: (...a: unknown[]) => openPrintMock(...a) }));
 
 afterEach(() => {
   openPrintMock.mockReset();

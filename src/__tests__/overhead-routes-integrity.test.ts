@@ -185,7 +185,7 @@ describe('overhead routes — accounting validation', () => {
   });
 
   test('DELETE removes a rule', async () => {
-    const p = { params: Promise.resolve({ id: RULE }) } as any;
+    const p = { params: Promise.resolve({ id: RULE }) };
     const res = await DELETE(requestAs('admin'), p);
     expect(res.status).toBe(200);
     expect(mockDb.calls.some((c) => c.mut.kind === 'delete')).toBe(true);

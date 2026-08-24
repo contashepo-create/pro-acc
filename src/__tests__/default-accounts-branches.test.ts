@@ -5,10 +5,10 @@ type Row = Record<string, unknown>;
 
 function makeEnsureDb(opts: { existing?: Row; cash?: Row; created?: Row | null }) {
   return wrapSupabase({ from: (table: string) => {
-    let mode = 'select'; let insertPayload: Row | Row[] | undefined;
+    let mode = 'select';
     const api: TestBuilder = {
       select: () => api, eq: () => api, limit: () => api,
-      insert: (payload: Row | Row[]) => { mode = 'insert'; insertPayload = payload; return api; },
+      insert: (_payload: Row | Row[]) => { mode = 'insert'; return api; },
       maybeSingle: async () => ({ data: table === 'banks_safes' ? opts.existing || null : opts.cash || null, error: null }),
       single: async () => ({ data: mode === 'insert' ? opts.created || null : null, error: null }),
     };

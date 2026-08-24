@@ -114,7 +114,7 @@ function request(url: string) {
 }
 
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);
-const body = async (response: any) => JSON.parse(await response.text());
+const body = async (response: Response) => JSON.parse(await response.text());
 
 beforeEach(() => { mockDb = makeDb(baseDb()); });
 

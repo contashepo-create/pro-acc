@@ -8,7 +8,7 @@ import { AnnouncementBar } from '@/components/AnnouncementBar';
 import OverheadSettings from '@/components/settings/OverheadSettings';
 
 const fetchMock = jest.fn();
-global.fetch = fetchMock as any;
+global.fetch = fetchMock as unknown as typeof fetch;
 
 afterEach(() => {
   jest.clearAllMocks();

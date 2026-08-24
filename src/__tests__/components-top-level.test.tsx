@@ -11,10 +11,10 @@ import { AdBanner } from '@/components/AdBanner';
 import { AnnouncementBar } from '@/components/AnnouncementBar';
 
 const initThemeMock = jest.fn();
-jest.mock('@/store/theme-store', () => ({ initTheme: (...a: any[]) => initThemeMock(...a) }));
+jest.mock('@/store/theme-store', () => ({ initTheme: (...a: unknown[]) => initThemeMock(...a) }));
 
 const fetchMock = jest.fn();
-global.fetch = fetchMock as any;
+global.fetch = fetchMock as unknown as typeof fetch;
 
 beforeEach(() => {
   localStorage.clear();

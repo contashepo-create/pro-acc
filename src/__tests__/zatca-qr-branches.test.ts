@@ -5,7 +5,7 @@ describe('ZATCA QR validation branches', () => {
     const result = validateInvoiceForZatca({ sellerName: ' ', vatNumber: 'bad', timestamp: 'bad', invoiceTotal: NaN, vatTotal: -1 });
     expect(result.valid).toBe(false);
     expect(result.errors).toHaveLength(5);
-    expect(validateInvoiceForZatca({ ...base, invoiceTotal: 'x' as any }).valid).toBe(false);
+    expect(validateInvoiceForZatca({ ...base, invoiceTotal: 'x' as unknown as number }).valid).toBe(false);
     expect(validateInvoiceForZatca({ ...base, vatTotal: Infinity }).valid).toBe(false);
     expect(validateInvoiceForZatca({ ...base, vatTotal: 116 }).errors).toContain('مبلغ الضريبة لا يمكن أن يكون أكبر من الإجمالي');
   });

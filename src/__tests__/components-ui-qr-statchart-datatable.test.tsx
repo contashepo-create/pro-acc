@@ -9,7 +9,7 @@ import { StatCard } from '@/components/ui/StatCard';
 import { DataTable } from '@/components/ui/DataTable';
 
 const toCanvasMock = jest.fn();
-jest.mock('qrcode', () => ({ toCanvas: (...a: any[]) => toCanvasMock(...a) }));
+jest.mock('qrcode', () => ({ toCanvas: (...a: unknown[]) => toCanvasMock(...a) }));
 
 afterEach(() => {
   jest.clearAllMocks();

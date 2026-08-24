@@ -153,7 +153,7 @@ describe('visitors', () => {
 });
 
 describe('advertisements GET', () => {
-  const ad = (over: Record<string, any> = {}) => ({
+  const ad = (over: Record<string, unknown> = {}) => ({
     id: 'a1', title: 'ad', body: 'b', type: 'banner', display_mode: 'banner',
     priority: 1, link_url: null, link_text: null, expires_at: null, starts_at: null, is_active: true,
     ...over,

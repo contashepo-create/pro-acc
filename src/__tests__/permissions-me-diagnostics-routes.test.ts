@@ -220,7 +220,7 @@ describe('auth/me', () => {
 describe('diagnostics GET', () => {
   test('returns a report when authorized by secret', async () => {
     process.env.DIAGNOSTICS_SECRET = 'diag-secret-123';
-    const res = await diagnosticsGET({ url: 'http://localhost/api/diagnostics', headers: { get: (k: string) => k === 'x-diagnostics-secret' ? 'diag-secret-123' : null } } as any);
+    const res = await diagnosticsGET({ url: 'http://localhost/api/diagnostics', headers: { get: (k: string) => k === 'x-diagnostics-secret' ? 'diag-secret-123' : null } } as unknown as NextRequest);
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.data.ok).toBeDefined();
@@ -230,7 +230,7 @@ describe('diagnostics GET', () => {
   test('rejects an unauthorized caller', async () => {
     delete process.env.DIAGNOSTICS_SECRET;
     delete process.env.CRON_SECRET;
-    const res = await diagnosticsGET({ url: 'http://localhost/api/diagnostics', headers: { get: () => null } } as any);
+    const res = await diagnosticsGET({ url: 'http://localhost/api/diagnostics', headers: { get: () => null } } as unknown as NextRequest);
     expect(res.status).toBe(401);
   });
 });

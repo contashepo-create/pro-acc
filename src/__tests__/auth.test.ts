@@ -12,6 +12,7 @@
 // Set TOKEN_SECRET before importing auth module
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+import crypto from 'crypto';
 import { hashPassword, verifyPassword, createToken, verifyToken } from '../lib/auth';
 
 describe('Password Hashing (scrypt)', () => {
@@ -131,7 +132,6 @@ describe('JWT Token (HMAC-SHA256)', () => {
     ).toString('base64url');
     
     // Sign it properly
-    const crypto = require('crypto');
     const signature = crypto
       .createHmac('sha256', process.env.TOKEN_SECRET!)
       .update(`${header}.${payload}`)

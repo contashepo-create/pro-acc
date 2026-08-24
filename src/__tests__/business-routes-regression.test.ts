@@ -111,7 +111,7 @@ jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { POST as fiscalPOST } from '@/app/api/fiscal/route';
 import { DELETE as fiscalDELETE } from '@/app/api/fiscal/[id]/route';
-import { GET as progressGET, POST as progressPOST } from '@/app/api/progress-billing/route';
+import { GET as progressGET } from '@/app/api/progress-billing/route';
 import { GET as progressDetailGET } from '@/app/api/progress-billing/[id]/route';
 import { POST as quotationsPOST } from '@/app/api/quotations/route';
 import { PUT as quotationsPUT } from '@/app/api/quotations/[id]/route';

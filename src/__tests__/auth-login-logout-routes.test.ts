@@ -6,7 +6,6 @@
  * logout invalidates the session by bumping token_version.
  */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
-import { createToken } from '@/lib/auth';
 
 type Row = Record<string, unknown>;
 

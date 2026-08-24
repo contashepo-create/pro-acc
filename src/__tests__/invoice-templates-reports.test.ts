@@ -15,7 +15,6 @@ type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
-  let insertCounter = 0;
 
   const from = (table: string) => {
     const ops: Op[] = [];

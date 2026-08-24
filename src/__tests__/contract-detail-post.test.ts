@@ -55,7 +55,7 @@ function makeDb(db: Record<string, Row[]>) {
     };
   } = {
     uploadResult: { error: null },
-    from: (bucket: string) => ({
+    from: (_bucket: string) => ({
       upload: async (...args: unknown[]) => { storageCalls.push({ op: 'upload', args }); return storage.uploadResult || { error: null }; },
       remove: async (...args: unknown[]) => { storageCalls.push({ op: 'remove', args }); return { error: null }; },
     }),

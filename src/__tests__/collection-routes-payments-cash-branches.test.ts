@@ -20,7 +20,7 @@ type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error?: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
@@ -84,7 +84,7 @@ const C1 = 'company-1';
 const ID1 = '00000000-0000-4000-8000-00000000f0b1';
 const INV = '00000000-0000-4000-8000-00000000f0c1';
 
-function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: any, extraHeaders: Record<string, string> = {}) {
+function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: Row, extraHeaders: Record<string, string> = {}) {
   const token = createToken('u1', role, 0);
   return { url, method, nextUrl: new URL(url), headers: { get: (k: string) => k === 'authorization' ? `Bearer ${token}` : (extraHeaders[k] ?? null) },
     cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;

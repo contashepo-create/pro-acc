@@ -83,7 +83,7 @@ describe('safeHttpsUrl', () => {
 
   test('rejects empty/non-string values', () => {
     expect(safeHttpsUrl('')).toBeNull();
-    expect(safeHttpsUrl(42 as any)).toBeNull();
+    expect(safeHttpsUrl(42)).toBeNull();
   });
 
   test('respects maxLength', () => {
@@ -110,7 +110,7 @@ describe('trustedReceiptReference', () => {
   test('rejects empty/non-string', () => {
     expect(trustedReceiptReference('', companyId)).toBeNull();
     expect(trustedReceiptReference(null, companyId)).toBeNull();
-    expect(trustedReceiptReference(42 as any, companyId)).toBeNull();
+    expect(trustedReceiptReference(42, companyId)).toBeNull();
   });
 
   test('rejects paths with control characters', () => {
