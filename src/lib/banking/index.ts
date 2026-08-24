@@ -217,8 +217,8 @@ export function autoReconcile(
       }
 
       // Date proximity (within 3 days)
-      const bankDate = new Date(bankTxn.date).getTime();
-      const entryDate = new Date(entry.date).getTime();
+      const bankDate = new Date(String(bankTxn.date)).getTime();
+      const entryDate = new Date(String(entry.date)).getTime();
       const dayDiff = Math.abs(bankDate - entryDate) / 86400000;
       if (dayDiff <= 3) score += 30 - (dayDiff * 10);
 

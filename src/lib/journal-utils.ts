@@ -6,6 +6,8 @@
 import { getSupabase } from '@/lib/supabase-client';
 import { getNextJournalNumber, isUniqueViolation } from '@/lib/numbering';
 
+import type { Row } from './types';
+
 const sb = () => getSupabase();
 
 interface JournalLineInput {
@@ -32,12 +34,12 @@ export async function insertJournalHeader(
     reference_id?: string | null;
     created_by?: string;
   },
-): Promise<{ data: { id: string } | null; error: any | null }> {
+): Promise<{ data: { id: string } | null; error: unknown | null }> {
   const s = sb();
   const { assertOpenFiscalPeriod } = await import('@/lib/fiscal-guard');
   await assertOpenFiscalPeriod(companyId, fields.date);
 
-  let lastError: any = null;
+  let lastError: unknown = null;
   for (let attempt = 0; attempt < 8; attempt++) {
     const number = await getNextJournalNumber(companyId, fields.date);
     const { data, error } = await s.from('journal_entries')
@@ -53,7 +55,7 @@ export async function insertJournalHeader(
       })
       .select('id')
       .single();
-    if (!error && data) return { data, error: null };
+    if (!error && data) return { data: { id: String(data.id) }, error: null };
     lastError = error;
     if (!isUniqueViolation(error)) return { data: null, error };
   }
@@ -63,7 +65,7 @@ export async function insertJournalHeader(
 export async function insertJournalLines(
   companyId: string,
   lines: JournalLineInput[]
-): Promise<{ error: any | null }> {
+): Promise<{ error: unknown | null }> {
   // This helper is used by invoices, vouchers, inventory and fiscal routes.
   // Enforce the posting invariant here too, not only in the manual-journal UI.
   if (lines.length < 2) return { error: new Error('لا يمكن ترحيل قيد بأقل من سطرين') };
@@ -105,7 +107,7 @@ export async function insertJournalLines(
 
   if (accErr) return { error: accErr };
 
-  const accMap = new Map((accounts || []).map((a: any) => [a.id, a]));
+  const accMap = new Map((accounts || []).map((a: Row) => [a.id, a]));
 
   // ACCOUNTING INTEGRITY: a line whose account cannot be resolved must fail
   // loudly — previously it was silently written with code '0000' / 'حساب غير
@@ -116,13 +118,14 @@ export async function insertJournalLines(
       error: new Error(`تعذر العثور على ${unresolved.length} حساب للقيد — تحقق من الحسابات المختارة`),
     };
   }
-  if (lines.some((line) => Boolean((accMap.get(line.account_id) as any).is_header))) {
+  if (lines.some((line) => Boolean((accMap.get(line.account_id) as Row).is_header))) {
     return { error: new Error('لا يجوز الترحيل على حساب رئيسي') };
   }
 
   // بناء السطور بالحقول المطلوبة
   const linesToInsert = lines.map(line => {
-    const acc = accMap.get(line.account_id);
+    // The unresolved-accounts check above guarantees every account resolves.
+    const acc = accMap.get(line.account_id)!;
     return {
       company_id: companyId,
       journal_entry_id: line.journal_entry_id,
@@ -190,7 +193,7 @@ export async function createJournalEntry(
     reference_id?: string | null;
     created_by?: string;
   }
-): Promise<{ journalId: string; error: any | null }> {
+): Promise<{ journalId: string; error: unknown | null }> {
   // ACCOUNTING INTEGRITY: فرض قيد مزدوج متوازن (قبل أي وصول لقاعدة البيانات)
   const totalDebit = lines.reduce((sum, l) => sum + (Number(l.debit) || 0), 0);
   const totalCredit = lines.reduce((sum, l) => sum + (Number(l.credit) || 0), 0);

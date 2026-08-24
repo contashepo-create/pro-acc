@@ -1,12 +1,12 @@
-let configResult: any = { data: null, error: null };
-let bankResult: any = { data: null, error: null };
-let userResult: any = { data: null, error: null };
+let configResult: { data: unknown; error: unknown } = { data: null, error: null };
+let bankResult: { data: unknown; error: unknown } = { data: null, error: null };
+let userResult: { data: unknown; error: unknown } = { data: null, error: null };
 const rpc = jest.fn();
 
 const db = {
   rpc,
   from: jest.fn((table: string) => {
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api, eq: () => api,
       maybeSingle: async () => table === 'company_telegram_configs' ? configResult : table === 'banks_safes' ? bankResult : userResult,
     };
@@ -17,6 +17,7 @@ const db = {
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
 jest.mock('@/lib/telegram', () => ({ escapeTelegramHtml: (value: string) => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }));
 
+import type { TestBuilder } from './mocks';
 import {
   getTelegramConfig, getAccountBalance, checkBankBalance, requireApproval,
   sendApprovalRequestNotification, handleApprovalResponse, sendTelegramNotification,
@@ -33,7 +34,7 @@ beforeEach(() => {
   configResult = { data: enabledConfig, error: null };
   bankResult = { data: null, error: null };
   userResult = { data: { name: 'Ali <Admin>', email: 'a@test.com' }, error: null };
-  global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as any;
+  global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
 });
 
 describe('notification configuration and balances', () => {
@@ -104,10 +105,10 @@ describe('approval notifications', () => {
     userResult = { data: null, error: null };
     await expect(sendApprovalRequestNotification('c1', 10, 'unknown_type', 'short', 'u1', 'a1')).rejects.toThrow('requester');
     userResult = { data: { name: null, email: null }, error: null };
-    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as any;
+    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
     await expect(sendApprovalRequestNotification('c1', 10, 'unknown_type', 'short', 'u1', 'a1')).resolves.toBeUndefined();
     userResult = { data: { name: null, email: 'fallback@test.com' }, error: null };
-    global.fetch = jest.fn(async () => new Response('denied', { status: 403 })) as any;
+    global.fetch = jest.fn(async () => new Response('denied', { status: 403 })) as unknown as typeof fetch;
     await expect(sendApprovalRequestNotification('c1', 10, 'journal_entry', 'j1', 'u1', 'a1')).rejects.toThrow('403');
   });
 
@@ -134,11 +135,11 @@ describe('general and transaction notifications', () => {
     process.env.TELEGRAM_BOT_TOKEN = 'sk_not_a_bot';
     await expect(sendTelegramNotification('c1', 'hello')).resolves.toMatchObject({ success: false, error: expect.stringContaining('غير محدد') });
     process.env.TELEGRAM_BOT_TOKEN = 'bot';
-    global.fetch = jest.fn(async () => new Response('bad', { status: 500 })) as any;
+    global.fetch = jest.fn(async () => new Response('bad', { status: 500 })) as unknown as typeof fetch;
     await expect(sendTelegramNotification('c1', 'hello')).resolves.toEqual({ success: false, error: 'فشل الإرسال: 500' });
-    global.fetch = jest.fn(async () => { throw new Error('network'); }) as any;
+    global.fetch = jest.fn(async () => { throw new Error('network'); }) as unknown as typeof fetch;
     await expect(sendTelegramNotification('c1', 'hello')).resolves.toEqual({ success: false, error: 'خطأ في الاتصال' });
-    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as any;
+    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
     await expect(sendTelegramNotification('c1', 'hello')).resolves.toEqual({ success: true });
   });
 
@@ -156,7 +157,7 @@ describe('general and transaction notifications', () => {
     expect(body.text).toContain('&lt;rent&gt;');
     expect(body.text).toContain('سند صرف');
     configResult = { data: { ...enabledConfig, approval_threshold: 0 }, error: null };
-    global.fetch = jest.fn(async () => new Response('bad', { status: 500 })) as any;
+    global.fetch = jest.fn(async () => new Response('bad', { status: 500 })) as unknown as typeof fetch;
     await expect(sendTransactionNotification('c1', 'receipt', { amount: 1, reason: 'x', date: 'd' }))
       .resolves.toMatchObject({ notified: false, message: 'فشل الإرسال: 500' });
   });

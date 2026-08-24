@@ -16,8 +16,18 @@ const actionMeta: Record<string, { variant: 'success' | 'warning' | 'danger' | '
   reject: { variant: 'danger', label: 'رفض' },
 };
 
+interface AuditRow {
+  created_at: string;
+  user_id?: string;
+  users?: { name?: string };
+  entity_type?: string;
+  entity_id?: string;
+  action?: string;
+  summary?: string;
+}
+
 export default function FinancialAuditPage() {
-  const [rows, setRows] = useState<any[]>([]);
+  const [rows, setRows] = useState<AuditRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -29,12 +39,12 @@ export default function FinancialAuditPage() {
   }, []);
 
   const columns = [
-    { key: 'created_at', label: 'الوقت', render: (r: any) => formatDate(r.created_at) },
-    { key: 'users', label: 'المستخدم', render: (r: any) => r.users?.name || r.user_id || '—' },
-    { key: 'entity_type', label: 'الكيان', render: (r: any) => <span className="font-mono text-xs">{r.entity_type}</span> },
-    { key: 'entity_id', label: 'المعرّف', render: (r: any) => <span className="font-mono text-xs">{r.entity_id}</span> },
-    { key: 'action', label: 'الإجراء', render: (r: any) => { const m = actionMeta[r.action] || { variant: 'default', label: r.action }; return <Badge variant={m.variant}>{m.label}</Badge>; } },
-    { key: 'summary', label: 'الملخص', render: (r: any) => <span className="text-xs">{r.summary || '—'}</span> },
+    { key: 'created_at', label: 'الوقت', render: (r: AuditRow) => formatDate(r.created_at) },
+    { key: 'users', label: 'المستخدم', render: (r: AuditRow) => r.users?.name || r.user_id || '—' },
+    { key: 'entity_type', label: 'الكيان', render: (r: AuditRow) => <span className="font-mono text-xs">{r.entity_type}</span> },
+    { key: 'entity_id', label: 'المعرّف', render: (r: AuditRow) => <span className="font-mono text-xs">{r.entity_id}</span> },
+    { key: 'action', label: 'الإجراء', render: (r: AuditRow) => { const m = actionMeta[r.action ?? ''] || { variant: 'default', label: r.action ?? '' }; return <Badge variant={m.variant}>{m.label}</Badge>; } },
+    { key: 'summary', label: 'الملخص', render: (r: AuditRow) => <span className="text-xs">{r.summary || '—'}</span> },
   ];
 
   return (

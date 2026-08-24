@@ -1,37 +1,44 @@
 /** Custody HTTP boundaries; PostgreSQL lifecycle/rollback/concurrency guards are
  * exercised by scripts/test-migrations.mjs. */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
 
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Array<{ op: string; col?: string; val?: any }>; mut?: string }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const calls: Array<{ table: string; ops: Array<{ op: string; col?: string; val?: unknown }>; mut?: string }> = [];
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
   const from = (table: string) => {
-    const ops: Array<{ op: string; col?: string; val?: any }> = [];
+    const ops: Array<{ op: string; col?: string; val?: unknown }> = [];
     const call = { table, ops, mut: undefined as string | undefined }; calls.push(call);
     const rows = () => (db[table] || []).filter((row) => ops.every((op) => {
       if (op.op === 'eq') return row[op.col!] === op.val;
       if (op.op === 'is') return row[op.col!] == null;
       return true;
     }));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
       order: () => api, range: () => api, limit: () => api,
       insert: () => { call.mut = 'insert'; return api; },
       update: () => { call.mut = 'update'; return api; },
       delete: () => { call.mut = 'delete'; return api; },
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
   return {
     from, calls, rpcCalls,
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
       rpcCalls.push({ name, params });
       return { data: name === 'post_custody_expense'
         ? { id: CUSTODY, applied_from_custody: 5, excess: 0 }
@@ -44,6 +51,8 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { POST as openPOST } from '@/app/api/custodies/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { GET as detailGET, PUT as detailPUT, DELETE as detailDELETE } from '@/app/api/custodies/[id]/route';
 import { POST as addPOST } from '@/app/api/custodies/[id]/add/route';
 import { POST as expensePOST } from '@/app/api/custodies/[id]/expense/route';
@@ -78,11 +87,11 @@ function seed() {
     accounts: [{ id: EXPENSE_ACCOUNT, company_id: C1, code: '5100', type: 'expense', is_active: true, is_header: false }],
   } as Record<string, Row[]>;
 }
-function request(body?: any, method = 'POST') {
+function request(body?: Row, method = 'POST') {
   const token = createToken(USER, 'admin');
   return { url: 'http://localhost/api/custodies', method,
     headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 const context = (id: string) => ({ params: Promise.resolve({ id }) });
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);

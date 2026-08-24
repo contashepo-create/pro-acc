@@ -3,6 +3,8 @@ import { success, error, handleApiError, requireModulePermission, parseBody, get
 import { getSupabase } from '@/lib/supabase-client';
 import { employeeAdvanceCreateSchema } from '@/lib/hr-validation';
 
+import type { Row } from '@/lib/types';
+
 const ADVANCE_COLUMNS = `id,employee_id,amount,remaining_amount,date,reason,journal_entry_id,
   voucher_disbursement_id,custody_id,type,status,approved_at,created_at,employees(name)`;
 
@@ -15,8 +17,8 @@ export async function GET(request: NextRequest) {
       .select(ADVANCE_COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId)
       .order('date', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const advances = (data || []).map((advance: any) => ({
-      ...advance, employee_name: advance.employees?.name || '', employees: undefined,
+    const advances = (data || []).map((advance: Row) => ({
+      ...advance, employee_name: advance.employees ? String((advance.employees as Row).name) || '' : '', employees: undefined,
     }));
     return success({ advances, total: count || 0, page, pageSize });
   } catch (cause) {

@@ -1,4 +1,4 @@
-import { allocateOverhead, sumAllocatedOverhead, validateOverheadRule, basisLabel, type OverheadAllocationRule } from '@/lib/project-overhead';
+import { allocateOverhead, sumAllocatedOverhead, validateOverheadRule, basisLabel, type OverheadAllocationRule , type ProjectOverheadResult } from '@/lib/project-overhead';
 
 describe('allocateOverhead', () => {
   const rules: OverheadAllocationRule[] = [
@@ -48,10 +48,10 @@ describe('allocateOverhead', () => {
   });
 
   test('treats null/undefined rules and costs as empty', () => {
-    expect(allocateOverhead(null as any, null as any)).toEqual([]);
-    expect(allocateOverhead(undefined as any, undefined as any)).toEqual([]);
+    expect(allocateOverhead(null, null)).toEqual([]);
+    expect(allocateOverhead(null, null)).toEqual([]);
     // No rules → zero allocation but per-project rows preserved.
-    const noRules = allocateOverhead([{ projectId: 'p1', directCost: 100, directLabor: 0 }], null as any);
+    const noRules = allocateOverhead([{ projectId: 'p1', directCost: 100, directLabor: 0 }], null);
     expect(noRules).toHaveLength(1);
     expect(noRules[0].allocatedOverhead).toBe(0);
   });
@@ -67,10 +67,10 @@ describe('sumAllocatedOverhead', () => {
   });
 
   test('returns 0 for null/undefined/empty input and tolerates missing allocatedOverhead', () => {
-    expect(sumAllocatedOverhead(null as any)).toBe(0);
-    expect(sumAllocatedOverhead(undefined as any)).toBe(0);
+    expect(sumAllocatedOverhead(null)).toBe(0);
+    expect(sumAllocatedOverhead(null)).toBe(0);
     expect(sumAllocatedOverhead([])).toBe(0);
-    expect(sumAllocatedOverhead([{ projectId: 'x' } as any])).toBe(0);
+    expect(sumAllocatedOverhead([{ projectId: 'x' } as unknown as ProjectOverheadResult])).toBe(0);
   });
 });
 

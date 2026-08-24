@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server';
 import { success, error } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 
@@ -45,7 +47,7 @@ export async function GET(request: NextRequest) {
 
       // Get detailed statistics for each ad
       const enrichedAds = await Promise.all(
-        (ads || []).map(async (ad: any) => {
+        (ads || []).map(async (ad: Row) => {
           // Distinct counts must consider every view. Capping the read at
           // 5,000 rows silently understated reach for any popular ad, and the
           // understatement was invisible because the number still looked
@@ -61,9 +63,9 @@ export async function GET(request: NextRequest) {
               .range(offset, offset + viewPageSize - 1);
             if (viewsError) throw viewsError;
             const page = views || [];
-            for (const view of page as any[]) {
-              if (view.user_id) uniqueUsers.add(view.user_id);
-              if (view.company_id) uniqueCompanies.add(view.company_id);
+            for (const view of page as Row[]) {
+              if (view.user_id) uniqueUsers.add(String(view.user_id));
+              if (view.company_id) uniqueCompanies.add(String(view.company_id));
             }
             if (page.length < viewPageSize) break;
           }
@@ -72,7 +74,7 @@ export async function GET(request: NextRequest) {
             ...ad,
             unique_users: uniqueUsers.size,
             unique_companies: uniqueCompanies.size,
-            ctr: calculateCTR(ad.views || 0, ad.clicks || 0),
+            ctr: calculateCTR(Number(ad.views || 0), Number(ad.clicks || 0)),
           };
         })
       );
@@ -100,7 +102,7 @@ export async function GET(request: NextRequest) {
 
       // Enrich with user data
       const enrichedApprovals = await Promise.all(
-        (approvals || []).map(async (approval: any) => {
+        (approvals || []).map(async (approval: Row) => {
           const { data: requester, error: requesterError } = await s.from('users')
             .select('name')
             .eq('id', approval.requester_id)
@@ -118,7 +120,7 @@ export async function GET(request: NextRequest) {
     } else {
       return error('نوع التقرير غير صالح', 400);
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     return adminJsonError(e);
   }
 }

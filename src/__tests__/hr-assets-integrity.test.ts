@@ -1,13 +1,17 @@
 /** Tenant and RPC boundaries for employees, advances, payroll, and assets. */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
 
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Array<{ op: string; col?: string; val?: any }>; mut?: string }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const calls: Array<{ table: string; ops: Array<{ op: string; col?: string; val?: unknown }>; mut?: string }> = [];
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
   const from = (table: string) => {
-    const ops: Array<{ op: string; col?: string; val?: any }> = [];
+    const ops: Array<{ op: string; col?: string; val?: unknown }> = [];
     const call = { table, ops, mut: undefined as string | undefined }; calls.push(call);
     const rows = () => (db[table] || []).filter((row) => ops.every((op) => {
       if (op.op === 'eq') return row[op.col!] === op.val;
@@ -15,24 +19,27 @@ function makeDb(db: Record<string, Row[]>) {
       if (op.op === 'lte') return String(row[op.col!]) <= String(op.val);
       return true;
     }));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
       order: () => api, range: () => api, limit: () => api, is: () => api,
       insert: () => { call.mut = 'insert'; return api; },
       update: () => { call.mut = 'update'; return api; },
       delete: () => { call.mut = 'delete'; return api; },
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
   return {
     from, calls, rpcCalls,
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
       rpcCalls.push({ name, params });
       if (name === 'post_payroll_batch') return { data: { records: [{ id: RESULT }] }, error: null };
       if (name === 'depreciate_fixed_assets_batch') return { data: { count: 1, totalDepreciation: 10, entries: [] }, error: null };
@@ -44,6 +51,8 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { POST as employeePOST } from '@/app/api/employees/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { GET as employeeGET, PUT as employeePUT, DELETE as employeeDELETE } from '@/app/api/employees/[id]/route';
 import { POST as advancePOST } from '@/app/api/employee-advances/route';
 import { PUT as advancePUT, DELETE as advanceDELETE } from '@/app/api/employee-advances/[id]/route';
@@ -83,11 +92,11 @@ function seed() {
     ],
   } as Record<string, Row[]>;
 }
-function request(body?: any, method = 'POST') {
+function request(body?: Row, method = 'POST') {
   const token = createToken(USER, 'admin');
   return { url: 'http://localhost/api/test', method,
     headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 const context = (id: string) => ({ params: Promise.resolve({ id }) });
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);

@@ -12,23 +12,27 @@ describe('next.config.ts environment configuration resilience', () => {
 
   it('should load config without error when NEXT_PUBLIC_SUPABASE_URL is undefined', () => {
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional: fresh require() after env change / module-init test
     expect(() => require('../../next.config.ts')).not.toThrow();
   });
 
   it('should load config without error when NEXT_PUBLIC_SUPABASE_URL is invalid URL string', () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'invalid-url';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional: fresh require() after env change / module-init test
     expect(() => require('../../next.config.ts')).not.toThrow();
   });
 
   it('should load config without error when NEXT_PUBLIC_SUPABASE_URL is redacted or malformed', () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = '[REDACTED]';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional: fresh require() after env change / module-init test
     expect(() => require('../../next.config.ts')).not.toThrow();
   });
 
   it('should load config correctly when NEXT_PUBLIC_SUPABASE_URL is a domain without scheme', () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'myproject.supabase.co';
-    let config: any;
+    let config: { headers?: () => Promise<Array<{ headers: Array<{ key: string; value: string }> }>> } | undefined;
     expect(() => {
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional: fresh require() after env change
       config = require('../../next.config.ts').default;
     }).not.toThrow();
 
@@ -37,9 +41,10 @@ describe('next.config.ts environment configuration resilience', () => {
 
   it('should load config correctly when NEXT_PUBLIC_SUPABASE_URL is a valid URL', async () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://myproject.supabase.co';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional: fresh require() after env change
     const config = require('../../next.config.ts').default;
     const headers = await config.headers();
-    const csp = headers[0].headers.find((h: any) => h.key === 'Content-Security-Policy');
+    const csp = headers[0].headers.find((h: { key: string; value: string }) => h.key === 'Content-Security-Policy');
 
     expect(csp).toBeDefined();
     // Hardening: connect-src no longer ships the Supabase origin (the

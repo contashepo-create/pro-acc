@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -19,7 +21,7 @@ export async function GET(
       .select('*').eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (noteError) throw noteError;
     if (!note) return notFound();
-    const row = note as Record<string, any>;
+    const row = note as Row;
 
     const { data: items, error: itemsError } = await s.from('credit_note_items')
       .select('*').eq('credit_note_id', id).eq('company_id', auth.companyId).order('id');
@@ -45,9 +47,9 @@ export async function GET(
     return success({
       ...row,
       items: items || [],
-      contact_name: (contactResult.data as any)?.name || null,
-      invoice_number: (invoiceResult.data as any)?.number || null,
-      project_name: (projectResult.data as any)?.name || null,
+      contact_name: (contactResult.data as Row)?.name || null,
+      invoice_number: (invoiceResult.data as Row)?.number || null,
+      project_name: (projectResult.data as Row)?.name || null,
     });
   } catch (err) {
     return handleApiError(err);

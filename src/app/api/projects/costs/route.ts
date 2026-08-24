@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { deliveryUuid } from '@/lib/project-delivery-validation';
 import { classifyProjectCost, PROJECT_COST_CATEGORY_LABELS, type ProjectCostCategory } from '@/lib/project-cost-classifier';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -48,14 +50,14 @@ export async function GET(request: NextRequest) {
     let grandTotal = 0;
 
     for (const l of (lines || [])) {
-      const acc = l.accounts as any;
+      const acc = l.accounts as Row;
       if (!acc) continue;
-      const key = acc.code;
+      const key = String(acc.code);
       if (!accountMap[key]) {
-        accountMap[key] = { code: acc.code, name: acc.name, type: acc.type, total_debit: 0, total_credit: 0 };
+        accountMap[key] = { code: String(acc.code), name: String(acc.name), type: String(acc.type), total_debit: 0, total_credit: 0 };
       }
-      const debit = parseFloat(l.debit) || 0;
-      const credit = parseFloat(l.credit) || 0;
+      const debit = parseFloat(String(l.debit)) || 0;
+      const credit = parseFloat(String(l.credit)) || 0;
       accountMap[key].total_debit += debit;
       accountMap[key].total_credit += credit;
       // الإيراد دائنٌ بالطبيعة (credit − debit = موجب)، والمصروف مدينٌ (debit − credit = موجب)
@@ -66,7 +68,7 @@ export async function GET(request: NextRequest) {
 
     const expenseRows = Object.values(accountMap).sort((a, b) => a.code.localeCompare(b.code));
 
-    const categories: Record<ProjectCostCategory, { code: string; name: string; total: number; items: any[] }> = {
+    const categories: Record<ProjectCostCategory, { code: string; name: string; total: number; items: Row[] }> = {
       materials: { code: '5110', name: PROJECT_COST_CATEGORY_LABELS.materials, total: 0, items: [] },
       labor: { code: '5120', name: PROJECT_COST_CATEGORY_LABELS.labor, total: 0, items: [] },
       subcontractor: { code: '5130', name: PROJECT_COST_CATEGORY_LABELS.subcontractor, total: 0, items: [] },

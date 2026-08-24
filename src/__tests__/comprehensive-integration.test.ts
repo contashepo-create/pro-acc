@@ -4,11 +4,8 @@
  * fiscal closing, ZATCA e-invoicing edge cases, and multi-tenancy limits.
  */
 
-import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
-import { generateUBLInvoice, generateInvoiceHash } from '@/lib/zatca/ubl-builder';
-import { checkRateLimit } from '@/lib/rate-limit';
-import { checkUsageLimit, getCompanyLimits } from '@/lib/usage-limits';
-import { verifyToken, createToken, hashPassword, verifyPassword } from '@/lib/auth';
+import { generateZatcaQRData } from '@/lib/zatca';
+import { generateInvoiceHash } from '@/lib/zatca/ubl-builder';
 import { createHmac } from 'crypto';
 
 describe('1. ZATCA Advanced & Cryptographic Validation', () => {

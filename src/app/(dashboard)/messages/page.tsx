@@ -8,8 +8,16 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate } from '@/lib/utils';
 
+interface MessageRow {
+  id: string;
+  subject?: string;
+  direction?: string;
+  created_at: string;
+  is_read?: boolean;
+}
+
 export default function MessagesPage() {
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<MessageRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -24,9 +32,10 @@ export default function MessagesPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
   useEffect(() => { fetchData(); }, []);
 
-  const handleDelete = async (message: any) => {
+  const handleDelete = async (message: MessageRow) => {
     try {
       const res = await fetch(`/api/messages/${message.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -51,13 +60,13 @@ export default function MessagesPage() {
 
   const columns = [
     { key: 'subject', label: 'الموضوع', sortable: true },
-    { key: 'direction', label: 'الاتجاه', render: (row: any) => directionBadge(row.direction) },
-    { key: 'created_at', label: 'التاريخ', render: (row: any) => formatDate(row.created_at) },
-    { key: 'is_read', label: 'الحالة', render: (row: any) => <Badge variant={row.is_read ? 'success' : 'warning'}>{row.is_read ? 'مقروء' : 'غير مقروء'}</Badge> },
+    { key: 'direction', label: 'الاتجاه', render: (row: MessageRow) => directionBadge(row.direction ?? '') },
+    { key: 'created_at', label: 'التاريخ', render: (row: MessageRow) => formatDate(row.created_at) },
+    { key: 'is_read', label: 'الحالة', render: (row: MessageRow) => <Badge variant={row.is_read ? 'success' : 'warning'}>{row.is_read ? 'مقروء' : 'غير مقروء'}</Badge> },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: MessageRow) => (
         <ActionButtons
           item={row}
           onDelete={handleDelete}

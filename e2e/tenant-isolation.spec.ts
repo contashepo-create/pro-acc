@@ -17,7 +17,8 @@ test.describe('Tenant Isolation', () => {
 
   test('API responses include company_id filter', async ({ page }) => {
     // Intercept API calls and verify they're tenant-scoped
-    const apiResponses: Array<{ url: string; body: any }> = [];
+    type TenantBody = { data?: { invoices?: Array<Record<string, unknown>> } };
+  const apiResponses: Array<{ url: string; body: TenantBody }> = [];
 
     page.on('response', async (response) => {
       const url = response.url();
@@ -38,13 +39,13 @@ test.describe('Tenant Isolation', () => {
     // (the page should load data from the API)
     if (apiResponses.length > 0) {
       // Every successful data response should be scoped to one company
-      for (const { url, body } of apiResponses) {
+      for (const { body } of apiResponses) {
         if (body?.data?.invoices) {
           // If there are invoices, they should all belong to the same company
           const companyIds = new Set(
             body.data.invoices
-              .filter((inv: any) => inv.company_id)
-              .map((inv: any) => inv.company_id),
+              .filter((inv) => inv.company_id)
+              .map((inv) => inv.company_id),
           );
           expect(companyIds.size).toBeLessThanOrEqual(1);
         }

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { success, error, handleApiError, getPaginationParams, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,7 +47,7 @@ export async function GET(request: NextRequest) {
       p_company_id: auth.companyId, p_box_id: boxId || null,
     });
     if (balanceError) throw balanceError;
-    const balanceMap = new Map((balances || []).map((row: Record<string, unknown>) => [
+    const balanceMap = new Map(((balances ?? []) as Row[]).map((row: Row) => [
       String(row.box_id), Number(row.current_balance) || 0,
     ]));
     const boxesWithBalance = (boxes || []).map((box: Record<string, unknown>) => ({

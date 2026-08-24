@@ -3,6 +3,7 @@
  * القالب المرئي وحده لا يثبت امتثال ZATCA أو IFRS/GAAP.
  */
 
+import type { Row } from './types';
 export type InvoiceTypeSelection = 'auto' | 'standard' | 'simplified';
 
 export interface InvoiceTemplateSettings {
@@ -167,7 +168,7 @@ export function getTemplateConfig(id: string): InvoiceTemplateDefinition {
  * - الفاتورة الضريبية المبسطة (Simplified Tax Invoice): B2C — تُصدر للأفراد أو المبيعات النقدية.
  */
 export function resolveInvoiceTitle(
-  invoice: any,
+  invoice: Row,
   userChoice: InvoiceTypeSelection = 'auto'
 ): { titleAr: string; titleEn: string; isSimplified: boolean; reason: string } {
   if (userChoice === 'standard') {
@@ -189,8 +190,9 @@ export function resolveInvoiceTitle(
   }
 
   // الوضع التلقائي (Auto):
-  const hasClientTaxNumber = Boolean(invoice?.client_tax_number || invoice?.contacts?.tax_number);
-  const hasClientCR = Boolean(invoice?.client_commercial_registration || invoice?.contacts?.commercial_registration);
+  const contacts = (invoice?.contacts ?? null) as Row | null;
+  const hasClientTaxNumber = Boolean(invoice?.client_tax_number || contacts?.tax_number);
+  const hasClientCR = Boolean(invoice?.client_commercial_registration || contacts?.commercial_registration);
   const isB2B = hasClientTaxNumber || hasClientCR;
 
   if (isB2B) {

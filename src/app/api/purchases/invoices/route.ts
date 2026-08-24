@@ -39,8 +39,8 @@ export async function GET(req: NextRequest) {
       if (itemsError) throw itemsError;
       const grouped = new Map<string, Record<string, unknown>[]>();
       for (const item of items || []) {
-        const list = grouped.get(item.purchase_invoice_id) || [];
-        list.push(item); grouped.set(item.purchase_invoice_id, list);
+        const list = grouped.get(String(item.purchase_invoice_id)) || [];
+        list.push(item); grouped.set(String(item.purchase_invoice_id), list);
       }
       for (const invoice of invoices) invoice.items = grouped.get(String(invoice.id)) || [];
     }

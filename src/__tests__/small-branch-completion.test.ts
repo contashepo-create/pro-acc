@@ -9,18 +9,18 @@ describe('small remaining branch paths', () => {
     const env = { backup: process.env.BACKUP_SECRET, token: process.env.TOKEN_SECRET, node: process.env.NODE_ENV };
     process.env.BACKUP_SECRET = 'test-only-dedicated-backup-secret-32-chars';
     expect(getBackupSecret()).toContain('dedicated');
-    delete process.env.BACKUP_SECRET; process.env.TOKEN_SECRET = 'test-only-fallback-token-secret-32-chars'; (process.env as any).NODE_ENV = 'test';
+    delete process.env.BACKUP_SECRET; process.env.TOKEN_SECRET = 'test-only-fallback-token-secret-32-chars'; Reflect.set(process.env, 'NODE_ENV', 'test');
     expect(getBackupSecret()).toContain('fallback');
     process.env.TOKEN_SECRET = 'short';
     expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');
     delete process.env.TOKEN_SECRET;
     expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');
-    (process.env as any).NODE_ENV = 'production';
+    Reflect.set(process.env, 'NODE_ENV', 'production');
     process.env.TOKEN_SECRET = 'test-only-long-token-secret-production-32-chars';
     expect(() => getBackupSecret()).toThrow('BACKUP_SECRET');
     if (env.backup === undefined) delete process.env.BACKUP_SECRET; else process.env.BACKUP_SECRET = env.backup;
     if (env.token === undefined) delete process.env.TOKEN_SECRET; else process.env.TOKEN_SECRET = env.token;
-    (process.env as any).NODE_ENV = env.node;
+    Reflect.set(process.env, 'NODE_ENV', env.node);
   });
 
   test('uses backup filename default date and template default id', () => {

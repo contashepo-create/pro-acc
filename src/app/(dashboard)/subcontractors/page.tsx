@@ -12,18 +12,30 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { Pagination } from '@/components/ui/Pagination';
 
+interface SubcontractorRow {
+  id: string;
+  name: string;
+  specialty?: string;
+  contact_person?: string;
+  phone?: string;
+  email?: string;
+  tax_number?: string;
+  notes?: string;
+}
+interface SubcontractorForm { name: string; contact_person: string; phone: string; email: string; tax_number: string; specialty: string; notes: string; }
+
 export default function SubcontractorsPage() {
-  const [subcontractors, setSubcontractors] = useState<any[]>([]);
+  const [subcontractors, setSubcontractors] = useState<SubcontractorRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingSubcontractor, setEditingSubcontractor] = useState<any>(null);
+  const [editingSubcontractor, setEditingSubcontractor] = useState<SubcontractorRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [total, setTotal] = useState(0);
-  const [form, setForm] = useState<any>({ name: '', contact_person: '', phone: '', email: '', tax_number: '', specialty: '', notes: '' });
+  const [form, setForm] = useState<SubcontractorForm>({ name: '', contact_person: '', phone: '', email: '', tax_number: '', specialty: '', notes: '' });
 
   const fetchData = useCallback(async () => {
     try {
@@ -66,7 +78,7 @@ export default function SubcontractorsPage() {
     } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (subcontractor: any) => {
+  const handleEdit = async (subcontractor: SubcontractorRow) => {
     try {
       const res = await fetch(`/api/subcontractors/${subcontractor.id}`);
       const json = await res.json();
@@ -88,7 +100,7 @@ export default function SubcontractorsPage() {
     }
   };
 
-  const handleDelete = async (subcontractor: any) => {
+  const handleDelete = async (subcontractor: SubcontractorRow) => {
     try {
       const res = await fetch(`/api/subcontractors/${subcontractor.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -98,7 +110,7 @@ export default function SubcontractorsPage() {
       } else {
         alert(json.message || 'فشل التعطيل');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -113,7 +125,7 @@ export default function SubcontractorsPage() {
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: SubcontractorRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}

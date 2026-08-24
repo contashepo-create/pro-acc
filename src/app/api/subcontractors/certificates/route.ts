@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, parseBody, getPaginationParams, handleApiError, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -28,12 +30,12 @@ export async function GET(req: NextRequest) {
     if (queryError) throw queryError;
 
     return success({
-      certificates: (certs || []).map((c: any) => ({
+      certificates: (certs || []).map((c: Row) => ({
         ...c,
         certificate_number: c.number,
         gross_amount: c.amount,
-        contract_number: c.subcontractor_contracts?.contract_number || null,
-        subcontractor_name: c.subcontractor_contracts?.contacts?.name || null,
+        contract_number: c.subcontractor_contracts ? String(((c.subcontractor_contracts as Row).contract_number)) || null : null,
+        subcontractor_name: c.subcontractor_contracts ? (c.subcontractor_contracts as Row).contacts ? String(((c.subcontractor_contracts as Row).contacts as Row).name) || null : null : null,
       })),
       total: count || 0,
       page,

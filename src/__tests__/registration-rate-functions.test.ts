@@ -1,11 +1,12 @@
-let attempts: any[] = [];
-let queryError: any = null;
-let insertError: any = null;
-const inserted: any[] = [];
+type Row = Record<string, unknown>;
+let attempts: Row[] = [];
+let queryError: Error | null = null;
+let insertError: Error | null = null;
+const inserted: Row[] = [];
 const db = { from: jest.fn(() => {
-  const api: any = {
+  const api = {
     select: () => api, or: () => api, gte: () => api, order: async () => ({ data: attempts, error: queryError }),
-    insert: async (payload: any) => { inserted.push(payload); return { error: insertError }; },
+    insert: async (payload: Row) => { inserted.push(payload); return { error: insertError }; },
   };
   return api;
 }) };

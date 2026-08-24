@@ -10,12 +10,12 @@ import { toast } from './Toast';
 import { openPrintWindow } from '@/lib/print';
 import { escapeHtml } from '@/lib/utils';
 
-interface ActionButtonsProps {
-  item: any;
-  onEdit?: (item: any) => void;
-  onDelete?: (item: any) => void;
-  onView?: (item: any) => void;
-  onPrint?: (item: any) => void;
+interface ActionButtonsProps<T extends object = object> {
+  item: T;
+  onEdit?: (item: T) => void;
+  onDelete?: (item: T) => void;
+  onView?: (item: T) => void;
+  onPrint?: (item: T) => void;
   showView?: boolean;
   showPrint?: boolean;
   status?: string;
@@ -23,7 +23,7 @@ interface ActionButtonsProps {
   deleteMode?: 'delete' | 'deactivate';
 }
 
-function defaultPrint(item: any) {
+function defaultPrint(item: object) {
   const skip = new Set(['id', 'company_id', 'created_by', 'updated_at', 'deleted_at', 'password_hash', 'children']);
   const rows = Object.entries(item || {})
     .filter(([k, v]) => !skip.has(k) && v != null && typeof v !== 'object')
@@ -42,7 +42,7 @@ function defaultPrint(item: any) {
   }
 }
 
-export function ActionButtons({
+export function ActionButtons<T extends object = object>({
   item,
   onEdit,
   onDelete,
@@ -53,7 +53,7 @@ export function ActionButtons({
   status,
   showStatus = false,
   deleteMode = 'delete',
-}: ActionButtonsProps) {
+}: ActionButtonsProps<T>) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
   const [deleting, setDeleting] = useState(false);

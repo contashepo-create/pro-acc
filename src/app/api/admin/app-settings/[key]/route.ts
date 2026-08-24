@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, notFound, requireAdminAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const SAFE_KEY = /^[a-z][a-z0-9_]{1,63}$/;
 const SAFE_CATEGORY = /^[a-z][a-z0-9_-]{0,49}$/;
 
@@ -34,7 +36,7 @@ export async function PUT(
       p_patch: patch,
     });
     if (updateError) throw updateError;
-    if ((data as any)?.not_found) return notFound();
+    if ((data as Row)?.not_found) return notFound();
     return success(data);
   } catch (err) {
     return handleApiError(err);
@@ -55,8 +57,8 @@ export async function DELETE(
       p_key: key,
     });
     if (deleteError) throw deleteError;
-    if ((data as any)?.not_found) return notFound();
-    if ((data as any)?.protected) return error('لا يمكن حذف الحقول الافتراضية، يمكن تعديلها فقط');
+    if ((data as Row)?.not_found) return notFound();
+    if ((data as Row)?.protected) return error('لا يمكن حذف الحقول الافتراضية، يمكن تعديلها فقط');
     return success({ deleted: true });
   } catch (err) {
     return handleApiError(err);

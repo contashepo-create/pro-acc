@@ -12,15 +12,18 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 
+interface CurrencyRow { id: string; code: string; name: string; rate: number; is_base?: boolean; }
+interface CurrencyForm { code: string; name: string; rate: number; }
+
 export default function CurrenciesPage() {
-  const [currencies, setCurrencies] = useState<any[]>([]);
+  const [currencies, setCurrencies] = useState<CurrencyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingCurrency, setEditingCurrency] = useState<any>(null);
+  const [editingCurrency, setEditingCurrency] = useState<CurrencyRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ code: '', name: '', rate: 1 });
+  const [form, setForm] = useState<CurrencyForm>({ code: '', name: '', rate: 1 });
 
   const fetchData = async () => {
     try {
@@ -33,6 +36,8 @@ export default function CurrenciesPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -54,10 +59,10 @@ export default function CurrenciesPage() {
         setForm({ code: '', name: '', rate: 1 });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (currency: any) => {
+  const handleEdit = async (currency: CurrencyRow) => {
     try {
       const res = await fetch(`/api/currencies/${currency.id}`);
       const json = await res.json();
@@ -71,7 +76,7 @@ export default function CurrenciesPage() {
     }
   };
 
-  const handleDelete = async (currency: any) => {
+  const handleDelete = async (currency: CurrencyRow) => {
     try {
       const res = await fetch(`/api/currencies/${currency.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -80,7 +85,7 @@ export default function CurrenciesPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -89,11 +94,11 @@ export default function CurrenciesPage() {
     { key: 'code', label: 'الرمز', sortable: true },
     { key: 'name', label: 'الاسم', sortable: true },
     { key: 'rate', label: 'سعر الصرف' },
-    { key: 'is_base', label: 'الأساس', render: (row: any) => <Badge variant={row.is_base ? 'success' : 'default'}>{row.is_base ? 'نعم' : 'لا'}</Badge> },
+    { key: 'is_base', label: 'الأساس', render: (row: CurrencyRow) => <Badge variant={row.is_base ? 'success' : 'default'}>{row.is_base ? 'نعم' : 'لا'}</Badge> },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: CurrencyRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}

@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server';
-import { success, error, handleApiError, parseBody, getPaginationParams, requireApiAuth, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -19,8 +21,8 @@ export async function GET(req: NextRequest) {
 
     if (queryError) throw queryError;
 
-    const categories = (data || []).map((tc: any) => ({
-      ...tc, account_code: tc.accounts?.code || null, account_name: tc.accounts?.name || null,
+    const categories = (data || []).map((tc: Row) => ({
+      ...tc, account_code: tc.accounts ? String((tc.accounts as Row).code) || null : null, account_name: tc.accounts ? String((tc.accounts as Row).name) || null : null,
     }));
 
     return success({ categories, total: count || 0, page, pageSize });

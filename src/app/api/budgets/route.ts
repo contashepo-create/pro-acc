@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { success, error, notFound, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const uuidSchema = z.string().uuid();
 const createSchema = z.object({
   project_id: uuidSchema,
@@ -35,7 +37,7 @@ export async function GET(request: NextRequest) {
     });
     if (queryError) throw queryError;
     const actualByScope = new Map<string, number>();
-    const budgets = (data || []).map((row: any) => {
+    const budgets = ((data ?? []) as Row[]).map((row: Row) => {
       const budgetAmount = amount(row.amount);
       const actual = amount(row.actual_spent);
       actualByScope.set(`${row.project_id}:${row.category}`, actual);
@@ -49,7 +51,7 @@ export async function GET(request: NextRequest) {
         is_over_budget: variance < 0,
       };
     });
-    const totalBudget = budgets.reduce((sum: number, row: any) => sum + amount(row.amount), 0);
+    const totalBudget = budgets.reduce((sum: number, row) => sum + amount((row as Row).amount), 0);
     const totalActual = [...actualByScope.values()].reduce((sum, value) => sum + value, 0);
     return success({
       budgets,

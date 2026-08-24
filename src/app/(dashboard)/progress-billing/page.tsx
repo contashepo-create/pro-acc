@@ -15,20 +15,43 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface ClaimRow {
+  id: string;
+  claim_number?: string;
+  project_name?: string;
+  date?: string;
+  gross_amount: number;
+  retention_amount?: number;
+  net_amount?: number;
+  status: string;
+  is_final?: boolean;
+}
+interface ProjectOption { id: string; name: string; }
+interface ClaimForm {
+  project_id: string;
+  date: string;
+  gross_amount: number;
+  retention_percentage: number;
+  notes: string;
+  is_final: boolean;
+  tax_enabled: boolean;
+  tax_rate: number;
+}
+
 export default function ProgressBillingPage() {
-  const [claims, setClaims] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [claims, setClaims] = useState<ClaimRow[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingClaim, setEditingClaim] = useState<any>(null);
+  const [editingClaim, setEditingClaim] = useState<ClaimRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<ClaimForm>({
     project_id: '', date: new Date().toISOString().split('T')[0],
     gross_amount: 0, retention_percentage: 10, notes: '', is_final: false, tax_enabled: false, tax_rate: 0.15,
   });
@@ -51,6 +74,8 @@ export default function ProgressBillingPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -78,28 +103,28 @@ export default function ProgressBillingPage() {
         });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (claim: any) => {
+  const handleEdit = async (claim: ClaimRow) => {
     const { data, error } = await fetchRecord(`/api/progress-billing/${claim.id}`);
     const src = recordOrRow(data, claim);
     if (!data && error) toast.error(error);
     setEditingClaim(claim);
     setForm(applyDates({
-      project_id: src.project_id || '',
-      date: src.date,
-      gross_amount: src.gross_amount || 0,
-      retention_percentage: src.retention_percentage ?? src.retention_rate ?? 10,
-      notes: src.notes || src.description || '',
-      is_final: src.is_final || false,
+      project_id: String(src.project_id ?? ''),
+      date: toDateInput(src.date) ?? '',
+      gross_amount: Number(src.gross_amount) || 0,
+      retention_percentage: Number(src.retention_percentage ?? src.retention_rate ?? 10) || 10,
+      notes: String(src.notes ?? src.description ?? ''),
+      is_final: Boolean(src.is_final),
       tax_enabled: Number(src.tax_rate || 0) > 0,
-      tax_rate: src.tax_rate || 0.15,
+      tax_rate: Number(src.tax_rate) || 0.15,
     }, ['date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (claim: any) => {
+  const handleDelete = async (claim: ClaimRow) => {
     try {
       const res = await fetch(`/api/progress-billing/${claim.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -108,7 +133,7 @@ export default function ProgressBillingPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -126,13 +151,13 @@ export default function ProgressBillingPage() {
   };
 
   const columns = [
-    { key: 'claim_number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('progress_billing', row.claim_number) },
+    { key: 'claim_number', label: 'الرقم', sortable: true, render: (row: ClaimRow) => formatDocumentNumber('progress_billing', row.claim_number) },
     { key: 'project_name', label: 'المشروع', sortable: true },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
-    { key: 'gross_amount', label: 'الإجمالي', render: (row: any) => formatCurrency(row.gross_amount) },
-    { key: 'retention_amount', label: 'الاحتجاز', render: (row: any) => formatCurrency(row.retention_amount) },
-    { key: 'net_amount', label: 'الصافي', render: (row: any) => formatCurrency(row.net_amount) },
-    { key: 'status', label: 'الحالة', render: (row: any) => (
+    { key: 'date', label: 'التاريخ', render: (row: ClaimRow) => formatDate(row.date) },
+    { key: 'gross_amount', label: 'الإجمالي', render: (row: ClaimRow) => formatCurrency(row.gross_amount) },
+    { key: 'retention_amount', label: 'الاحتجاز', render: (row: ClaimRow) => formatCurrency(row.retention_amount ?? 0) },
+    { key: 'net_amount', label: 'الصافي', render: (row: ClaimRow) => formatCurrency(row.net_amount ?? 0) },
+    { key: 'status', label: 'الحالة', render: (row: ClaimRow) => (
       <div className="flex items-center gap-2">
         {statusBadge(row.status)}
         {row.is_final && <Badge variant="success">نهائية</Badge>}
@@ -141,7 +166,7 @@ export default function ProgressBillingPage() {
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: ClaimRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -161,7 +186,7 @@ export default function ProgressBillingPage() {
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingClaim(null); }} title={editingClaim ? 'تعديل فاتورة مرحلية' : 'إضافة فاتورة مرحلية'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingClaim(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select label="المشروع" value={form.project_id} disabled={!!editingClaim} onChange={(v) => setForm({...form, project_id: v})} options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} className="col-span-2" />
+            <Select label="المشروع" value={form.project_id} disabled={!!editingClaim} onChange={(v) => setForm({...form, project_id: v})} options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} className="col-span-2" />
             <Input label="التاريخ" type="date" value={form.date} disabled={!!editingClaim} onChange={(e) => setForm({...form, date: e.target.value})} />
             <Input label="المبلغ الإجمالي" type="number" value={form.gross_amount} disabled={!!editingClaim} onChange={(e) => setForm({...form, gross_amount: parseFloat(e.target.value) || 0})} />
             <Input label="نسبة الاحتجاز (%)" type="number" value={form.retention_percentage} disabled={!!editingClaim} onChange={(e) => setForm({...form, retention_percentage: parseFloat(e.target.value) || 10})} />

@@ -34,6 +34,7 @@ jest.mock('@/lib/api-helpers', () => {
 });
 
 import { POST as uploadReceipt } from '@/app/api/upload/receipt/route';
+import type { NextRequest } from 'next/server';
 import {
   NOTIFICATIONS_UPDATED_EVENT,
   publishUnreadNotificationCount,
@@ -57,7 +58,7 @@ describe('subscription payment-proof upload', () => {
       type: 'image/png', size: png.length,
       arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
     };
-    const request = { formData: async () => new Map([['file', file]]) } as any;
+    const request = { formData: async () => new Map([['file', file]]) } as unknown as NextRequest;
 
     const response = await uploadReceipt(request);
     const payload = await response.json();
@@ -77,20 +78,20 @@ describe('subscription payment-proof upload', () => {
 
 describe('notification badge event', () => {
   test('is safe server-side and rejects malformed event details', () => {
-    const originalWindow = (globalThis as any).window;
-    delete (globalThis as any).window;
+    const originalWindow = (globalThis as { window?: unknown }).window;
+    delete (globalThis as { window?: unknown }).window;
     expect(() => publishUnreadNotificationCount(2)).not.toThrow();
     expect(readUnreadNotificationCount(new Event('x'))).toBeNull();
     expect(readUnreadNotificationCount(new CustomEvent('x', { detail: { unreadCount: '3' } }))).toBeNull();
-    (globalThis as any).window = originalWindow;
+    (globalThis as { window?: unknown }).window = originalWindow;
   });
 
   test('publishes a normalized unread count immediately', () => {
-    const originalWindow = (globalThis as any).window;
+    const originalWindow = (globalThis as { window?: unknown }).window;
     const listener = jest.fn();
     const fakeWindow = new EventTarget();
     fakeWindow.addEventListener(NOTIFICATIONS_UPDATED_EVENT, listener);
-    (globalThis as any).window = fakeWindow;
+    (globalThis as { window?: unknown }).window = fakeWindow;
 
     try {
       publishUnreadNotificationCount(3.9);
@@ -99,7 +100,7 @@ describe('notification badge event', () => {
       expect(readUnreadNotificationCount(listener.mock.calls[0][0])).toBe(3);
       expect(readUnreadNotificationCount(listener.mock.calls[1][0])).toBe(0);
     } finally {
-      (globalThis as any).window = originalWindow;
+      (globalThis as { window?: unknown }).window = originalWindow;
     }
   });
 });

@@ -62,11 +62,12 @@ export async function POST(request: NextRequest) {
 
     const created = data as { company: { id: string; name: string }; user: { id: string; name: string; email: string; role: string } };
     const token = createToken(created.user.id, created.user.role);
+    // SECURITY: the session JWT travels only in the HttpOnly cookie — never in
+    // the JSON body (a body token would be readable by any XSS).
     const response = success({
       message: 'تم إعداد النظام بنجاح',
       companyId: created.company.id,
       user: created.user,
-      token,
       setupProtected: !!expectedToken,
     }, 201);
     setAuthCookie(response, 'token', token, 86400 * 7);

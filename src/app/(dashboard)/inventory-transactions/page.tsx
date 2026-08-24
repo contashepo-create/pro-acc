@@ -14,21 +14,43 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
-import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface InvTxRow {
+  id: string;
+  number?: string;
+  item_name?: string;
+  warehouse_name?: string;
+  type: string;
+  quantity?: number;
+  unit_price: number;
+  total_value: number;
+  date?: string;
+}
+interface ItemOption { id: string; code: string; name: string; warehouse_id?: string; }
+interface WarehouseOption { id: string; name: string; }
+interface InvTxForm {
+  item_id: string;
+  warehouse_id: string;
+  type: string;
+  quantity: number;
+  unit_price: number;
+  date: string;
+  notes: string;
+  to_warehouse_id: string;
+}
+
 export default function InventoryTransactionsPage() {
-  const [transactions, setTransactions] = useState<any[]>([]);
-  const [items, setItems] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<InvTxRow[]>([]);
+  const [items, setItems] = useState<ItemOption[]>([]);
+  const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingTransaction, setEditingTransaction] = useState<any>(null);
+  const [editingTransaction, setEditingTransaction] = useState<InvTxRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<InvTxForm>({
     item_id: '', warehouse_id: '', type: 'add', quantity: 0, unit_price: 0,
     date: new Date().toISOString().split('T')[0], notes: '', to_warehouse_id: '',
   });
@@ -54,6 +76,8 @@ export default function InventoryTransactionsPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -96,10 +120,10 @@ export default function InventoryTransactionsPage() {
         });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (transaction: any) => {
+  const handleEdit = async (transaction: InvTxRow) => {
     try {
       const res = await fetch(`/api/inventory-transactions/${transaction.id}`);
       const json = await res.json();
@@ -138,18 +162,18 @@ export default function InventoryTransactionsPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('inventory_transaction', row.number) },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: InvTxRow) => formatDocumentNumber('inventory_transaction', row.number) },
     { key: 'item_name', label: 'الصنف', sortable: true },
     { key: 'warehouse_name', label: 'المستودع', sortable: true },
-    { key: 'type', label: 'النوع', render: (row: any) => typeBadge(row.type) },
+    { key: 'type', label: 'النوع', render: (row: InvTxRow) => typeBadge(row.type) },
     { key: 'quantity', label: 'الكمية', sortable: true },
-    { key: 'unit_price', label: 'السعر', render: (row: any) => formatCurrency(row.unit_price) },
-    { key: 'total_value', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total_value) },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
+    { key: 'unit_price', label: 'السعر', render: (row: InvTxRow) => formatCurrency(row.unit_price) },
+    { key: 'total_value', label: 'الإجمالي', render: (row: InvTxRow) => formatCurrency(row.total_value) },
+    { key: 'date', label: 'التاريخ', render: (row: InvTxRow) => formatDate(row.date) },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: InvTxRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -173,13 +197,13 @@ export default function InventoryTransactionsPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select label="الصنف" value={form.item_id} onChange={(v) => {
-              const item = items.find((candidate: any) => candidate.id === v);
+              const item = items.find((candidate) => candidate.id === v);
               setForm({ ...form, item_id: v, warehouse_id: item?.warehouse_id || '' });
-            }} disabled={isEdit} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i: any) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
-            <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} disabled={isEdit || !!form.item_id} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w: any) => ({ value: w.id, label: w.name }))]} />
+            }} disabled={isEdit} options={[{ value: '', label: 'اختر صنفاً' }, ...items.map((i) => ({ value: i.id, label: `${i.code} - ${i.name}` }))]} className="col-span-2" />
+            <Select label="المستودع" value={form.warehouse_id} onChange={(v) => setForm({...form, warehouse_id: v})} disabled={isEdit || !!form.item_id} options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((w) => ({ value: w.id, label: w.name }))]} />
             <Select label="النوع" value={form.type} onChange={(v) => setForm({...form, type: v})} disabled={isEdit} options={[{ value: 'add', label: 'إضافة' }, { value: 'issue', label: 'صرف' }, { value: 'adjustment', label: 'تسوية' }, { value: 'transfer', label: 'تحويل' }, { value: 'return', label: 'مرتجع' }]} />
             {!isEdit && form.type === 'transfer' && (
-              <Select label="إلى مستودع" value={form.to_warehouse_id} onChange={(v) => setForm({...form, to_warehouse_id: v})} options={[{ value: '', label: 'اختر مستودع الوجهة' }, ...warehouses.filter((w: any) => w.id !== form.warehouse_id).map((w: any) => ({ value: w.id, label: w.name }))]} />
+              <Select label="إلى مستودع" value={form.to_warehouse_id} onChange={(v) => setForm({...form, to_warehouse_id: v})} options={[{ value: '', label: 'اختر مستودع الوجهة' }, ...warehouses.filter((w) => w.id !== form.warehouse_id).map((w) => ({ value: w.id, label: w.name }))]} />
             )}
             <Input label="الكمية" type="number" value={form.quantity} disabled={isEdit} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
             <Input label="سعر الوحدة" type="number" value={form.unit_price} disabled={isEdit} onChange={(e) => setForm({...form, unit_price: parseFloat(e.target.value) || 0})} />

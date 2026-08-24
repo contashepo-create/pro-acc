@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     }
     const check = validateOverheadRule(body);
     if (typeof check === 'string') return error(check);
-    const name = body.name.trim();
+    const name = String(body.name).trim();
     const rate = Number(body.rate);
     const basis = body.allocation_basis;
 

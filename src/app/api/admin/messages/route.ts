@@ -4,6 +4,8 @@ import { success, error, parseBody } from '@/lib/api-helpers';
 import { requireAdmin, adminJsonError } from '@/lib/admin-guard';
 import { adminCompanyMessageSchema, communicationUuid } from '@/lib/communication-validation';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
@@ -27,19 +29,19 @@ export async function GET(request: NextRequest) {
     const { data: messages, error: err } = await queryBuilder;
     if (err) throw err;
 
-    const companyIds = (messages || []).map((m: any) => m.company_id).filter(Boolean);
+    const companyIds = (messages || []).map((m: Row) => m.company_id).filter(Boolean);
     const companyMap: Record<string, string> = {};
     if (companyIds.length > 0) {
       const { data: companies, error: companiesError } = await s.from('companies')
         .select('id, name')
         .in('id', [...new Set(companyIds)]);
       if (companiesError) throw companiesError;
-      (companies || []).forEach((c: any) => { companyMap[c.id] = c.name; });
+      ((companies ?? []) as Row[]).forEach((c: Row) => { companyMap[String(c.id)] = String(c.name); });
     }
 
-    const result = (messages || []).map((m: any) => ({
+    const result = (messages || []).map((m: Row) => ({
       ...m,
-      company_name: companyMap[m.company_id] || null,
+      company_name: companyMap[String(m.company_id)] || null,
     }));
 
     return success(result);

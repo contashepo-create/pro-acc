@@ -14,21 +14,35 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface CashTransactionRow {
+  id: string;
+  number?: string;
+  date?: string;
+  type: string;
+  account_name?: string;
+  amount: number;
+  reason?: string;
+}
+interface BankSafeOption { id: string; name: string; account_id?: string; }
+interface AccountOption { id: string; code: string; name: string; is_header?: boolean; children?: AccountOption[]; }
+interface ContactOption { id: string; name: string; }
+interface CashForm { date: string; type: string; amount: number; account_id: string; bank_safe_id: string; contact_id: string; reason: string; }
+
 export default function CashPage() {
-  const [transactions, setTransactions] = useState<any[]>([]);
-  const [banks, setBanks] = useState<any[]>([]);
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const [contacts, setContacts] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<CashTransactionRow[]>([]);
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
+  const [accounts, setAccounts] = useState<AccountOption[]>([]);
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingTransaction, setEditingTransaction] = useState<any>(null);
+  const [editingTransaction, setEditingTransaction] = useState<CashTransactionRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<CashForm>({
     date: new Date().toISOString().split('T')[0],
     type: 'receipt',
     amount: 0,
@@ -62,7 +76,7 @@ export default function CashPage() {
       }
       if (bankJson.success) setBanks(bankJson.data?.banks || []);
       if (accJson.success) {
-        const flatten = (nodes: any[], out: any[] = []): any[] => {
+        const flatten = (nodes: AccountOption[], out: AccountOption[] = []): AccountOption[] => {
           for (const n of nodes || []) {
             if (!n.is_header) out.push(n);
             if (n.children?.length) flatten(n.children, out);
@@ -72,7 +86,7 @@ export default function CashPage() {
         setAccounts(flatten(accJson.data?.accounts || []));
       }
       if (conJson.success) setContacts(conJson.data?.contacts || []);
-    } catch (err) {
+    } catch {
       setError('فشل تحميل البيانات');
       toast.error('خطأ في الاتصال بالخادم');
     } finally {
@@ -133,31 +147,31 @@ export default function CashPage() {
       } else {
         setSaveError(json.message || 'فشل الحفظ');
       }
-    } catch (e: any) {
+    } catch {
       setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = async (transaction: any) => {
+  const handleEdit = async (transaction: CashTransactionRow) => {
     const { data, error } = await fetchRecord(`/api/cash/${transaction.id}`);
     const src = recordOrRow(data, transaction);
     if (!data && error) toast.error(error);
     setEditingTransaction(transaction);
     setForm(applyDates({
-      date: src.date,
-      type: src.type || 'receipt',
-      amount: src.amount || 0,
-      account_id: src.account_id || '',
-      bank_safe_id: src.bank_safe_id || '',
-      contact_id: src.contact_id || '',
-      reason: src.reason || '',
+      date: toDateInput(src.date) ?? '',
+      type: String(src.type ?? 'receipt'),
+      amount: Number(src.amount) || 0,
+      account_id: String(src.account_id ?? ''),
+      bank_safe_id: String(src.bank_safe_id ?? ''),
+      contact_id: String(src.contact_id ?? ''),
+      reason: String(src.reason ?? ''),
     }, ['date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (transaction: any) => {
+  const handleDelete = async (transaction: CashTransactionRow) => {
     try {
       const res = await fetch(`/api/cash/${transaction.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -167,14 +181,16 @@ export default function CashPage() {
       } else {
         toast.error(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
   const [typeTab, setTypeTab] = useState('all');
 
+  // Initial load on mount (standard fetch pattern).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
   }, []);
 
@@ -193,16 +209,16 @@ export default function CashPage() {
   );
   
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('cash_transaction', row.number) },
-    { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
-    { key: 'type', label: 'النوع', sortable: true, render: (row: any) => typeBadge(row.type) },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: CashTransactionRow) => formatDocumentNumber('cash_transaction', row.number) },
+    { key: 'date', label: 'التاريخ', sortable: true, render: (row: CashTransactionRow) => formatDate(row.date) },
+    { key: 'type', label: 'النوع', sortable: true, render: (row: CashTransactionRow) => typeBadge(row.type) },
     { key: 'account_name', label: 'الحساب', sortable: true },
-    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: any) => formatCurrency(row.amount) },
+    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: CashTransactionRow) => formatCurrency(row.amount) },
     { key: 'reason', label: 'البيان', sortable: true },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: CashTransactionRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -270,21 +286,21 @@ export default function CashPage() {
               value={form.account_id}
               disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, account_id: v})}
-              options={[{ value: '', label: 'اختر حساب الإيراد أو المصروف' }, ...accounts.filter((account: any) => account.id !== banks.find((bank: any) => bank.id === form.bank_safe_id)?.account_id).map((a: any) => ({ value: a.id, label: `${a.code} - ${a.name}` }))]}
+              options={[{ value: '', label: 'اختر حساب الإيراد أو المصروف' }, ...accounts.filter((account) => account.id !== banks.find((bank) => bank.id === form.bank_safe_id)?.account_id).map((a) => ({ value: a.id, label: `${a.code} - ${a.name}` }))]}
             />
             <Select
               label="الخزينة/البنك"
               value={form.bank_safe_id}
               disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, bank_safe_id: v})}
-              options={[{ value: '', label: 'بدون' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]}
+              options={[{ value: '', label: 'بدون' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]}
             />
             <Select
               label="جهة الاتصال (اختياري)"
               value={form.contact_id}
               disabled={!!editingTransaction}
               onChange={(v) => setForm({...form, contact_id: v})}
-              options={[{ value: '', label: 'بدون' }, ...contacts.map((c: any) => ({ value: c.id, label: c.name }))]}
+              options={[{ value: '', label: 'بدون' }, ...contacts.map((c) => ({ value: c.id, label: c.name }))]}
             />
             <Input label="البيان" value={form.reason} onChange={(e) => setForm({...form, reason: e.target.value})} placeholder="سبب المعاملة" className="col-span-2" />
           </div>

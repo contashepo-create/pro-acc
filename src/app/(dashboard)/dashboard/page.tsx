@@ -33,6 +33,19 @@ import {
 } from 'recharts';
 import { useAuthStore } from '@/store/auth-store';
 
+interface DashboardProject {
+  id: string;
+  name: string;
+  status: string;
+  contract_value: number;
+  progress?: number | null;
+}
+interface DashboardActivity {
+  action: string;
+  entity_type: string;
+  created_at: string;
+}
+
 interface DashboardData {
   totalRevenue: number;
   totalExpense: number;
@@ -46,9 +59,9 @@ interface DashboardData {
   overdueAmount: number;
   revenueThisMonth: number;
   expenseThisMonth: number;
-  projects: any[];
+  projects: DashboardProject[];
   projectsTruncated: boolean;
-  recentActivity: any[];
+  recentActivity: DashboardActivity[];
 }
 
 const empty: DashboardData = {
@@ -147,6 +160,7 @@ export default function DashboardPage() {
     try {
       const params = new URLSearchParams(window.location.search);
       if (params.get('denied') === 'admin-only') {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
         setDeniedNotice(true);
         window.history.replaceState({}, '', '/dashboard');
       }
@@ -317,7 +331,7 @@ export default function DashboardPage() {
             <p className="text-sm py-8 text-center" style={{ color: 'var(--color-text-muted)' }}>لا توجد مشاريع بعد</p>
           ) : (
             <ul className="space-y-3">
-              {s.projects.slice(0, 6).map((p: any) => (
+              {s.projects.slice(0, 6).map((p) => (
                 <li key={p.id} className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>{p.name}</div>
@@ -346,7 +360,7 @@ export default function DashboardPage() {
             <p className="text-sm py-8 text-center" style={{ color: 'var(--color-text-muted)' }}>لا يوجد نشاط حديث</p>
           ) : (
             <ul className="space-y-3">
-              {s.recentActivity.slice(0, 8).map((a: any, i: number) => (
+              {s.recentActivity.slice(0, 8).map((a, i: number) => (
                 <li key={i} className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-sm font-medium truncate" style={{ color: 'var(--color-text-primary)' }}>

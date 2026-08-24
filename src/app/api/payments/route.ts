@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { initPayment, getPaymentStatus, mapPaymentStatus } from '@/lib/payments/moyasar';
 import { generateId } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -53,7 +55,7 @@ export async function POST(request: NextRequest) {
       .eq('id', body.invoice_id).eq('company_id', auth.companyId).maybeSingle();
     if (invoiceErr) throw invoiceErr;
     if (!invoice) return error('الفاتورة غير موجودة', 404);
-    const inv = invoice as any;
+    const inv = invoice as Row;
     if (inv.status === 'paid' || inv.status === 'cancelled') return error('الفاتورة مدفوعة أو ملغاة');
     const amount = Math.round((Number(inv.total) - Number(inv.paid_amount || 0)) * 100) / 100;
     if (!Number.isFinite(amount) || amount <= 0) return error('لا يوجد مبلغ متبقٍ للدفع');
@@ -64,7 +66,7 @@ export async function POST(request: NextRequest) {
         .select('account_id').eq('id', body.bank_safe_id).eq('company_id', auth.companyId).eq('is_active', true).maybeSingle();
       if (bankErr) throw bankErr;
       if (!bank?.account_id) return error('حساب التحصيل غير صالح', 404);
-      settlementAccountId = bank.account_id;
+      settlementAccountId = String(bank.account_id);
     }
 
     const configuredUrl = (process.env.NEXT_PUBLIC_APP_URL || '').trim();
@@ -76,8 +78,8 @@ export async function POST(request: NextRequest) {
       if (requested.origin !== trusted.origin) return error('عنوان العودة غير مسموح', 400);
     }
 
-    const name = body.customer_name || inv.contacts?.name || 'عميل';
-    const email = body.customer_email || inv.contacts?.email || '';
+    const name = String(body.customer_name || (inv.contacts ? (inv.contacts as Row).name ?? '' : '') || 'عميل');
+    const email = String(body.customer_email || (inv.contacts ? (inv.contacts as Row).email ?? '' : '') || '');
     let gateway: { paymentId: string; paymentUrl: string | null };
     let manual = false;
     try {
@@ -85,7 +87,7 @@ export async function POST(request: NextRequest) {
         amount,
         description: `دفعة فاتورة رقم ${inv.number}`,
         callbackUrl: `${trusted.origin}/invoices?payment=callback`,
-        invoiceId: inv.id,
+        invoiceId: String(inv.id),
         customerName: name,
         customerEmail: email,
       });

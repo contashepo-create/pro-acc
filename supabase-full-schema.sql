@@ -86,10 +86,13 @@
 --   074-voucher-auto-settlement.sql
 --   075-purchase-invoice-other-expenses.sql
 --   076-lock-down-audit-tables-and-helper.sql
+--   076-posted-journal-immutability-and-balance.sql
 --   077-lock-down-internal-trigger-functions.sql
+--   077-rate-limit-store.sql
 --   078-server-only-public-schema-privileges.sql
 --   079-server-only-function-privileges.sql
 --   080-remove-duplicate-indexes.sql
+--   081-admin-telegram-token-at-rest.sql
 -- ============================================================================
 
 
@@ -19822,6 +19825,168 @@ GRANT EXECUTE ON FUNCTION public.resolve_other_expense_account(UUID, TEXT, UUID)
   TO service_role;
 
 -- ----------------------------------------------------------------------------
+-- BEGIN 076-posted-journal-immutability-and-balance.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================
+-- 076 — Posted-journal immutability + whole-entry balance
+--
+-- Two ledger invariants were previously held only by application code and the
+-- atomic RPCs. Because every API route writes through the service role
+-- (which bypasses RLS), a direct write — or any future route that forgets an
+-- application check — could still mutate or delete a posted entry, or create
+-- an entry whose debit/credit totals do not match. Both invariants are now
+-- enforced in the database itself, on EVERY write path:
+--
+--   1. Immutability of completed entries. A journal entry that carries lines
+--      cannot be deleted, and its financial fields cannot change. The only
+--      writes allowed are:
+--        * audit/reversal links: reference_type, reference_id, reversal_of,
+--          reversed_by (written by the audited reversal/lifecycle functions);
+--        * the approval lifecycle: posted -> pending (approval request),
+--          pending -> posted (approval, stamping approved_by/approved_at),
+--          pending -> rejected (rejection);
+--        * the company-wide reset flow (app.business_data_reset), the same
+--          transaction-scoped escape hatch every other tenant guard uses.
+--      The sole supported way to undo a completed entry remains the reversing
+--      entry, which keeps the original in the audit trail.
+--
+--   2. Whole-entry balance at COMMIT. A DEFERRABLE INITIALLY DEFERRED
+--      constraint trigger on journal_lines verifies at commit that every
+--      entry which has lines is exactly balanced (SUM(debit) = SUM(credit),
+--      no tolerance: NUMERIC(15,2) is exact). Direct multi-line inserts, line
+--      edits, or line deletions that would leave an entry unbalanced abort the
+--      transaction instead of corrupting the ledger. An entry without lines is
+--      exempt: it is either in the brief header-then-lines creation window or
+--      an orphan awaiting the writer's cleanup, and it carries no ledger data
+--      (zero/zero lines are impossible — the row-integrity trigger from 048
+--      rejects them, so "sums are 0" unambiguously means "no lines").
+--
+-- Idempotent by design (CREATE OR REPLACE / DROP TRIGGER IF EXISTS /
+-- DROP CONSTRAINT IF EXISTS), matching the rest of the chain.
+-- ============================================================
+
+-- ---------- 1) Immutability guard (BEFORE UPDATE OR DELETE) ----------
+
+CREATE OR REPLACE FUNCTION public.guard_journal_entry_immutability()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_company UUID := COALESCE(NEW.company_id, OLD.company_id);
+BEGIN
+  -- Company-wide reset (reset_company_business_data) intentionally wipes the
+  -- tenant's ledger; every other tenant guard honours this same GUC.
+  IF current_setting('app.business_data_reset', TRUE) = v_company::TEXT THEN
+    IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+  END IF;
+
+  -- A line-less header is not a completed entry: it is either mid-creation
+  -- (its lines follow in the writer's next statement) or an orphan the
+  -- writer is cleaning up after a failed line insert. Allow the cleanup.
+  IF NOT EXISTS (SELECT 1 FROM journal_lines WHERE journal_entry_id = OLD.id) THEN
+    IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'posted journal entry cannot be deleted; reverse it with post_journal_reversal instead'
+      USING ERRCODE = '23514';
+  END IF;
+
+  -- Financial and audit fields of a completed entry are immutable. The
+  -- remaining columns (reference_type, reference_id, reversal_of,
+  -- reversed_by, status, and approved_by/approved_at while not posted) are
+  -- checked below; anything else changing is tampering.
+  IF NEW.id IS DISTINCT FROM OLD.id
+     OR NEW.company_id IS DISTINCT FROM OLD.company_id
+     OR NEW.number IS DISTINCT FROM OLD.number
+     OR NEW.date IS DISTINCT FROM OLD.date
+     OR NEW.type IS DISTINCT FROM OLD.type
+     OR NEW.description IS DISTINCT FROM OLD.description
+     OR NEW.project_id IS DISTINCT FROM OLD.project_id
+     OR NEW.created_by IS DISTINCT FROM OLD.created_by
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR NEW.cost_center_id IS DISTINCT FROM OLD.cost_center_id
+     OR NEW.branch_id IS DISTINCT FROM OLD.branch_id
+     OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+     OR NEW.reference IS DISTINCT FROM OLD.reference THEN
+    RAISE EXCEPTION 'posted journal entry is immutable; post a reversing entry instead of editing it'
+      USING ERRCODE = '23514';
+  END IF;
+
+  -- Approval metadata may only be stamped while the entry is not posted.
+  IF COALESCE(OLD.status, 'posted') = 'posted'
+     AND (NEW.approved_by IS DISTINCT FROM OLD.approved_by
+          OR NEW.approved_at IS DISTINCT FROM OLD.approved_at) THEN
+    RAISE EXCEPTION 'posted journal entry is immutable; post a reversing entry instead of editing it'
+      USING ERRCODE = '23514';
+  END IF;
+
+  -- Status may only follow the documented lifecycle transitions.
+  IF NEW.status IS DISTINCT FROM OLD.status AND NOT (
+       (COALESCE(OLD.status, 'posted') = 'posted' AND NEW.status = 'pending')
+    OR (COALESCE(OLD.status, 'posted') = 'pending' AND NEW.status IN ('posted', 'rejected'))
+  ) THEN
+    RAISE EXCEPTION 'invalid journal entry status transition % -> %', OLD.status, NEW.status
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_guard_journal_entry_immutability ON public.journal_entries;
+CREATE TRIGGER trg_guard_journal_entry_immutability
+BEFORE UPDATE OR DELETE ON public.journal_entries
+FOR EACH ROW EXECUTE FUNCTION public.guard_journal_entry_immutability();
+
+-- ---------- 2) Whole-entry balance, enforced at COMMIT ----------
+
+-- A constraint-trigger function is an ordinary row trigger function; the
+-- constraint (DEFERRABLE INITIALLY DEFERRED) is declared on the ALTER TABLE
+-- below.
+CREATE OR REPLACE FUNCTION public.check_journal_entry_balance()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_company UUID := COALESCE(NEW.company_id, OLD.company_id);
+  v_entry_id UUID := COALESCE(NEW.journal_entry_id, OLD.journal_entry_id);
+  v_debit NUMERIC;
+  v_credit NUMERIC;
+BEGIN
+  -- The company-wide reset removes the whole ledger; mirror the row guard.
+  IF v_company IS NOT NULL
+     AND current_setting('app.business_data_reset', TRUE) = v_company::TEXT THEN
+    RETURN NULL;
+  END IF;
+  SELECT COALESCE(SUM(debit), 0), COALESCE(SUM(credit), 0)
+    INTO v_debit, v_credit
+    FROM journal_lines
+   WHERE journal_entry_id = v_entry_id;
+  IF v_debit = 0 AND v_credit = 0 THEN
+    -- No lines committed for this entry (creation window / orphan cleanup):
+    -- there is no ledger data to balance yet.
+    RETURN NULL;
+  END IF;
+  IF v_debit IS DISTINCT FROM v_credit THEN
+    RAISE EXCEPTION 'journal entry % is unbalanced: debit total % <> credit total %',
+      v_entry_id, v_debit, v_credit
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+-- Constraint triggers are dropped with the plain DROP TRIGGER statement.
+DROP TRIGGER IF EXISTS trg_chk_journal_entry_balanced ON public.journal_lines;
+CREATE CONSTRAINT TRIGGER trg_chk_journal_entry_balanced
+AFTER INSERT OR UPDATE OR DELETE ON public.journal_lines
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION public.check_journal_entry_balance();
+
+-- ----------------------------------------------------------------------------
 -- BEGIN 077-lock-down-internal-trigger-functions.sql
 -- ----------------------------------------------------------------------------
 
@@ -19838,6 +20003,122 @@ REVOKE ALL ON FUNCTION public.touch_overhead_allocation()
 GRANT EXECUTE ON FUNCTION public.bootstrap_company_fiscal_year() TO service_role;
 GRANT EXECUTE ON FUNCTION public.guard_salary_item_project_tenant() TO service_role;
 GRANT EXECUTE ON FUNCTION public.touch_overhead_allocation() TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 077-rate-limit-store.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================
+-- 077 — Shared, atomic rate-limit store
+--
+-- The in-memory limiter (src/lib/memory-rate-limit.ts) keeps its buckets in a
+-- per-process Map: on serverless every cold instance starts empty, so a
+-- client can bypass the business-route budget by rotating instances. The
+-- auth routes already count against real tables (login_attempts, etc.); this
+-- migration gives the ~220 business routes the same guarantee with ONE
+-- generic store:
+--
+--   rate_limit_buckets(key, window_start, hits)
+--
+-- `hit_rate_limit(p_key, p_window_ms, p_max)` is a SINGLE atomic statement
+-- (INSERT ... ON CONFLICT DO UPDATE): concurrent hits on the same key are
+-- serialized on the row and each one sees the previous increment, so the
+-- distributed budget can never be over-allocated. The application keeps the
+-- in-memory limiter as a cheap fast path (instant local rejection) and this
+-- store as the authoritative cross-instance share.
+--
+-- Rows are bounded by the number of active (principal, read/write) keys and
+-- are pruned by `prune_rate_limit_buckets` (call it from any maintenance
+-- job; the window itself only recycles, never deletes, rows).
+--
+-- Idempotent by design (IF NOT EXISTS / CREATE OR REPLACE), matching the
+-- rest of the chain.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+  key TEXT PRIMARY KEY,
+  window_start TIMESTAMPTZ NOT NULL,
+  hits INTEGER NOT NULL DEFAULT 1 CHECK (hits >= 0)
+);
+
+-- The store is written exclusively through the service role (every API route
+-- runs as service role); no API role may read or tamper with the counters.
+ALTER TABLE rate_limit_buckets ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "rate_limit_buckets service only" ON public.rate_limit_buckets;
+CREATE POLICY "rate_limit_buckets service only"
+  ON public.rate_limit_buckets FOR ALL
+  TO service_role USING (TRUE) WITH CHECK (TRUE);
+
+CREATE OR REPLACE FUNCTION public.hit_rate_limit(
+  p_key TEXT,
+  p_window_ms INTEGER,
+  p_max INTEGER
+) RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_now TIMESTAMPTZ := NOW();
+  v_window INTERVAL := make_interval(secs => p_window_ms / 1000.0);
+  v_row rate_limit_buckets%ROWTYPE;
+BEGIN
+  IF p_key IS NULL OR LENGTH(p_key) > 200 THEN
+    RAISE EXCEPTION 'invalid rate limit key';
+  END IF;
+  IF p_window_ms IS NULL OR p_window_ms < 1000 THEN
+    RAISE EXCEPTION 'invalid rate limit window';
+  END IF;
+  IF p_max IS NULL OR p_max < 1 THEN
+    RAISE EXCEPTION 'invalid rate limit budget';
+  END IF;
+
+  -- Atomic read-modify-write: the ON CONFLICT target row is locked, so two
+  -- concurrent hits on the same key can never both pass the budget.
+  INSERT INTO rate_limit_buckets(key, window_start, hits)
+  VALUES (p_key, v_now, 1)
+  ON CONFLICT (key) DO UPDATE SET
+    window_start = CASE WHEN rate_limit_buckets.window_start < v_now - v_window
+                        THEN v_now ELSE rate_limit_buckets.window_start END,
+    hits = CASE WHEN rate_limit_buckets.window_start < v_now - v_window
+                THEN 1 ELSE rate_limit_buckets.hits + 1 END
+  RETURNING * INTO v_row;
+
+  IF v_row.hits > p_max THEN
+    RETURN jsonb_build_object(
+      'allowed', FALSE,
+      'retry_after_seconds', GREATEST(1, CEIL(EXTRACT(EPOCH FROM (v_row.window_start + v_window - v_now)))::INTEGER)
+    );
+  END IF;
+  RETURN jsonb_build_object('allowed', TRUE, 'retry_after_seconds', 0);
+END;
+$$;
+
+-- Maintenance: drop buckets idle for longer than the given window so the
+-- table does not accumulate keys of long-gone users.
+CREATE OR REPLACE FUNCTION public.prune_rate_limit_buckets(p_max_age_ms INTEGER)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_removed INTEGER;
+BEGIN
+  IF p_max_age_ms IS NULL OR p_max_age_ms < 1000 THEN
+    RAISE EXCEPTION 'invalid prune window';
+  END IF;
+  DELETE FROM rate_limit_buckets
+  WHERE window_start < NOW() - make_interval(secs => p_max_age_ms / 1000.0);
+  GET DIAGNOSTICS v_removed = ROW_COUNT;
+  RETURN COALESCE(v_removed, 0);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.hit_rate_limit(TEXT, INTEGER, INTEGER) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.prune_rate_limit_buckets(INTEGER) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.hit_rate_limit(TEXT, INTEGER, INTEGER) TO service_role;
+GRANT EXECUTE ON FUNCTION public.prune_rate_limit_buckets(INTEGER) TO service_role;
+REVOKE ALL ON TABLE rate_limit_buckets FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE rate_limit_buckets TO service_role;
 
 -- ----------------------------------------------------------------------------
 -- BEGIN 078-server-only-public-schema-privileges.sql
@@ -19938,4 +20219,48 @@ ALTER TABLE public.voucher_disbursements
 DROP INDEX IF EXISTS public.idx_voucher_receipts_company_id;
 ALTER TABLE public.voucher_receipts
   DROP CONSTRAINT IF EXISTS voucher_receipts_company_id_number_key;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 081-admin-telegram-token-at-rest.sql
+-- ----------------------------------------------------------------------------
+
+-- ============================================================
+-- 081 — admin_users.telegram_bot_token: encryption at rest
+--
+-- This column held the per-admin Telegram bot token in PLAINTEXT.
+-- A token of this shape was committed to the repository history
+-- once (see .gitleaks.toml), and any database backup/dump carried
+-- the credential in cleartext. The previously committed token has
+-- already been revoked at the Telegram side.
+--
+-- Policy from this migration onward:
+--   * the column stores ONLY the encrypted envelope:
+--         enc:v1:<iv_b64>:<authtag_b64>:<ciphertext_b64>
+--     (AES-256-GCM; key = server env var TELEGRAM_TOKEN_KEY,
+--      64 hex chars; AAD "pro-acc/admin-telegram-bot-token/v1").
+--   * the application writes/reads it through
+--     src/lib/telegram-token-crypto.ts; the ops scripts use the
+--     byte-identical format in scripts/lib/telegram-token-crypto.mjs
+--     (both pinned by the same known-answer test vectors).
+--   * NULL is the normal state when an admin has no dedicated bot —
+--     the global TELEGRAM_BOT_TOKEN env var is the default path.
+--
+-- Steps:
+--   1) DROP NOT NULL so admins without a dedicated bot are valid.
+--   2) NULL out any remaining plaintext Telegram-token-shaped values.
+--      Encrypted envelopes (enc:v1:...) never match the shape and are
+--      left untouched. Because the leaked token is already revoked,
+--      clearing the stale plaintext loses no working credential; the
+--      value can be re-stored encrypted through the admin API
+--      (/api/admin/admins/[id]/telegram-token) or the seed scripts.
+-- ============================================================
+
+ALTER TABLE public.admin_users ALTER COLUMN telegram_bot_token DROP NOT NULL;
+
+UPDATE public.admin_users
+   SET telegram_bot_token = NULL
+ WHERE telegram_bot_token ~ '^[0-9]{8,10}:A[A-Za-z0-9_-]{30,100}$';
+
+COMMENT ON COLUMN public.admin_users.telegram_bot_token IS
+  'Encrypted per-admin Telegram bot token: enc:v1:<iv>:<authtag>:<ciphertext> (AES-256-GCM, key TELEGRAM_TOKEN_KEY, AAD pro-acc/admin-telegram-bot-token/v1). Plaintext tokens are forbidden; NULL means the global TELEGRAM_BOT_TOKEN applies.';
 

@@ -1,5 +1,8 @@
+import { getSupabase } from '@/lib/supabase-client';
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, requireAdmin, handleApiError } from '@/lib/api-helpers';
+
+import type { Row } from '@/lib/types';
 import { 
   getUserPermissions, 
   setUserPermission, 
@@ -8,10 +11,7 @@ import {
   ACTIONS,
 } from '@/lib/permissions';
 
-const sb = () => {
-  const { getSupabase } = require('@/lib/supabase-client');
-  return getSupabase();
-};
+const sb = () => getSupabase();
 
 /**
  * GET /api/permissions
@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAdmin(request);
     const s = sb();
-    const data = await parseBody<any>(request);
+    const data = await parseBody<Row>(request);
 
     const { user_id, bypass_telegram } = data;
     if (!user_id) return error('user_id مطلوب');
@@ -87,9 +87,9 @@ export async function POST(request: NextRequest) {
       if (customModulesError) throw customModulesError;
       const validModules = new Set<string>([
         ...(Object.values(MODULES) as string[]),
-        ...(customModules || []).flatMap((row: any) => [row.code, row.name]).filter(Boolean),
+        ...((customModules ?? []) as Row[]).flatMap((row: Row) => [String(row.code), String(row.name)]).filter(Boolean),
       ]);
-      const validActions = new Set<string>([...(Object.values(ACTIONS) as any), '*']);
+      const validActions = new Set<string>([...Object.values(ACTIONS), '*']);
       for (const p of data.permissions) {
         if (!p.module || !validModules.has(p.module)) {
           return error(`وحدة غير صالحة: ${p.module || '(فارغة)'}`);
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      if (data.permissions.length > 200 || new Set(data.permissions.map((permission: any) => permission.module)).size !== data.permissions.length) {
+      if (data.permissions.length > 200 || new Set(data.permissions.map((permission: Row) => permission.module)).size !== data.permissions.length) {
         return error('قائمة الصلاحيات مكررة أو كبيرة جداً');
       }
       const { error: replaceError } = await s.rpc('replace_user_permissions', {
@@ -113,22 +113,22 @@ export async function POST(request: NextRequest) {
     }
 
     // 🛑 الحالة 2: حفظ فردي لوحدة واحدة (متوافق)
-    const { module, actions } = data;
+    const { module: moduleName, actions } = data;
     const { data: customModules, error: customModulesError } = await s.from('custom_modules')
       .select('code, name').eq('company_id', auth.companyId).eq('is_active', true);
     if (customModulesError) throw customModulesError;
     const validModules = new Set<string>([
       ...(Object.values(MODULES) as string[]),
-      ...(customModules || []).flatMap((row: any) => [row.code, row.name]).filter(Boolean),
+      ...((customModules ?? []) as Row[]).flatMap((row: Row) => [String(row.code), String(row.name)]).filter(Boolean),
     ]);
-    const validActions = new Set<string>([...(Object.values(ACTIONS) as any), '*']);
-    if (!module || !validModules.has(module) || !Array.isArray(actions) || actions.some((action: string) => !validActions.has(action))) {
+    const validActions = new Set<string>([...Object.values(ACTIONS), '*']);
+    if (!moduleName || !validModules.has(String(moduleName)) || !Array.isArray(actions) || actions.some((action: string) => !validActions.has(action))) {
       return error('الوحدة أو الإجراءات غير صالحة');
     }
     await setUserPermission(
-      user_id,
+      String(user_id),
       auth.companyId,
-      module || 'general',
+      String(moduleName || 'general'),
       actions || [],
       bypass_telegram || false
     );
@@ -147,7 +147,7 @@ export async function DELETE(request: NextRequest) {
     const auth = await requireAdmin(request);
     const url = new URL(request.url);
     const userId = url.searchParams.get('userId');
-    const module = url.searchParams.get('module');
+    const moduleName = url.searchParams.get('module');
 
     if (!userId) return error('userId مطلوب');
 
@@ -157,8 +157,8 @@ export async function DELETE(request: NextRequest) {
       .eq('user_id', userId)
       .eq('company_id', auth.companyId);
 
-    if (module) {
-      query = query.eq('module', module);
+    if (moduleName) {
+      query = query.eq('module', moduleName);
     }
 
     const { error: deleteErr } = await query;

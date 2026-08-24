@@ -5,6 +5,8 @@ import { auditLog } from '@/lib/admin-auth';
 import { createHash } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 export async function POST(request: NextRequest) {
   try {
     const { email, code } = await parseBody<{ email: string; code: string }>(request);
@@ -24,7 +26,7 @@ export async function POST(request: NextRequest) {
       p_code_hash: createHash('sha256').update(code).digest('hex'),
     });
     if (verifyErr) throw verifyErr;
-    const status = String((data as Record<string, any>)?.status || 'invalid_session');
+    const status = String((data as Row)?.status || 'invalid_session');
     if (status === 'locked') return error('تم تجاوز عدد محاولات رمز التحقق. يرجى تسجيل الدخول مجدداً', 429);
     if (status === 'invalid_code') return error('رمز التحقق غير صحيح', 401);
     if (status !== 'verified') return error('رمز التحقق منتهي الصلاحية أو حالة الجلسة غير صالحة', 401);

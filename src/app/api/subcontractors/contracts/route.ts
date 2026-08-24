@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server';
-import { success, error, parseBody, getPaginationParams, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, parseBody, getPaginationParams, handleApiError, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -17,7 +19,7 @@ export async function GET(req: NextRequest) {
       .order('start_date', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
 
-    const contracts = (data || []).map((sc: any) => ({ ...sc, subcontractor_name: sc.contacts?.name || null }));
+    const contracts = ((data ?? []) as Row[]).map((sc: Row) => ({ ...sc, subcontractor_name: sc.contacts ? String((sc.contacts as Row).name) || null : null }));
     return success({ contracts, total: count || 0, page, pageSize });
   } catch (err) { return handleApiError(err); }
 }

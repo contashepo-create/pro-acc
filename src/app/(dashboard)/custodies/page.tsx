@@ -16,18 +16,42 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 
+interface CustodyRow {
+  id: string;
+  file_number?: string;
+  employee_name?: string;
+  project_name?: string;
+  amount?: number;
+  total_received?: number;
+  total_expenses?: number;
+  remaining_amount: number;
+  date?: string;
+  status?: string;
+}
+interface EmployeeOption { id: string; name: string; }
+interface BankSafeOption { id: string; name: string; }
+interface ProjectOption { id: string; name: string; }
+interface CustodyForm {
+  employee_id: string;
+  amount: number;
+  date: string;
+  bank_safe_id: string;
+  project_id: string;
+  description: string;
+}
+
 export default function CustodiesPage() {
   const router = useRouter();
-  const [custodies, setCustodies] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [banks, setBanks] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [custodies, setCustodies] = useState<CustodyRow[]>([]);
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<CustodyForm>({
     employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0],
     bank_safe_id: '', project_id: '', description: '',
   });
@@ -50,6 +74,8 @@ export default function CustodiesPage() {
     finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -94,18 +120,18 @@ export default function CustodiesPage() {
   };
 
   const columns = [
-    { key: 'file_number', label: 'رقم الملف', render: (r: any) => r.file_number || r.id?.slice(0, 8) },
+    { key: 'file_number', label: 'رقم الملف', render: (r: CustodyRow) => r.file_number || r.id?.slice(0, 8) },
     { key: 'employee_name', label: 'الموظف', sortable: true },
-    { key: 'project_name', label: 'المشروع', render: (r: any) => r.project_name || '—' },
-    { key: 'amount', label: 'المستلم', render: (r: any) => formatCurrency(r.total_received || r.amount) },
-    { key: 'total_expenses', label: 'المصروف', render: (r: any) => formatCurrency(r.total_expenses || 0) },
-    { key: 'remaining_amount', label: 'المتبقي', render: (r: any) => formatCurrency(r.remaining_amount) },
-    { key: 'date', label: 'التاريخ', render: (r: any) => formatDate(r.date) },
-    { key: 'status', label: 'الحالة', render: (r: any) => statusBadge(r.status) },
+    { key: 'project_name', label: 'المشروع', render: (r: CustodyRow) => r.project_name || '—' },
+    { key: 'amount', label: 'المستلم', render: (r: CustodyRow) => formatCurrency(r.total_received ?? r.amount ?? 0) },
+    { key: 'total_expenses', label: 'المصروف', render: (r: CustodyRow) => formatCurrency(r.total_expenses ?? 0) },
+    { key: 'remaining_amount', label: 'المتبقي', render: (r: CustodyRow) => formatCurrency(r.remaining_amount) },
+    { key: 'date', label: 'التاريخ', render: (r: CustodyRow) => formatDate(r.date) },
+    { key: 'status', label: 'الحالة', render: (r: CustodyRow) => statusBadge(r.status ?? '') },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: CustodyRow) => (
         <ActionButtons
           item={row}
           onView={() => router.push(`/custodies/${row.id}`)}
@@ -141,13 +167,13 @@ export default function CustodiesPage() {
           <p className="text-xs text-text-muted">يُنشأ قيد: مدين عُهد الموظفين 1150 / دائن الخزينة. يمكن فتح أكثر من ملف لنفس الموظف.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select label="الموظف" value={form.employee_id} onChange={(v) => setForm({ ...form, employee_id: v })}
-              options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e: any) => ({ value: e.id, label: e.name }))]} className="col-span-2" />
+              options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e) => ({ value: e.id, label: e.name }))]} className="col-span-2" />
             <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
             <Select label="الخزينة / البنك" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}
-              options={[{ value: '', label: 'اختر المصدر' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]} />
+              options={[{ value: '', label: 'اختر المصدر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />
             <Select label="المشروع (اختياري)" value={form.project_id} onChange={(v) => setForm({ ...form, project_id: v })}
-              options={[{ value: '', label: 'بدون مشروع' }, ...(Array.isArray(projects) ? projects : []).map((p: any) => ({ value: p.id, label: p.name }))]} />
+              options={[{ value: '', label: 'بدون مشروع' }, ...(Array.isArray(projects) ? projects : []).map((p: ProjectOption) => ({ value: p.id, label: p.name }))]} />
             <Input label="الغرض" className="col-span-2" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}

@@ -17,7 +17,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const check = validateOverheadRule(body);
     if (typeof check === 'string') return error(check);
     const update: Record<string, unknown> = {};
-    if (body.name !== undefined) update.name = body.name.trim();
+    if (body.name !== undefined) update.name = String(body.name).trim();
     if (body.allocation_basis !== undefined) update.allocation_basis = body.allocation_basis;
     if (body.rate !== undefined) update.rate = Number(body.rate);
     if (body.is_active !== undefined) update.is_active = body.is_active;

@@ -1,26 +1,29 @@
 const verifyAdminJwt = jest.fn();
 const verifyPassword = jest.fn();
-let maybeResult: any = { data: null, error: null };
-const inserts: any[] = [];
+let maybeResult: { data: unknown; error: unknown } = { data: null, error: null };
+type Row = Record<string, unknown>;
+const inserts: Array<{ table: string; payload: Row }> = [];
 
 const db = {
   from: jest.fn((table: string) => {
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
       eq: () => api,
       maybeSingle: async () => maybeResult,
-      insert: async (payload: any) => { inserts.push({ table, payload }); return { error: null }; },
+      insert: (payload: Row | Row[]) => { inserts.push({ table, payload: payload as Row }); return { error: null } as unknown as TestBuilder; },
     };
     return api;
   }),
 };
 
 jest.mock('@/lib/auth', () => ({ verifyAdminToken: verifyAdminJwt, verifyPassword }));
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
 
 import { verifyAdminToken, verifyMasterPassword, auditLog } from '@/lib/admin-auth';
 
-const request = (token?: string) => ({ cookies: { get: () => token ? { value: token } : undefined } }) as any;
+const request = (token?: string) => ({ cookies: { get: () => token ? { value: token } : undefined } }) as unknown as NextRequest;
 
 beforeEach(() => {
   jest.clearAllMocks(); inserts.length = 0; maybeResult = { data: null, error: null };
@@ -73,7 +76,7 @@ describe('legacy admin auth helpers', () => {
     expect(inserts[0].payload.target_id).toHaveLength(64);
     expect(inserts[0].payload.ip_address).toHaveLength(64);
 
-    db.from.mockImplementationOnce(() => ({ insert: async () => { throw new Error('down'); } }) as any);
+    db.from.mockImplementationOnce(() => ({ insert: async () => { throw new Error('down'); } }) as unknown as TestBuilder);
     await expect(auditLog('a1', 'login')).resolves.toBeUndefined();
   });
 });

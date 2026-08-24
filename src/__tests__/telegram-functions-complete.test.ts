@@ -9,21 +9,21 @@ beforeEach(() => jest.restoreAllMocks());
 
 describe('Telegram transport functions', () => {
   test('cleans BOM/whitespace from the configured bot token', async () => {
-    const module = await loadTelegram('\uFEFF  token  ', '1');
-    expect(module.getBotToken()).toBe('token');
+    const mod = await loadTelegram('\uFEFF  token  ', '1');
+    expect(mod.getBotToken()).toBe('token');
   });
 
   test('fails safely when admin Telegram is not configured', async () => {
-    const module = await loadTelegram();
-    await expect(module.sendTelegramCode('123456')).resolves.toBe(false);
-    await expect(module.sendAdminNotification('hello')).resolves.toBe(false);
-    await expect(module.sendTelegramMessage('', 'hello')).resolves.toBe(false);
+    const mod = await loadTelegram();
+    await expect(mod.sendTelegramCode('123456')).resolves.toBe(false);
+    await expect(mod.sendAdminNotification('hello')).resolves.toBe(false);
+    await expect(mod.sendTelegramMessage('', 'hello')).resolves.toBe(false);
   });
 
   test('sends escaped OTP codes to the configured admin chat', async () => {
-    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as any;
-    const module = await loadTelegram('token', 'admin-chat');
-    await expect(module.sendTelegramCode('<123&>')).resolves.toBe(true);
+    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    const mod = await loadTelegram('token', 'admin-chat');
+    await expect(mod.sendTelegramCode('<123&>')).resolves.toBe(true);
     const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
     expect(url).toBe('https://api.telegram.org/bottoken/sendMessage');
     const body = JSON.parse(init.body);
@@ -35,7 +35,7 @@ describe('Telegram transport functions', () => {
   test('aborts slow OTP delivery after ten seconds', async () => {
     jest.useFakeTimers();
     let resolveFetch!: (response: Response) => void;
-    global.fetch = jest.fn((_url: string, init: RequestInit) => new Promise<Response>((resolve) => { resolveFetch = resolve; expect(init.signal).toBeDefined(); })) as any;
+    global.fetch = jest.fn((_url: string, init: RequestInit) => new Promise<Response>((resolve) => { resolveFetch = resolve; expect(init.signal).toBeDefined(); })) as unknown as typeof fetch;
     const telegramModule = await loadTelegram('token', 'admin');
     const pending = telegramModule.sendTelegramCode('123');
     jest.advanceTimersByTime(10_000);
@@ -47,25 +47,25 @@ describe('Telegram transport functions', () => {
   });
 
   test('returns false for HTTP and network failures', async () => {
-    global.fetch = jest.fn(async () => new Response('denied', { status: 403 })) as any;
-    let module = await loadTelegram('token', 'admin');
-    await expect(module.sendTelegramCode('123')).resolves.toBe(false);
-    await expect(module.sendAdminNotification('hello')).resolves.toBe(false);
-    await expect(module.sendTelegramMessage('chat', 'hello')).resolves.toBe(false);
+    global.fetch = jest.fn(async () => new Response('denied', { status: 403 })) as unknown as typeof fetch;
+    let mod = await loadTelegram('token', 'admin');
+    await expect(mod.sendTelegramCode('123')).resolves.toBe(false);
+    await expect(mod.sendAdminNotification('hello')).resolves.toBe(false);
+    await expect(mod.sendTelegramMessage('chat', 'hello')).resolves.toBe(false);
 
-    global.fetch = jest.fn(async () => { throw new Error('network'); }) as any;
-    module = await loadTelegram('token', 'admin');
-    await expect(module.sendTelegramCode('123')).resolves.toBe(false);
-    await expect(module.sendAdminNotification('hello')).resolves.toBe(false);
-    await expect(module.sendTelegramMessage('chat', 'hello')).resolves.toBe(false);
+    global.fetch = jest.fn(async () => { throw new Error('network'); }) as unknown as typeof fetch;
+    mod = await loadTelegram('token', 'admin');
+    await expect(mod.sendTelegramCode('123')).resolves.toBe(false);
+    await expect(mod.sendAdminNotification('hello')).resolves.toBe(false);
+    await expect(mod.sendTelegramMessage('chat', 'hello')).resolves.toBe(false);
   });
 
   test('sends admin/direct messages and escapes all Telegram HTML metacharacters', async () => {
-    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as any;
-    const module = await loadTelegram('token', 'admin');
-    await expect(module.sendAdminNotification('<b>trusted</b>')).resolves.toBe(true);
-    await expect(module.sendTelegramMessage('chat', 'hello')).resolves.toBe(true);
+    global.fetch = jest.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    const mod = await loadTelegram('token', 'admin');
+    await expect(mod.sendAdminNotification('<b>trusted</b>')).resolves.toBe(true);
+    await expect(mod.sendTelegramMessage('chat', 'hello')).resolves.toBe(true);
     expect(JSON.parse((global.fetch as jest.Mock).mock.calls[1][1].body)).toMatchObject({ chat_id: 'chat', text: 'hello', parse_mode: 'HTML' });
-    expect(module.escapeTelegramHtml(`<tag a='1'>&`)).toBe(`&lt;tag a='1'&gt;&amp;`);
+    expect(mod.escapeTelegramHtml(`<tag a='1'>&`)).toBe(`&lt;tag a='1'&gt;&amp;`);
   });
 });

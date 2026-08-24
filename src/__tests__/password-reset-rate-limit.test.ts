@@ -2,8 +2,8 @@
  * Tests for password-reset rate limiting (lib/rate-limit.ts).
  */
 let capturedFilter = '';
-let mockData: any[] | null = [];
-let mockError: any = null;
+let mockData: Record<string, unknown>[] | null = [];
+let mockError: Error | null = null;
 
 jest.mock('../lib/supabase-client', () => ({
   getSupabase: () => ({

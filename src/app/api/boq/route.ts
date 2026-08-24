@@ -3,6 +3,8 @@ import { success, error, parseBody, getPaginationParams, requireModulePermission
 import { getSupabase } from '@/lib/supabase-client';
 import { boqCreateSchema, deliveryUuid } from '@/lib/project-delivery-validation';
 
+import type { Row } from '@/lib/types';
+
 const BOQ_COLUMNS = 'id,project_id,item_code,code,description,unit,quantity,unit_price,total,parent_id,level,created_at,projects(name)';
 
 export async function GET(req: NextRequest) {
@@ -16,8 +18,8 @@ export async function GET(req: NextRequest) {
     const offset = (page - 1) * pageSize;
     const { data, error: queryError, count } = await query.order('item_code').range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const items = (data || []).map((item: any) => ({
-      ...item, project_name: item.projects?.name || null, projects: undefined,
+    const items = (data || []).map((item: Row) => ({
+      ...item, project_name: item.projects ? String((item.projects as Row).name) || null : null, projects: undefined,
     }));
     return success({ items, boqItems: items, total: count || 0, page, pageSize });
   } catch (cause) {

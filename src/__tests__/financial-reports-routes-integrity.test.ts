@@ -10,12 +10,12 @@
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error?: unknown } | { rows: unknown } | null>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
@@ -23,27 +23,29 @@ function makeDb(db: Record<string, Row[]>) {
       (db[table] || []).filter((r) =>
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'neq') return r[o.col!] !== o.val;
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
       gte: () => api, lte: () => api, or: () => api, is: () => api, order: () => api, limit: () => api, range: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
   const s = {
     from, calls, rpcResults,
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, _params?: Row) => {
       calls.push({ table: `rpc:${name}`, ops: [] });
       const val = rpcResults.get(name);
       if (val && typeof val === 'object' && 'rows' in val) return val;
@@ -57,6 +59,8 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET as financialGET } from '@/app/api/reports/financial/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { GET as operationalGET } from '@/app/api/reports/operational/route';
 import { GET as profitabilityGET } from '@/app/api/reports/profitability/route';
 import { GET as projectProfitLossGET } from '@/app/api/reports/project-profit-loss/route';
@@ -69,7 +73,7 @@ function req(role = 'admin', url = 'http://localhost/api/reports/financial') {
     nextUrl: new URL(url),
     headers: { get: (k: string) => k === 'authorization' ? `Bearer ${token}` : null },
     cookies: { get: () => undefined },
-  } as any;
+  } as unknown as NextRequest;
 }
 
 function baseDb() {

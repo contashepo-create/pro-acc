@@ -3,6 +3,8 @@ import { success, error, serverError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { createHash } from 'crypto';
 
+import type { Row } from '@/lib/types';
+
 export async function POST(request: NextRequest) {
   try {
     const { token } = await parseBody<{ token?: unknown }>(request);
@@ -31,7 +33,7 @@ export async function POST(request: NextRequest) {
       }
       throw verifyErr;
     }
-    return success({ message: 'تم تأكيد البريد الإلكتروني بنجاح', email: (data as Record<string, any>)?.email });
+    return success({ message: 'تم تأكيد البريد الإلكتروني بنجاح', email: (data as Row)?.email });
   } catch (err) {
     return serverError(err);
   }

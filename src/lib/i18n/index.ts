@@ -1,15 +1,16 @@
+import type { Row } from '../types';
+
 /**
  * Internationalization (i18n) System
  * Supports Arabic (ar) and English (en)
  * 
  * Usage:
- *   import { t } from '@/lib/i18n';
+ *   import {t} from '@/lib/i18n';
  *   const label = t('common.save', 'ar');
  */
 
 export type Locale = 'ar' | 'en';
 
-type TranslationKeys = typeof translations.ar;
 
 export const translations = {
   ar: {
@@ -335,7 +336,7 @@ export const translations = {
  * Get translation for a key
  */
 export function t(key: string, locale: Locale = 'ar'): string {
-  const dict = (translations as any)[locale] || (translations as any).ar;
+  const dict = (translations as Row)[locale] || (translations as Row).ar;
   return (dict as Record<string, string>)[key] || key;
 }
 

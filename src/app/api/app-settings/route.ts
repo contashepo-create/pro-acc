@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 // Never expose arbitrary administrator-created configuration. Payment account
 // details have a dedicated authenticated endpoint with its own field list.
 const PUBLIC_SETTING_KEYS = [
@@ -20,8 +22,8 @@ export async function GET(request: NextRequest) {
     if (queryErr) throw queryErr;
 
     const settings: Record<string, string> = {};
-    (data || []).forEach((item: any) => {
-      settings[item.key] = item.value || '';
+    (data || []).forEach((item: Row) => {
+      settings[String(item.key)] = String(item.value || '');
     });
     return success(settings);
   } catch (err) {

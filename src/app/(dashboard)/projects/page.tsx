@@ -1,9 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
-  Plus, Lock, FileText, Trash2, Loader2, Layers, ShieldCheck,
-} from 'lucide-react';
+import { Plus, Lock, FileText, Trash2, ShieldCheck } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -19,26 +17,44 @@ import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
 
+interface BoqItem { description: string; unit: string; quantity: number; unit_price: number; total: number; }
+interface ProjectForm { name: string; client_id: string; start_date: string; end_date: string; contract_value: number; description: string; location: string; }
+interface ProjectRow {
+  id: string;
+  name: string;
+  client_id?: string;
+  client_name?: string;
+  start_date?: string;
+  contract_value: number;
+  status: string;
+  boq_items?: BoqItem[];
+}
+interface ClientOption { id: string; name: string; }
+interface QuotationOption { id: string; number: string; contact_name?: string; }
+interface BankOption { id: string; name: string; }
+interface CloseForm { close_date: string; notes: string; }
+interface InvoiceForm { date: string; dueDate: string; vatRate: number; collected_amount: number; bank_safe_id: string; notes: string; }
+
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<any[]>([]);
-  const [clients, setClients] = useState<any[]>([]);
-  const [quotations, setQuotations] = useState<any[]>([]); // عروض الأسعار المقبولة للاستيراد
-  const [banks, setBanks] = useState<any[]>([]); // جلب البنوك لغايات سند القبض الفوري
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
+  const [clients, setClients] = useState<ClientOption[]>([]);
+  const [quotations, setQuotations] = useState<QuotationOption[]>([]); // عروض الأسعار المقبولة للاستيراد
+  const [banks, setBanks] = useState<BankOption[]>([]); // جلب البنوك لغايات سند القبض الفوري
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
   // شاشات الإضافة والتعديل للمشاريع
   const [showModal, setShowModal] = useState(false);
-  const [editingProject, setEditingProject] = useState<any>(null);
+  const [editingProject, setEditingProject] = useState<ProjectRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   
   // بنود جدول الكميات (BOQ) الخاصة بالمشروع الجديد
-  const [boqItems, setBoqItems] = useState<any[]>([
+  const [boqItems, setBoqItems] = useState<BoqItem[]>([
     { description: '', unit: 'متر', quantity: 1, unit_price: 0, total: 0 }
   ]);
 
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<ProjectForm>({
     name: '',
     client_id: '',
     start_date: new Date().toISOString().split('T')[0],
@@ -50,8 +66,8 @@ export default function ProjectsPage() {
 
   // شاشات إغلاق المشروع
   const [showCloseModal, setShowCloseModal] = useState(false);
-  const [closingProject, setClosingProject] = useState<any>(null);
-  const [closeForm, setCloseForm] = useState<any>({
+  const [closingProject, setClosingProject] = useState<ProjectRow | null>(null);
+  const [closeForm, setCloseForm] = useState<CloseForm>({
     close_date: new Date().toISOString().split('T')[0],
     notes: '',
   });
@@ -60,8 +76,8 @@ export default function ProjectsPage() {
 
   // 🛑 شاشة الفاتورة النقدية والتحصيل الفوري المدمج من المشروع 🛑
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
-  const [invoiceProject, setInvoiceProject] = useState<any>(null);
-  const [invoiceForm, setInvoiceForm] = useState<any>({
+  const [invoiceProject, setInvoiceProject] = useState<ProjectRow | null>(null);
+  const [invoiceForm, setInvoiceForm] = useState<InvoiceForm>({
     date: new Date().toISOString().split('T')[0],
     dueDate: new Date().toISOString().split('T')[0],
     vatRate: 0.15,
@@ -101,7 +117,10 @@ export default function ProjectsPage() {
     }
   };
 
+  // Initial load on mount: fetchData() sets the loading indicator
+  // synchronously before the network round trip (standard fetch pattern).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
   }, []);
 
@@ -141,7 +160,7 @@ export default function ProjectsPage() {
         return;
       }
       const d = json.data;
-      const items = (d.items || []).map((it: any) => ({
+      const items = (d.items || []).map((it: Record<string, unknown>) => ({
         description: String(it.description || '').trim(),
         unit: String(it.unit || 'وحدة').trim(),
         quantity: Number(it.quantity) || 1,
@@ -152,9 +171,9 @@ export default function ProjectsPage() {
         toast.error('عرض السعر المحدد لا يحتوي على بنود');
         return;
       }
-      const sum = items.reduce((s: number, it: any) => s + (it.total || 0), 0);
+      const sum = items.reduce((s: number, it: BoqItem) => s + (it.total || 0), 0);
       setBoqItems(items);
-      setForm((prev: any) => ({
+      setForm((prev) => ({
         ...prev,
         // إجمالي العقد = صافي البنود بدون ضريبة
         contract_value: sum,
@@ -175,14 +194,14 @@ export default function ProjectsPage() {
   };
 
   // تعديل بيانات سطر بند جدول الكميات
-  const handleBoqItemChange = (index: number, field: string, value: any) => {
+  const handleBoqItemChange = (index: number, field: string, value: string | number) => {
     const updated = boqItems.map((item, i) => {
       if (i === index) {
         const newItem = { ...item, [field]: value };
         // حساب إجمالي السطر تلقائياً
         if (field === 'quantity' || field === 'unit_price') {
-          const qty = field === 'quantity' ? parseFloat(value) || 0 : item.quantity;
-          const price = field === 'unit_price' ? parseFloat(value) || 0 : item.unit_price;
+          const qty = field === 'quantity' ? parseFloat(String(value)) || 0 : item.quantity;
+          const price = field === 'unit_price' ? parseFloat(String(value)) || 0 : item.unit_price;
           newItem.total = qty * price;
         }
         return newItem;
@@ -193,7 +212,7 @@ export default function ProjectsPage() {
 
     // تحديث إجمالي قيمة العقد تلقائياً في فورم المشروع الرئيسي
     const sum = updated.reduce((s: number, item: { total?: number }) => s + (item.total || 0), 0);
-    setForm((prev: Record<string, unknown>) => ({ ...prev, contract_value: sum }));
+    setForm((prev) => ({ ...prev, contract_value: sum }));
   };
 
   const handleSave = async () => {
@@ -243,14 +262,14 @@ export default function ProjectsPage() {
       } else {
         setSaveError(json.message || 'فشل الحفظ');
       }
-    } catch (e: any) {
+    } catch {
       setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = async (project: any) => {
+  const handleEdit = async (project: ProjectRow) => {
     try {
       const res = await fetch(`/api/projects/${project.id}`);
       const json = await res.json();
@@ -279,7 +298,7 @@ export default function ProjectsPage() {
     }
   };
 
-  const handleDelete = async (project: any) => {
+  const handleDelete = async (project: ProjectRow) => {
     if (!confirm(`هل تريد إلغاء المشروع "${project.name}"؟ لا يمكن إلغاء مشروع له آثار مالية قائمة، ولن تُحذف السجلات التاريخية.`)) return;
     try {
       const res = await fetch(`/api/projects/${project.id}`, { method: 'DELETE' });
@@ -290,13 +309,13 @@ export default function ProjectsPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
 
   // فتح شاشة الفاتورة والتحصيل المباشر
-  const openInvoiceModal = (project: any) => {
+  const openInvoiceModal = (project: ProjectRow) => {
     if (!project.client_id) {
       toast.error('يجب ربط المشروع بعميل أولاً لكي تتمكن من إصدار فاتورة له');
       return;
@@ -316,6 +335,7 @@ export default function ProjectsPage() {
 
   // ترحيل وحفظ الفاتورة المدمجة والتحصيل الفوري
   const handleSaveInvoiceWithPayment = async () => {
+    if (!invoiceProject) return; // modal is only opened for a selected project
     if (Number(invoiceForm.collected_amount) > 0 && !invoiceForm.bank_safe_id) {
       setInvoiceError('يجب تحديد "الخزينة/البنك" التي تود إيداع واستلام المبلغ المحصل عليها');
       return;
@@ -326,7 +346,7 @@ export default function ProjectsPage() {
 
     try {
       // بناء بنود الفاتورة مطابقة تماماً لجدول كميات المشروع (BOQ)
-      const invoiceItems = (invoiceProject.boq_items || []).map((item: any) => ({
+      const invoiceItems = (invoiceProject.boq_items || []).map((item: BoqItem) => ({
         description: item.description,
         quantity: Number(item.quantity) || 1,
         unitPrice: Number(item.unit_price) || 0,
@@ -386,7 +406,7 @@ export default function ProjectsPage() {
     }
   };
 
-  const openCloseModal = (project: any) => {
+  const openCloseModal = (project: ProjectRow) => {
     setClosingProject(project);
     setCloseForm({ close_date: new Date().toISOString().split('T')[0], notes: '' });
     setCloseError('');
@@ -411,7 +431,7 @@ export default function ProjectsPage() {
       } else {
         setCloseError(json.message || 'فشل الإقفال');
       }
-    } catch (e: any) { 
+    } catch { 
       setCloseError('خطأ في الاتصال'); 
     } finally { 
       setClosing(false); 
@@ -423,7 +443,7 @@ export default function ProjectsPage() {
 
   const columns = [
     { key: 'name', label: 'اسم المشروع', sortable: true,
-      render: (row: any) => (
+      render: (row: ProjectRow) => (
         <div className="space-y-1 text-right">
           <div className="font-bold text-slate-800">{row.name}</div>
           <div className="text-[10px] text-slate-400">BOQ: {row.boq_items?.length || 0} بند كميات جاهز</div>
@@ -431,9 +451,9 @@ export default function ProjectsPage() {
       )
     },
     { key: 'client_name', label: 'العميل', sortable: true },
-    { key: 'start_date', label: 'تاريخ البدء', render: (row: any) => formatDate(row.start_date) },
-    { key: 'contract_value', label: 'قيمة العقد / الميزانية', render: (row: any) => formatCurrency(row.contract_value) },
-    { key: 'status', label: 'الحالة', render: (row: any) => (
+    { key: 'start_date', label: 'تاريخ البدء', render: (row: ProjectRow) => formatDate(row.start_date) },
+    { key: 'contract_value', label: 'قيمة العقد / الميزانية', render: (row: ProjectRow) => formatCurrency(row.contract_value) },
+    { key: 'status', label: 'الحالة', render: (row: ProjectRow) => (
       <Badge variant={row.status === 'active' ? 'success' : row.status === 'completed' ? 'info' : 'warning'}>
         {row.status === 'active' ? 'نشط' : row.status === 'completed' ? 'مكتمل' : 'معلّق'}
       </Badge>
@@ -441,7 +461,7 @@ export default function ProjectsPage() {
     {
       key: 'actions',
       label: 'إجراءات متكاملة',
-      render: (row: any) => (
+      render: (row: ProjectRow) => (
         <div className="flex items-center gap-2">
           {row.status === 'active' && (
             <>
@@ -531,7 +551,7 @@ export default function ProjectsPage() {
                 label="العميل (مرجعي فقط — لا يؤثر على رصيده)"
                 value={form.client_id}
                 onChange={(v) => setForm({...form, client_id: v})}
-                options={[{ value: '', label: 'اختر عميلاً (اختياري)' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]}
+                options={[{ value: '', label: 'اختر عميلاً (اختياري)' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
                 className="md:col-span-2"
               />
               <Input label="تاريخ البدء *" type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} />
@@ -566,7 +586,7 @@ export default function ProjectsPage() {
                       onChange={(v) => { if (v) importFromQuotation(v); }}
                       options={[
                         { value: '', label: 'استيراد من عرض سعر مقبول...' },
-                        ...quotations.map((q: any) => ({ value: q.id, label: `عرض #${q.number} — ${q.contact_name || ''}` })),
+                        ...quotations.map((q) => ({ value: q.id, label: `عرض #${q.number} — ${q.contact_name || ''}` })),
                       ]}
                       className="w-64"
                     />
@@ -649,8 +669,8 @@ export default function ProjectsPage() {
             {/* ملخص بنود جدول الكميات */}
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
               <div className="text-sm text-text-muted">
-                عدد البنود: <span className="font-bold text-text-primary">{boqItems.filter((i: any) => i.description?.trim()).length}</span>
-                {' '}— إجمالي الكميات: <span className="font-bold text-text-primary">{boqItems.reduce((s: number, i: any) => s + (Number(i.quantity) || 0), 0).toLocaleString('en')}</span>
+                عدد البنود: <span className="font-bold text-text-primary">{boqItems.filter((i) => i.description?.trim()).length}</span>
+                {' '}— إجمالي الكميات: <span className="font-bold text-text-primary">{boqItems.reduce((s: number, i: BoqItem) => s + (Number(i.quantity) || 0), 0).toLocaleString('en')}</span>
               </div>
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-text-muted">إجمالي قيمة العقد:</span>
@@ -685,7 +705,7 @@ export default function ProjectsPage() {
               <div>
                 <strong>نظام ترحيل مدمج متزن أمنياً ماليًا:</strong>
                 <br />
-                سيقوم النظام تلقائياً بإنشاء فاتورة مبيعات ضريبية متضمنة تفاصيل كامل بنود كميات المشروع المعتمدة (BOQ)، وإنشاء سند قبض تلقائي بقيمة "المبلغ المحصل"، وترحيل قيد مزدوج متزن فوري يتأثر به رصيد حساب العميل المساعد فوراً!
+                سيقوم النظام تلقائياً بإنشاء فاتورة مبيعات ضريبية متضمنة تفاصيل كامل بنود كميات المشروع المعتمدة (BOQ)، وإنشاء سند قبض تلقائي بقيمة &quot;المبلغ المحصل&quot;، وترحيل قيد مزدوج متزن فوري يتأثر به رصيد حساب العميل المساعد فوراً!
               </div>
             </div>
 
@@ -718,7 +738,7 @@ export default function ProjectsPage() {
                   label="إيداع واستلام المقبوضات على الخزينة/البنك *"
                   value={invoiceForm.bank_safe_id}
                   onChange={(v) => setInvoiceForm({...invoiceForm, bank_safe_id: v})}
-                  options={[{ value: '', label: 'اختر البنك أو الخزينة المودع عليها' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]}
+                  options={[{ value: '', label: 'اختر البنك أو الخزينة المودع عليها' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]}
                   className="col-span-2"
                 />
               )}

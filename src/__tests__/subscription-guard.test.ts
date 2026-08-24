@@ -67,7 +67,7 @@ describe('requireApiAuth enforces subscription', () => {
       method: 'POST',
       headers: { get: () => 'Bearer fake' },
       cookies: { get: () => undefined },
-    } as any;
+    } as unknown as Request;
     // The token won't verify, so we expect an AuthError. What we care about is
     // that the subscription-guard path is reachable; we exercise the expired
     // path via direct import below.

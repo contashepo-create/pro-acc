@@ -9,14 +9,35 @@ import { printCurrentPage } from '@/lib/print';
 import { getClientBalanceMeaning } from '@/lib/contact-balance';
 
 export default function ClientStatementPage() {
+interface StatementEntry {
+  id: string;
+  date: string;
+  entry_number?: string;
+  type?: string;
+  description?: string;
+  debit: number;
+  credit: number;
+  balance: number;
+  reference_id?: string;
+  created_by_name?: string;
+}
+interface StatementData {
+  client: { name: string; phone?: string; address?: string; tax_number?: string; commercial_registration?: string };
+  entries: StatementEntry[];
+  balance: number;
+  total_debit: number;
+  total_credit: number;
+  pagination?: { total?: number; totalPages?: number };
+}
+
   const params = useParams();
   const router = useRouter();
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<StatementData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [showReportModal, setShowReportModal] = useState(false);
-  const [reportEntry, setReportEntry] = useState<any>(null);
+  const [reportEntry, setReportEntry] = useState<StatementEntry | null>(null);
   const [reportNote, setReportNote] = useState('');
   const [reportSent, setReportSent] = useState(false);
   const [page, setPage] = useState(1);
@@ -39,7 +60,7 @@ export default function ClientStatementPage() {
     void printCurrentPage();
   };
 
-  const openReport = (entry: any) => {
+  const openReport = (entry: StatementEntry) => {
     setReportEntry(entry);
     setReportNote('');
     setReportSent(false);
@@ -170,7 +191,7 @@ export default function ClientStatementPage() {
                 {entries.length === 0 ? (
                   <tr><td colSpan={7} className="text-center py-8 text-gray-400">لا توجد حركات</td></tr>
                 ) : (
-                  entries.map((entry: any, i: number) => {
+                  entries.map((entry, i: number) => {
                     const isExpanded = expandedRows[entry.id];
                     return (
                       <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
@@ -181,7 +202,7 @@ export default function ClientStatementPage() {
                             entry.type === 'voucher_receipt' ? 'bg-green-100 text-green-700' :
                             entry.type === 'voucher_disbursement' ? 'bg-red-100 text-red-700' :
                             'bg-gray-100 text-gray-600'
-                          }`}>{entryTypeLabel[entry.type] || entry.type}</span>
+                          }`}>{entryTypeLabel[entry.type ?? ''] || entry.type}</span>
                         </td>
                         <td className="py-2 px-3 text-sm text-gray-900">
                           <span

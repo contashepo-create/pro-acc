@@ -10,16 +10,15 @@ jest.mock('../lib/auth', () => ({
   verifyToken: mockVerifyToken,
 }));
 
-let callCount = 0;
-let mockUsersData: any = null;
-let mockCompanyData: any = null;
+let mockUsersData: Record<string, unknown> | null = null;
+let mockCompanyData: Record<string, unknown> | null = null;
 
 jest.mock('../lib/supabase-client', () => ({
   getSupabase: () => ({
     from: (table: string) => ({
-      select: (cols: string) => ({
-        eq: (col: string, val: string) => ({
-          eq: (col2: string, val2: string) => ({
+      select: (_cols: string) => ({
+        eq: (_col: string, _val: string) => ({
+          eq: (_col2: string, _val2: string) => ({
             single: jest.fn().mockImplementation(() => {
               if (table === 'users') return Promise.resolve({ data: mockUsersData, error: mockUsersData ? null : 'not found' });
               if (table === 'companies') return Promise.resolve({ data: mockCompanyData, error: null });
@@ -37,6 +36,10 @@ jest.mock('../lib/supabase-client', () => ({
   }),
 }));
 
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { requireRole, requireAdmin, requireManagerOrAbove, requireAccountantOrAbove, AuthError } from '../lib/api-helpers';
 
 const mockRequest = {} as Request;
@@ -51,7 +54,6 @@ function setupMocks(role: string, companyId = 'company-123') {
 describe('requireRole', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    callCount = 0;
   });
 
   test('should allow admin when admin is in allowed roles', async () => {

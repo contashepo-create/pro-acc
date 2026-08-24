@@ -64,6 +64,7 @@ export async function POST(request: NextRequest) {
 
     // Try to upload to Supabase Storage (receipts bucket)
     try {
+      if (!s.storage) return error('تعذر حفظ الملف في التخزين الآمن. حاول لاحقاً.', 503);
       const { error: uploadError } = await s.storage
         .from('receipts')
         .upload(fileName, buffer, {
@@ -117,6 +118,7 @@ async function countDirectoryBytes(storageClient: ReturnType<typeof getSupabase>
   let total = 0;
   let offset = 0;
   const pageSize = 1000;
+  if (!storageClient.storage) return 0;
   while (true) {
     const { data, error: listError } = await storageClient.storage.from('receipts').list(directory, {
       limit: pageSize,

@@ -22,15 +22,15 @@ export interface AuditEntry {
   entity_type: string;   // e.g. 'journal_entry', 'invoice', 'voucher'
   entity_id: string;
   action: AuditAction;
-  before?: Record<string, any> | null;
-  after?: Record<string, any> | null;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
   summary?: string;
 }
 
 /** Only store a compact snapshot to avoid bloating the trail with huge rows. */
-function compact(obj: Record<string, any> | null | undefined): Record<string, any> | null {
+function compact(obj: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
   if (!obj) return null;
-  const allowed: Record<string, any> = {};
+  const allowed: Record<string, unknown> = {};
   const keys = ['id', 'number', 'date', 'total', 'amount', 'status', 'type', 'vat_rate', 'vat_amount', 'subtotal', 'notes', 'description'];
   for (const k of keys) {
     if (obj[k] !== undefined) allowed[k] = obj[k];
@@ -64,7 +64,7 @@ export async function logAudit(entry: AuditEntry): Promise<void> {
  * Compute a diff summary like "المبلغ: 100.00 → 150.00" for the trail.
  * Numerically-equivalent values (100 vs "100") are treated as unchanged.
  */
-export function diffSummary(before: Record<string, any> | null, after: Record<string, any> | null): string {
+export function diffSummary(before: Record<string, unknown> | null, after: Record<string, unknown> | null): string {
   const parts: string[] = [];
   const keys = new Set([...(before ? Object.keys(before) : []), ...(after ? Object.keys(after) : [])]);
   for (const k of keys) {
@@ -76,7 +76,7 @@ export function diffSummary(before: Record<string, any> | null, after: Record<st
   return parts.join('، ');
 }
 
-function sameValue(a: any, b: any): boolean {
+function sameValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   // Numeric equivalence (number vs numeric string)
   const aNum = typeof a === 'number' || (typeof a === 'string' && a.trim() !== '' && !isNaN(Number(a)));

@@ -30,7 +30,7 @@ export async function createAutoAccount(params: CreateAccountParams): Promise<{
       parent_id: parentAccount.id, is_active: true,
     }).select('id, code, name').single();
     if (accountError || !newAccount) return null;
-    if (!opening) return newAccount;
+    if (!opening) return newAccount as { id: string; code: string; name: string; journalId?: string };
     if (!params.createdBy) {
       await s.from('accounts').delete().eq('id', newAccount.id).eq('company_id', params.companyId);
       return null;
@@ -47,20 +47,20 @@ export async function createAutoAccount(params: CreateAccountParams): Promise<{
       date: new Date().toISOString().slice(0, 10), type: 'opening_balance',
       description: `رصيد افتتاحي - ${params.name}`,
       lines: opening > 0 ? [
-        { account_id: newAccount.id, debit: positive, credit: 0 },
-        { account_id: capitalAccount.id, debit: 0, credit: positive },
+        { account_id: String(newAccount.id), debit: positive, credit: 0 },
+        { account_id: String(capitalAccount.id), debit: 0, credit: positive },
       ] : [
-        { account_id: newAccount.id, debit: 0, credit: positive },
-        { account_id: capitalAccount.id, debit: positive, credit: 0 },
+        { account_id: String(newAccount.id), debit: 0, credit: positive },
+        { account_id: String(capitalAccount.id), debit: positive, credit: 0 },
       ],
-      reference_type: 'account_opening_balance', reference_id: newAccount.id,
+      reference_type: 'account_opening_balance', reference_id: String(newAccount.id),
       created_by: params.createdBy,
     });
     if (entry.error || !entry.journalId) {
       await s.from('accounts').delete().eq('id', newAccount.id).eq('company_id', params.companyId);
       return null;
     }
-    return { ...newAccount, journalId: entry.journalId };
+    return { ...newAccount, journalId: entry.journalId } as { id: string; code: string; name: string; journalId?: string };
   } catch {
     return null;
   }

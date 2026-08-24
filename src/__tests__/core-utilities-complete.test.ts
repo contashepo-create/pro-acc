@@ -19,7 +19,7 @@ import {
   getCompanyBranding, brandingToCSS, generateInvoiceHeader, INVOICE_TEMPLATES,
   type CompanyBranding,
 } from '@/lib/branding';
-import { t, getDirection, formatCurrency as i18nCurrency, formatDate as i18nDate, formatNumber } from '@/lib/i18n';
+import { t, getDirection, formatCurrency as i18nCurrency, formatDate as i18nDate, formatNumber, type Locale } from '@/lib/i18n';
 import { DEFAULT_THEME_ID, getTheme, themes } from '@/lib/themes';
 import { dayIndex, priorityMeta, statusMeta } from '@/lib/gantt-types';
 
@@ -140,7 +140,7 @@ describe('bank statement parsers and matching', () => {
     expect(parseBankStatement(mt940, 'mt940')).toHaveLength(2);
     expect(parseBankStatement(csv)).toHaveLength(2);
     expect(parseBankStatement(csv, 'csv')).toHaveLength(2);
-    expect(parseBankStatement(csv, 'invalid' as any)).toEqual([]);
+    expect(parseBankStatement(csv, 'invalid' as 'csv')).toEqual([]);
   });
 
   test('reconciles by correct debit/credit side, amount, date and words', () => {
@@ -191,7 +191,7 @@ describe('branding, localization, themes and gantt helpers', () => {
     expect(i18nCurrency(12.5, 'en', 'USD')).toContain('$12.50');
     expect(i18nDate(new Date(2026, 7, 20), 'en')).toContain('2026');
     expect(formatNumber(1234, 'en')).toBe('1,234');
-    expect(t('common.save', 'xx' as any)).toBe('حفظ');
+    expect(t('common.save', 'xx' as Locale)).toBe('حفظ');
     expect(i18nCurrency(12.5)).toContain('١٢٫٥٠');
     expect(i18nDate('2026-08-20')).toBeTruthy();
     expect(formatNumber(1234)).toContain('١');

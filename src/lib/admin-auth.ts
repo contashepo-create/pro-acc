@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { verifyAdminToken as verifyAdminJwt, verifyPassword } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from './types';
+
 export interface AdminPayload {
   userId: string;
   role: string;
@@ -26,9 +28,9 @@ export async function verifyAdminToken(request: NextRequest): Promise<AdminPaylo
       .select('id, is_active, token_version')
       .eq('id', payload.userId)
       .maybeSingle();
-    if (!data || !(data as any).is_active) return null;
-    if (payload.ver !== (Number((data as any).token_version) || 0)) return null;
-    return { userId: (data as any).id, role: 'superadmin' };
+    if (!data || !(data as Row).is_active) return null;
+    if (payload.ver !== (Number((data as Row).token_version) || 0)) return null;
+    return { userId: String((data as Row).id), role: 'superadmin' };
   } catch {
     return null;
   }
@@ -42,8 +44,8 @@ export async function verifyMasterPassword(adminId: string, masterPassword: stri
       .select('master_password_hash')
       .eq('id', adminId)
       .maybeSingle();
-    if (error || !data || !(data as any).master_password_hash) return false;
-    return verifyPassword(String(masterPassword), String((data as any).master_password_hash));
+    if (error || !data || !(data as Row).master_password_hash) return false;
+    return verifyPassword(String(masterPassword), String((data as Row).master_password_hash));
   } catch {
     return false;
   }

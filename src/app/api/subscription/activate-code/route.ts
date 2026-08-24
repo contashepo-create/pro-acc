@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireApiAuth, handleApiError, success, error, parseBody } from '@/lib/api-helpers';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const CODE_PATTERN = /^[A-F0-9-]{16,80}$/;
 
@@ -65,12 +67,13 @@ export async function GET(request: NextRequest) {
 
     const s = sb();
     const digest = createHash('sha256').update(code).digest('hex');
-    let { data: ac, error: codeError } = await s.from('activation_codes')
+    const codeResult = await s.from('activation_codes')
       .select('id, plan_code, duration_months, plan_duration_months, addon_type, addon_quantity, expires_at, target_company_id, company_id, is_used')
       .eq('code_hash', digest)
       .eq('is_used', false)
       .maybeSingle();
-    if (codeError) throw codeError;
+    if (codeResult.error) throw codeResult.error;
+    let ac = codeResult.data;
 
     // Backward compatibility for codes created before migration 049.
     if (!ac) {
@@ -85,8 +88,8 @@ export async function GET(request: NextRequest) {
     }
 
     if (!ac) return success({ valid: false });
-    const row = ac as Record<string, any>;
-    if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
+    const row = ac as Row;
+    if (row.expires_at && new Date(String(row.expires_at)).getTime() < Date.now()) {
       return success({ valid: false, reason: 'expired' });
     }
     const target = row.target_company_id || row.company_id;
@@ -107,7 +110,7 @@ export async function GET(request: NextRequest) {
     return success({
       valid: true,
       type: 'plan',
-      plan_name: (plan as any).name || row.plan_code,
+      plan_name: (plan as Row).name || row.plan_code,
       duration_months: row.duration_months || row.plan_duration_months,
     });
   } catch (err) {

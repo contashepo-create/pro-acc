@@ -14,21 +14,44 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface DisbursementRow {
+  id: string;
+  number?: string;
+  date?: string;
+  disbursement_type: string;
+  contact_name?: string;
+  employee_name?: string;
+  amount: number;
+  bank_name?: string;
+  status?: string;
+}
+interface BankSafeOption { id: string; name: string; }
+interface ContactOption { id: string; name: string; }
+interface DisbursementForm {
+  date: string;
+  disbursement_type: string;
+  bank_safe_id: string;
+  contact_id: string;
+  employee_id: string;
+  amount: number;
+  reason: string;
+}
+
 export default function DisbursementPage() {
-  const [disbursements, setDisbursements] = useState<any[]>([]);
-  const [banks, setBanks] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
+  const [disbursements, setDisbursements] = useState<DisbursementRow[]>([]);
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
+  const [suppliers, setSuppliers] = useState<ContactOption[]>([]);
+  const [employees, setEmployees] = useState<ContactOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingDisbursement, setEditingDisbursement] = useState<any>(null);
+  const [editingDisbursement, setEditingDisbursement] = useState<DisbursementRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<DisbursementForm>({
     date: new Date().toISOString().split('T')[0],
     disbursement_type: 'supplier',
     bank_safe_id: '',
@@ -67,7 +90,9 @@ export default function DisbursementPage() {
     }
   };
 
+  // Initial load on mount (standard fetch pattern).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
   }, []);
 
@@ -120,24 +145,24 @@ export default function DisbursementPage() {
     }
   };
 
-  const handleEdit = async (disbursement: any) => {
+  const handleEdit = async (disbursement: DisbursementRow) => {
     const { data, error } = await fetchRecord(`/api/vouchers/disbursement/${disbursement.id}`);
     const src = recordOrRow(data, disbursement);
     if (!data && error) toast.error(error);
     setEditingDisbursement(disbursement);
     setForm(applyDates({
-      date: src.date,
-      disbursement_type: src.disbursement_type || 'supplier',
-      bank_safe_id: src.bank_safe_id || '',
-      contact_id: src.contact_id || '',
-      employee_id: src.employee_id || '',
-      amount: src.amount || 0,
-      reason: src.reason || '',
+      date: toDateInput(src.date) ?? '',
+      disbursement_type: String(src.disbursement_type ?? 'supplier'),
+      bank_safe_id: String(src.bank_safe_id ?? ''),
+      contact_id: String(src.contact_id ?? ''),
+      employee_id: String(src.employee_id ?? ''),
+      amount: Number(src.amount) || 0,
+      reason: String(src.reason ?? ''),
     }, ['date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (disbursement: any) => {
+  const handleDelete = async (disbursement: DisbursementRow) => {
     if (!confirm('هل أنت متأكد من حذف هذا السند؟')) return;
     
     try {
@@ -168,14 +193,14 @@ export default function DisbursementPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('disbursement_voucher', row.number) },
-    { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
-    { key: 'disbursement_type', label: 'النوع', sortable: true, render: (row: any) => typeBadge(row.disbursement_type) },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: DisbursementRow) => formatDocumentNumber('disbursement_voucher', row.number) },
+    { key: 'date', label: 'التاريخ', sortable: true, render: (row: DisbursementRow) => formatDate(row.date) },
+    { key: 'disbursement_type', label: 'النوع', sortable: true, render: (row: DisbursementRow) => typeBadge(row.disbursement_type) },
     { key: 'contact_name', label: 'المورد', sortable: true },
     { key: 'employee_name', label: 'الموظف', sortable: true },
-    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: any) => formatCurrency(row.amount) },
+    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: DisbursementRow) => formatCurrency(row.amount) },
     { key: 'bank_name', label: 'الخزينة/البنك' },
-    { key: 'status', label: 'الحالة', render: (row: any) => (
+    { key: 'status', label: 'الحالة', render: (row: DisbursementRow) => (
       <Badge variant={row.status === 'approved' ? 'success' : row.status === 'rejected' ? 'danger' : 'warning'}>
         {row.status === 'approved' ? 'مؤكدة' : row.status === 'rejected' ? 'مرفوضة' : 'قيد الانتظار'}
       </Badge>
@@ -183,7 +208,7 @@ export default function DisbursementPage() {
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: DisbursementRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -245,7 +270,7 @@ export default function DisbursementPage() {
               label="الخزينة/البنك"
               value={form.bank_safe_id}
               onChange={(v) => setForm({...form, bank_safe_id: v})}
-              options={[{ value: '', label: 'اختر' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]}
+              options={[{ value: '', label: 'اختر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]}
               className="col-span-2"
             />
             {(form.disbursement_type === 'supplier' || form.disbursement_type === 'subcontractor') && (
@@ -253,7 +278,7 @@ export default function DisbursementPage() {
                 label="المورد/المقاول (اختياري)"
                 value={form.contact_id}
                 onChange={(v) => setForm({...form, contact_id: v})}
-                options={[{ value: '', label: 'اختر' }, ...suppliers.map((s: any) => ({ value: s.id, label: s.name }))]}
+                options={[{ value: '', label: 'اختر' }, ...suppliers.map((s) => ({ value: s.id, label: s.name }))]}
                 className="col-span-2"
               />
             )}
@@ -262,7 +287,7 @@ export default function DisbursementPage() {
                 label="الموظف"
                 value={form.employee_id}
                 onChange={(v) => setForm({...form, employee_id: v})}
-                options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e: any) => ({ value: e.id, label: e.name }))]}
+                options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e) => ({ value: e.id, label: e.name }))]}
                 className="col-span-2"
               />
             )}

@@ -5,12 +5,12 @@
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error?: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
@@ -18,25 +18,27 @@ function makeDb(db: Record<string, Row[]>) {
       (db[table] || []).filter((r) =>
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'neq') return r[o.col!] !== o.val;
-          if (o.op === 'gte') return r[o.col!] >= o.val;
-          if (o.op === 'lte') return r[o.col!] <= o.val;
+          if (o.op === 'gte') return (r[o.col!] as string) >= (o.val as string);
+          if (o.op === 'lte') return (r[o.col!] as string) <= (o.val as string);
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
       order: () => api, limit: () => api, range: () => api, maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
@@ -50,15 +52,17 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET as taxGET } from '@/app/api/tax-returns/route';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 import { GET as warehousesGET, POST as warehousesPOST } from '@/app/api/warehouses/route';
 import { GET as contractsGET } from '@/app/api/subcontractors/contracts/route';
 import { GET as certificatesGET } from '@/app/api/subcontractors/certificates/route';
 
 const C1 = 'company-1';
-function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: any) {
+function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: Row) {
   const token = createToken('u1', role, 0);
   return { url, method, nextUrl: new URL(url), headers: { get: (k: string) => k === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 
 function baseDb() {

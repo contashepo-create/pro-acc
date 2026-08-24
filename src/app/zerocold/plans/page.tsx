@@ -24,7 +24,7 @@ interface Plan {
   max_invoices_per_month: number | null;
   max_storage_mb: number;
   currency?: string;
-  features_modules: any;
+  features_modules: Record<string, boolean>;
   is_active: boolean;
   sort_order: number;
 }
@@ -70,12 +70,12 @@ const ALL_MODULES = [
   { id: 'telegram_integration', label: 'ربط تيليجرام والموافقات', icon: '🤖' },
 ];
 
-function normalizeModules(input: any): Record<string, boolean> {
+function normalizeModules(input: Record<string, boolean> | string[] | null | undefined): Record<string, boolean> {
   const out: Record<string, boolean> = {};
   ALL_MODULES.forEach((m) => { out[m.id] = false; });
   if (!input) return out;
   if (Array.isArray(input)) {
-    input.forEach((k: any) => { if (typeof k === 'string' && ALL_MODULES.some(m => m.id === k)) out[k] = true; });
+    input.forEach((k) => { if (typeof k === 'string' && ALL_MODULES.some(m => m.id === k)) out[k] = true; });
   } else if (typeof input === 'object') {
     ALL_MODULES.forEach((m) => { if (input[m.id]) out[m.id] = true; });
   }
@@ -89,7 +89,30 @@ export default function PlansPageEnhanced() {
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
-  const [form, setForm] = useState<any>({
+interface PlanForm {
+  code: string;
+  name: string;
+  description_ar: string;
+  description: string;
+  currency: string;
+  price_monthly: number;
+  price_yearly: number;
+  yearly_discount_percent: number;
+  trial_days: number;
+  max_users: number;
+  max_clients: number | null;
+  max_suppliers: number | null;
+  max_employees: number | null;
+  max_projects: number | null;
+  max_quotations_per_month: number | null;
+  max_invoices_per_month: number | null;
+  is_active: boolean;
+  sort_order: number;
+  max_storage_mb: number;
+  features_modules: Record<string, boolean>;
+}
+
+  const [form, setForm] = useState<PlanForm>({
     code: '', name: '', description_ar: '', description: '',
     currency: 'USD',
     price_monthly: 0, price_yearly: 0, yearly_discount_percent: 20,
@@ -155,6 +178,7 @@ export default function PlansPageEnhanced() {
     setEditingPlan(null);
     setForm({
       code: '', name: '', description_ar: '', description: '',
+      currency: 'USD',
       price_monthly: 15, price_yearly: 144, yearly_discount_percent: 20,
       trial_days: 7, max_users: 1, max_clients: null, max_suppliers: null,
       max_employees: null, max_projects: null,
@@ -184,7 +208,7 @@ export default function PlansPageEnhanced() {
   };
 
   const toggleModule = (moduleId: string) => {
-    setForm((prev: any) => ({
+    setForm((prev: PlanForm) => ({
       ...prev,
       features_modules: {
         ...prev.features_modules,
@@ -316,9 +340,9 @@ export default function PlansPageEnhanced() {
                   <h3 className="font-bold flex items-center gap-2 mb-3"><Users size={16} /> الحدود والأعداد (تحكم مرن)</h3>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div><label className="text-xs text-text-secondary">مستخدمين</label><input type="number" value={form.max_users} onChange={(e) => setForm({...form, max_users: Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" /></div>
-                    <div><label className="text-xs text-text-secondary">عملاء</label><input type="number" value={form.max_clients} onChange={(e) => setForm({...form, max_clients: Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" /></div>
-                    <div><label className="text-xs text-text-secondary">موردين</label><input type="number" value={form.max_suppliers} onChange={(e) => setForm({...form, max_suppliers: Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" /></div>
-                    <div><label className="text-xs text-text-secondary">موظفين</label><input type="number" value={form.max_employees} onChange={(e) => setForm({...form, max_employees: Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" /></div>
+                    <div><label className="text-xs text-text-secondary">عملاء</label><input type="number" value={form.max_clients ?? 0} onChange={(e) => setForm({...form, max_clients: Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" /></div>
+                    <div><label className="text-xs text-text-secondary">موردين</label><input type="number" value={form.max_suppliers ?? 0} onChange={(e) => setForm({...form, max_suppliers: Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" /></div>
+                    <div><label className="text-xs text-text-secondary">موظفين</label><input type="number" value={form.max_employees ?? 0} onChange={(e) => setForm({...form, max_employees: Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" /></div>
                     <div><label className="text-xs text-text-secondary">مشاريع</label><input type="number" value={form.max_projects ?? ''} onChange={(e) => setForm({...form, max_projects: e.target.value === '' ? null : Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" placeholder="اتركه فارغاً لغير محدود" /></div>
                     <div><label className="text-xs text-text-secondary">فواتير/شهر</label><input type="number" value={form.max_invoices_per_month ?? ''} onChange={(e) => setForm({...form, max_invoices_per_month: e.target.value === '' ? null : Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" placeholder="فارغ = غير محدود" /></div>
                     <div><label className="text-xs text-text-secondary">عروض سعر/شهر</label><input type="number" value={form.max_quotations_per_month ?? ''} onChange={(e) => setForm({...form, max_quotations_per_month: e.target.value === '' ? null : Number(e.target.value)})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm" placeholder="فارغ = غير محدود" /></div>

@@ -1,5 +1,7 @@
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from './types';
+
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export function accumulateProjectLine(
@@ -20,7 +22,7 @@ export async function sumProjectJournal(companyId: string, projectId: string, fr
   if (error) throw error;
   let expenses = 0;
   let revenue = 0;
-  const accounts = (data || []).map((row: any) => {
+  const accounts = ((data ?? []) as Row[]).map((row: Row) => {
     const debit = Number(row.debit) || 0;
     const credit = Number(row.credit) || 0;
     if (row.account_type === 'expense') expenses += debit - credit;
@@ -42,12 +44,13 @@ export async function sumProjectsJournal(
     p_company_id: companyId, p_project_ids: projectIds, p_from: from || null, p_to: to || null,
   });
   if (error) throw error;
-  for (const row of data || []) {
-    if (!map[row.project_id]) continue;
+  for (const row of (data ?? []) as Row[]) {
+    const pid = String(row.project_id);
+    if (!map[pid]) continue;
     const debit = Number(row.debit) || 0;
     const credit = Number(row.credit) || 0;
-    if (row.account_type === 'expense') map[row.project_id].expenses += debit - credit;
-    if (row.account_type === 'revenue') map[row.project_id].revenue += credit - debit;
+    if (row.account_type === 'expense') map[pid].expenses += debit - credit;
+    if (row.account_type === 'revenue') map[pid].revenue += credit - debit;
   }
   for (const value of Object.values(map)) {
     value.expenses = round2(value.expenses);

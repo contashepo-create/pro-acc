@@ -16,7 +16,11 @@ jest.mock('@/store/theme-store', () => ({ useThemeStore: () => themeState }));
 const sidebarState = { isCollapsed: false, setMobileOpen: setMobileOpenMock };
 jest.mock('@/store/sidebar-store', () => ({ useSidebarStore: () => sidebarState }));
 
-const authState: any = {
+const authState: {
+  user: { name: string; role: string; email: string };
+  company: { name: string; logo_url: string | null };
+  logout: jest.Mock;
+} = {
   user: { name: 'مدير', role: 'admin', email: 'admin@example.com' },
   company: { name: 'شركة', logo_url: null },
   logout: logoutMock,
@@ -29,8 +33,9 @@ jest.mock('@/lib/notification-events', () => ({
 }));
 
 const fetchMock = jest.fn();
-global.fetch = fetchMock as any;
+global.fetch = fetchMock as unknown as typeof fetch;
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- intentional: reaches next/navigation internal router for layout tests
 const { __router } = require('next/navigation');
 
 beforeEach(() => {

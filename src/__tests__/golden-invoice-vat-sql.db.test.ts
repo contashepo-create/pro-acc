@@ -27,7 +27,7 @@ beforeAll(async () => {
      RETURNING id`,
     [ctx.companyId],
   );
-  contactId = contact.rows[0].id;
+  contactId = String(contact.rows[0].id);
 }, 120_000); // migrations can take a while under PGlite
 
 afterAll(async () => {
@@ -61,7 +61,7 @@ async function createInvoice(
      ) AS inv`,
     [ctx.companyId, contactId, date, dueDate, items, vatRate, vatEnabled, ctx.userId],
   );
-  return result.rows[0].inv;
+  return result.rows[0].inv as Record<string, unknown>;
 }
 
 /* ── golden cases (all numbers hand-verified with a calculator) ── */

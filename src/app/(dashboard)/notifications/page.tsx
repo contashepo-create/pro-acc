@@ -10,8 +10,17 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate } from '@/lib/utils';
 import { publishUnreadNotificationCount } from '@/lib/notification-events';
 
+interface NotificationRow {
+  id: string;
+  title?: string;
+  type?: string;
+  message?: string;
+  created_at?: string;
+  is_read?: boolean;
+}
+
 export default function NotificationsPage() {
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -32,9 +41,11 @@ export default function NotificationsPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
-  const handleMarkAsRead = async (notification: any) => {
+  const handleMarkAsRead = async (notification: NotificationRow) => {
     try {
       const res = await fetch(`/api/notifications/${notification.id}`, {
         method: 'PUT',
@@ -52,7 +63,7 @@ export default function NotificationsPage() {
       } else {
         alert(json.message || 'فشل التحديث');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -84,7 +95,7 @@ export default function NotificationsPage() {
     }
   };
 
-  const handleDelete = async (notification: any) => {
+  const handleDelete = async (notification: NotificationRow) => {
     try {
       const res = await fetch(`/api/notifications/${notification.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -96,7 +107,7 @@ export default function NotificationsPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -124,14 +135,14 @@ export default function NotificationsPage() {
 
   const columns = [
     { key: 'title', label: 'العنوان', sortable: true },
-    { key: 'type', label: 'النوع', render: (row: any) => typeBadge(row.type) },
+    { key: 'type', label: 'النوع', render: (row: NotificationRow) => typeBadge(row.type ?? '') },
     { key: 'message', label: 'الرسالة' },
-    { key: 'created_at', label: 'التاريخ', render: (row: any) => formatDate(row.created_at) },
-    { key: 'is_read', label: 'الحالة', render: (row: any) => <Badge variant={row.is_read ? 'success' : 'warning'}>{row.is_read ? 'مقروء' : 'جديد'}</Badge> },
+    { key: 'created_at', label: 'التاريخ', render: (row: NotificationRow) => formatDate(row.created_at) },
+    { key: 'is_read', label: 'الحالة', render: (row: NotificationRow) => <Badge variant={row.is_read ? 'success' : 'warning'}>{row.is_read ? 'مقروء' : 'جديد'}</Badge> },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: NotificationRow) => (
         <div className="flex gap-2">
           {!row.is_read && (
             <Button variant="ghost" size="sm" onClick={() => handleMarkAsRead(row)}>

@@ -41,7 +41,7 @@ describe('isHeaderAccount', () => {
   });
 
   test('returns false for null/undefined input', () => {
-    expect(isHeaderAccount({} as any)).toBe(false);
+    expect(isHeaderAccount({})).toBe(false);
     expect(isHeaderAccount({ code: null })).toBe(false);
   });
 

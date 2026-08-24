@@ -2,12 +2,12 @@ const mailer = jest.fn();
 const telegramSender = jest.fn();
 const escapeTelegramHtml = jest.fn((value: string) => value.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
 const rpc = jest.fn();
-let overdueResult: any = { data: [], error: null };
+let overdueResult: { data: unknown[] | null; error: unknown } = { data: [], error: null };
 
 const db = {
   rpc,
   from: jest.fn(() => {
-    const api: any = {
+    const api = {
       select: () => api, eq: () => api, lt: async () => overdueResult,
     };
     return api;
@@ -67,8 +67,8 @@ describe('message templates and channel adapters', () => {
     expect(escapeTelegramHtml).toHaveBeenCalledWith('<b>attack</b>');
     expect(telegramSender).toHaveBeenCalledWith('1', '&lt;b&gt;attack&lt;/b&gt;');
 
-    await expect(sendMessage({ channel: 'email', to: 'a@test.com', template: null as any })).resolves.toMatchObject({ channel: 'email' });
-    await expect(sendMessage({ channel: 'sms' as any, to: '1', template: 'x' }))
+    await expect(sendMessage({ channel: 'email', to: 'a@test.com', template: null as unknown as string })).resolves.toMatchObject({ channel: 'email' });
+    await expect(sendMessage({ channel: 'sms', to: '1', template: 'x' }))
       .resolves.toEqual({ sent: false, channel: 'sms', error: 'Channel not supported' });
   });
 });

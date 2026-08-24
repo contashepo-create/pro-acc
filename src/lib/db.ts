@@ -1,8 +1,13 @@
-import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
-import { lookup } from 'dns';
+import {Pool, PoolClient, QueryResult, QueryResultRow} from 'pg';
+import {lookup} from 'dns';
+
 
 // Custom lookup that tries both IPv4 and IPv6
-function dnsLookup(hostname: string, options: any, callback: any) {
+function dnsLookup(
+  hostname: string,
+  _options: Record<string, unknown>,
+  callback: (err: Error | null, address?: string, family?: number) => void
+): void {
   lookup(hostname, { all: true, family: 0 }, (err, addresses) => {
     if (err) return callback(err);
     if (!addresses || addresses.length === 0) {
@@ -71,7 +76,7 @@ function getPool(): Pool {
   return _pool;
 }
 
-export async function query<T extends QueryResultRow = any>(text: string, params?: any[]): Promise<QueryResult<T>> {
+export async function query<T extends QueryResultRow = Record<string, unknown>>(text: string, params?: unknown[]): Promise<QueryResult<T>> {
   const start = Date.now();
   try {
     const res = await getPool().query<T>(text, params);

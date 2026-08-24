@@ -1,9 +1,9 @@
-let primary: any = { data: null, error: null };
-let fallback: any = { data: null, error: null };
-let transactions: any = { data: [], error: null };
+let primary: { data: unknown; error: unknown } = { data: null, error: null };
+let fallback: { data: unknown; error: unknown } = { data: null, error: null };
+let transactions: { data: unknown[] | null; error: unknown } = { data: [], error: null };
 let custodyCalls = 0;
 const db = { from: jest.fn((table: string) => {
-  const api: any = {
+  const api = {
     select: () => api, eq: () => api,
     maybeSingle: async () => table === 'custodies' ? (++custodyCalls === 1 ? primary : fallback) : { data: null, error: null },
     order: async () => transactions,
@@ -28,7 +28,7 @@ describe('custody file loader callbacks', () => {
       { type: 'open', amount: '100' }, { type: 'addition', amount: '50' },
       { type: 'expense', amount: '40' }, { type: 'return', amount: '10' },
     ], error: null };
-    const result = await loadCustodyFile('c1', 'f1');
+    const result = (await loadCustodyFile('c1', 'f1'))!;
     expect(result).toMatchObject({ employee_name: 'Ali', project_name: 'P', bank_name: 'Safe', total_received: 150, total_expenses: 40, remaining_amount: 110, computed_status: 'partially_settled' });
     expect(result.deposits).toHaveLength(2);
     expect(result.expenses).toHaveLength(1);

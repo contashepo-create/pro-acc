@@ -1,14 +1,26 @@
-let user: any = { id: 'u1', role: 'supervisor' };
-let permissions: any[] = [];
-let bypass: any = null;
-let userList: any[] | null = null;
-let errors: Record<string, any> = {};
-const upserts: any[] = [];
+let user: Row | null = { id: 'u1', role: 'supervisor' };
+let permissions: Row[] | null = [];
+let bypass: Row | null = null;
+let userList: Row[] | null = null;
+let errors: Record<string, unknown> = {};
+const upserts: Array<{ payload: Row | Row[]; options: Row }> = [];
 
 const db = {
   from: jest.fn((table: string) => {
     let selectText = '';
-    const api: any = {
+    interface PermsChain {
+      select: (text: string) => PermsChain;
+      eq: () => PermsChain;
+      limit: () => PermsChain;
+      order: () => Promise<{ data: unknown; error: unknown }>;
+      maybeSingle: () => Promise<{ data: unknown; error: unknown }>;
+      upsert: (payload: Row | Row[], options: Row) => Promise<{ error: unknown }>;
+      then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+        resolve?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+        reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise<T1 | T2>;
+    }
+    const api: PermsChain = {
       select: (text: string) => { selectText = text; return api; },
       eq: () => api,
       limit: () => api,
@@ -16,10 +28,13 @@ const db = {
       maybeSingle: async () => {
         if (table === 'users') return { data: user, error: errors.users || null };
         if (selectText.includes('bypass_telegram_confirmation') && !selectText.includes('module')) return { data: bypass, error: errors.bypass || null };
-        return { data: permissions[0] || null, error: errors.permissions || null };
+        return { data: permissions?.[0] ?? null, error: errors.permissions || null };
       },
-      upsert: async (payload: any, options: any) => { upserts.push({ payload, options }); return { error: errors.upsert || null }; },
-      then: (resolve: any, reject: any) => Promise.resolve({ data: table === 'users' ? userList : permissions, error: errors[table] || null }).then(resolve, reject),
+      upsert: async (payload: Row | Row[], options: Row) => { upserts.push({ payload, options }); return { error: errors.upsert || null }; },
+      then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+        resolve?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+        reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: table === 'users' ? userList : permissions, error: errors[table] || null }).then(resolve ?? undefined, reject ?? undefined),
     };
     return api;
   }),
@@ -27,6 +42,7 @@ const db = {
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
 
 import { canBypassTelegramConfirmation, hasModulePermission, getUserPermissions, setUserPermission, getCompanyUsersWithPermissions } from '@/lib/permissions';
+type Row = Record<string, unknown>;
 
 beforeEach(() => { jest.clearAllMocks(); user = { id: 'u1', role: 'supervisor' }; userList = [user]; permissions = []; bypass = null; errors = {}; upserts.length = 0; });
 
@@ -56,6 +72,13 @@ describe('remaining permission functions', () => {
     await expect(hasModulePermission('u1', 'c1', 'journal', 'nonsense')).resolves.toBe(false);
   });
 
+  test('falls back to supervisor defaults when the user row has no role', async () => {
+    user = { id: 'u1' };
+    await expect(hasModulePermission('u1', 'c1', 'journal', 'read')).resolves.toBe(true);
+    permissions = [{ module: 'journal', permissions: ['export'] }];
+    await expect(hasModulePermission('u1', 'c1', 'journal', 'read')).resolves.toBe(false);
+  });
+
   test('returns role defaults alongside all custom permissions', async () => {
     permissions = [{ module: 'journal', permissions: ['read'], bypass_telegram_confirmation: false }];
     user = { id: 'u1', role: 'accountant' };
@@ -64,7 +87,7 @@ describe('remaining permission functions', () => {
     expect(result.defaultPermissions['*']).toContain('create');
     user = { id: 'u1', role: '' };
     expect((await getUserPermissions('u1', 'c1')).role).toBe('supervisor');
-    user = { id: 'u1', role: 'unknown' }; permissions = null as any;
+    user = { id: 'u1', role: 'unknown' }; permissions = null;
     expect(await getUserPermissions('u1', 'c1')).toMatchObject({ role: 'unknown', defaultPermissions: {}, customPermissions: [] });
     user = null;
     await expect(getUserPermissions('u1', 'c1')).rejects.toThrow('does not belong');
@@ -94,7 +117,7 @@ describe('remaining permission functions', () => {
     const result = await getCompanyUsersWithPermissions('c1');
     expect(result[0].permissions).toHaveLength(2);
     expect(result[1].permissions).toEqual([]);
-    permissions = null as any;
+    permissions = null;
     userList = [{ id: 'u3', name: 'C' }];
     await expect(getCompanyUsersWithPermissions('c1')).resolves.toEqual([{ id: 'u3', name: 'C', permissions: [] }]);
     userList = null;

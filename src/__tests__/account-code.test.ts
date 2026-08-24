@@ -1,3 +1,4 @@
+import type { TestBuilder } from './mocks';
 import {
   accountCodeLookupKeys,
   nextChildAccountCode,
@@ -5,6 +6,7 @@ import {
   findAccountByCode,
   ACCOUNT_CODE_RE,
 } from '@/lib/account-code';
+import { wrapSupabase } from './mocks';
 
 describe('account codes — order & RTL aliases', () => {
   test('canonical child is parent then sequence', () => {
@@ -32,12 +34,12 @@ describe('account codes — order & RTL aliases', () => {
 
   test('searches aliases in order and returns null when no account matches', async () => {
     const calls: string[] = [];
-    const supabase = { from: () => {
-      const api: any = { select: () => api, eq: (_field: string, value: string) => { if (_field === 'code') calls.push(value); return api; }, maybeSingle: async () => ({ data: calls.at(-1) === '1110-0001' ? { id: 'a1', code: '1110-0001' } : null }) };
+    const supabase = wrapSupabase({ from: () => {
+      const api: TestBuilder = { select: () => api, eq: (_field: string, value: string) => { if (_field === 'code') calls.push(value); return api; }, maybeSingle: async () => ({ data: calls.at(-1) === '1110-0001' ? { id: 'a1', code: '1110-0001' } : null, error: null }) };
       return api;
-    } };
+    } });
     await expect(findAccountByCode(supabase, 'c1', '0001-1110')).resolves.toMatchObject({ id: 'a1' });
-    await expect(findAccountByCode({ from: () => { const api: any = { select: () => api, eq: () => api, maybeSingle: async () => ({ data: null }) }; return api; } }, 'c1', '9999')).resolves.toBeNull();
+    await expect(findAccountByCode(wrapSupabase({ from: () => { const api: TestBuilder = { select: () => api, eq: () => api, maybeSingle: async () => ({ data: null, error: null }) }; return api; } }), 'c1', '9999')).resolves.toBeNull();
   });
 
   test('schema-like regex allows parent and child', () => {

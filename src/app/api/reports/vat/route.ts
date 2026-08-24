@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 import { parseReportPagination } from '@/lib/report-validation';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
 
@@ -43,12 +45,12 @@ export async function GET(request: NextRequest) {
     const summary = (summaryResult.data || {}) as Record<string, unknown>;
     const outputVat = number(summary.outputVat);
     const inputVat = number(summary.inputVat);
-    const lines = linesResult.data || [];
-    const salesDetails = lines.filter((row: any) => row.vat_type === 'sales').map(formatVatLine);
-    const purchaseDetails = lines.filter((row: any) => row.vat_type === 'purchases').map(formatVatLine);
-    const invoiceVatTotal = (invoicesResult.data || []).reduce((sum: number, row: any) => sum + number(row.tax_amount), 0);
-    const purchaseVatTotal = (purchasesResult.data || []).reduce((sum: number, row: any) => sum + number(row.tax_amount), 0);
-    const totalCount = lines.length ? number((lines[0] as any).total_count) : 0;
+    const lines = (linesResult.data ?? []) as Row[];
+    const salesDetails = lines.filter((row: Row) => row.vat_type === 'sales').map(formatVatLine);
+    const purchaseDetails = lines.filter((row: Row) => row.vat_type === 'purchases').map(formatVatLine);
+    const invoiceVatTotal = ((invoicesResult.data ?? []) as Row[]).reduce((sum: number, row: Row) => sum + number(row.tax_amount), 0);
+    const purchaseVatTotal = ((purchasesResult.data ?? []) as Row[]).reduce((sum: number, row: Row) => sum + number(row.tax_amount), 0);
+    const totalCount = lines.length ? number((lines[0] as Row).total_count) : 0;
 
     return success({
       period: { from, to },
@@ -78,7 +80,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-function formatVatLine(row: any) {
+function formatVatLine(row: Row) {
   return {
     date: row.entry_date, number: row.entry_number, description: row.description,
     amount: number(row.amount), type: row.vat_type,

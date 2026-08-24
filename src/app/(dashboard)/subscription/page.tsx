@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Check, Loader2, CreditCard, Crown, AlertTriangle, Upload, DollarSign, Calendar, Clock, Image as ImageIcon, Send, Key as KeyIcon, UserPlus, Building2, HardDrive, Download } from 'lucide-react';
+import { Check, Loader2, Crown, AlertTriangle, Send, Key as KeyIcon, UserPlus, Building2, HardDrive, Download } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -23,7 +23,7 @@ interface Plan {
   max_employees?: number | null; max_projects: number | null; max_invoices_per_month?: number | null;
   max_quotations_per_month?: number | null;
   max_storage_mb?: number;
-  features_modules: any;
+  features_modules: Record<string, unknown>;
   currency?: string;
 }
 
@@ -32,6 +32,47 @@ interface PaymentMethod {
 }
 
 type AddonId = 'extra_user' | 'extra_branch' | 'storage_gb';
+
+interface SubscriptionState {
+  plan_code?: string;
+  plan_name?: string;
+  status?: string;
+  end_date?: string;
+  days_remaining?: number;
+  extra_users?: number;
+  extra_branches?: number;
+  is_expiring_soon?: boolean;
+}
+interface FlashMessage { type: 'success' | 'error'; text: string; }
+interface CodePreview { plan_name?: string; duration_months?: number; is_used?: boolean; }
+interface UpgradeRequest {
+  id: string;
+  requested_plan_id?: string;
+  subscription_plans?: { name?: string };
+  duration_type?: string;
+  payment_method_code?: string;
+  payment_amount?: number;
+  created_at: string;
+  status?: string;
+}
+interface AddonRequest {
+  id: string;
+  addon_type?: string;
+  quantity?: number;
+  duration_type?: string;
+  total_amount_usd?: number;
+  created_at: string;
+  status?: string;
+}
+interface SupportTicket { id: string; subject?: string; status?: string; created_at: string; }
+interface DataExport {
+  id: string;
+  requested_at: string;
+  file_size_bytes?: number;
+  status?: string;
+  has_file?: boolean;
+  error_message?: string;
+}
 
 export default function SubscriptionPageEnhanced() {
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -47,9 +88,9 @@ export default function SubscriptionPageEnhanced() {
     }
   }, [loggedInUser, authLoading, router]);
 
-  const [subscription, setSubscription] = useState<any>(null);
-  const [upgradeRequests, setUpgradeRequests] = useState<any[]>([]);
-  const [addonRequests, setAddonRequests] = useState<any[]>([]);
+  const [subscription, setSubscription] = useState<SubscriptionState | null>(null);
+  const [upgradeRequests, setUpgradeRequests] = useState<UpgradeRequest[]>([]);
+  const [addonRequests, setAddonRequests] = useState<AddonRequest[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
@@ -57,7 +98,7 @@ export default function SubscriptionPageEnhanced() {
   const [duration, setDuration] = useState<'monthly' | 'yearly'>('monthly');
   const [form, setForm] = useState({ payment_method: 'instapay', amount: '', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<any>(null);
+  const [message, setMessage] = useState<FlashMessage | null>(null);
 
   // Add-on modal
   const [showAddonModal, setShowAddonModal] = useState(false);
@@ -90,25 +131,28 @@ export default function SubscriptionPageEnhanced() {
 
   // Activation code state
   const [activationCode, setActivationCode] = useState('');
-  const [codePreview, setCodePreview] = useState<any>(null);
+  const [codePreview, setCodePreview] = useState<CodePreview | null>(null);
   const [codeChecking, setCodeChecking] = useState(false);
   const [activating, setActivating] = useState(false);
-  const [activationMsg, setActivationMsg] = useState<any>(null);
+  const [activationMsg, setActivationMsg] = useState<FlashMessage | null>(null);
 
   // Support tab state
   const [activeTab, setActiveTab] = useState<'plans'|'addons'|'support'|'export'>('plans');
+  // Keep the active tab in sync with the ?tab= URL parameter (standard
+  // URL-driven state sync on param change).
   useEffect(() => {
     const tab = searchParams?.get('tab');
-    if (tab === 'support' || tab === 'export' || tab === 'addons') setActiveTab(tab as any);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (tab === 'support' || tab === 'export' || tab === 'addons') setActiveTab(tab as 'support' | 'export' | 'addons');
   }, [searchParams]);
 
   // Support form
   const [supportForm, setSupportForm] = useState({ subject: '', message: '', category: 'billing' });
   const [supportSubmitting, setSupportSubmitting] = useState(false);
-  const [supportTickets, setSupportTickets] = useState<any[]>([]);
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
 
   // Data export
-  const [exports, setExports] = useState<any[]>([]);
+  const [exports, setExports] = useState<DataExport[]>([]);
   const [exportRequesting, setExportRequesting] = useState(false);
 
   const refreshAll = async () => {
@@ -143,6 +187,8 @@ export default function SubscriptionPageEnhanced() {
     setLoading(false);
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { refreshAll(); }, []);
 
   const openUpgrade = (plan: Plan) => {
@@ -371,7 +417,7 @@ export default function SubscriptionPageEnhanced() {
           {upgradeRequests.length > 0 && (
             <Card title="طلبات الترقية السابقة">
               <div className="space-y-2">
-                {upgradeRequests.map((req: any) => (
+                {upgradeRequests.map((req: UpgradeRequest) => (
                   <div key={req.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
                     <div>
                       <div className="font-medium">{req.subscription_plans?.name || req.requested_plan_id} - {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
@@ -492,15 +538,15 @@ export default function SubscriptionPageEnhanced() {
               </div>
               <div>
                 <label className="text-xs text-text-muted">المبلغ المحول</label>
-                <Input type="number" value={form.amount} onChange={(e:any)=>setForm({...form, amount: e.target.value})} />
+                <Input type="number" value={form.amount} onChange={(e)=>setForm({...form, amount: e.target.value})} />
               </div>
               <div>
                 <label className="text-xs text-text-muted">تاريخ التحويل</label>
-                <Input type="date" value={form.date} onChange={(e:any)=>setForm({...form, date: e.target.value})} />
+                <Input type="date" value={form.date} onChange={(e)=>setForm({...form, date: e.target.value})} />
               </div>
               <div>
                 <label className="text-xs text-text-muted">وقت التحويل</label>
-                <Input type="time" value={form.time} onChange={(e:any)=>setForm({...form, time: e.target.value})} />
+                <Input type="time" value={form.time} onChange={(e)=>setForm({...form, time: e.target.value})} />
               </div>
             </div>
 
@@ -563,7 +609,7 @@ export default function SubscriptionPageEnhanced() {
           {addonRequests.length > 0 && (
             <Card title="طلبات الإضافات السابقة">
               <div className="space-y-2">
-                {addonRequests.map((r: any) => (
+                {addonRequests.map((r: AddonRequest) => (
                   <div key={r.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
                     <div>
                       <div className="font-medium">{r.addon_type === 'extra_user' ? 'مستخدم إضافي' : r.addon_type === 'extra_branch' ? 'فرع/مستودع إضافي' : 'تخزين إضافي'} ×{r.quantity} - {r.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
@@ -589,7 +635,7 @@ export default function SubscriptionPageEnhanced() {
                 <option value="data_request">طلب بيانات</option>
                 <option value="other">أخرى</option>
               </select>
-              <Input placeholder="عنوان الرسالة" value={supportForm.subject} onChange={(e:any) => setSupportForm({...supportForm, subject: e.target.value})} />
+              <Input placeholder="عنوان الرسالة" value={supportForm.subject} onChange={(e) => setSupportForm({...supportForm, subject: e.target.value})} />
               <textarea value={supportForm.message} onChange={e => setSupportForm({...supportForm, message: e.target.value})} className="w-full px-3 py-2 bg-bg-secondary border rounded-xl text-sm h-32" placeholder="اشرح طلبك بوضوح..."></textarea>
               <Button onClick={submitSupport} disabled={supportSubmitting} leftIcon={supportSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}>{supportSubmitting ? 'جاري الإرسال...' : 'إرسال'}</Button>
               <p className="text-[10px] text-text-muted">تعمل الرسائل حتى مع انتهاء الاشتراك.</p>
@@ -598,7 +644,7 @@ export default function SubscriptionPageEnhanced() {
           <Card title="الرسائل السابقة">
             <div className="space-y-2">
               {supportTickets.length === 0 ? <p className="text-sm text-text-muted">لا توجد رسائل سابقة.</p> :
-                supportTickets.map((t: any) => (
+                supportTickets.map((t: SupportTicket) => (
                   <div key={t.id} className="p-3 bg-bg-secondary rounded-lg text-sm">
                     <div className="flex justify-between"><strong>{t.subject}</strong> <span className={`text-xs ${t.status === 'open' ? 'text-warning font-semibold' : t.status === 'resolved' ? 'text-success font-semibold' : 'text-text-muted'}`}>{t.status === 'open' ? 'مفتوحة' : t.status === 'in_progress' ? 'قيد المعالجة' : t.status === 'resolved' ? 'تم الحل' : 'مغلقة'}</span></div>
                     <div className="text-xs text-text-muted">{new Date(t.created_at).toLocaleDateString()}</div>
@@ -617,7 +663,7 @@ export default function SubscriptionPageEnhanced() {
           <Button onClick={requestExport} disabled={exportRequesting} leftIcon={exportRequesting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}>{exportRequesting ? 'جاري التجهيز...' : 'طلب تصدير جديد'}</Button>
           <div className="mt-6 space-y-2">
             {exports.length === 0 ? <p className="text-xs text-text-muted">لا توجد طلبات تصدير سابقة.</p> :
-              exports.map((ex: any) => (
+              exports.map((ex: DataExport) => (
                 <div key={ex.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
                   <div>
                     <div className="font-medium">{new Date(ex.requested_at).toLocaleString()}</div>
@@ -647,7 +693,7 @@ export default function SubscriptionPageEnhanced() {
             </div>
             <div>
               <label className="text-xs text-text-muted">المدة</label>
-              <select value={addonDuration} onChange={e => setAddonDuration(e.target.value as any)} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm">
+              <select value={addonDuration} onChange={e => setAddonDuration(e.target.value as 'monthly' | 'yearly')} className="w-full mt-1 px-3 py-2 bg-bg-secondary border rounded-lg text-sm">
                 <option value="monthly">شهري - ${addonUnitPrice()}/وحدة</option>
                 <option value="yearly">سنوي - ${addonUnitPrice()}/وحدة (توفير 20%)</option>
               </select>
@@ -671,10 +717,10 @@ export default function SubscriptionPageEnhanced() {
             </div>
             <div>
               <label className="text-xs text-text-muted">المبلغ</label>
-              <Input type="number" value={addonForm.amount} onChange={(e:any)=>setAddonForm({...addonForm, amount: e.target.value})} />
+              <Input type="number" value={addonForm.amount} onChange={(e)=>setAddonForm({...addonForm, amount: e.target.value})} />
             </div>
-            <div><label className="text-xs text-text-muted">التاريخ</label><Input type="date" value={addonForm.date} onChange={(e:any)=>setAddonForm({...addonForm, date: e.target.value})} /></div>
-            <div><label className="text-xs text-text-muted">الوقت</label><Input type="time" value={addonForm.time} onChange={(e:any)=>setAddonForm({...addonForm, time: e.target.value})} /></div>
+            <div><label className="text-xs text-text-muted">التاريخ</label><Input type="date" value={addonForm.date} onChange={(e)=>setAddonForm({...addonForm, date: e.target.value})} /></div>
+            <div><label className="text-xs text-text-muted">الوقت</label><Input type="time" value={addonForm.time} onChange={(e)=>setAddonForm({...addonForm, time: e.target.value})} /></div>
           </div>
           <div>
             <label className="text-xs text-text-muted">إيصال الدفع (JPG أو PNG أو PDF، حتى 5MB)</label>

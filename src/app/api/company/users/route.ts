@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword } from '@/lib/auth';
 import { passwordPolicy } from '@/lib/validation';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -49,7 +51,7 @@ export async function GET(request: NextRequest) {
           .eq('company_id', auth.companyId)
           .order('created_at', { ascending: false })
           .limit(1).maybeSingle();
-        if (sub) planName = ((sub as any).subscription_plans as any)?.name || null;
+        if (sub) planName = (sub as Row).subscription_plans ? String(((sub as Row).subscription_plans as Row).name) || null : null;
       }
     } catch {
       // ignore
@@ -138,7 +140,7 @@ export async function POST(request: NextRequest) {
           .select('subscription_plans(name)')
           .eq('company_id', auth.companyId)
           .order('created_at', { ascending: false }).limit(1).maybeSingle();
-        if (sub) planName = ((sub as any).subscription_plans as any)?.name || '';
+        if (sub) planName = (sub as Row).subscription_plans ? String(((sub as Row).subscription_plans as Row).name) || '' : '';
       }
     } catch {
       // ignore
@@ -171,7 +173,7 @@ export async function POST(request: NextRequest) {
 
     const passwordHash = await hashPassword(password);
 
-    const insertData: any = {
+    const insertData: Row = {
       company_id: auth.companyId,
       email: email.toLowerCase().trim(),
       name: name.trim(),

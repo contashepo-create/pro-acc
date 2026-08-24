@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { deliveryDate, deliveryUuid, projectExpenseCreateSchema } from '@/lib/project-delivery-validation';
 import { PROJECT_EXPENSE_CODES } from '@/lib/constants';
 
+import type { Row } from '@/lib/types';
+
 const EXPENSE_COLUMNS = `id,project_id,expense_type,description,amount,date,contact_id,journal_entry_id,status,
   approved_by,approved_at,notes,created_at,updated_at,projects(name),contacts(name),users(name)`;
 
@@ -26,7 +28,7 @@ export async function GET(req: NextRequest) {
     const offset = (page - 1) * pageSize;
     const { data, error: queryError, count } = await query.order('date', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const expenses = (data || []).map((row: any) => ({ ...row, project_name: row.projects?.name || null, projects: undefined }));
+    const expenses = ((data ?? []) as Row[]).map((row: Row) => ({ ...row, project_name: row.projects ? String((row.projects as Row).name) || null : null, projects: undefined }));
     return success({ expenses, total: count || 0, page, pageSize });
   } catch (cause) {
     return handleApiError(cause);
@@ -74,10 +76,10 @@ export async function POST(req: NextRequest) {
       const { logAudit } = await import('@/lib/audit');
       await logAudit({
         company_id: auth.companyId, user_id: auth.userId, entity_type: 'project_expense',
-        entity_id: String((data as any)?.id || ''), action: 'create',
+        entity_id: String((data as Row)?.id || ''), action: 'create',
         after: {
-          id: (data as any)?.id, project_id: input.project_id, expense_type: input.expense_type,
-          amount: input.amount, date: input.date, status: (data as any)?.status,
+          id: (data as Row)?.id, project_id: input.project_id, expense_type: input.expense_type,
+          amount: input.amount, date: input.date, status: (data as Row)?.status,
         },
         summary: `مصروف مشروع (${input.expense_type}) بقيمة ${input.amount}`,
       });

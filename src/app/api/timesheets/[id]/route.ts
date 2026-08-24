@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server';
-import { success, error, notFound, requireApiAuth, handleApiError, parseBody, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, notFound, handleApiError, parseBody, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -24,12 +26,12 @@ export async function PUT(
         .maybeSingle();
 
       if (!ts) return notFound();
-      const t = ts as any;
+      const t = ts as Row;
       if (t.status === 'completed') return error('تم تسجيل الانصراف بالفعل');
 
-      const checkOut = body.check_out || new Date().toISOString();
-      const totalMinutes = (new Date(checkOut).getTime() - new Date(t.check_in).getTime()) / 60000;
-      const totalHours = (totalMinutes - (parseFloat(t.break_minutes) || 0)) / 60;
+      const checkOut = String(body.check_out || new Date().toISOString());
+      const totalMinutes = (new Date(checkOut).getTime() - new Date(String(t.check_in)).getTime()) / 60000;
+      const totalHours = (totalMinutes - (parseFloat(String(t.break_minutes)) || 0)) / 60;
       const standardDay = 8;
       const regularHours = Math.min(totalHours, standardDay);
       const overtimeHours = Math.max(0, totalHours - standardDay);

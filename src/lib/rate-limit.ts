@@ -82,7 +82,7 @@ export async function checkRateLimit(
   const earliest = attempts?.[0]?.attempted_at;
 
   if (count >= 5 && earliest) {
-    const elapsedMs = Date.now() - new Date(earliest).getTime();
+    const elapsedMs = Date.now() - new Date(String(earliest)).getTime();
     const remainingMs = 15 * 60 * 1000 - elapsedMs;
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
     return { allowed: false, remainingMinutes };
@@ -125,7 +125,7 @@ export async function checkPasswordResetRateLimit(
   const count = (data || []).length;
   if (count >= maxRequests) {
     // maxRequests is clamped to >=1, therefore a blocked result always has a first row.
-    const elapsedMs = Date.now() - new Date(data![0].created_at).getTime();
+    const elapsedMs = Date.now() - new Date(String(data![0].created_at)).getTime();
     const remainingMs = windowMinutes * 60000 - elapsedMs;
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
     return { allowed: false, remainingMinutes };
@@ -147,7 +147,7 @@ export async function recordPasswordResetRequest(
     .insert({ email: email.toLowerCase().trim(), ip_address: safeIp, status: 'requested' })
     .select('id').single();
   if (error) throw error;
-  return data?.id || null;
+  return data?.id == null ? null : String(data.id);
 }
 
 /** Update a recorded request's delivery outcome for diagnostics. */
@@ -198,7 +198,7 @@ export async function checkRegistrationRateLimit(
   const count = (data || []).length;
   if (count >= maxAttempts) {
     // maxAttempts is clamped to >=1, therefore a blocked result always has a first row.
-    const elapsedMs = Date.now() - new Date(data![0].created_at).getTime();
+    const elapsedMs = Date.now() - new Date(String(data![0].created_at)).getTime();
     const remainingMs = windowMinutes * 60000 - elapsedMs;
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
     return { allowed: false, remainingMinutes };

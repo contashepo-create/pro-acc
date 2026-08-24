@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const number = (value: unknown) => Number(value) || 0;
 
@@ -29,20 +31,20 @@ export async function GET(request: NextRequest) {
       if (result.error) throw result.error;
     }
 
-    const revenueChart = (monthlyResult.data || []).map((row: any) => ({
+    const revenueChart = ((monthlyResult.data ?? []) as Row[]).map((row: Row) => ({
       month: months[number(row.month_number) - 1], revenue: number(row.revenue), expenses: number(row.expenses),
     }));
-    const agingReport = (agingResult.data || []).map((row: any) => ({
+    const agingReport = ((agingResult.data ?? []) as Row[]).map((row: Row) => ({
       range: row.bucket, count: number(row.invoice_count), amount: number(row.amount),
     }));
-    const topClients = (clientsResult.data || []).map((row: any) => ({
+    const topClients = ((clientsResult.data ?? []) as Row[]).map((row: Row) => ({
       name: row.name, revenue: number(row.revenue), count: number(row.entry_count),
     }));
-    const projectProfitability = (projectsResult.data || []).map((row: any) => ({
+    const projectProfitability = ((projectsResult.data ?? []) as Row[]).map((row: Row) => ({
       name: row.name, revenue: number(row.revenue), expenses: number(row.expenses), margin: number(row.margin),
     }));
-    const totalRevenue = revenueChart.reduce((sum: number, row: any) => sum + row.revenue, 0);
-    const totalExpenses = revenueChart.reduce((sum: number, row: any) => sum + row.expenses, 0);
+    const totalRevenue = revenueChart.reduce((sum: number, row) => sum + row.revenue, 0);
+    const totalExpenses = revenueChart.reduce((sum: number, row) => sum + row.expenses, 0);
     const netProfit = totalRevenue - totalExpenses;
     const invoiceKpis = (invoiceKpisResult.data || {}) as Record<string, unknown>;
 

@@ -3,6 +3,8 @@
  * Tests VAT calculations, journal balancing, invoice totals, etc.
  */
 
+import crypto from 'crypto';
+
 describe('Invoice Calculations (VAT 15%)', () => {
   const VAT_RATE = 0.15;
 
@@ -207,7 +209,6 @@ describe('Security - Input Validation', () => {
 
 describe('Backup & HMAC Verification', () => {
   test('should generate consistent HMAC', () => {
-    const crypto = require('crypto');
     const secret = 'test-secret';
     const data = JSON.stringify({ company_id: '123', data: { accounts: [] } });
 
@@ -219,7 +220,6 @@ describe('Backup & HMAC Verification', () => {
   });
 
   test('should detect tampered backup', () => {
-    const crypto = require('crypto');
     const secret = 'test-secret';
     const originalData = JSON.stringify({ company_id: '123', amount: 100 });
     const tamperedData = JSON.stringify({ company_id: '123', amount: 9999 });

@@ -3,6 +3,8 @@ import { success, error, notFound, parseBody, requireModulePermission, handleApi
 import { getSupabase } from '@/lib/supabase-client';
 import { deliveryUuid, projectUpdateSchema } from '@/lib/project-delivery-validation';
 
+import type { Row } from '@/lib/types';
+
 const PROJECT_COLUMNS = `id,name,client_id,contract_value,start_date,end_date,status,description,location,budget,
   tax_enabled,tax_rate,closed_at,closed_by,closure_journal_entry_id,created_at,updated_at,contacts(name)`;
 
@@ -24,8 +26,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .select('id,project_id,item_code,code,description,unit,quantity,unit_price,total,parent_id,level,created_at')
       .eq('project_id', id).eq('company_id', auth.companyId).order('item_code');
     if (boqError) throw boqError;
-    const row = project as any;
-    return success({ ...row, client_id: row.client_id || '', client_name: row.contacts?.name || null, contacts: undefined, boq_items: boq || [] });
+    const row = project as Row;
+    return success({ ...row, client_id: String(row.client_id || ''), client_name: row.contacts ? String((row.contacts as Row).name) || null : null, contacts: undefined, boq_items: boq || [] });
   } catch (cause) {
     return handleApiError(cause);
   }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { 
   Search, Bell, Moon, Sun, User, LogOut, Menu, 
   Settings, HelpCircle, ChevronDown 
@@ -23,7 +23,6 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const pathname = usePathname();
   const router = useRouter();
   
   const { isDark, toggleMode } = useThemeStore();
@@ -76,7 +75,7 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
       await logout();
       toast.success('تم تسجيل الخروج بنجاح');
       router.push('/login');
-    } catch (error) {
+    } catch {
       toast.error('فشل تسجيل الخروج');
     }
   };
@@ -111,6 +110,7 @@ export default function Header({ title = '', breadcrumbs }: HeaderProps = {}) {
         <div className="hidden lg:flex items-center gap-3">
           <div className="flex items-center gap-2.5">
             {company?.logo_url ? (
+              // eslint-disable-next-line @next/next/no-img-element -- company logo from user URL
               <img src={company.logo_url} alt={company.name} className="w-8 h-8 rounded-lg object-cover" />
             ) : (
               <div className="w-8 h-8 rounded-lg bg-accent flex items-center justify-center text-white text-base font-bold shrink-0 shadow-sm">

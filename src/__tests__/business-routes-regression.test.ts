@@ -16,34 +16,34 @@
  *   - quotations PUT must accept the UI's `tax_enabled` field and strip it
  *     (plus `items`) before calling the RPC, instead of rejecting the edit.
  */
-import { randomBytes } from 'crypto';
-
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type RpcResult = { data: any; error: any } | ((name: string, params: any) => { data: any; error: any });
+type Row = Record<string, unknown>;
+type RpcResult = { data: unknown; error: unknown } | ((name: string, params?: Row) => { data: unknown; error: unknown });
 
 function makeDb(db: Record<string, Row[]>) {
-  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
   const rpcResults = new Map<string, RpcResult>();
   const selectArgs: string[] = [];
 
   const from = (table: string) => {
-    const filters: Array<{ kind: string; col: string; val: any }> = [];
+    const filters: Array<{ kind: string; col: string; val: unknown }> = [];
     let rangeBounds: { from: number; to: number } | null = null;
     let limitCount: number | null = null;
-    let mut: { kind?: string; payload?: any } = {};
+    let mut: { kind?: string; payload?: Row | Row[] } = {};
 
     const filtered = () => {
       let rows = (db[table] || []).filter((row) =>
         filters.every((f) => {
           if (f.kind === 'eq') return row[f.col] === f.val;
           if (f.kind === 'neq') return row[f.col] !== f.val;
-          if (f.kind === 'in') return f.val.includes(row[f.col]);
-          if (f.kind === 'gte') return row[f.col] >= f.val;
-          if (f.kind === 'lte') return row[f.col] <= f.val;
+          if (f.kind === 'in') return (f.val as unknown[]).includes(row[f.col]);
+          if (f.kind === 'gte') return (row[f.col] as string) >= (f.val as string);
+          if (f.kind === 'lte') return (row[f.col] as string) <= (f.val as string);
           return true;
         })
       );
@@ -52,37 +52,40 @@ function makeDb(db: Record<string, Row[]>) {
       return rows;
     };
 
-    const api: any = {
+    const api: TestBuilder = {
       select: (cols: string) => { selectArgs.push(String(cols)); return api; },
-      eq: (col: string, val: any) => { filters.push({ kind: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { filters.push({ kind: 'neq', col, val }); return api; },
-      in: (col: string, val: any) => { filters.push({ kind: 'in', col, val }); return api; },
-      gte: (col: string, val: any) => { filters.push({ kind: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { filters.push({ kind: 'lte', col, val }); return api; },
+      eq: (col: string, val: unknown) => { filters.push({ kind: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { filters.push({ kind: 'neq', col, val }); return api; },
+      in: (col: string, val: unknown) => { filters.push({ kind: 'in', col, val }); return api; },
+      gte: (col: string, val: unknown) => { filters.push({ kind: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { filters.push({ kind: 'lte', col, val }); return api; },
       or: () => api,
       not: () => api,
       is: () => api,
       order: () => api,
       limit: (n: number) => { limitCount = n; return api; },
       range: (fromIdx: number, toIdx: number) => { rangeBounds = { from: fromIdx, to: toIdx }; return api; },
-      insert: (payload: any) => { mut = { kind: 'insert', payload }; return api; },
-      update: (payload: any) => { mut = { kind: 'update', payload }; return api; },
-      upsert: (payload: any) => { mut = { kind: 'upsert', payload }; return api; },
+      insert: (payload: Row | Row[]) => { mut = { kind: 'insert', payload }; return api; },
+      update: (payload: Row) => { mut = { kind: 'update', payload }; return api; },
+      upsert: (payload: Row | Row[]) => { mut = { kind: 'upsert', payload }; return api; },
       delete: () => { mut = { kind: 'delete' }; return api; },
       maybeSingle: async () => ({ data: filtered()[0] || null, error: null }),
       single: async () => {
         const row = filtered()[0] || null;
         return { data: row, error: row ? null : { message: 'not found', code: 'PGRST116' } };
       },
-      then: (resolve: any, reject: any) => {
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        resolve?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => {
         if (mut.kind === 'insert' || mut.kind === 'upsert') {
-          return Promise.resolve({ data: mut.payload, error: null }).then(resolve, reject);
+          return Promise.resolve({ data: mut.payload, error: null }).then(resolve ?? undefined, reject ?? undefined);
         }
         if (mut.kind === 'update' || mut.kind === 'delete') {
-          return Promise.resolve({ data: filtered()[0] ?? null, error: null }).then(resolve, reject);
+          return Promise.resolve({ data: filtered()[0] ?? null, error: null }).then(resolve ?? undefined, reject ?? undefined);
         }
         const rows = filtered();
-        return Promise.resolve({ data: rows, error: null, count: rows.length }).then(resolve, reject);
+        return Promise.resolve({ data: rows, error: null, count: rows.length }).then(resolve ?? undefined, reject ?? undefined);
       },
     };
     return api;
@@ -93,7 +96,7 @@ function makeDb(db: Record<string, Row[]>) {
     rpcCalls,
     rpcResults,
     selectArgs,
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, params?: Row): Promise<{ data: unknown; error: unknown }> => {
       rpcCalls.push({ name, params });
       const result = rpcResults.get(name);
       if (!result) return { data: null, error: null };
@@ -108,7 +111,7 @@ jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { POST as fiscalPOST } from '@/app/api/fiscal/route';
 import { DELETE as fiscalDELETE } from '@/app/api/fiscal/[id]/route';
-import { GET as progressGET, POST as progressPOST } from '@/app/api/progress-billing/route';
+import { GET as progressGET } from '@/app/api/progress-billing/route';
 import { GET as progressDetailGET } from '@/app/api/progress-billing/[id]/route';
 import { POST as quotationsPOST } from '@/app/api/quotations/route';
 import { PUT as quotationsPUT } from '@/app/api/quotations/[id]/route';
@@ -139,7 +142,7 @@ function baseDb(): Record<string, Row[]> {
   };
 }
 
-function req(method: string, body?: any, path = '/api/test') {
+function req(method: string, body?: Row, path = '/api/test') {
   const token = createToken(ADMIN, 'admin');
   return {
     url: `http://localhost${path}`,
@@ -147,12 +150,12 @@ function req(method: string, body?: any, path = '/api/test') {
     headers: { get: (key: string) => (key.toLowerCase() === 'authorization' ? `Bearer ${token}` : null) },
     cookies: { get: () => undefined },
     json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
 
 beforeEach(() => {
   mockDb = makeDb(baseDb());
-  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as any;
+  global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as unknown as typeof fetch;
 });
 
 describe('progress-billing route regression', () => {
@@ -232,8 +235,8 @@ describe('quotations route regression', () => {
     expect(response.status).toBe(200);
     const call = mockDb.rpcCalls.find((c) => c.name === 'update_draft_quotation');
     expect(call).toBeDefined();
-    expect(call!.params.p_payload).not.toHaveProperty('tax_enabled');
-    expect(call!.params.p_payload).not.toHaveProperty('items');
-    expect(call!.params.p_items).toEqual(body.items);
+    expect((call!.params as Row).p_payload).not.toHaveProperty('tax_enabled');
+    expect((call!.params as Row).p_payload).not.toHaveProperty('items');
+    expect((call!.params as Row).p_items).toEqual(body.items);
   });
 });

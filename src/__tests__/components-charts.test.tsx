@@ -6,9 +6,10 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import AnalyticsDashboard from '@/components/charts/AnalyticsDashboard';
 import { GanttChart } from '@/components/gantt/GanttChart';
+import type { GanttDependency, GanttTask } from '@/lib/gantt-types';
 
 const fetchMock = jest.fn();
-global.fetch = fetchMock as any;
+global.fetch = fetchMock as unknown as typeof fetch;
 
 afterEach(() => {
   jest.clearAllMocks();
@@ -61,7 +62,7 @@ describe('GanttChart', () => {
     ];
     const deps = [{ id: 'd1', predecessor_task_id: 'a', successor_task_id: 'b', lag_days: 2, type: 'finish_to_start' }];
     const { container } = render(
-      <GanttChart tasks={twoTasks as any} dependencies={deps as any} projectStart="2026-01-01" totalDays={10} dayWidth={30} onSelectTask={onSelectTask} />
+      <GanttChart tasks={twoTasks as unknown as GanttTask[]} dependencies={deps as unknown as GanttDependency[]} projectStart="2026-01-01" totalDays={10} dayWidth={30} onSelectTask={onSelectTask} />
     );
     expect(container.querySelectorAll('polyline').length).toBe(1);
     expect(container.querySelector('text')).toBeInTheDocument();
@@ -76,7 +77,7 @@ describe('GanttChart', () => {
     ];
     const deps = [{ id: 'd1', predecessor_task_id: 'a', successor_task_id: 'b', lag_days: 0, type: 'finish_to_start' }];
     const { container } = render(
-      <GanttChart tasks={twoTasks as any} dependencies={deps as any} projectStart="2026-01-01" totalDays={10} dayWidth={30} selectedTaskId="b" />
+      <GanttChart tasks={twoTasks as unknown as GanttTask[]} dependencies={deps as unknown as GanttDependency[]} projectStart="2026-01-01" totalDays={10} dayWidth={30} selectedTaskId="b" />
     );
     const polyline = container.querySelector('polyline') as SVGElement;
     expect(polyline.getAttribute('stroke-dasharray')).toBe('4 3');
@@ -88,7 +89,7 @@ describe('GanttChart', () => {
       { id: 'a', name: 'مرنة', start_date: '2026-01-01', end_date: '2026-01-03', status: 'pending', isCritical: false, total_float: 4, progress_percent: 20 },
     ];
     const { container } = render(
-      <GanttChart tasks={floatTask as any} dependencies={[]} projectStart="2026-01-01" totalDays={10} dayWidth={30} />
+      <GanttChart tasks={floatTask as unknown as GanttTask[]} dependencies={[]} projectStart="2026-01-01" totalDays={10} dayWidth={30} />
     );
     expect(container.querySelector('[title^="فائض زمني"]')).not.toBeNull();
   });

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireApiAuth, requireAdmin, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -143,7 +144,7 @@ export async function PUT(request: NextRequest) {
 
     if (!id) return error('معرف القسم مطلوب');
 
-    const updateData: any = {};
+    const updateData: Row = {};
     if (name !== undefined) updateData.name = name.trim();
     if (name_en !== undefined) updateData.name_en = name_en;
     if (icon !== undefined) updateData.icon = icon;

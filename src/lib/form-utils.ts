@@ -1,3 +1,5 @@
+import type { Row } from './types';
+
 /** Normalize any date-like value to YYYY-MM-DD for <input type="date">. */
 export function toDateInput(value: unknown): string {
   if (value == null || value === '') return '';
@@ -11,14 +13,14 @@ export function toDateInput(value: unknown): string {
 }
 
 /** Unwrap `{ success, data }` or a raw payload. */
-export function unwrapData<T = any>(json: any): T | null {
+export function unwrapData<T = Row>(json: Row): T | null {
   if (!json) return null;
   if (json.success === false) return null;
   return (json.data ?? json) as T;
 }
 
 /** Same-origin GET that never throws. Used by every edit form. */
-export async function fetchRecord(url: string): Promise<{ data: any | null; error: string | null }> {
+export async function fetchRecord(url: string): Promise<{ data: unknown | null; error: string | null }> {
   try {
     const res = await fetch(url, { credentials: 'same-origin' });
     const json = await res.json();
@@ -31,10 +33,10 @@ export async function fetchRecord(url: string): Promise<{ data: any | null; erro
 
 /** Normalize the listed date keys so <input type="date"> shows the saved value. */
 /** Normalize the listed date keys so `<input type="date">` shows the saved value. */
-export function applyDates<T extends Record<string, any>>(obj: T, keys: string[]): T {
+export function applyDates<T extends Record<string, unknown>>(obj: T, keys: string[]): T {
   const out = { ...obj };
   for (const k of keys) {
-    if (k in out) (out as any)[k] = toDateInput(out[k]);
+    if (k in out) (out as Row)[k] = toDateInput(out[k]);
   }
   return out;
 }
@@ -43,6 +45,6 @@ export function applyDates<T extends Record<string, any>>(obj: T, keys: string[]
  * Prefer the GET payload; if it failed, fall back to the list row so the
  * edit modal is never blank. Caller should toast `error` when data came from fallback.
  */
-export function recordOrRow(fetched: any | null, row: any): any {
-  return fetched || row || {};
+export function recordOrRow(fetched: unknown | null, row: unknown): Row {
+  return (fetched || row || {}) as Row;
 }

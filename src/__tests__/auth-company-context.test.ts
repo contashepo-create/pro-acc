@@ -7,14 +7,14 @@ import { createToken, getCompanyContext } from '@/lib/auth';
 const request = (token?: string, cookieToken?: string) => ({
   headers: new Headers(token ? { authorization: `Bearer ${token}` } : {}),
   cookies: { get: () => cookieToken ? { value: cookieToken } : undefined },
-}) as any;
+}) as unknown as Request;
 
 beforeEach(() => jest.clearAllMocks());
 
 describe('getCompanyContext', () => {
   test('returns null without or with an invalid token', async () => {
     await expect(getCompanyContext(request())).resolves.toBeNull();
-    await expect(getCompanyContext({ headers: new Headers({ authorization: 'Basic x' }) } as any)).resolves.toBeNull();
+    await expect(getCompanyContext({ headers: new Headers({ authorization: 'Basic x' }) } as unknown as Request)).resolves.toBeNull();
     await expect(getCompanyContext(request('invalid'))).resolves.toBeNull();
   });
 

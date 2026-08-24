@@ -6,6 +6,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { adminJsonError } from '@/lib/admin-guard';
 import { auditLog } from '@/lib/admin-auth';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
@@ -51,7 +53,7 @@ export async function POST(request: NextRequest) {
       return error('المستخدم غير موجود', 401);
     }
 
-    const a = admin as Record<string, any>;
+    const a = admin as Row;
     if (!a.is_active) {
       return error('هذا الحساب غير نشط', 403);
     }
@@ -60,7 +62,7 @@ export async function POST(request: NextRequest) {
       return error('لم يتم تعيين كلمة مرور رئيسية لهذا الحساب', 403);
     }
 
-    const valid = await verifyPassword(masterPassword, a.master_password_hash);
+    const valid = await verifyPassword(masterPassword, String(a.master_password_hash));
     if (!valid) {
       const { error: attemptErr } = await s.from('login_attempts').insert({
         email: session.email,
@@ -73,14 +75,16 @@ export async function POST(request: NextRequest) {
     }
 
     // SECURITY: Use admin-specific secret; shorter TTL (24h); role enforced.
-    const token = createAdminToken(a.id, Number(a.token_version) || 0);
+    const token = createAdminToken(String(a.id), Number(a.token_version) || 0);
     await deleteSession(adminId);
-    try { await auditLog(a.id, 'admin_login_success', 'Admin login successful (step 3)'); } catch {}
+    try { await auditLog(String(a.id), 'admin_login_success', 'Admin login successful (step 3)'); } catch {}
 
+    // SECURITY: the admin session JWT travels only in the HttpOnly
+    // admin_token cookie — never in the JSON body (XSS could read a body
+    // token and fully neutralize the httpOnly protection).
     const response = success({
       message: 'تم تسجيل الدخول بنجاح',
       admin: { id: a.id, name: a.name, email: a.email, role: 'superadmin' },
-      token,
     });
 
     setAuthCookie(response, 'admin_token', token, 86400);

@@ -3,6 +3,8 @@ import { success, error, requireModulePermission, handleApiError } from '@/lib/a
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const number = (value: unknown) => Number(value) || 0;
 
 /** Auxiliary customer/supplier ledger, aggregated without API row limits. */
@@ -20,7 +22,7 @@ export async function GET(request: NextRequest) {
       p_company_id: auth.companyId, p_type: type, p_from: from, p_to: to,
     });
     if (queryError) throw queryError;
-    const contacts = (data || []).map((row: any) => {
+    const contacts = ((data ?? []) as Row[]).map((row: Row) => {
       const closing = number(row.closing);
       return {
         id: row.contact_id, name: row.name,
@@ -33,7 +35,7 @@ export async function GET(request: NextRequest) {
         balance_type: closing >= 0 ? 'مدين' : 'دائن',
       };
     });
-    const totals = contacts.reduce((acc: Record<string, number>, row: Record<string, number>) => ({
+    const totals = contacts.reduce((acc: Record<string, number>, row) => ({
       opening: acc.opening + row.opening_balance,
       debit: acc.debit + row.period_debit,
       credit: acc.credit + row.period_credit,

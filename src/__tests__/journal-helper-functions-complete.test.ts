@@ -1,21 +1,24 @@
 const getNextJournalNumber = jest.fn(async () => 1);
-const isUniqueViolation = jest.fn((error: any) => error?.code === '23505');
+const isUniqueViolation = jest.fn((error: unknown) => (error as { code?: string } | null | undefined)?.code === '23505');
 const assertOpenFiscalPeriod = jest.fn(async () => undefined);
 const rpc = jest.fn();
-let headerResults: any[] = [];
-let accounts: any[] | null = [];
-let accountsError: any = null;
-let lineInsertError: any = null;
-const inserts: Array<{ table: string; payload: any }> = [];
+let headerResults: Array<{ data: { id: string } | null; error: unknown }> = [];
+let accounts: Row[] | null = [];
+let accountsError: unknown = null;
+let lineInsertError: unknown = null;
+const inserts: Array<{ table: string; payload: Row }> = [];
 
 const db = { rpc, from: jest.fn((table: string) => {
-  let mode = 'select'; let payload: any;
-  const api: any = {
+  let mode = 'select';
+  const api: TestBuilder = {
     select: () => api, in: () => api, eq: () => api,
-    insert: (value: any) => { mode = 'insert'; payload = value; inserts.push({ table, payload: value }); return api; },
+    insert: (value: Row) => { mode = 'insert'; inserts.push({ table, payload: value }); return api; },
     delete: () => { mode = 'delete'; return api; },
     single: async () => table === 'journal_entries' && mode === 'insert' ? (headerResults.shift() || { data: { id: 'j1' }, error: null }) : { data: null, error: null },
-    then: (resolve: any, reject: any) => Promise.resolve(table === 'accounts' ? { data: accounts, error: accountsError } : { data: null, error: table === 'journal_lines' && mode === 'insert' ? lineInsertError : null }).then(resolve, reject),
+    then: <T1 = { data: unknown; error: unknown }, T2 = never>(
+      resolve?: ((v: { data: unknown; error: unknown }) => T1 | PromiseLike<T1>) | null,
+      reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+    ) => Promise.resolve(table === 'accounts' ? { data: accounts, error: accountsError } : { data: null, error: table === 'journal_lines' && mode === 'insert' ? lineInsertError : null }).then(resolve ?? undefined, reject ?? undefined),
   };
   return api;
 }) };
@@ -25,6 +28,8 @@ jest.mock('@/lib/numbering', () => ({ getNextJournalNumber, isUniqueViolation })
 jest.mock('@/lib/fiscal-guard', () => ({ assertOpenFiscalPeriod }));
 
 import { insertJournalHeader, insertJournalLines, getAccountBalanceFromJournal, createJournalEntry } from '@/lib/journal-utils';
+import type { TestBuilder } from './mocks';
+type Row = Record<string, unknown>;
 
 beforeEach(() => { jest.clearAllMocks(); headerResults = []; accounts = []; accountsError = null; lineInsertError = null; inserts.length = 0; getNextJournalNumber.mockResolvedValue(1); });
 
@@ -43,7 +48,7 @@ describe('remaining journal helper functions', () => {
     await expect(insertJournalHeader('c1', { date: '2026-08-20', type: 'general' })).resolves.toMatchObject({ data: null, error: { code: 'other' } });
     headerResults = Array.from({ length: 8 }, () => ({ data: null, error: { code: '23505' } }));
     const exhausted = await insertJournalHeader('c1', { date: '2026-08-20', type: 'general' });
-    expect(exhausted.error.code).toBe('23505');
+    expect((exhausted.error as { code?: string })?.code).toBe('23505');
   });
 
   test('gets tenant-scoped account balances and handles errors/context', async () => {
@@ -57,7 +62,8 @@ describe('remaining journal helper functions', () => {
   });
 
   test('rejects malformed, unbalanced, same-sided and unresolved journal lines', async () => {
-    const base = (a: any, b: any) => [{ journal_entry_id: 'j', account_id: 'a1', ...a }, { journal_entry_id: 'j', account_id: 'a2', ...b }];
+    const base = (a: { debit?: number; credit?: number }, b: { debit?: number; credit?: number }): Array<{ journal_entry_id: string; account_id: string; debit: number; credit: number }> =>
+      [{ journal_entry_id: 'j', account_id: 'a1', debit: 0, credit: 0, ...a }, { journal_entry_id: 'j', account_id: 'a2', debit: 0, credit: 0, ...b }];
     expect((await insertJournalLines('c1', [])).error).toBeTruthy();
     for (const lines of [
       base({ debit: NaN, credit: 0 }, { debit: 0, credit: 1 }),
@@ -67,17 +73,17 @@ describe('remaining journal helper functions', () => {
       base({ debit: 1.001, credit: 0 }, { debit: 0, credit: 1.001 }),
       base({ debit: 1, credit: 0 }, { debit: 0, credit: 1.001 }),
     ]) expect((await insertJournalLines('c1', lines)).error).toBeTruthy();
-    expect((await insertJournalLines('c1', base({ debit: 2, credit: 0 }, { debit: 0, credit: 1 }))).error?.message).toContain('غير متزن');
-    expect((await insertJournalLines('c1', [
+    expect(((await insertJournalLines('c1', base({ debit: 2, credit: 0 }, { debit: 0, credit: 1 }))).error as { message?: string } | null)?.message).toContain('غير متزن');
+    expect(((await insertJournalLines('c1', [
       { journal_entry_id: 'j', account_id: 'a1', debit: 1, credit: 0 },
       { journal_entry_id: 'j', account_id: 'a1', debit: 0, credit: 1 },
-    ])).error?.message).toContain('الحساب نفسه');
+    ])).error as { message?: string } | null)?.message).toContain('الحساب نفسه');
     accountsError = new Error('accounts');
     await expect(insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).resolves.toEqual({ error: accountsError });
     accountsError = null; accounts = null;
-    expect((await insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).error?.message).toContain('العثور');
+    expect(((await insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).error as { message?: string } | null)?.message).toContain('العثور');
     accounts = [{ id: 'a1', code: '1000', name: 'Header', is_header: true }, { id: 'a2', code: '2', name: 'B' }];
-    expect((await insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).error?.message).toContain('رئيسي');
+    expect(((await insertJournalLines('c1', base({ debit: 1, credit: 0 }, { debit: 0, credit: 1 }))).error as { message?: string } | null)?.message).toContain('رئيسي');
   });
 
   test('creates a complete journal and executes line mapping callback', async () => {

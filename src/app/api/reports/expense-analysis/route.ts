@@ -3,6 +3,8 @@ import { success, error, requireModulePermission, handleApiError } from '@/lib/a
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const number = (value: unknown) => Number(value) || 0;
 
 export async function GET(request: NextRequest) {
@@ -16,14 +18,14 @@ export async function GET(request: NextRequest) {
       p_company_id: auth.companyId, p_account_type: 'expense', p_from: from, p_to: to,
     });
     if (queryError) throw queryError;
-    const categories = (data || []).map((row: any) => ({
+    const categories = ((data ?? []) as Row[]).map((row: Row) => ({
       id: row.account_id, code: row.code, name: row.name,
-      amount: number(row.debit) - number(row.credit),
-    })).filter((row: any) => Math.abs(row.amount) >= 0.005)
-      .sort((a: any, b: any) => Math.abs(b.amount) - Math.abs(a.amount));
-    const totalExpense = categories.reduce((sum: number, row: any) => sum + row.amount, 0);
+      amount: number(String(row.debit)) - number(String(row.credit)),
+    })).filter((row) => Math.abs(row.amount) >= 0.005)
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    const totalExpense = categories.reduce((sum: number, row) => sum + row.amount, 0);
     return success({
-      categories: categories.map((row: any) => ({
+      categories: categories.map((row) => ({
         ...row, percentage: totalExpense ? (row.amount / totalExpense) * 100 : 0,
       })),
       total_expense: totalExpense, count: categories.length, period: { from, to },

@@ -80,8 +80,8 @@ export async function POST(request: NextRequest) {
     };
     const vars = {
       customer_name: row.contacts?.name || 'العميل', invoice_number: String(row.number),
-      amount: Number(row.total).toFixed(2), due_date: new Date(row.due_date).toLocaleDateString('ar-SA'),
-      days_overdue: String(Math.max(0, Math.floor((Date.now() - new Date(row.due_date).getTime()) / 86400000))),
+      amount: Number(row.total).toFixed(2), due_date: new Date(String(row.due_date)).toLocaleDateString('ar-SA'),
+      days_overdue: String(Math.max(0, Math.floor((Date.now() - new Date(String(row.due_date)).getTime()) / 86400000))),
       company_name: String((company as { name?: string } | null)?.name || 'شركتنا'),
     };
     const message = renderTemplate(TEMPLATES.invoice_overdue_ar.body, vars);

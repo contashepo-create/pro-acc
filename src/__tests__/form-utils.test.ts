@@ -28,7 +28,7 @@ describe('unwrapData and form record helpers', () => {
     expect(unwrapData({ success: true, data: { id: 1 } })).toEqual({ id: 1 });
     expect(unwrapData({ id: 2 })).toEqual({ id: 2 });
     expect(unwrapData({ success: false, message: 'x' })).toBeNull();
-    expect(unwrapData(null)).toBeNull();
+    expect(unwrapData(null as never)).toBeNull();
   });
 
   test('normalizes only requested date fields without mutating input', () => {
@@ -50,7 +50,7 @@ describe('unwrapData and form record helpers', () => {
       .mockResolvedValueOnce({ json: async () => ({ success: false }) })
       .mockResolvedValueOnce({ json: async () => ({ success: true, data: null }) })
       .mockResolvedValueOnce({ json: async () => null })
-      .mockRejectedValueOnce(new Error('network')) as any;
+      .mockRejectedValueOnce(new Error('network')) as unknown as typeof fetch;
     await expect(fetchRecord('/api/x/1')).resolves.toEqual({ data: { id: 1 }, error: null });
     expect(global.fetch).toHaveBeenNthCalledWith(1, '/api/x/1', { credentials: 'same-origin' });
     await expect(fetchRecord('/api/x/2')).resolves.toEqual({ data: null, error: 'غير موجود' });
@@ -74,8 +74,6 @@ describe('GET /api/journal/[id] does not select a phantom reference column', () 
 });
 
 describe('missing detail routes that made edit forms empty', () => {
-  const fs = require('fs') as typeof import('fs');
-  const path = require('path') as typeof import('path');
   test('fiscal/[id] and fixed-assets/[id] expose GET+PUT', () => {
     for (const rel of ['../app/api/fiscal/[id]/route.ts', '../app/api/fixed-assets/[id]/route.ts']) {
       const src = fs.readFileSync(path.join(__dirname, rel), 'utf8');

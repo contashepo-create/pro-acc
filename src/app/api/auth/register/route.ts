@@ -1,3 +1,4 @@
+import type { Row } from '@/lib/types';
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
 import { hashPassword, createToken, getTokenSecret } from '@/lib/auth';
@@ -28,7 +29,7 @@ function isDisposableEmail(email: string): boolean {
 // Use CAPTCHA_ENABLED=false to disable math captcha in production and rely on Turnstile
 const CAPTCHA_ENABLED = process.env.CAPTCHA_ENABLED !== 'false';
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   if (process.env.NODE_ENV === 'production'
     && (!process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY)) {
     return error('التسجيل غير مهيأ بأمان. يجب إعداد Cloudflare Turnstile.', 503);
@@ -46,7 +47,6 @@ export async function GET(request: NextRequest) {
   const a = randomInt(1, 20);
   const b = randomInt(1, 20);
   const answer = a + b;
-  const challengeId = randomBytes(16).toString('hex');
   
   // FIXED: Store in Supabase instead of memory Map for serverless compatibility
   // For now, embed answer in HMAC signed token to avoid server state
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
       && (!process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || !process.env.TURNSTILE_SECRET_KEY)) {
       return error('التسجيل غير مهيأ بأمان. يجب إعداد Cloudflare Turnstile.', 503);
     }
-    const body = await parseBody<any>(request);
+    const body = await parseBody<Row>(request);
     const parsed = registerSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
         if (!captchaId || captchaAnswer === undefined) {
           return error('يرجى إكمال التحقق الأمني');
         }
-        const valid = verifyCaptchaToken(captchaId, Number(captchaAnswer));
+        const valid = verifyCaptchaToken(String(captchaId), Number(captchaAnswer));
         if (!valid) {
           return error('إجابة التحقق غير صحيحة أو انتهت صلاحيتها');
         }
@@ -196,7 +196,7 @@ export async function POST(request: NextRequest) {
 
     // Get country config
     const { getCountryConfig } = await import('@/lib/countries');
-    const countryCode = body.country || 'SA';
+    const countryCode = String(body.country || 'SA');
     const countryConfig = getCountryConfig(countryCode);
 
     const accountTemplate=DEFAULT_CHART_OF_ACCOUNTS.map((account)=>({
@@ -252,10 +252,11 @@ export async function POST(request: NextRequest) {
     // mailbox ownership is proven. The user signs in after verification.
     const issueDevelopmentSession = process.env.NODE_ENV !== 'production';
     const token = issueDevelopmentSession ? createToken(user.id, user.role) : null;
+    // SECURITY: same rule as login — the session JWT (development only) lives
+    // exclusively in the HttpOnly cookie, never in the JSON body.
     const response = success({
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
       company: { id: co.id, name: companyName },
-      token,
       emailVerificationSent: emailSent,
       message: emailSent
         ? 'تم إنشاء الحساب. يرجى تأكيد بريدك الإلكتروني خلال 24 ساعة'

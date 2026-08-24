@@ -41,11 +41,22 @@ export default function ZerocoldCompaniesPage() {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showPlanModal, setShowPlanModal] = useState(false);
-  const [plans, setPlans] = useState<any[]>([]);
-  const [editForm, setEditForm] = useState<any>({});
-  const [planForm, setPlanForm] = useState<any>({ plan_id: '', duration_days: 30, auto_renew: false });
+interface PlanOption { id: string; name: string; price_monthly?: number; }
+interface EditForm { name: string; commercial_registration: string; tax_number: string; phone: string; email: string; address: string; country: string; }
+interface PlanChangeForm { plan_id: string; duration_days: number; auto_renew: boolean; }
+interface DetailUser { id: string; name: string; email: string; role: string; }
+interface DetailData {
+  company?: { email?: string; phone?: string; address?: string; country?: string };
+  subscription?: { subscriber_number?: number; end_date?: string; subscription_plans?: { name?: string } };
+  stats?: { user_count?: number; project_count?: number };
+  users?: DetailUser[];
+}
+
+  const [plans, setPlans] = useState<PlanOption[]>([]);
+  const [editForm, setEditForm] = useState<EditForm>({} as EditForm);
+  const [planForm, setPlanForm] = useState<PlanChangeForm>({ plan_id: '', duration_days: 30, auto_renew: false });
   const [masterPassword, setMasterPassword] = useState('');
-  const [detailData, setDetailData] = useState<any>(null);
+  const [detailData, setDetailData] = useState<DetailData | null>(null);
 
   const fetchCompanies = async () => {
     setLoading(true);
@@ -66,6 +77,7 @@ export default function ZerocoldCompaniesPage() {
     if (body.success) setPlans(body.data || []);
   };
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- standard fetch pattern
   useEffect(() => { fetchCompanies(); fetchPlans(); }, []);
 
   const openDetail = async (company: Company) => {
@@ -308,10 +320,10 @@ export default function ZerocoldCompaniesPage() {
                     <div className="bg-bg-primary rounded-lg p-3 text-center"><p className="text-xs text-text-secondary/50">المستخدمين</p><p className="text-xl font-bold text-amber-300">{detailData.stats?.user_count || 0}</p></div>
                     <div className="bg-bg-primary rounded-lg p-3 text-center"><p className="text-xs text-text-secondary/50">المشاريع</p><p className="text-xl font-bold text-amber-300">{detailData.stats?.project_count || 0}</p></div>
                   </div>
-                  {detailData.users?.length > 0 && (
+                  {detailData.users && detailData.users.length > 0 && (
                     <div className="bg-bg-primary rounded-lg p-3">
                       <p className="text-xs text-text-secondary/50 mb-2">المستخدمون</p>
-                      {detailData.users.map((u: any, i: number) => (
+                      {detailData.users.map((u, i: number) => (
                         <div key={u.id} className="flex items-center gap-2 py-1.5 border-b border-[#1f1725] last:border-0">
                           <span className="text-xs text-text-secondary">{i + 1}.</span>
                           <span className="text-sm text-amber-200">{u.name}</span>
@@ -362,7 +374,7 @@ export default function ZerocoldCompaniesPage() {
               <div className="p-4 space-y-3">
                 <select className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-amber-600" value={planForm.plan_id} onChange={e => setPlanForm({ ...planForm, plan_id: e.target.value })}>
                   <option value="">— اختر الباقة —</option>
-                  {plans.map((p: any) => <option key={p.id} value={p.id}>{p.name} ({p.price_monthly || 0}/شهر)</option>)}
+                  {plans.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.price_monthly || 0}/شهر)</option>)}
                 </select>
                 <input type="number" className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-amber-600" placeholder="عدد الأيام" value={planForm.duration_days} onChange={e => setPlanForm({ ...planForm, duration_days: parseInt(e.target.value) || 30 })} />
                 <label className="flex items-center gap-2 text-sm text-amber-200"><input type="checkbox" checked={planForm.auto_renew} onChange={e => setPlanForm({ ...planForm, auto_renew: e.target.checked })} /> تجديد تلقائي</label>

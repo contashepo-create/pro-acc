@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, requireAdminAuth, handleApiError, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const SAFE_KEY = /^[a-z][a-z0-9_]{1,63}$/;
 
@@ -14,8 +16,8 @@ export async function GET(request: NextRequest) {
     if (queryErr) throw queryErr;
 
     const settings: Record<string, string> = {};
-    (data || []).forEach((item: any) => {
-      settings[item.key] = item.value || '';
+    (data || []).forEach((item: Row) => {
+      settings[String(item.key)] = String(item.value || '');
     });
     return success(settings);
   } catch (err) {

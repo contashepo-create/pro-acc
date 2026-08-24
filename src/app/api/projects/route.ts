@@ -3,6 +3,8 @@ import { success, error, parseBody, getPaginationParams, requireModulePermission
 import { getSupabase } from '@/lib/supabase-client';
 import { projectCreateSchema } from '@/lib/project-delivery-validation';
 
+import type { Row } from '@/lib/types';
+
 const PROJECT_COLUMNS = `id,name,client_id,contract_value,start_date,end_date,status,description,location,
   budget,tax_enabled,tax_rate,closed_at,closed_by,closure_journal_entry_id,created_at,updated_at,contacts(name)`;
 const BOQ_COLUMNS = 'id,project_id,item_code,code,description,unit,quantity,unit_price,total,parent_id,level,created_at';
@@ -19,17 +21,17 @@ export async function GET(request: NextRequest) {
     const offset = (page - 1) * pageSize;
     const { data, error: queryError, count } = await query.order('created_at', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const projectIds = (data || []).map((project: any) => project.id);
-    const boqByProject: Record<string, any[]> = {};
+    const projectIds = (data || []).map((project: Row) => project.id);
+    const boqByProject: Record<string, Row[]> = {};
     if (projectIds.length) {
       const { data: items, error: boqError } = await getSupabase().from('boq_items').select(BOQ_COLUMNS)
         .in('project_id', projectIds).eq('company_id', auth.companyId).order('item_code');
       if (boqError) throw boqError;
-      for (const item of items || []) (boqByProject[item.project_id] ||= []).push(item);
+      for (const item of (items ?? []) as Row[]) (boqByProject[String(item.project_id)] ||= []).push(item);
     }
-    const rows = (data || []).map((project: any) => ({
-      ...project, client_name: project.contacts?.name || null, contacts: undefined,
-      boq_items: boqByProject[project.id] || [],
+    const rows = (data || []).map((project: Row) => ({
+      ...project, client_name: project.contacts ? String((project.contacts as Row).name) || null : null, contacts: undefined,
+      boq_items: boqByProject[String(project.id)] || [],
     }));
     return success({ rows, total: count || 0, page, pageSize, totalPages: Math.ceil((count || 0) / pageSize) });
   } catch (cause) {

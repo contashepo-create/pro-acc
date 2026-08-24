@@ -7,25 +7,36 @@ import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 
+interface SalarySheetRow {
+  id: string;
+  name?: string;
+  month?: number;
+  year?: number;
+  date?: string;
+  total_amount?: number;
+  status?: string;
+}
+interface EmployeeOption { id: string; name: string; }
+interface SalarySheetForm { name: string; month: number; year: number; date: string; }
+
 export default function SalarySheetsPage() {
-  const [sheets, setSheets] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
+  const [sheets, setSheets] = useState<SalarySheetRow[]>([]);
+  const [, setEmployees] = useState<EmployeeOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingSheet, setEditingSheet] = useState<any>(null);
+  const [editingSheet, setEditingSheet] = useState<SalarySheetRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', month: 1, year: new Date().getFullYear(), date: new Date().toISOString().split('T')[0] });
+  const [form, setForm] = useState<SalarySheetForm>({ name: '', month: 1, year: new Date().getFullYear(), date: new Date().toISOString().split('T')[0] });
 
   const fetchData = async () => {
     try {
@@ -45,6 +56,8 @@ export default function SalarySheetsPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -66,24 +79,24 @@ export default function SalarySheetsPage() {
         setForm({ name: '', month: 1, year: new Date().getFullYear(), date: new Date().toISOString().split('T')[0] });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (sheet: any) => {
+  const handleEdit = async (sheet: SalarySheetRow) => {
     const { data, error } = await fetchRecord(`/api/salary-sheets/${sheet.id}`);
     const src = recordOrRow(data, sheet);
     if (!data && error) toast.error(error);
     setEditingSheet(sheet);
     setForm(applyDates({
-      name: src.name || '',
-      month: src.month || 1,
-      year: src.year || new Date().getFullYear(),
-      date: src.date,
+      name: String(src.name ?? ''),
+      month: Number(src.month) || 1,
+      year: Number(src.year) || new Date().getFullYear(),
+      date: toDateInput(src.date) ?? '',
     }, ['date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (sheet: any) => {
+  const handleDelete = async (sheet: SalarySheetRow) => {
     try {
       const res = await fetch(`/api/salary-sheets/${sheet.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -92,7 +105,7 @@ export default function SalarySheetsPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -111,13 +124,13 @@ export default function SalarySheetsPage() {
     { key: 'name', label: 'الاسم', sortable: true },
     { key: 'month', label: 'الشهر' },
     { key: 'year', label: 'السنة' },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
-    { key: 'total_amount', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total_amount || 0) },
-    { key: 'status', label: 'الحالة', render: (row: any) => statusBadge(row.status) },
+    { key: 'date', label: 'التاريخ', render: (row: SalarySheetRow) => formatDate(row.date) },
+    { key: 'total_amount', label: 'الإجمالي', render: (row: SalarySheetRow) => formatCurrency(row.total_amount ?? 0) },
+    { key: 'status', label: 'الحالة', render: (row: SalarySheetRow) => statusBadge(row.status ?? '') },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: SalarySheetRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}

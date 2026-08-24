@@ -7,9 +7,22 @@ import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { formatCurrency } from '@/lib/utils';
 
+interface WipRow {
+  project_name?: string;
+  client_name?: string;
+  contract_amount: number;
+  costs_incurred: number;
+  billed_to_date: number;
+  percentComplete: number;
+  earnedRevenue: number;
+  overUnderBilled: number;
+  status?: string;
+}
+interface WipTotals { contract: number; costs: number; billed: number; overUnderBilled: number; }
+
 export default function WipReportPage() {
-  const [rows, setRows] = useState<any[]>([]);
-  const [totals, setTotals] = useState<any>(null);
+  const [rows, setRows] = useState<WipRow[]>([]);
+  const [totals, setTotals] = useState<WipTotals | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -23,22 +36,22 @@ export default function WipReportPage() {
   const columns = [
     { key: 'project_name', label: 'المشروع' },
     { key: 'client_name', label: 'العميل' },
-    { key: 'contract_amount', label: 'قيمة العقد', render: (r: any) => formatCurrency(r.contract_amount) },
-    { key: 'costs_incurred', label: 'التكاليف', render: (r: any) => formatCurrency(r.costs_incurred) },
-    { key: 'billed_to_date', label: 'المفوتر', render: (r: any) => formatCurrency(r.billed_to_date) },
-    { key: 'percentComplete', label: 'الإنجاز %', render: (r: any) => `${(r.percentComplete * 100).toFixed(1)}%` },
-    { key: 'earnedRevenue', label: 'الإيراد المستحق', render: (r: any) => formatCurrency(r.earnedRevenue) },
-    { key: 'overUnderBilled', label: 'زيادة/نقص الفوترة', render: (r: any) => {
+    { key: 'contract_amount', label: 'قيمة العقد', render: (r: WipRow) => formatCurrency(r.contract_amount) },
+    { key: 'costs_incurred', label: 'التكاليف', render: (r: WipRow) => formatCurrency(r.costs_incurred) },
+    { key: 'billed_to_date', label: 'المفوتر', render: (r: WipRow) => formatCurrency(r.billed_to_date) },
+    { key: 'percentComplete', label: 'الإنجاز %', render: (r: WipRow) => `${(r.percentComplete * 100).toFixed(1)}%` },
+    { key: 'earnedRevenue', label: 'الإيراد المستحق', render: (r: WipRow) => formatCurrency(r.earnedRevenue) },
+    { key: 'overUnderBilled', label: 'زيادة/نقص الفوترة', render: (r: WipRow) => {
       const v = r.overUnderBilled;
       return <span className={v >= 0 ? 'text-success font-bold' : 'text-danger font-bold'}>{formatCurrency(v)}</span>;
     } },
-    { key: 'status', label: 'الحالة', render: (r: any) => {
-      const map: Record<string, any> = {
+    { key: 'status', label: 'الحالة', render: (r: WipRow) => {
+      const map: Record<string, { v: 'default' | 'info' | 'danger' | 'success' | 'warning' | 'accent'; l: string }> = {
         'under-billed': { v: 'info', l: 'نقص فوترة' },
         'over-billed': { v: 'danger', l: 'زيادة فوترة' },
         'on-track': { v: 'success', l: 'متوازن' },
       };
-      const m = map[r.status] || { v: 'default', l: r.status };
+      const m = map[r.status ?? ''] || { v: 'default', l: r.status ?? '' };
       return <Badge variant={m.v}>{m.l}</Badge>;
     } },
   ];

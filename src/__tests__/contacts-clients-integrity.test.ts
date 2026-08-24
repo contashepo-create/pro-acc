@@ -2,32 +2,38 @@
 
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
 import { getContactBalance, getContactBalances } from '@/lib/contact-utils';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: { kind?: string; payload?: any } = {};
+    const mut: { kind?: string; payload?: Row | Row[] } = {};
     calls.push({ table, ops, mut });
     const applyFilters = () => (db[table] || []).filter((row) => ops.every((op) => {
       if (op.op === 'eq') return row[op.col!] === op.val;
       if (op.op === 'neq') return row[op.col!] !== op.val;
-      if (op.op === 'in') return (op.val as any[]).includes(row[op.col!]);
+      if (op.op === 'in') return (op.val as unknown[]).includes(row[op.col!]);
       if (op.op === 'is') return op.val === null ? row[op.col!] == null : row[op.col!] === op.val;
       return true;
     }));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      in: (col: string, val: any[]) => { ops.push({ op: 'in', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: readonly unknown[]) => { ops.push({ op: 'in', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
       order: () => api,
       limit: () => api,
       range: () => api,
@@ -36,7 +42,10 @@ function makeDb(db: Record<string, Row[]>) {
         const row = applyFilters()[0] ?? null;
         return { data: row, error: row ? null : { message: 'not found' } };
       },
-      then: (onFulfilled: any, onRejected: any) => Promise.resolve({ data: applyFilters(), error: null, count: applyFilters().length }).then(onFulfilled, onRejected),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        onFulfilled?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        onRejected?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: applyFilters(), error: null, count: applyFilters().length }).then(onFulfilled ?? undefined, onRejected ?? undefined),
     };
     return api;
   };
@@ -51,24 +60,23 @@ function makeDb(db: Record<string, Row[]>) {
       .filter((row) => row.company_id === companyId).map((row) => [row.id, row.code]));
     return (db.journal_lines || [])
       .filter((line) => line.company_id === companyId && line.contact_id === contactId
-        && allowedCodes(contact.type).includes(accountById[line.account_id]))
+        && allowedCodes(String(contact.type)).includes(accountById[String(line.account_id)]))
       .reduce((sum, line) => sum + (Number(line.debit) || 0) - (Number(line.credit) || 0), 0);
   };
 
-  const instance: any = { from, calls, rpcCalls };
-  instance.rpcImpl = async (name: string, params: any) => {
-    if (name === 'get_contact_balance') return { data: balanceFor(params.p_company_id, params.p_contact_id), error: null };
+  const rpcImpl = async (name: string, params: Row): Promise<{ data: unknown; error: unknown }> => {
+    if (name === 'get_contact_balance') return { data: balanceFor(String(params.p_company_id), String(params.p_contact_id)), error: null };
     if (name === 'get_contact_balance_batch') return {
-      data: params.p_contact_ids.map((id: string) => ({ contact_id: id, balance: balanceFor(params.p_company_id, id) })), error: null,
+      data: (params.p_contact_ids as readonly string[]).map((id) => ({ contact_id: id, balance: balanceFor(String(params.p_company_id), id) })), error: null,
     };
     if (name === 'create_contact_atomic') return {
-      data: { id: '90000000-0000-4000-8000-000000000001', company_id: params.p_company_id, ...params.p_data,
-        opening_journal_id: params.p_opening_amount > 0 ? '90000000-0000-4000-8000-000000000002' : null }, error: null,
+      data: { id: '90000000-0000-4000-8000-000000000001', company_id: params.p_company_id, ...(params.p_data as Row),
+        opening_journal_id: Number(params.p_opening_amount) > 0 ? '90000000-0000-4000-8000-000000000002' : null }, error: null,
     };
     if (name === 'update_contact_atomic') {
       const contact = (db.contacts || []).find((row) => row.id === params.p_contact_id && row.company_id === params.p_company_id);
       if (!contact) return { data: null, error: { message: 'الطرف غير موجود' } };
-      return { data: { ...contact, ...params.p_patch }, error: null };
+      return { data: { ...contact, ...(params.p_patch as Row) }, error: null };
     }
     if (name === 'deactivate_contact_atomic') {
       const contact = (db.contacts || []).find((row) => row.id === params.p_contact_id && row.company_id === params.p_company_id);
@@ -77,9 +85,15 @@ function makeDb(db: Record<string, Row[]>) {
     }
     return { data: null, error: { message: `missing ${name}` } };
   };
-  instance.rpc = (name: string, params: any) => {
-    rpcCalls.push({ name, params });
-    return instance.rpcImpl(name, params);
+  const instance = {
+    from,
+    calls,
+    rpcCalls,
+    rpcImpl,
+    rpc: (name: string, params: Row = {}) => {
+      rpcCalls.push({ name, params });
+      return instance.rpcImpl(name, params);
+    },
   };
   return instance;
 }
@@ -134,18 +148,18 @@ function baseDb() {
   } as Record<string, Row[]>;
 }
 
-function authedRequest(body?: any, method = 'GET') {
+function authedRequest(body?: Row, method = 'GET') {
   const token = createToken('u1', 'admin');
   const url = 'http://localhost/api/test';
   return {
     url, nextUrl: new URL(url), method,
     headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
     cookies: { get: () => undefined }, json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
-const withQuery = (request: any, query: string) => {
+const withQuery = (request: NextRequest, query: string): NextRequest => {
   const url = `http://localhost/api/test${query}`;
-  return { ...request, url, nextUrl: new URL(url) };
+  return { ...request, url, nextUrl: new URL(url) } as unknown as NextRequest;
 };
 const paramsOf = (id: string) => ({ params: Promise.resolve({ id }) });
 
@@ -200,7 +214,7 @@ describe('tenant-scoped reads', () => {
     const response = await clientsGET(authedRequest());
     const clients = (await response.json()).data.clients;
     expect(clients.find((row: Row) => row.id === CLIENT).balance).toBe(125);
-    expect(mockDb.rpcCalls.filter((call: any) => call.name === 'get_contact_balance_batch')).toHaveLength(1);
+    expect(mockDb.rpcCalls.filter((call) => call.name === 'get_contact_balance_batch')).toHaveLength(1);
   });
 
   test('client detail, statement, update and deactivate reject a foreign-tenant id', async () => {
@@ -242,7 +256,7 @@ describe('atomic contact mutations', () => {
         p_opening_amount: 1000, p_opening_type: 'debit',
       },
     }]);
-    expect(mockDb.calls.find((call: any) => call.mut.kind && call.table === 'contacts')).toBeUndefined();
+    expect(mockDb.calls.find((call) => call.mut.kind && call.table === 'contacts')).toBeUndefined();
   });
 
   test('update uses one audited RPC and never creates a duplicate control account', async () => {
@@ -252,7 +266,7 @@ describe('atomic contact mutations', () => {
       name: 'update_contact_atomic',
       params: { p_company_id: C1, p_contact_id: CLIENT, p_patch: { name: 'اسم محدّث' }, p_user_id: 'u1' },
     });
-    expect(mockDb.calls.find((call: any) => call.table === 'accounts')).toBeUndefined();
+    expect(mockDb.calls.find((call) => call.table === 'accounts')).toBeUndefined();
   });
 
   test('DELETE soft-deactivates even when history exists and performs no hard delete', async () => {
@@ -263,7 +277,7 @@ describe('atomic contact mutations', () => {
     const response = await contactDELETE(authedRequest(undefined, 'DELETE'), paramsOf(CLIENT));
     expect(response.status).toBe(200);
     expect(mockDb.rpcCalls[0].name).toBe('deactivate_contact_atomic');
-    expect(mockDb.calls.some((call: any) => call.mut.kind === 'delete')).toBe(false);
+    expect(mockDb.calls.some((call) => call.mut.kind === 'delete')).toBe(false);
   });
 
   test('rejects invalid input before any RPC', async () => {

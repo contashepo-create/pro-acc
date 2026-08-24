@@ -3,6 +3,8 @@ import { success, error, notFound, parseBody, requireManagerOrAbove, handleApiEr
 import { getSupabase } from '@/lib/supabase-client';
 import { deliveryUuid, projectCloseSchema } from '@/lib/project-delivery-validation';
 
+import type { Row } from '@/lib/types';
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = await requireManagerOrAbove(req);
@@ -25,9 +27,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (fetchError) throw fetchError;
     if (!updated) return notFound();
-    const summary = closure as Record<string, any>;
-    const result = updated as Record<string, any>;
-    result.client_name = result.contacts?.name || null;
+    const summary = closure as Row;
+    const result = updated as Row;
+    result.client_name = result.contacts ? String((result.contacts as Row).name) || null : null;
     delete result.contacts;
     result.closure_summary = {
       total_revenue: Number(summary.total_revenue) || 0,

@@ -1,4 +1,5 @@
 import { isHeaderAccount, isCashOrBankCode, resolvePaymentAccountId, listCashBankAccountIds } from '@/lib/account-resolve';
+import { wrapSupabase, type TestBuilder, type TestQueryResult } from './mocks';
 import { getCountryConfig, getCountriesList, COUNTRIES } from '@/lib/countries';
 import { safeInternalPath, safeHttpsUrl } from '@/lib/safe-input';
 import { telegramConfigSchema, pushSubscriptionSchema, pushQueueSchema, complaintPatchSchema, adminComplaintPatchSchema, adminSupportPatchSchema } from '@/lib/communication-validation';
@@ -12,21 +13,25 @@ import { quantityAmount, receiptVoucherCreateSchema, disbursementVoucherCreateSc
 import { boqCreateSchema, projectCreateSchema, projectExpenseCreateSchema, equipmentMaintenanceSchema } from '@/lib/project-delivery-validation';
 import { custodyExpenseSchema } from '@/lib/custody-validation';
 
-function dbFor(data: Record<string, any[]>) {
-  return {
+type Row = Record<string, unknown>;
+function dbFor(data: Record<string, Row[]>) {
+  return wrapSupabase({
     from: (table: string) => {
       const filters: Array<[string, unknown]> = [];
       const rows = () => (data[table] || []).filter((row) => filters.every(([col, val]) => row[col] === val));
-      const api: any = {
+      const api: TestBuilder = {
         select: () => api,
         eq: (col: string, val: unknown) => { filters.push([col, val]); return api; },
         order: async () => ({ data: rows(), error: null }),
         maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
-        then: (resolve: any, reject: any) => Promise.resolve({ data: rows(), error: null }).then(resolve, reject),
+        then: <T1 = TestQueryResult, T2 = never>(
+          resolve?: ((v: TestQueryResult) => T1 | PromiseLike<T1>) | null,
+          reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+        ) => Promise.resolve({ data: rows(), error: null } as TestQueryResult).then(resolve ?? undefined, reject ?? undefined),
       };
       return api;
     },
-  };
+  });
 }
 
 const UUID1 = '90000000-0000-4000-8000-000000000001';
@@ -39,7 +44,7 @@ describe('remaining account and country helper functions', () => {
     expect(isHeaderAccount({ code: '1000' })).toBe(true);
     expect(isHeaderAccount({ code: '1111', children: [] })).toBe(false);
     expect(isHeaderAccount({ code: null, children: null })).toBe(false);
-    expect(isHeaderAccount(null as any)).toBe(false);
+    expect(isHeaderAccount(null)).toBe(false);
     expect(isHeaderAccount({})).toBe(false);
     for (const code of ['1110', '1120', '1110-0001', '1120-1', '0001-1110', '0001-1120', '11100001', '11200001']) expect(isCashOrBankCode(code)).toBe(true);
     for (const code of [null, undefined, '', '1111', '1110001']) expect(isCashOrBankCode(code)).toBe(false);
@@ -63,7 +68,7 @@ describe('remaining account and country helper functions', () => {
     db = dbFor({ accounts: [{ id: 'bank-parent', company_id: 'c1', code: '1120' }] });
     await expect(resolvePaymentAccountId(db, 'c1')).resolves.toBe('bank-parent');
     await expect(resolvePaymentAccountId(dbFor({}), 'c1')).resolves.toBeNull();
-    const nullDb = { from: () => { const api: any = { select: () => api, eq: () => api, order: async () => ({ data: null }), maybeSingle: async () => ({ data: null }), then: (resolve: any) => resolve({ data: null }) }; return api; } };
+    const nullDb = wrapSupabase({ from: () => { const api = { select: () => api, eq: () => api, order: async () => ({ data: null, error: null }), maybeSingle: async () => ({ data: null, error: null }), then: (resolve?: (v: { data: null; error: null }) => unknown) => { if (resolve) resolve({ data: null, error: null }); } }; return api; } });
     await expect(resolvePaymentAccountId(nullDb, 'c1')).resolves.toBeNull();
     await expect(listCashBankAccountIds(nullDb, 'c1')).resolves.toEqual([]);
   });

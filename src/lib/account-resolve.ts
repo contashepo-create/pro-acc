@@ -1,3 +1,5 @@
+import type { Row, SupabaseLike } from './types';
+
 /**
  * تمييز الحسابات الرئيسية (غير قابلة للترحيل) وحل حسابات النقدية/البنوك الفعلية.
  * البرامج المحاسبية لا ترحّل على المجموعات (الأصول، الخصوم، البنوك كمجموعة).
@@ -20,7 +22,7 @@ export function isHeaderAccount(acc: {
   code?: string | null;
   is_header?: boolean | null;
   children?: unknown[] | null;
-}): boolean {
+} | null): boolean {
   if (acc?.is_header === true) return true;
   if (Array.isArray(acc?.children) && acc.children.length > 0) return true;
   if (acc?.code && HEADER_ACCOUNT_CODES.has(String(acc.code))) return true;
@@ -45,7 +47,7 @@ export function isCashOrBankCode(code: string | null | undefined): boolean {
  * حساب الدفع الافتراضي: خزينة/بنك مسجّل في banks_safes ثم 1110 ثم 1120.
  */
 export async function resolvePaymentAccountId(
-  supabase: any,
+  supabase: SupabaseLike,
   companyId: string,
   preferredBankSafeId?: string | null,
 ): Promise<string | null> {
@@ -56,7 +58,7 @@ export async function resolvePaymentAccountId(
       .eq('id', preferredBankSafeId)
       .eq('company_id', companyId)
       .maybeSingle();
-    if (data?.account_id) return data.account_id;
+    if (data?.account_id) return String(data.account_id);
   }
 
   const { data: safes } = await supabase
@@ -65,10 +67,10 @@ export async function resolvePaymentAccountId(
     .eq('company_id', companyId)
     .eq('is_active', true)
     .order('type'); // safe قبل bank أبجدياً؟ type: bank < safe — نفضّل الخزينة
-  const rows = (safes || []).filter((r: any) => r.account_id);
-  const cash = rows.find((r: any) => r.type === 'safe');
-  if (cash?.account_id) return cash.account_id;
-  if (rows[0]?.account_id) return rows[0].account_id;
+  const rows = (safes || []).filter((r: Row) => r.account_id);
+  const cash = rows.find((r: Row) => r.type === 'safe');
+  if (cash?.account_id) return String(cash.account_id);
+  if (rows[0]?.account_id) return String(rows[0].account_id);
 
   for (const code of ['1110', '1120']) {
     const { data: acc } = await supabase
@@ -77,13 +79,13 @@ export async function resolvePaymentAccountId(
       .eq('company_id', companyId)
       .eq('code', code)
       .maybeSingle();
-    if (acc?.id) return acc.id;
+    if (acc?.id) return String(acc.id);
   }
   return null;
 }
 
 export async function listCashBankAccountIds(
-  supabase: any,
+  supabase: SupabaseLike,
   companyId: string,
 ): Promise<string[]> {
   const ids = new Set<string>();
@@ -92,14 +94,14 @@ export async function listCashBankAccountIds(
     .select('id, code')
     .eq('company_id', companyId);
   for (const a of accounts || []) {
-    if (isCashOrBankCode(a.code)) ids.add(a.id);
+    if (isCashOrBankCode(String(a.code))) ids.add(String(a.id));
   }
   const { data: safes } = await supabase
     .from('banks_safes')
     .select('account_id')
     .eq('company_id', companyId);
   for (const s of safes || []) {
-    if (s.account_id) ids.add(s.account_id);
+    if (s.account_id) ids.add(String(s.account_id));
   }
   return [...ids];
 }

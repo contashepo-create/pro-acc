@@ -1,6 +1,20 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { errorText } from '@/lib/errors';
+import type { Row, SupabaseLike } from '@/lib/types';
+
+interface DiagnosticsReport {
+  ok: boolean;
+  deployment: { commit: string | null; nodeEnv: string | null };
+  env: Record<string, boolean>;
+  db: { connected: boolean; error: string | null };
+  tables: Record<string, 'ok' | 'missing' | 'error'>;
+  columns: Record<string, 'ok' | 'missing' | 'error'>;
+  functions: Record<string, 'ok' | 'missing' | 'error' | 'unknown'>;
+  usersCount: number | null;
+  issues: string[];
+}
 
 function secretsMatch(provided: string | null, expected: string | undefined): boolean {
   if (!provided || !expected) return false;
@@ -48,7 +62,7 @@ export async function GET(request: NextRequest) {
     return handleApiError(err);
   }
 
-  const report: Record<string, any> = {
+  const report: DiagnosticsReport = {
     ok: true,
     deployment: {
       commit: process.env.VERCEL_GIT_COMMIT_SHA || null,
@@ -73,12 +87,12 @@ export async function GET(request: NextRequest) {
     report.issues.push(`متغيرات بيئة ناقصة: ${missingEnv.join(', ')}`);
   }
 
-  let s: any;
+  let s: SupabaseLike;
   try {
     s = getSupabase();
-  } catch (e: any) {
+  } catch (e: unknown) {
     report.ok = false;
-    report.db.error = e?.message || 'فشل إنشاء عميل Supabase';
+    report.db.error = errorText(e) || 'فشل إنشاء عميل Supabase';
     report.issues.push('تعذر إنشاء اتصال Supabase — تحقق من متغيرات البيئة');
     return success(report);
   }
@@ -89,14 +103,17 @@ export async function GET(request: NextRequest) {
       report.db.error = error.message;
     }
     report.db.connected = !error || !/fetch|network|ECONN|ENOTFOUND/i.test(error.message || '');
-  } catch (e: any) {
-    report.db.error = e?.message || 'fetch failed';
+  } catch (e: unknown) {
+    report.db.error = errorText(e) || 'fetch failed';
     report.ok = false;
-    report.issues.push(`فشل الاتصال بقاعدة البيانات: ${e?.message}`);
+    report.issues.push(`فشل الاتصال بقاعدة البيانات: ${errorText(e)}`);
   }
 
-  const isMissing = (err: any, name: string) =>
-    !!err && new RegExp(`${name}|does not exist|Could not find|42P01|42703`, 'i').test(`${err.message || ''} ${err.details || ''} ${err.code || ''}`);
+  const isMissing = (err: unknown, name: string) => {
+    if (!err) return false;
+    const e = err as Row;
+    return new RegExp(`${name}|does not exist|Could not find|42P01|42703`, 'i').test(`${e.message || ''} ${e.details || ''} ${e.code || ''}`);
+  };
 
   const coreTables = ['companies', 'users', 'accounts', 'contacts', 'journal_entries', 'journal_lines', 'invoice_sequences', 'journal_sequences', 'invoices', 'invoice_items', 'banks_safes', 'voucher_receipts', 'login_attempts'];
   for (const table of coreTables) {
@@ -138,12 +155,12 @@ export async function GET(request: NextRequest) {
 
   // كشف وجود الدوال بأمان تام: نستدعيها بمعطيات بنوع خاطئ فيفشل تحليل النوع
   // قبل تنفيذ جسم الدالة (لا آثار جانبية). إن لم توجد الدالة ⇒ PGRST "Could not find".
-  const probeFn = async (name: string, args: Record<string, any>) => {
+  const probeFn = async (name: string, args: Record<string, unknown>) => {
     try {
       const { error } = await s.rpc(name, args);
       report.functions[name] = !error ? 'ok' : /Could not find|PGRST202/i.test(error.message || '') ? 'missing' : 'ok';
-    } catch (e: any) {
-      report.functions[name] = /Could not find|PGRST202/i.test(e?.message || '') ? 'missing' : 'unknown';
+    } catch (e: unknown) {
+      report.functions[name] = /Could not find|PGRST202/i.test(errorText(e)) ? 'missing' : 'unknown';
     }
     if (report.functions[name] === 'missing') {
       report.issues.push(`الدالة ${name} غير موجودة في قاعدة البيانات — طبّق الهجرات (مثل 012)`);

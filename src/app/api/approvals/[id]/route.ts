@@ -34,7 +34,7 @@ async function decideApproval(request: NextRequest, { params }: { params: Promis
       .select('id,entity_type,transaction_type,status,approver_id').eq('id', id).eq('company_id', auth.companyId).single();
     if (fetchError || !approval) return error('طلب الموافقة غير موجود', 404);
     if (auth.role !== 'admin' && approval.approver_id !== auth.userId) return error('ليس لديك صلاحية لاتخاذ قرار على هذا الطلب', 403);
-    if (!['pending', 'processing'].includes(approval.status)) {
+    if (!['pending', 'processing'].includes(String(approval.status))) {
       const requestedStatus = parsed.data.action === 'approve' ? 'approved' : 'rejected';
       if (approval.status === requestedStatus) return success({ id, status: approval.status, replayed: true });
       return error('تم اتخاذ قرار مختلف على هذا الطلب مسبقاً', 409);

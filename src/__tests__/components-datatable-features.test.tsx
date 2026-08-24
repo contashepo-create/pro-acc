@@ -58,8 +58,8 @@ describe('DataTable features', () => {
   function stubAnchor() {
     const clickSpy = jest.fn();
     const realCreateElement = document.createElement.bind(document);
-    jest.spyOn(document, 'createElement').mockImplementation((tag: any) => {
-      if (String(tag).toLowerCase() === 'a') return { click: clickSpy, href: '', download: '' } as any;
+    jest.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      if (String(tag).toLowerCase() === 'a') return { click: clickSpy, href: '', download: '' } as unknown as HTMLElement;
       return realCreateElement(tag);
     });
     return clickSpy;
@@ -68,8 +68,8 @@ describe('DataTable features', () => {
   test('exports a CSV file and includes header and rows', () => {
     const createObjectURL = jest.fn(() => 'blob:export');
     const revokeObjectURL = jest.fn();
-    (URL as any).createObjectURL = createObjectURL;
-    (URL as any).revokeObjectURL = revokeObjectURL;
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
     const clickSpy = stubAnchor();
 
     render(<DataTable columns={columns} data={data} exportable />);
@@ -117,14 +117,14 @@ describe('DataTable features', () => {
 
   test('exports rendered cell text via extractTextFromRender', () => {
     const withRenderColumns = [
-      { key: 'name', label: 'الاسم', render: (row: any) => <b>{row.name}</b> },
+      { key: 'name', label: 'الاسم', render: (row: { name?: unknown }) => <b>{String(row.name)}</b> },
     ];
     const createObjectURL = jest.fn(() => 'blob:x');
-    (URL as any).createObjectURL = createObjectURL;
-    (URL as any).revokeObjectURL = jest.fn();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = jest.fn();
     const clickSpy = stubAnchor();
 
-    render(<DataTable columns={withRenderColumns as any} data={data} exportable />);
+    render(<DataTable columns={withRenderColumns} data={data} exportable />);
     fireEvent.click(screen.getByText('تصدير'));
     expect(clickSpy).toHaveBeenCalled();
   });

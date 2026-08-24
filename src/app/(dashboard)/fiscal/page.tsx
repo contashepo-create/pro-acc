@@ -12,18 +12,27 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 
+interface FiscalYearRow {
+  id: string;
+  name: string;
+  start_date?: string;
+  end_date?: string;
+  status?: string;
+}
+interface FiscalYearForm { name: string; start_date: string; end_date: string; }
+
 export default function FiscalPage() {
-  const [fiscalYears, setFiscalYears] = useState<any[]>([]);
+  const [fiscalYears, setFiscalYears] = useState<FiscalYearRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingYear, setEditingYear] = useState<any>(null);
+  const [editingYear, setEditingYear] = useState<FiscalYearRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', start_date: '', end_date: '' });
+  const [form, setForm] = useState<FiscalYearForm>({ name: '', start_date: '', end_date: '' });
 
   const fetchData = async () => {
     try {
@@ -36,6 +45,8 @@ export default function FiscalPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -60,23 +71,23 @@ export default function FiscalPage() {
         setForm({ name: '', start_date: '', end_date: '' });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (year: any) => {
+  const handleEdit = async (year: FiscalYearRow) => {
     const { data, error } = await fetchRecord(`/api/fiscal/${year.id}`);
     const src = recordOrRow(data, year);
     if (!data && error) toast.error(error);
     setEditingYear(year);
     setForm(applyDates({
-      name: src.name || '',
-      start_date: src.start_date || '',
-      end_date: src.end_date || '',
+      name: String(src.name ?? ''),
+      start_date: toDateInput(src.start_date) ?? '',
+      end_date: toDateInput(src.end_date) ?? '',
     }, ['start_date', 'end_date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (year: any) => {
+  const handleDelete = async (year: FiscalYearRow) => {
     try {
       const res = await fetch(`/api/fiscal/${year.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -85,20 +96,20 @@ export default function FiscalPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
 
   const columns = [
     { key: 'name', label: 'الاسم', sortable: true },
-    { key: 'start_date', label: 'تاريخ البداية', render: (row: any) => formatDate(row.start_date) },
-    { key: 'end_date', label: 'تاريخ النهاية', render: (row: any) => formatDate(row.end_date) },
-    { key: 'status', label: 'الحالة', render: (row: any) => <Badge variant={row.status === 'open' ? 'success' : 'warning'}>{row.status === 'open' ? 'مفتوحة' : 'مقفلة'}</Badge> },
+    { key: 'start_date', label: 'تاريخ البداية', render: (row: FiscalYearRow) => formatDate(row.start_date) },
+    { key: 'end_date', label: 'تاريخ النهاية', render: (row: FiscalYearRow) => formatDate(row.end_date) },
+    { key: 'status', label: 'الحالة', render: (row: FiscalYearRow) => <Badge variant={row.status === 'open' ? 'success' : 'warning'}>{row.status === 'open' ? 'مفتوحة' : 'مقفلة'}</Badge> },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: FiscalYearRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -108,7 +119,7 @@ export default function FiscalPage() {
     },
   ];
 
-  const openYear = fiscalYears.find((y: any) => y.status === 'open');
+  const openYear = fiscalYears.find((y: FiscalYearRow) => y.status === 'open');
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;

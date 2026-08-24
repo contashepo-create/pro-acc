@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import type { Row } from '@/lib/types';
 import { Plus, Trash2, PackageCheck } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -15,7 +16,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
 
@@ -24,27 +25,42 @@ interface OrderItem {
   quantity: number;
   unit_price: number;
   inventory_item_id?: string;
+  received_quantity?: number;
 }
 
 const emptyItem: OrderItem = { description: '', quantity: 1, unit_price: 0, inventory_item_id: '' };
 
+interface PurchaseOrderRow {
+  id: string;
+  number?: string;
+  po_number?: string;
+  date?: string;
+  supplier_name?: string;
+  total: number;
+  status: string;
+  items?: OrderItem[];
+}
+interface SupplierOption { id: string; name: string; }
+interface InventoryItemOption { id: string; code: string; name: string; warehouse_name?: string; }
+interface PurchaseOrderForm { date: string; supplier_id: string; notes: string; items: OrderItem[]; }
+
 export default function PurchaseOrdersPage() {
-  const [orders, setOrders] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [inventoryItems, setInventoryItems] = useState<any[]>([]);
+  const [orders, setOrders] = useState<PurchaseOrderRow[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItemOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingOrder, setEditingOrder] = useState<any>(null);
-  const [viewingOrder, setViewingOrder] = useState<any>(null);
+  const [editingOrder, setEditingOrder] = useState<PurchaseOrderRow | null>(null);
+  const [viewingOrder, setViewingOrder] = useState<PurchaseOrderRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [receivingId, setReceivingId] = useState<string | null>(null);
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<PurchaseOrderForm>({
     date: new Date().toISOString().split('T')[0],
     supplier_id: '',
     notes: '',
-    items: [{ ...emptyItem }] as OrderItem[],
+    items: [{ ...emptyItem }],
   });
 
   const fetchData = async () => {
@@ -68,6 +84,8 @@ export default function PurchaseOrdersPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const grandTotal = form.items.reduce((s: number, it: OrderItem) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0);
@@ -75,7 +93,7 @@ export default function PurchaseOrdersPage() {
   const addItem = () => setForm({ ...form, items: [...form.items, { ...emptyItem }] });
   const removeItem = (index: number) => {
     if (form.items.length <= 1) return;
-    setForm({ ...form, items: form.items.filter((_: any, i: number) => i !== index) });
+    setForm({ ...form, items: form.items.filter((_o: OrderItem, i: number) => i !== index) });
   };
   const updateItem = (index: number, patch: Partial<OrderItem>) => {
     setForm({
@@ -131,21 +149,21 @@ export default function PurchaseOrdersPage() {
     } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (order: any) => {
+  const handleEdit = async (order: PurchaseOrderRow) => {
     const { data, error } = await fetchRecord(`/api/purchases/orders/${order.id}`);
     const src = recordOrRow(data, order);
     if (!data && error) toast.error(error);
     setEditingOrder(order);
     setForm(applyDates({
-      date: src.date,
-      supplier_id: src.supplier_id || '',
-      notes: src.notes || '',
-      items: src.items?.length ? src.items : [{ ...emptyItem }],
+      date: toDateInput(src.date) ?? '',
+      supplier_id: String(src.supplier_id ?? ''),
+      notes: String(src.notes ?? ''),
+      items: src.items && (src.items as Row[]).length ? (src.items as OrderItem[]) : [{ ...emptyItem }],
     }, ['date']));
     setShowModal(true);
   };
 
-  const handleReceive = async (order: any) => {
+  const handleReceive = async (order: PurchaseOrderRow) => {
     if (!window.confirm('تأكيد استلام كامل الكميات المتبقية لهذا الأمر؟ سيتم تحديث المخزون.')) return;
     setReceivingId(order.id);
     try {
@@ -174,15 +192,15 @@ export default function PurchaseOrdersPage() {
   };
 
   const columns = [
-    { key: 'po_number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('purchase_order', row.number || row.po_number) },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
+    { key: 'po_number', label: 'الرقم', sortable: true, render: (row: PurchaseOrderRow) => formatDocumentNumber('purchase_order', row.number || row.po_number) },
+    { key: 'date', label: 'التاريخ', render: (row: PurchaseOrderRow) => formatDate(row.date) },
     { key: 'supplier_name', label: 'المورد', sortable: true },
-    { key: 'total', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total) },
-    { key: 'status', label: 'الحالة', render: (row: any) => statusBadge(row.status) },
+    { key: 'total', label: 'الإجمالي', render: (row: PurchaseOrderRow) => formatCurrency(row.total) },
+    { key: 'status', label: 'الحالة', render: (row: PurchaseOrderRow) => statusBadge(row.status) },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: PurchaseOrderRow) => (
         <div className="flex items-center gap-2">
           {(row.status === 'pending' || row.status === 'partial') && (
             <button
@@ -216,7 +234,7 @@ export default function PurchaseOrdersPage() {
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
 
-  const handleDelete = async (order: any) => {
+  const handleDelete = async (order: PurchaseOrderRow) => {
     try {
       const res = await fetch(`/api/purchases/orders/${order.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -238,7 +256,7 @@ export default function PurchaseOrdersPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
-            <Select label="المورد" value={form.supplier_id} onChange={(v) => setForm({ ...form, supplier_id: v })} options={[{ value: '', label: 'اختر مورداً' }, ...suppliers.map((s: any) => ({ value: s.id, label: s.name }))]} />
+            <Select label="المورد" value={form.supplier_id} onChange={(v) => setForm({ ...form, supplier_id: v })} options={[{ value: '', label: 'اختر مورداً' }, ...suppliers.map((s) => ({ value: s.id, label: s.name }))]} />
           </div>
 
           <div className="space-y-2">
@@ -263,11 +281,11 @@ export default function PurchaseOrdersPage() {
                       <td className="p-2">
                         <div className="space-y-1">
                           <select className="w-full bg-transparent border-b border-border pb-1 outline-none text-xs" value={item.inventory_item_id || ''} onChange={(event) => {
-                            const selected = inventoryItems.find((candidate: any) => candidate.id === event.target.value);
+                            const selected = inventoryItems.find((candidate) => candidate.id === event.target.value);
                             updateItem(i, { inventory_item_id: event.target.value, description: selected?.code || item.description });
                           }}>
                             <option value="">بند حر / صنف جديد</option>
-                            {inventoryItems.map((inventoryItem: any) => <option key={inventoryItem.id} value={inventoryItem.id}>{inventoryItem.code} - {inventoryItem.name} ({inventoryItem.warehouse_name || 'مستودع'})</option>)}
+                            {inventoryItems.map((inventoryItem: InventoryItemOption) => <option key={inventoryItem.id} value={inventoryItem.id}>{inventoryItem.code} - {inventoryItem.name} ({inventoryItem.warehouse_name || 'مستودع'})</option>)}
                           </select>
                           <input className="w-full bg-transparent outline-none" value={item.description} onChange={(e) => updateItem(i, { description: e.target.value, inventory_item_id: '' })} placeholder="كود الصنف أو وصف البند" />
                         </div>
@@ -318,7 +336,7 @@ export default function PurchaseOrdersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {viewingOrder.items.map((it: any, idx: number) => (
+                {(viewingOrder.items || []).map((it: OrderItem, idx: number) => (
                   <tr key={idx}>
                     <td className="p-2 font-medium">{it.description}</td>
                     <td className="p-2 text-center font-mono">{it.quantity}</td>

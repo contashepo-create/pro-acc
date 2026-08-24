@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { success, error, parseBody, getPaginationParams, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 const money = z.number().finite().refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8,
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest) {
       ? await sb().rpc('get_bank_safe_balances', { p_company_id: auth.companyId, p_bank_safe_ids: ids })
       : { data: [], error: null };
     if (balanceError) throw balanceError;
-    const balanceMap = new Map((balances || []).map((row: Record<string, unknown>) => [
+    const balanceMap = new Map(((balances ?? []) as Row[]).map((row: Row) => [
       String(row.bank_safe_id), Number(row.current_balance) || 0,
     ]));
     const banks = (data || []).map((value: Record<string, unknown>) => ({

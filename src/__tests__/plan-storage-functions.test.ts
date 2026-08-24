@@ -1,12 +1,24 @@
-let subscription: any = null;
+type SubRow = {
+  plan_code: string;
+  extra_users: number; extra_branches: number; extra_storage_gb: number;
+  addons_json: Record<string, unknown>;
+  subscription_plans: {
+    code: string; max_users: number; max_projects: number | null; max_clients: number | null;
+    max_suppliers: number | null; max_employees: number | null; max_invoices_per_month: number;
+    max_quotations_per_month: number; max_storage_mb: number; max_branches: number;
+    features_modules: Record<string, unknown>;
+  };
+};
+let subscription: SubRow | null = null;
 const list = jest.fn();
 const db = {
   storage: { from: jest.fn((bucket: string) => ({ list: (directory: string, options: unknown) => list(bucket, directory, options) })) },
   from: jest.fn(() => {
-    const api: any = { select: () => api, eq: () => api, order: () => api, limit: () => api, maybeSingle: async () => ({ data: subscription, error: null }) };
+    const api: TestBuilder = { select: () => api, eq: () => api, order: () => api, limit: () => api, maybeSingle: async () => ({ data: subscription, error: null }) };
     return api;
   }),
 };
+import type { TestBuilder } from './mocks';
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
 
 import { countUsedStorageBytes, hasModule } from '@/lib/plan-limits';
@@ -41,6 +53,13 @@ describe('storage accounting and module entitlement helpers', () => {
     const page = Array.from({ length: 1000 }, (_, index) => ({ name: `f${index}`, metadata: { size: 1 } }));
     list.mockResolvedValue({ data: page, error: null });
     await expect(countUsedStorageBytes('c1')).rejects.toThrow('safe scan limit');
+  });
+
+  test('returns zero when the client has no storage surface', async () => {
+    const storageRef = (db as { storage?: unknown }).storage;
+    delete (db as { storage?: unknown }).storage;
+    await expect(countUsedStorageBytes('c1')).resolves.toBe(0);
+    (db as { storage?: unknown }).storage = storageRef;
   });
 
   test('defaults unknown modules to enabled and honors explicit feature flags', async () => {

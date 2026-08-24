@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import type { Row } from '@/lib/types';
 import { Plus, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -15,7 +16,7 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { formatDate, formatCurrency, escapeHtml } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
 import { openPrintWindow } from '@/lib/print';
@@ -24,9 +25,53 @@ interface PurchaseItem {
   description: string;
   quantity: number;
   unit_price: number;
+  total?: number;
 }
 
 const emptyItem: PurchaseItem = { description: '', quantity: 1, unit_price: 0 };
+
+interface OtherExpense { description: string; amount: number; }
+interface OrderItem { description?: string; quantity?: number; received_quantity?: number; unit_price?: number; }
+interface PurchaseInvoiceRow {
+  id: string;
+  number?: string;
+  invoice_number?: string;
+  date?: string;
+  supplier_name?: string;
+  total: number;
+  paid_amount?: number;
+  status?: string;
+  items?: PurchaseItem[];
+  notes?: string;
+  subtotal?: number;
+  tax_amount?: number;
+  other_expenses_total?: number;
+  journal_entry_id?: string | number;
+  contacts?: { name?: string };
+  supplier?: { name?: string };
+}
+interface PurchaseInvoiceForm {
+  date: string;
+  supplier_id: string;
+  purchase_order_id: string;
+  notes: string;
+  tax_percent: number;
+  status: string;
+  items: PurchaseItem[];
+  other_expenses?: OtherExpense[];
+  payment_account_id?: string;
+}
+interface SupplierOption { id: string; name: string; }
+interface PurchaseOrderOption {
+  id: string;
+  supplier_id?: string;
+  number?: string;
+  po_number?: string;
+  supplier_name?: string;
+  status: string;
+  items?: OrderItem[];
+}
+interface CompanyInfo { name?: string; tax_number?: string; }
 
 const STATUS_LABELS: Record<string, { variant: 'success' | 'warning' | 'info' | 'danger'; label: string }> = {
   paid: { variant: 'success', label: 'مدفوعة' },
@@ -36,18 +81,18 @@ const STATUS_LABELS: Record<string, { variant: 'success' | 'warning' | 'info' | 
 };
 
 export default function PurchaseInvoicesPage() {
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [orders, setOrders] = useState<any[]>([]);
+  const [invoices, setInvoices] = useState<PurchaseInvoiceRow[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
+  const [orders, setOrders] = useState<PurchaseOrderOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingInvoice, setEditingInvoice] = useState<any>(null);
-  const [viewingInvoice, setViewingInvoice] = useState<any>(null);
-  const [company, setCompany] = useState<any>(null);
+  const [editingInvoice, setEditingInvoice] = useState<PurchaseInvoiceRow | null>(null);
+  const [viewingInvoice, setViewingInvoice] = useState<PurchaseInvoiceRow | null>(null);
+  const [company, setCompany] = useState<CompanyInfo | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<PurchaseInvoiceForm>({
     date: new Date().toISOString().split('T')[0],
     supplier_id: '',
     purchase_order_id: '',
@@ -83,24 +128,27 @@ export default function PurchaseInvoicesPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern: loading state set
+  // synchronously before the network round trip).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const subtotal = form.items.reduce((s: number, it: PurchaseItem) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0);
   const taxAmount = subtotal * ((Number(form.tax_percent) || 0) / 100);
-  const otherExpensesTotal = (form.other_expenses || []).reduce((s: number, o: any) => s + (Number(o.amount) || 0), 0);
+  const otherExpensesTotal = (form.other_expenses || []).reduce((s: number, o: OtherExpense) => s + (Number(o.amount) || 0), 0);
   const grandTotal = subtotal + taxAmount + otherExpensesTotal;
   const addOtherExpense = () => setForm({ ...form, other_expenses: [...(form.other_expenses || []), { description: '', amount: 0 }] });
-  const updateOtherExpense = (i: number, patch: any) => {
+  const updateOtherExpense = (i: number, patch: Partial<OtherExpense>) => {
     const list = [...(form.other_expenses || [])];
     list[i] = { ...list[i], ...patch };
     setForm({ ...form, other_expenses: list });
   };
-  const removeOtherExpense = (i: number) => setForm({ ...form, other_expenses: (form.other_expenses || []).filter((_: any, idx: number) => idx !== i) });
+  const removeOtherExpense = (i: number) => setForm({ ...form, other_expenses: (form.other_expenses || []).filter((_o: OtherExpense, idx: number) => idx !== i) });
 
   const addItem = () => setForm({ ...form, items: [...form.items, { ...emptyItem }] });
   const removeItem = (index: number) => {
     if (form.items.length <= 1) return;
-    setForm({ ...form, items: form.items.filter((_: any, i: number) => i !== index) });
+    setForm({ ...form, items: form.items.filter((_o: PurchaseItem, i: number) => i !== index) });
   };
   const updateItem = (index: number, patch: Partial<PurchaseItem>) => {
     setForm({
@@ -114,7 +162,7 @@ export default function PurchaseInvoicesPage() {
       setForm({ ...form, purchase_order_id: '' });
       return;
     }
-    const order = orders.find((candidate: any) => candidate.id === orderId);
+    const order = orders.find((candidate) => candidate.id === orderId);
     if (!order) {
       setForm({ ...form, purchase_order_id: orderId });
       return;
@@ -123,7 +171,7 @@ export default function PurchaseInvoicesPage() {
       ...form,
       purchase_order_id: orderId,
       supplier_id: order.supplier_id || form.supplier_id,
-      items: (order.items || []).map((item: any) => ({
+      items: (order.items || []).map((item: OrderItem) => ({
         description: item.description || '',
         quantity: Math.max(0, Number(item.quantity) - Number(item.received_quantity || 0)) || Number(item.quantity) || 1,
         unit_price: Number(item.unit_price) || 0,
@@ -163,7 +211,7 @@ export default function PurchaseInvoicesPage() {
               quantity: Number(it.quantity),
               unit_price: Number(it.unit_price),
             })),
-            other_expenses: (form.other_expenses || []).filter((o: any) => String(o.description || '').trim() && Number(o.amount) > 0),
+            other_expenses: (form.other_expenses || []).filter((o: OtherExpense) => String(o.description || '').trim() && Number(o.amount) > 0),
             payment_account_id: form.payment_account_id || null,
           };
 
@@ -193,24 +241,24 @@ export default function PurchaseInvoicesPage() {
     } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (invoice: any) => {
+  const handleEdit = async (invoice: PurchaseInvoiceRow) => {
     const { data, error } = await fetchRecord(`/api/purchases/invoices/${invoice.id}`);
     const src = recordOrRow(data, invoice);
     if (!data && error) toast.error(error);
     setEditingInvoice(invoice);
     setForm(applyDates({
-      date: src.date,
-      supplier_id: src.supplier_id || '',
-      purchase_order_id: src.purchase_order_id || '',
-      notes: src.notes || '',
+      date: toDateInput(src.date) ?? '',
+      supplier_id: String(src.supplier_id ?? ''),
+      purchase_order_id: String(src.purchase_order_id ?? ''),
+      notes: String(src.notes ?? ''),
       tax_percent: Math.round((Number(src.tax_rate) || 0) * 100),
-      status: src.status || 'unpaid',
-      items: src.items?.length ? src.items : [{ ...emptyItem }],
+      status: String(src.status ?? 'unpaid'),
+      items: src.items && (src.items as Row[]).length ? (src.items as PurchaseItem[]) : [{ ...emptyItem }],
     }, ['date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (invoice: any) => {
+  const handleDelete = async (invoice: PurchaseInvoiceRow) => {
     try {
       const res = await fetch(`/api/purchases/invoices/${invoice.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -225,15 +273,15 @@ export default function PurchaseInvoicesPage() {
   };
 
   // طباعة فاتورة مشتريات احترافية كفاتورة.
-  const handlePrint = async (invoice: any) => {
-    let record: any = invoice;
+  const handlePrint = async (invoice: PurchaseInvoiceRow) => {
+    let record: PurchaseInvoiceRow = invoice;
     try {
       const res = await fetch(`/api/purchases/invoices/${invoice.id}`);
       const json = await res.json();
       if (json.success) record = json.data;
     } catch { /* use row data */ }
     const items = record.items || [];
-    const itemsHtml = items.map((it: any) => `<tr>
+    const itemsHtml = items.map((it: PurchaseItem) => `<tr>
       <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:right">${escapeHtml(String(it.description || ''))}</td>
       <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.quantity || 0)}</td>
       <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.unit_price || 0).toFixed(2)}</td>
@@ -310,21 +358,21 @@ export default function PurchaseInvoicesPage() {
   };
 
   const columns = [
-    { key: 'invoice_number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('purchase_invoice', row.number || row.invoice_number) },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
+    { key: 'invoice_number', label: 'الرقم', sortable: true, render: (row: PurchaseInvoiceRow) => formatDocumentNumber('purchase_invoice', row.number || row.invoice_number) },
+    { key: 'date', label: 'التاريخ', render: (row: PurchaseInvoiceRow) => formatDate(row.date) },
     { key: 'supplier_name', label: 'المورد', sortable: true },
-    { key: 'total', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total) },
-    { key: 'paid_amount', label: 'المدفوع', render: (row: any) => formatCurrency(row.paid_amount || 0) },
+    { key: 'total', label: 'الإجمالي', render: (row: PurchaseInvoiceRow) => formatCurrency(row.total) },
+    { key: 'paid_amount', label: 'المدفوع', render: (row: PurchaseInvoiceRow) => formatCurrency(row.paid_amount || 0) },
     {
-      key: 'status', label: 'الحالة', render: (row: any) => {
-        const m = STATUS_LABELS[row.status] || { variant: 'warning' as const, label: row.status || 'غير مدفوعة' };
+      key: 'status', label: 'الحالة', render: (row: PurchaseInvoiceRow) => {
+        const m = STATUS_LABELS[row.status ?? ''] || { variant: 'warning' as const, label: row.status || 'غير مدفوعة' };
         return <Badge variant={m.variant}>{m.label}</Badge>;
       }
     },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: PurchaseInvoiceRow) => (
         <ActionButtons
           item={row}
           onPrint={() => handlePrint(row)}
@@ -337,7 +385,7 @@ export default function PurchaseInvoicesPage() {
             } catch { toast.error('تعذر عرض الفاتورة'); }
           }}
           onEdit={row.status !== 'cancelled' ? handleEdit : undefined}
-          onDelete={!row.journal_entry_id && (parseFloat(row.paid_amount) || 0) <= 0 ? handleDelete : undefined}
+          onDelete={!row.journal_entry_id && (parseFloat(String(row.paid_amount ?? '')) || 0) <= 0 ? handleDelete : undefined}
         />
       ),
     },
@@ -369,17 +417,17 @@ export default function PurchaseInvoicesPage() {
                 ]}
               />
             ) : (
-              <Select label="المورد" value={form.supplier_id} onChange={(v) => setForm({ ...form, supplier_id: v })} options={[{ value: '', label: 'اختر مورداً' }, ...suppliers.map((s: any) => ({ value: s.id, label: s.name }))]} />
+              <Select label="المورد" value={form.supplier_id} onChange={(v) => setForm({ ...form, supplier_id: v })} options={[{ value: '', label: 'اختر مورداً' }, ...suppliers.map((s) => ({ value: s.id, label: s.name }))]} />
             )}
             {!isEdit && (
               <>
-                <Select label="أمر الشراء (اختياري)" value={form.purchase_order_id} onChange={applyPurchaseOrder} options={[{ value: '', label: 'بدون' }, ...orders.filter((order: any) => order.status === 'received').map((o: any) => ({ value: o.id, label: `${formatDocumentNumber('purchase_order', o.number || o.po_number)} — ${o.supplier_name || ''}` }))]} />
+                <Select label="أمر الشراء (اختياري)" value={form.purchase_order_id} onChange={applyPurchaseOrder} options={[{ value: '', label: 'بدون' }, ...orders.filter((order) => order.status === 'received').map((o) => ({ value: o.id, label: `${formatDocumentNumber('purchase_order', o.number || o.po_number)} — ${o.supplier_name || ''}` }))]} />
                 <Input label="نسبة الضريبة %" type="number" min={0} max={100} value={form.tax_percent} onChange={(e) => setForm({ ...form, tax_percent: Number(e.target.value) })} />
               </>
             )}
           </div>
 
-          {!isEdit && orders.some((order: any) => order.status !== 'received' && order.status !== 'cancelled') && (
+          {!isEdit && orders.some((order) => order.status !== 'received' && order.status !== 'cancelled') && (
             <div className="rounded-lg border border-info/30 bg-info/10 p-3 text-xs text-text-secondary">
               لا تظهر هنا إلا أوامر الشراء المستلمة بالكامل. نفّذ «استلام البضاعة» من شاشة أوامر الشراء أولاً؛ عندها تُحدّث كميات المخزون، ثم اختر الأمر هنا لترحيل فاتورة المورد وإغلاق حساب البضاعة المستلمة غير المفوترة.
             </div>
@@ -447,7 +495,7 @@ export default function PurchaseInvoicesPage() {
               <div className="text-xs text-text-muted py-2">لا توجد مصاريف إضافية.</div>
             ) : (
               <div className="space-y-2">
-                {(form.other_expenses || []).map((o: any, i: number) => (
+                {(form.other_expenses || []).map((o: OtherExpense, i: number) => (
                   <div key={i} className="grid grid-cols-[1fr_8rem_2rem] gap-2 items-center">
                     <input
                       className="input-base !py-2 text-sm"
@@ -494,7 +542,7 @@ export default function PurchaseInvoicesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {viewingInvoice.items.map((it: any, idx: number) => (
+                {(viewingInvoice.items || []).map((it: PurchaseItem, idx: number) => (
                   <tr key={idx}>
                     <td className="p-2 font-medium">{it.description}</td>
                     <td className="p-2 text-center font-mono">{it.quantity}</td>

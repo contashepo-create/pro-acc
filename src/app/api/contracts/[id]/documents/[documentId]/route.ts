@@ -23,6 +23,7 @@ export async function GET(
     if (!reference.startsWith('storage:contract-documents/')) return error('المستند القديم غير متاح عبر التخزين الآمن', 410);
     const objectPath = reference.slice('storage:contract-documents/'.length);
     if (!objectPath.startsWith(`${auth.companyId}/${id}/`) || objectPath.includes('..')) return error('مرجع المستند غير صالح', 500);
+    if (!s.storage) return error('تعذر إنشاء رابط المستند', 503);
     const { data: signed, error: signError } = await s.storage.from('contract-documents').createSignedUrl(objectPath, 60);
     if (signError || !signed?.signedUrl) return error('تعذر إنشاء رابط المستند', 503);
 

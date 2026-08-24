@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import {
   Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone,
-  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, Copy, ExternalLink, Trash2, Key, Globe, MessageSquare, FileText, Layers, ShieldCheck, Printer, HelpCircle
+  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, ExternalLink, Trash2, Key, Globe, MessageSquare,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -27,7 +27,7 @@ import {
 export default function SettingsPage() {
   const [tab, setTab] = useState('general');
   const [toast, setToast] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const { themeId, isDark, setTheme, toggleMode } = useThemeStore();
   const { user, company } = useAuthStore();
 
@@ -58,14 +58,49 @@ export default function SettingsPage() {
   const [notifStock, setNotifStock] = useState(true);
   const [notifVoucher, setNotifVoucher] = useState(false);
 
+interface SettingsSubscription {
+  id?: string;
+  subscriber_number?: string;
+  plan_name?: string;
+  end_date?: string;
+  days_remaining: number;
+  is_expired: boolean;
+  is_expiring_soon: boolean;
+}
+interface AppSettingsData {
+  app_name?: string;
+  app_name_en?: string;
+  app_version?: string;
+  developer_name?: string;
+  support_email?: string;
+  support_phone?: string;
+  support_whatsapp?: string;
+  support_telegram?: string;
+  support_website?: string;
+  payment_info?: string;
+  payment_bank_name?: string;
+  payment_iban?: string;
+  payment_stc_pay?: string;
+  footer_text?: string;
+}
+interface TelegramSettings {
+  chat_id: string;
+  is_enabled: boolean;
+  notify_invoices: boolean;
+  notify_cash_transactions: boolean;
+  notify_user_logins: boolean;
+  approvals_enabled: boolean;
+  approval_threshold: string;
+}
+
   // Subscription state
-  const [subscription, setSubscription] = useState<any>(null);
-  const [appSettings, setAppSettings] = useState<any>({});
+  const [subscription, setSubscription] = useState<SettingsSubscription | null>(null);
+  const [appSettings, setAppSettings] = useState<AppSettingsData>({});
   const [subLoading, setSubLoading] = useState(true);
 
   // Telegram Settings State
   const [telegramAllowed, setTelegramAllowed] = useState(true);
-  const [telegramConfig, setTelegramConfig] = useState<any>({
+  const [telegramConfig, setTelegramConfig] = useState<TelegramSettings>({
     chat_id: '',
     is_enabled: false,
     notify_invoices: true,
@@ -90,6 +125,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get('tab');
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (t) setTab(t);
     // Load company data and settings
     fetch('/api/settings')
@@ -457,7 +493,6 @@ export default function SettingsPage() {
     }
   };
 
-  const currentTheme = themes.find((t) => t.id === themeId) || themes[0];
 
   return (
     <div className="space-y-6">
@@ -480,12 +515,12 @@ export default function SettingsPage() {
       {tab === 'general' && (
         <Card title="معلومات الشركة">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="اسم الشركة" value={companyName} onChange={(e: any) => setCompanyName(e.target.value)} className="col-span-2" />
-            <Input label="رقم السجل التجاري" value={registration} onChange={(e: any) => setRegistration(e.target.value)} />
-            <Input label="الرقم الضريبي" value={taxNumber} onChange={(e: any) => setTaxNumber(e.target.value)} />
-            <Input label="الهاتف" value={phone} onChange={(e: any) => setPhone(e.target.value)} />
-            <Input label="البريد الإلكتروني" type="email" value={email} onChange={(e: any) => setEmail(e.target.value)} />
-            <Input label="العنوان" value={address} onChange={(e: any) => setAddress(e.target.value)} className="col-span-2" />
+            <Input label="اسم الشركة" value={companyName} onChange={(e) => setCompanyName(e.target.value)} className="col-span-2" />
+            <Input label="رقم السجل التجاري" value={registration} onChange={(e) => setRegistration(e.target.value)} />
+            <Input label="الرقم الضريبي" value={taxNumber} onChange={(e) => setTaxNumber(e.target.value)} />
+            <Input label="الهاتف" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            <Input label="البريد الإلكتروني" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Input label="العنوان" value={address} onChange={(e) => setAddress(e.target.value)} className="col-span-2" />
           </div>
 
           {/* Country & Currency Section */}
@@ -508,8 +543,8 @@ export default function SettingsPage() {
                 options={getCountriesList()}
               />
               <Input label="رمز العملة" value={currencyCode} disabled />
-              <Input label="رمز العملة (العرض)" value={currencySymbol} onChange={(e: any) => setCurrencySymbol(e.target.value)} />
-              <Input label="نسبة الضريبة (%)" type="number" value={vatRate} onChange={(e: any) => setVatRate(e.target.value)} />
+              <Input label="رمز العملة (العرض)" value={currencySymbol} onChange={(e) => setCurrencySymbol(e.target.value)} />
+              <Input label="نسبة الضريبة (%)" type="number" value={vatRate} onChange={(e) => setVatRate(e.target.value)} />
             </div>
           </div>
 
@@ -713,7 +748,7 @@ export default function SettingsPage() {
               <Input
                 label="نص التذييل الثابت (Footer Note)"
                 value={invoiceSettings.footerText}
-                onChange={(e: any) => setInvoiceSettings({ ...invoiceSettings, footerText: e.target.value })}
+                onChange={(e) => setInvoiceSettings({ ...invoiceSettings, footerText: e.target.value })}
                 placeholder="مثال: شكراً لتعاملكم معنا • للإيداع البنكي: بنك الراجحي SA..."
               />
             </div>
@@ -735,8 +770,8 @@ export default function SettingsPage() {
       {tab === 'accounting' && (
         <Card title="الإعدادات المحاسبية">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="بداية السنة المالية" type="date" value={fiscalStart} onChange={(e:any)=>setFiscalStart(e.target.value)} />
-            <Input label="عدد المنازل العشرية" type="number" value={decimalPlaces} onChange={(e:any)=>setDecimalPlaces(e.target.value)} />
+            <Input label="بداية السنة المالية" type="date" value={fiscalStart} onChange={(e)=>setFiscalStart(e.target.value)} />
+            <Input label="عدد المنازل العشرية" type="number" value={decimalPlaces} onChange={(e)=>setDecimalPlaces(e.target.value)} />
           </div>
           <label className="flex items-start gap-3 mt-5 cursor-pointer">
             <input
@@ -762,7 +797,7 @@ export default function SettingsPage() {
       {tab === 'tax' && (
         <Card title="إعدادات الضرائب">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="نسبة ضريبة القيمة المضافة (%)" type="number" value={vatRate} onChange={(e:any)=>setVatRate(e.target.value)} />
+            <Input label="نسبة ضريبة القيمة المضافة (%)" type="number" value={vatRate} onChange={(e)=>setVatRate(e.target.value)} />
           </div>
           <div className="mt-4">
             <Button onClick={handleSaveTax} leftIcon={<Save size={16} />}>حفظ</Button>
@@ -1150,7 +1185,7 @@ export default function SettingsPage() {
                       <div className="w-8 h-8 rounded-lg bg-accent text-white flex items-center justify-center font-bold text-sm mb-2">3</div>
                       <h4 className="text-sm font-bold text-text-primary">ربط المعرّف في الموقع</h4>
                       <p className="text-xs text-text-muted leading-relaxed">
-                        قم بنسخ المعرّف الرقمي المكون من أرقام فقط (مثال: <code className="font-mono text-accent">876543210</code>) وضعه في خانة <b>Chat ID</b> بالبطاقة أدناه، ثم علم على خيار "تفعيل" واضغط على حفظ الإعدادات!
+                        قم بنسخ المعرّف الرقمي المكون من أرقام فقط (مثال: <code className="font-mono text-accent">876543210</code>) وضعه في خانة <b>Chat ID</b> بالبطاقة أدناه، ثم علم على خيار &quot;تفعيل&quot; واضغط على حفظ الإعدادات!
                       </p>
                     </div>
                   </div>
@@ -1164,7 +1199,7 @@ export default function SettingsPage() {
                       label="معرف الدردشة تيليجرام (Chat ID)" 
                       placeholder="أدخل الأرقام هنا (مثال: 987654321)" 
                       value={telegramConfig.chat_id} 
-                      onChange={(e: any) => setTelegramConfig({...telegramConfig, chat_id: e.target.value})} 
+                      onChange={(e) => setTelegramConfig({...telegramConfig, chat_id: e.target.value})} 
                     />
                     <div className="flex flex-col justify-end pb-1">
                       <label className="flex items-center gap-3 cursor-pointer py-3">
@@ -1229,7 +1264,7 @@ export default function SettingsPage() {
                           type="number" 
                           placeholder="5000" 
                           value={telegramConfig.approval_threshold} 
-                          onChange={(e: any) => setTelegramConfig({...telegramConfig, approval_threshold: e.target.value})} 
+                          onChange={(e) => setTelegramConfig({...telegramConfig, approval_threshold: e.target.value})} 
                         />
                         <p className="text-[10px] text-text-muted mt-1 leading-relaxed">
                           أي مستند (سند صرف، عهدة، قيد مالي) يتخطى هذا المبلغ، سيتطلب نقرة موافقة تفاعلية من هاتف المدير قبل ترحيله للدفاتر المحاسبية.
@@ -1347,7 +1382,7 @@ export default function SettingsPage() {
                           label="رمز المصادقة السداسي (2FA Code)" 
                           placeholder="مثال: 123456" 
                           value={resetCode} 
-                          onChange={(e: any) => setResetCode(e.target.value)} 
+                          onChange={(e) => setResetCode(e.target.value)} 
                           dir="ltr"
                           className="font-mono font-bold text-center"
                         />

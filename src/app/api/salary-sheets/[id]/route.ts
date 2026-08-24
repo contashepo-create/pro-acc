@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireModulePermission, requireManagerOrAbove, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -24,9 +26,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       .eq('company_id', auth.companyId);
     if (itemsErr) throw itemsErr;
 
-    const itemsWithNames = (items || []).map((si: any) => ({
+    const itemsWithNames = (items || []).map((si: Row) => ({
       ...si,
-      employee_name: si.employees?.name || '',
+      employee_name: si.employees ? String((si.employees as Row).name) || '' : '',
     }));
 
     return success({ ...sheet, items: itemsWithNames });
@@ -45,9 +47,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const { data: existing } = await s.from('salary_sheets').select('id, status')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return error('Not found', 404);
-    if ((existing as any).status !== 'draft') return error('لا يمكن تعديل كشف رواتب بعد دخوله دورة الموافقة', 409);
+    if ((existing as Row).status !== 'draft') return error('لا يمكن تعديل كشف رواتب بعد دخوله دورة الموافقة', 409);
     if (body.status !== undefined) return error('تغيير حالة الكشف يتم عبر مسار الموافقات فقط', 409);
-    const updateData: any = {};
+    const updateData: Row = {};
     if (body.name !== undefined) {
       if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200) return error('اسم الكشف غير صالح');
       updateData.name = body.name.trim();

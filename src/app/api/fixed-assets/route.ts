@@ -3,6 +3,8 @@ import { success, error, parseBody, getPaginationParams, requireModulePermission
 import { getSupabase } from '@/lib/supabase-client';
 import { fixedAssetCreateSchema } from '@/lib/hr-validation';
 
+import type { Row } from '@/lib/types';
+
 export const FIXED_ASSET_COLUMNS = `id,name,code,category,purchase_date,purchase_cost,useful_life_years,
   depreciation_rate,depreciation_method,accumulated_depreciation,net_book_value,status,location,notes,
   journal_entry_id,asset_account_id,depreciation_account_id,approved_at,created_at`;
@@ -16,7 +18,7 @@ export async function GET(req: NextRequest) {
       .select(FIXED_ASSET_COLUMNS, { count: 'exact' }).eq('company_id', auth.companyId)
       .order('purchase_date', { ascending: false }).range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const assets = (data || []).map((asset: any) => ({
+    const assets = (data || []).map((asset: Row) => ({
       ...asset,
       net_book_value: Number(asset.purchase_cost || 0) - Number(asset.accumulated_depreciation || 0),
     }));

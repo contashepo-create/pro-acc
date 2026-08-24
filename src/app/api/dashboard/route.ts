@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const amount = (value: unknown) => Number(value) || 0;
 const PROJECT_PREVIEW_LIMIT = 100;
 
@@ -28,7 +30,7 @@ export async function GET(request: NextRequest) {
     const ledger = (allSummary.data || {}) as Record<string, unknown>;
     const month = (monthSummary.data || {}) as Record<string, unknown>;
     const snapshot = (snapshotResult.data || {}) as Record<string, unknown>;
-    const projects = projectsResult.data || [];
+    const projects = (projectsResult.data ?? []) as Row[];
     const totalProjects = amount(snapshot.totalProjects);
     const totalRevenue = amount(ledger.revenue);
     const totalExpense = amount(ledger.expenses);
@@ -45,7 +47,7 @@ export async function GET(request: NextRequest) {
       overdueAmount: amount(snapshot.overdueInvoices),
       revenueThisMonth: amount(month.revenue),
       expenseThisMonth: amount(month.expenses),
-      projects: projects.map((project: any) => ({ ...project, progress: calculateProjectProgress(project) })),
+      projects: projects.map((project: Row) => ({ ...project, progress: calculateProjectProgress(project) })),
       projectsTruncated: totalProjects > projects.length,
       recentActivity: activityResult.data || [],
     });
@@ -54,11 +56,11 @@ export async function GET(request: NextRequest) {
   }
 }
 
-function calculateProjectProgress(project: any): number {
+function calculateProjectProgress(project: Row): number {
   if (!project.start_date || !project.end_date) return 0;
   const now = Date.now();
-  const start = Date.parse(project.start_date);
-  const end = Date.parse(project.end_date);
+  const start = Date.parse(String(project.start_date));
+  const end = Date.parse(String(project.end_date));
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return now >= end ? 100 : 0;
   if (now <= start) return 0;
   if (now >= end) return 100;

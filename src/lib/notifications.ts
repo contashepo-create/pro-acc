@@ -61,7 +61,7 @@ export async function checkBankBalance(
   if (!bankAcc)
     return { allowed: false, balance: 0, message: "البنك/الخزينة غير موجود" };
   const currentBalance = bankAcc.account_id
-    ? await getAccountBalance(bankAcc.account_id, companyId)
+    ? await getAccountBalance(String(bankAcc.account_id), companyId)
     : 0;
   return currentBalance < amount
     ? {

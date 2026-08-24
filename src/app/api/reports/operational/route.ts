@@ -5,6 +5,8 @@ import { isValidDate } from '@/lib/utils';
 import { parseReportPagination } from '@/lib/report-validation';
 import { classifyProjectCost } from '@/lib/project-cost-classifier';
 
+import type { Row } from '@/lib/types';
+
 const number = (value: unknown) => Number(value) || 0;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -35,7 +37,7 @@ export async function GET(req: NextRequest) {
       });
       if (queryError) throw queryError;
       const costs = { materials: 0, workers: 0, purchases: 0, subcontractors: 0, total: 0 };
-      for (const row of data || []) {
+      for (const row of (data ?? []) as Row[]) {
         if (row.account_type !== 'expense') continue;
         const amount = number(row.debit) - number(row.credit);
         costs.total += amount;
@@ -58,9 +60,9 @@ export async function GET(req: NextRequest) {
     const { data, error: queryError, count } = await query.order('date', { ascending: false })
       .range((page - 1) * pageSize, page * pageSize - 1);
     if (queryError) throw queryError;
-    const rows = (data || []).map((item: any) => ({
-      ...item, item_name: item.inventory_items?.name || null,
-      item_code: item.inventory_items?.code || null, project_name: item.projects?.name || null,
+    const rows = (data || []).map((item: Row) => ({
+      ...item, item_name: item.inventory_items ? String((item.inventory_items as Row).name) || null : null,
+      item_code: item.inventory_items ? String((item.inventory_items as Row).code) || null : null, project_name: item.projects ? String((item.projects as Row).name) || null : null,
     }));
     return success({ rows, page, pageSize, total: count || 0, totalPages: Math.ceil((count || 0) / pageSize) });
   } catch (err) {

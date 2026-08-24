@@ -46,12 +46,13 @@ jest.mock('@/lib/rate-limit', () => ({
 
 import { registerSchema } from '@/lib/validation';
 import { POST as registerPOST } from '@/app/api/auth/register/route';
+import type { NextRequest } from 'next/server';
 
-function req(body: any) {
+function req(body: Record<string, unknown>) {
   return {
     json: async () => body,
     headers: { get: () => null },
-  } as any;
+  } as unknown as NextRequest;
 }
 
 const validBody = {
@@ -134,15 +135,19 @@ describe('register — atomic company bootstrap', () => {
     expect(res.status).toBe(201);
     expect(getRpcCalls()).toHaveLength(1);
     const call = getRpcCalls()[0];
+    const params = call.params as {
+      p_company_name: string; p_email: string; p_user_name: string;
+      p_password_hash: string; p_verification_hash: string; p_accounts: unknown[];
+    };
     expect(call.name).toBe('register_company');
-    expect(call.params.p_company_name).toBe(validBody.companyName);
-    expect(call.params.p_email).toBe(validBody.email.toLowerCase());
-    expect(call.params.p_user_name).toBe(validBody.name);
-    expect(call.params.p_password_hash).toContain(':');
-    expect(call.params.p_password_hash).not.toContain(validBody.password);
-    expect(call.params.p_verification_hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(Array.isArray(call.params.p_accounts)).toBe(true);
-    expect(call.params.p_accounts.length).toBeGreaterThan(0);
+    expect(params.p_company_name).toBe(validBody.companyName);
+    expect(params.p_email).toBe(validBody.email.toLowerCase());
+    expect(params.p_user_name).toBe(validBody.name);
+    expect(params.p_password_hash).toContain(':');
+    expect(params.p_password_hash).not.toContain(validBody.password);
+    expect(params.p_verification_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(Array.isArray(params.p_accounts)).toBe(true);
+    expect(params.p_accounts.length).toBeGreaterThan(0);
 
     expect(findOp('companies', 'insert')).toBeNull();
     expect(findOp('users', 'insert')).toBeNull();
@@ -157,6 +162,20 @@ describe('register — atomic company bootstrap', () => {
     expect(body.data.user).toMatchObject({ id: 'u1', email: validBody.email, role: 'admin' });
     expect(JSON.stringify(body)).not.toContain('password_hash');
     expect(JSON.stringify(body)).not.toContain('verification_hash');
+  });
+
+  test('never embeds the session JWT in the response body (dev session included)', async () => {
+    setRpcResult('register_company', registration);
+    const res = await registerPOST(req({ ...validBody, email: 'noleak@example.com' }));
+    const body = await res.json();
+    expect(res.status).toBe(201);
+    // In non-production a session is issued — it must live only in the
+    // HttpOnly cookie, never in the JSON body (XSS would read a body token).
+    expect(body.data.token).toBeUndefined();
+    const cookieValue = (res as unknown as { cookies?: { get?: (k: string) => { value?: string } | undefined } }).cookies?.get?.('token')?.value;
+    if (cookieValue) {
+      expect(JSON.stringify(body.data)).not.toContain(cookieValue);
+    }
   });
 
   test('maps a database uniqueness conflict to 409', async () => {

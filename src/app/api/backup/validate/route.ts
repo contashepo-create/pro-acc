@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { requireAdmin, handleApiError, error, success, enforceRateLimit } from '@/lib/api-helpers';
+
+import type { Row } from '@/lib/types';
 import {
   parseBackupUploadBody, checkBackupOwnership, checkBackupSignature,
   validateBackupPayload, BackupValidationError, BACKUP_LIMITS,
@@ -30,7 +32,7 @@ export async function POST(request: NextRequest) {
     if (!company) return error('الشركة غير موجودة', 404);
 
     const ownership = checkBackupOwnership(
-      backupData, auth.companyId, (company as Record<string, any>).email,
+      backupData, auth.companyId, String((company as Row).email),
     );
     if (!ownership.ok) return error(ownership.message, ownership.status);
 

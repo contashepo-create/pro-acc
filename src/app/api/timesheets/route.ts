@@ -1,7 +1,9 @@
-import { NextRequest } from 'next/server';
-import { success, error, requireApiAuth, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
-import { generateId } from '@/lib/utils';
+import {NextRequest} from 'next/server';
+import {success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+import {generateId} from '@/lib/utils';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -37,17 +39,17 @@ export async function GET(request: NextRequest) {
 
     if (qErr) throw qErr;
 
-    const timesheets = (data || []).map((t: any) => ({
+    const timesheets = (data || []).map((t: Row) => ({
       ...t,
-      employee_name: t.employees?.name || null,
-      project_name: t.projects?.name || null,
+      employee_name: t.employees ? String((t.employees as Row).name) || null : null,
+      project_name: t.projects ? String((t.projects as Row).name) || null : null,
       total_hours: calculateTotalHours(t),
       overtime_hours: calculateOvertime(t),
     }));
 
     // Summary stats
-    const totalHours = timesheets.reduce((sum: number, t: any) => sum + t.total_hours, 0);
-    const totalOvertime = timesheets.reduce((sum: number, t: any) => sum + t.overtime_hours, 0);
+    const totalHours = timesheets.reduce((sum: number, t: Row) => sum + Number(t.total_hours), 0);
+    const totalOvertime = timesheets.reduce((sum: number, t: Row) => sum + Number(t.overtime_hours), 0);
 
     return success({
       timesheets,
@@ -85,8 +87,8 @@ export async function POST(request: NextRequest) {
     }
 
     const timesheetId = generateId();
-    const checkIn = body.check_in || new Date().toISOString();
-    const checkOut = body.check_out || null;
+    const checkIn = String(body.check_in || new Date().toISOString());
+    const checkOut = body.check_out ? String(body.check_out) : null;
 
     // Calculate hours
     let regularHours = 0;
@@ -94,7 +96,7 @@ export async function POST(request: NextRequest) {
     if (checkOut) {
       const totalMinutes = (new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 60000;
       const totalHours = totalMinutes / 60;
-      const standardDay = body.standard_hours || 8;
+      const standardDay = Number(body.standard_hours || 8);
       regularHours = Math.min(totalHours, standardDay);
       overtimeHours = Math.max(0, totalHours - standardDay);
     }
@@ -130,13 +132,13 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function calculateTotalHours(t: any): number {
+function calculateTotalHours(t: Row): number {
   if (t.check_out && t.check_in) {
-    return (new Date(t.check_out).getTime() - new Date(t.check_in).getTime()) / 3600000;
+    return (new Date(String(t.check_out)).getTime() - new Date(String(t.check_in)).getTime()) / 3600000;
   }
-  return (parseFloat(t.regular_hours) || 0) + (parseFloat(t.overtime_hours) || 0);
+  return (parseFloat(String(t.regular_hours)) || 0) + (parseFloat(String(t.overtime_hours)) || 0);
 }
 
-function calculateOvertime(t: any): number {
-  return parseFloat(t.overtime_hours) || 0;
+function calculateOvertime(t: Row): number {
+  return parseFloat(String(t.overtime_hours)) || 0;
 }

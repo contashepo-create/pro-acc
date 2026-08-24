@@ -5,6 +5,8 @@ import { resendVerificationSchema } from '@/lib/validation';
 import { randomBytes, createHash } from 'crypto';
 import { sendEmail } from '@/lib/email';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
@@ -39,10 +41,10 @@ export async function POST(request: NextRequest) {
     // Generic message to avoid leaking whether an account exists.
     const genericMsg = 'إذا كان البريد الإلكتروني مسجلاً وغير مؤكد، سنرسل رابط التأكيد';
 
-    if (!user || !(user as Record<string, any>).is_active) {
+    if (!user || !(user as Row).is_active) {
       return success({ message: genericMsg });
     }
-    const u = user as Record<string, any>;
+    const u = user as Row;
     if (u.email_verified === true) {
       return success({ message: genericMsg });
     }

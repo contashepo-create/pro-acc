@@ -4,48 +4,57 @@
  */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const rpcCalls: Array<{ name: string; params: Row }> = [];
   const from = (table: string) => {
     const ops: Op[] = []; calls.push({ table, ops });
     const rows = () => (db[table] || []).filter((row) => ops.every((op) => {
       if (op.op === 'eq') return row[op.col!] === op.val;
-      if (op.op === 'in') return op.val.includes(row[op.col!]);
+      if (op.op === 'in') return (op.val as unknown[]).includes(row[op.col!]);
       if (op.op === 'is') return op.val === null ? row[op.col!] == null : row[op.col!] === op.val;
       if (op.op === 'gte') return String(row[op.col!]) >= String(op.val);
       return true;
     }));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any[]) => { ops.push({ op: 'in', col, val }); return api; },
-      is: (col: string, val: any) => { ops.push({ op: 'is', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      is: (col: string, val: unknown) => { ops.push({ op: 'is', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
       neq: () => api, or: () => api, order: () => api, range: () => api, limit: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
-  const instance = { from, calls, rpcCalls } as {
-    from: (table: string) => any;
+  const instance: {
+    from: (table: string) => TestBuilder;
     calls: typeof calls;
-    rpcCalls: Array<{ name: string; params: any }>;
-    [key: string]: any;
-  };
-  instance.rpc = async (name: string, params: any) => {
+    rpcCalls: Array<{ name: string; params: Row }>;
+    rpc?: (name: string, params: Row) => Promise<{ data: unknown; error: unknown }>;
+  } = { from, calls, rpcCalls };
+  instance.rpc = async (name: string, params: Row): Promise<{ data: unknown; error: unknown }> => {
     rpcCalls.push({ name, params });
     if (name === 'post_inventory_movement_atomic') {
       const item = (db.inventory_items || []).find((row) => row.id === params.p_item_id && row.company_id === params.p_company_id);
       if (!item) return { data: null, error: { message: 'الصنف غير موجود' } };
       if (item.warehouse_id !== params.p_warehouse_id) return { data: null, error: { message: 'الصنف لا ينتمي إلى مستودع المصدر' } };
-      if (params.p_type === 'issue' && Number(item.quantity) < params.p_quantity) {
+      if (params.p_type === 'issue' && Number(item.quantity) < Number(params.p_quantity)) {
         return { data: null, error: { message: 'الكمية غير متوفرة في المخزون' } };
       }
       return { data: { transaction: { id: TX, company_id: params.p_company_id, ...params } }, error: null };
@@ -63,10 +72,11 @@ function makeDb(db: Record<string, Row[]>) {
     if (name === 'update_inventory_item_atomic') {
       const item = (db.inventory_items || []).find((row) => row.id === params.p_item_id && row.company_id === params.p_company_id);
       if (!item) return { data: null, error: { message: 'الصنف غير موجود' } };
-      if ((params.p_patch.warehouse_id || params.p_patch.is_active === false) && Number(item.quantity) !== 0) {
-        return { data: null, error: { message: params.p_patch.is_active === false ? 'لا يمكن تعطيل صنف عليه رصيد' : 'لا يمكن نقل صنف عليه رصيد دون حركة تحويل' } };
+      const patch = params.p_patch as Row;
+      if ((patch.warehouse_id || patch.is_active === false) && Number(item.quantity) !== 0) {
+        return { data: null, error: { message: patch.is_active === false ? 'لا يمكن تعطيل صنف عليه رصيد' : 'لا يمكن نقل صنف عليه رصيد دون حركة تحويل' } };
       }
-      return { data: { ...item, ...params.p_patch }, error: null };
+      return { data: { ...item, ...patch }, error: null };
     }
     if (name === 'create_purchase_invoice_atomic') return { data: { id: PI }, error: null };
     return { data: null, error: { message: `missing ${name}` } };
@@ -119,14 +129,14 @@ function baseDb() {
   } as Record<string, Row[]>;
 }
 
-function request(body?: any, method = 'POST') {
+function request(body?: Row, method = 'POST') {
   const token = createToken('u1', 'admin');
   return { url: 'http://localhost/api/test', method,
     headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
-const movement = (patch: any = {}) => ({
+const movement = (patch: Row = {}) => ({
   item_id: ITEM, warehouse_id: W1, type: 'add', quantity: 5,
   unit_price: 120, date: '2026-08-01', ...patch,
 });

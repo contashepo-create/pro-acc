@@ -53,13 +53,11 @@ export default function AdminMessagesPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadCompanies();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadMessages();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId]);
 
   const handleSend = async (e: React.FormEvent) => {

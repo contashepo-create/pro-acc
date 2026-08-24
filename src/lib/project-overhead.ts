@@ -1,3 +1,5 @@
+import type { Row } from './types';
+
 /**
  * Overhead (indirect cost) allocation for project costing.
  *
@@ -24,13 +26,13 @@ export const basisLabel = (basis: OverheadAllocationBasis) =>
  * Validate an overhead-rule payload (create/update). Returns either a
  * normalized object of provided fields or an Arabic error string.
  */
-export function validateOverheadRule(body: any):
+export function validateOverheadRule(body: Row):
   | { name?: string; basis?: string; rate?: number; active?: boolean }
   | string {
   if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > 100)) {
     return 'اسم قاعدة التخصيص غير صالح';
   }
-  if (body.allocation_basis !== undefined && !OVERHEAD_BASIS.has(body.allocation_basis)) {
+  if (body.allocation_basis !== undefined && !OVERHEAD_BASIS.has(String(body.allocation_basis))) {
     return 'أساس التخصيص غير صالح';
   }
   if (body.rate !== undefined) {
@@ -42,7 +44,12 @@ export function validateOverheadRule(body: any):
   if (body.is_active !== undefined && typeof body.is_active !== 'boolean') {
     return 'حالة القاعدة غير صالحة';
   }
-  return { name: body.name, basis: body.allocation_basis, rate: body.rate, active: body.is_active };
+  return {
+    name: body.name == null ? undefined : String(body.name),
+    basis: body.allocation_basis == null ? undefined : String(body.allocation_basis),
+    rate: body.rate == null ? undefined : Number(body.rate),
+    active: body.is_active == null ? undefined : Boolean(body.is_active),
+  };
 }
 
 export interface OverheadAllocationRule {
@@ -67,8 +74,8 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /** Allocate overhead across projects from the active rules and their bases. */
 export function allocateOverhead(
-  costs: ProjectCostBase[],
-  rules: OverheadAllocationRule[],
+  costs: ProjectCostBase[] | null,
+  rules: OverheadAllocationRule[] | null,
 ): ProjectOverheadResult[] {
   const active = (rules || []).filter((r) => r.isActive);
   return (costs || []).map((c) => {
@@ -86,6 +93,6 @@ export function allocateOverhead(
 }
 
 /** Total allocated overhead across a set of projects (for a summary row). */
-export function sumAllocatedOverhead(results: ProjectOverheadResult[]): number {
+export function sumAllocatedOverhead(results: ProjectOverheadResult[] | null): number {
   return round2((results || []).reduce((s, r) => s + (r.allocatedOverhead || 0), 0));
 }

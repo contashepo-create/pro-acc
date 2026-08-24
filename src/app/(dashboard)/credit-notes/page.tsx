@@ -17,17 +17,39 @@ import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface CreditNoteItem { description: string; quantity: number; unit_price: number; }
+interface CreditNoteRow {
+  id: string;
+  number?: string;
+  date?: string;
+  contact_name?: string;
+  reason?: string;
+  total: number;
+  status?: string;
+}
+interface InvoiceOption { id: string; number: string; total: number; }
+interface ProjectOption { id: string; name: string; }
+interface ContactOption { id: string; name: string; type?: string; }
+interface CreditNoteForm {
+  invoice_id: string;
+  project_id: string;
+  contact_id: string;
+  reason: string;
+  date: string;
+  items: CreditNoteItem[];
+}
+
 export default function CreditNotesPage() {
-  const [creditNotes, setCreditNotes] = useState<any[]>([]);
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [contacts, setContacts] = useState<any[]>([]);
+  const [creditNotes, setCreditNotes] = useState<CreditNoteRow[]>([]);
+  const [invoices, setInvoices] = useState<InvoiceOption[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<CreditNoteForm>({
     invoice_id: '', project_id: '', contact_id: '', reason: '', date: new Date().toISOString().split('T')[0],
     items: [{ description: '', quantity: 1, unit_price: 0 }],
   });
@@ -51,6 +73,8 @@ export default function CreditNotesPage() {
     finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -74,7 +98,7 @@ export default function CreditNotesPage() {
     finally { setSaving(false); }
   };
 
-  const handleDelete = async (cn: any) => {
+  const handleDelete = async (cn: CreditNoteRow) => {
     try {
       const res = await fetch(`/api/credit-notes/${cn.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -84,23 +108,23 @@ export default function CreditNotesPage() {
   };
 
   const addItem = () => setForm({ ...form, items: [...form.items, { description: '', quantity: 1, unit_price: 0 }] });
-  const removeItem = (i: number) => { if (form.items.length > 1) setForm({ ...form, items: form.items.filter((_: any, idx: number) => idx !== i) }); };
-  const updateItem = (i: number, field: string, value: any) => {
+  const removeItem = (i: number) => { if (form.items.length > 1) setForm({ ...form, items: form.items.filter((_o: CreditNoteItem, idx: number) => idx !== i) }); };
+  const updateItem = (i: number, field: string, value: string | number) => {
     const items = [...form.items];
     items[i] = { ...items[i], [field]: value };
     setForm({ ...form, items });
   };
 
-  const subtotal = form.items.reduce((s: number, it: any) => s + (it.quantity * it.unit_price || 0), 0);
+  const subtotal = form.items.reduce((s: number, it: CreditNoteItem) => s + (it.quantity * it.unit_price || 0), 0);
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('credit_note', row.number) },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date), sortable: true },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: CreditNoteRow) => formatDocumentNumber('credit_note', row.number) },
+    { key: 'date', label: 'التاريخ', render: (row: CreditNoteRow) => formatDate(row.date), sortable: true },
     { key: 'contact_name', label: 'العميل', sortable: true },
     { key: 'reason', label: 'السبب' },
-    { key: 'total', label: 'القيمة', render: (row: any) => formatCurrency(row.total), sortable: true },
-    { key: 'status', label: 'الحالة', render: (row: any) => <Badge variant={row.status === 'approved' ? 'success' : 'warning'}>{row.status === 'approved' ? 'معتمد' : row.status}</Badge> },
-    { key: 'actions', label: 'إجراءات', render: (row: any) => <ActionButtons item={row} onDelete={handleDelete} /> },
+    { key: 'total', label: 'القيمة', render: (row: CreditNoteRow) => formatCurrency(row.total), sortable: true },
+    { key: 'status', label: 'الحالة', render: (row: CreditNoteRow) => <Badge variant={row.status === 'approved' ? 'success' : 'warning'}>{row.status === 'approved' ? 'معتمد' : row.status}</Badge> },
+    { key: 'actions', label: 'إجراءات', render: (row: CreditNoteRow) => <ActionButtons item={row} onDelete={handleDelete} /> },
   ];
 
   if (loading) return <LoadingSkeleton variant="table" count={6} />;
@@ -123,11 +147,11 @@ export default function CreditNotesPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
             <Select label="الفاتورة (اختياري)" value={form.invoice_id} onChange={(v) => setForm({ ...form, invoice_id: v })}
-              options={[{ value: '', label: '— بدون —' }, ...invoices.map((inv: any) => ({ value: inv.id, label: `#${inv.number} - ${formatCurrency(inv.total) }` }))]} />
+              options={[{ value: '', label: '— بدون —' }, ...invoices.map((inv) => ({ value: inv.id, label: `#${inv.number} - ${formatCurrency(inv.total) }` }))]} />
             <Select label="المشروع (اختياري)" value={form.project_id} onChange={(v) => setForm({ ...form, project_id: v })}
-              options={[{ value: '', label: '— بدون —' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} />
+              options={[{ value: '', label: '— بدون —' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
             <Select label="العميل" value={form.contact_id} onChange={(v) => setForm({ ...form, contact_id: v })}
-              options={[{ value: '', label: '— اختر —' }, ...contacts.filter((c: any) => c.type === 'client' || c.type === 'both').map((c: any) => ({ value: c.id, label: c.name }))]} />
+              options={[{ value: '', label: '— اختر —' }, ...contacts.filter((c) => c.type === 'client' || c.type === 'both').map((c) => ({ value: c.id, label: c.name }))]} />
           </div>
           <Textarea label="السبب" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="سبب الإشعار الدائن..." />
 
@@ -143,7 +167,7 @@ export default function CreditNotesPage() {
                 </tr>
               </thead>
               <tbody>
-                {form.items.map((item: any, i: number) => (
+                {form.items.map((item: CreditNoteItem, i: number) => (
                   <tr key={i} className="border-t border-border">
                     <td className="p-1"><Input value={item.description} onChange={(e) => updateItem(i, 'description', e.target.value)} /></td>
                     <td className="p-1"><Input type="number" value={item.quantity} onChange={(e) => updateItem(i, 'quantity', parseFloat(e.target.value) || 0)} /></td>

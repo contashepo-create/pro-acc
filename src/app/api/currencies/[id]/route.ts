@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireManagerOrAbove, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -33,11 +35,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const { data: existing } = await s.from('currencies').select('*')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return error('Currency not found', 404);
-    const code = body.code === undefined ? (existing as any).code : String(body.code).trim().toUpperCase();
-    const name = body.name === undefined ? (existing as any).name : String(body.name).trim();
-    const rate = body.rate === undefined ? Number((existing as any).rate) : Number(body.rate);
-    const isBase = body.isBase === undefined ? Boolean((existing as any).is_base) : body.isBase;
-    if (!/^[A-Z]{3,10}$/.test(code) || !name || name.length > 100 || !Number.isFinite(rate) || rate <= 0 || typeof isBase !== 'boolean') return error('بيانات العملة غير صالحة');
+    const code = body.code === undefined ? (existing as Row).code : String(body.code).trim().toUpperCase();
+    const name = body.name === undefined ? (existing as Row).name : String(body.name).trim();
+    const rate = body.rate === undefined ? Number((existing as Row).rate) : Number(body.rate);
+    const isBase = body.isBase === undefined ? Boolean((existing as Row).is_base) : body.isBase;
+    if (!/^[A-Z]{3,10}$/.test(String(code)) || !name || String(name).length > 100 || !Number.isFinite(rate) || rate <= 0 || typeof isBase !== 'boolean') return error('بيانات العملة غير صالحة');
     const { error: saveError } = await s.rpc('save_currency', {
       p_company_id: auth.companyId, p_id: id, p_code: code,
       p_name: name, p_rate: rate, p_is_base: isBase,
@@ -61,7 +63,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const { data: existing } = await s.from('currencies').select('id, is_base')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
     if (!existing) return error('Currency not found', 404);
-    if ((existing as any).is_base) return error('لا يمكن حذف العملة الأساسية', 409);
+    if ((existing as Row).is_base) return error('لا يمكن حذف العملة الأساسية', 409);
     const { data: result, error: deleteError } = await s.from('currencies')
       .delete().eq('id', id).eq('company_id', auth.companyId)
       .select('id').maybeSingle();

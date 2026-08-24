@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Megaphone, X, Gift, Image, Crown, AlertTriangle, Info, Zap, Star } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 interface Ad {
   id: string;
@@ -16,10 +17,9 @@ interface Ad {
 
 // مفتاح التخزين المحلي لتتبع الإعلانات التي رآها المستخدم
 const STORAGE_KEY = 'proacc_dismissed_ads';
-const SESSION_KEY = 'proacc_session_ads';
 
 // أيقونات حسب النوع
-const TYPE_ICONS: Record<string, { icon: any; color: string }> = {
+const TYPE_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
   announcement: { icon: Megaphone, color: 'text-blue-500' },
   promotion: { icon: Gift, color: 'text-green-500' },
   banner: { icon: Image, color: 'text-purple-500' },
@@ -63,6 +63,10 @@ function dismissAd(adId: string, showUntil?: string | null) {
   } catch {}
 }
 
+function computeShowUntil(existing?: string | null): string {
+  return existing ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+}
+
 export function AnnouncementBar() {
   const [ads, setAds] = useState<Ad[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
@@ -77,6 +81,7 @@ export function AnnouncementBar() {
       .catch(() => {});
     
     // تحميل الإعلانات المخفية
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
     setDismissed(getDismissedAds());
   }, []);
 
@@ -90,17 +95,7 @@ export function AnnouncementBar() {
   });
 
   const handleDismiss = (ad: Ad) => {
-    // حساب مدة الإخفاء
-    let showUntil: string;
-    if (ad.show_until) {
-      // إذا كان للإعلان تاريخ انتهاء، نخفيه حتى ذلك التاريخ
-      showUntil = ad.show_until;
-    } else {
-      // افتراضياً نخفيه لمدة 24 ساعة
-      showUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-    }
-    
-    dismissAd(ad.id, showUntil);
+    dismissAd(ad.id, computeShowUntil(ad.show_until));
     setDismissed((prev) => new Set([...prev, ad.id]));
   };
 

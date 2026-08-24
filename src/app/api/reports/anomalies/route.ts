@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { success, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 import {
   detectDuplicateInvoices, detectOutliers, detectSpendingSpikes, detectInvalidValues, type AnomalyFinding,
 } from '@/lib/analytics/anomaly';
@@ -21,15 +23,15 @@ export async function GET(request: NextRequest) {
     ]);
     if (invoiceResult.error) throw invoiceResult.error;
     if (monthlyResult.error) throw monthlyResult.error;
-    const invoiceRows = (invoiceResult.data || []).map((invoice: any) => ({
-      id: invoice.id, contact_id: invoice.contact_id,
-      amount: Number(invoice.total), date: invoice.date,
+    const invoiceRows = ((invoiceResult.data ?? []) as Row[]).map((invoice: Row) => ({
+      id: String(invoice.id), contact_id: invoice.contact_id == null ? null : String(invoice.contact_id),
+      amount: Number(invoice.total), date: String(invoice.date),
     }));
     const findings: AnomalyFinding[] = [
       ...detectDuplicateInvoices(invoiceRows.filter((row) => Number.isFinite(row.amount)), 30),
       ...detectOutliers(invoiceRows.filter((row) => Number.isFinite(row.amount)).map((row) => ({ id: row.id, amount: row.amount }))),
       ...detectInvalidValues(invoiceRows.map((row) => ({ id: row.id, label: `فاتورة ${row.id}`, value: row.amount }))),
-      ...detectSpendingSpikes((monthlyResult.data || []).map((row: any) => ({
+      ...detectSpendingSpikes(((monthlyResult.data ?? []) as Row[]).map((row: Row) => ({
         period: `${year}-${String(row.month_number).padStart(2, '0')}`, amount: Number(row.expenses) || 0,
       }))),
     ];

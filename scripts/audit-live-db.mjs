@@ -8,7 +8,6 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { createDriver } from './migration-drivers.mjs';
 
@@ -30,7 +29,7 @@ const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).so
 for (const filename of files) {
   const tracked = await db.query('SELECT 1 FROM _migrations WHERE filename=$1', [filename]);
   if (tracked.rows.length) continue;
-  let sql = fs.readFileSync(path.join(migrationsDir, filename), 'utf8')
+  const sql = fs.readFileSync(path.join(migrationsDir, filename), 'utf8')
     .replace(/^\s*BEGIN\s*;\s*$/gim, '').replace(/^\s*COMMIT\s*;\s*$/gim, '').trim();
   await db.exec('BEGIN');
   try {
@@ -45,8 +44,8 @@ for (const filename of files) {
 console.log(`applied ${files.length} migrations\n`);
 
 const uuid = () => randomBytes(16).toString('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
-const CO_A = uuid(), CO_B = uuid();
-const USER_A = uuid(), USER_B = uuid();
+const CO_B = uuid();
+const USER_B = uuid();
 
 const accounts = ['1000','1110','1150','1160','2120','2140','3000','3200','4100','5100'].map((code) => ({
   code, name: `Acct ${code}`, name_en: `Acct ${code}`,
@@ -145,7 +144,7 @@ console.log(`(info) journal sequence after tests: ${seq.rows[0]?.last_number ?? 
 
 // ============ email verification token single-use ============
 await db.query(`UPDATE users SET email_verified=FALSE WHERE id=$1`, [USER_B]);
-const t1 = await db.query(`UPDATE users SET email_verification_token=$1, email_verification_expires=NOW()+INTERVAL '1 day' WHERE id=$2 RETURNING 1`, ['a'.repeat(64), USER_B]);
+await db.query(`UPDATE users SET email_verification_token=$1, email_verification_expires=NOW()+INTERVAL '1 day' WHERE id=$2 RETURNING 1`, ['a'.repeat(64), USER_B]);
 let firstOk = false, secondOk = true;
 try { firstOk = !!(await db.query(`SELECT consume_email_verification_token($1)`, ['a'.repeat(64)])).rows[0]; } catch {}
 try { await db.query(`SELECT consume_email_verification_token($1)`, ['a'.repeat(64)]); } catch { secondOk = false; }

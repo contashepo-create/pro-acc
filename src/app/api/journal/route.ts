@@ -3,17 +3,15 @@ import { success, error, parseBody, requireModulePermission, handleApiError } fr
 import { getSupabase } from '@/lib/supabase-client';
 import { journalEntrySchema } from '@/lib/validation';
 
+import type { Row } from '@/lib/types';
+
 
 const sb = () => getSupabase();
 
 // Type definitions for Supabase query results
 interface JournalEntry { id: string; number: number; date: string; type: string; description: string; created_by: string; created_at: string }
 interface JournalLine { journal_entry_id: string; account_id: string; account_code: string; debit: number; credit: number; description: string }
-interface JournalLineWithAccount { id: string; journal_entry_id: string; account_id: string; account_code: string; debit: number; credit: number; description: string; accounts: { name: string; type: string } | null }
-interface AccountRow { id: string }
-interface LineIdRow { journal_entry_id: string }
 interface RpcResult { id: string; number: number; total_debit: number; total_credit: number; lines_count: number }
-interface SequenceRow { last_number: number }
 
 export async function GET(request: NextRequest) {
   try {
@@ -55,7 +53,7 @@ export async function GET(request: NextRequest) {
     if (queryError) throw queryError;
 
     const enriched = entries || [];
-    const enrichedIds = enriched.map((entry: any) => entry.id);
+    const enrichedIds = enriched.map((entry: Row) => entry.id);
     const linesMap: Record<string, { count: number; total_debit: number; total_credit: number }> = {};
     if (enrichedIds.length > 0) {
       const { data: allLines, error: linesError } = await s.from('journal_lines')
@@ -65,11 +63,11 @@ export async function GET(request: NextRequest) {
       if (linesError) throw linesError;
       
       for (const line of allLines || []) {
-        const jeId = (line as JournalLine).journal_entry_id;
+        const jeId = String((line as unknown as JournalLine).journal_entry_id);
         if (!linesMap[jeId]) linesMap[jeId] = { count: 0, total_debit: 0, total_credit: 0 };
         linesMap[jeId].count += 1;
-        linesMap[jeId].total_debit += Number((line as JournalLine).debit) || 0;
-        linesMap[jeId].total_credit += Number((line as JournalLine).credit) || 0;
+        linesMap[jeId].total_debit += Number((line as unknown as JournalLine).debit) || 0;
+        linesMap[jeId].total_credit += Number((line as unknown as JournalLine).credit) || 0;
       }
     }
 
@@ -140,9 +138,9 @@ export async function POST(request: NextRequest) {
       .select('id, account_code, accounts(name, type), debit, credit, description')
       .eq('journal_entry_id', result.id).eq('company_id', auth.companyId).order('id');
     if (linesError) throw linesError;
-    const formattedLines = (createdLines || []).map((line: Record<string, any>) => ({
-      id: line.id, account_code: line.account_code, account_name: line.accounts?.name || null,
-      account_type: line.accounts?.type || null, debit: line.debit, credit: line.credit, description: line.description,
+    const formattedLines = (createdLines || []).map((line: Record<string, unknown>) => ({
+      id: line.id, account_code: line.account_code, account_name: line.accounts ? String((line.accounts as Row).name) || null : null,
+      account_type: line.accounts ? String((line.accounts as Row).type) || null : null, debit: line.debit, credit: line.credit, description: line.description,
     }));
     try {
       const { logAudit } = await import('@/lib/audit');

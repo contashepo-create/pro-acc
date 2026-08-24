@@ -2,7 +2,22 @@
 // Usage: node scripts/update-supabase-admin.mjs (reads from .env.local)
 import { scryptSync, randomBytes } from 'crypto';
 import { config } from 'dotenv';
+import { encryptTelegramToken } from './lib/telegram-token-crypto.mjs';
 config({ path: '.env.local' });
+
+// The per-admin Telegram bot token is stored ENCRYPTED (enc:v1: envelope).
+// Without TELEGRAM_TOKEN_KEY the column is left NULL and the global
+// TELEGRAM_BOT_TOKEN env var remains the bot source.
+function storeToken(token) {
+  if (!token) return null;
+  try {
+    return encryptTelegramToken(token);
+  } catch (e) {
+    console.warn('⚠️', e.message);
+    console.warn('   Leaving telegram_bot_token NULL; the global TELEGRAM_BOT_TOKEN env var still works.');
+    return null;
+  }
+}
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -19,7 +34,7 @@ if (!SUPABASE_URL || !SERVICE_KEY || !ADMIN_EMAIL || !ADMIN_PASSWORD) {
   process.exit(1);
 }
 
-function hashPassword(password: string) {
+function hashPassword(password) {
   const salt = randomBytes(32).toString('hex');
   const derivedKey = scryptSync(password, salt, 64);
   return salt + ':' + derivedKey.toString('hex');
@@ -44,7 +59,7 @@ async function run() {
     password_hash: passwordHash,
     master_password_hash: masterHash,
     telegram_chat_id: TELEGRAM_CHAT_ID,
-    telegram_bot_token: TELEGRAM_BOT_TOKEN,
+    telegram_bot_token: storeToken(TELEGRAM_BOT_TOKEN),
     name: ADMIN_NAME,
     is_active: true,
   };

@@ -3,6 +3,8 @@ import { success, error, parseBody, getPaginationParams, getDateRangeParams, req
 import { getSupabase } from '@/lib/supabase-client';
 import { hrDate, hrUuid, payrollBatchSchema } from '@/lib/hr-validation';
 
+import type { Row } from '@/lib/types';
+
 const PAYROLL_COLUMNS = `id,employee_id,date,basic_salary,allowances,deductions,advance_deduction,
   custody_deduction,net_pay,journal_entry_id,payroll_period,created_at,employees(name,department)`;
 
@@ -25,10 +27,10 @@ export async function GET(req: NextRequest) {
     const { data, error: queryError, count } = await query.order('date', { ascending: false })
       .range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
-    const records = (data || []).map((record: any) => ({
+    const records = (data || []).map((record: Row) => ({
       ...record,
-      employee_name: record.employees?.name || null,
-      department: record.employees?.department || null,
+      employee_name: record.employees ? String((record.employees as Row).name) || null : null,
+      department: record.employees ? String((record.employees as Row).department) || null : null,
       employees: undefined,
     }));
     return success({ records, total: count || 0, page, pageSize });
@@ -49,7 +51,7 @@ export async function POST(req: NextRequest) {
       p_created_by: auth.userId,
     });
     if (rpcError) throw rpcError;
-    return success((data as Record<string, any>)?.records || [], 201);
+    return success((data as Row)?.records || [], 201);
   } catch (cause) {
     return handleApiError(cause);
   }

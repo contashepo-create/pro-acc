@@ -1,6 +1,6 @@
-import { NextRequest } from 'next/server';
-import { success, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, handleApiError, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
 
 const sb = () => getSupabase();
 
@@ -119,7 +119,7 @@ export async function GET(request: NextRequest) {
 
       if (sub) {
         const subData = sub as { end_date: string };
-        const daysToExpire = Math.ceil((new Date(subData.end_date).getTime() - now.getTime()) / 86400000);
+        const daysToExpire = Math.ceil((new Date(String(subData.end_date)).getTime() - now.getTime()) / 86400000);
         if (daysToExpire <= 14 && daysToExpire > 0) {
           notifications.push({
             id: 'subscription-expiring',

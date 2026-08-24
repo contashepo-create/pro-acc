@@ -1,5 +1,6 @@
-let result: any = { data: [], error: null };
-const db = { from: jest.fn(() => { const api: any = { select: () => api, eq: () => api, then: (resolve: any, reject: any) => Promise.resolve(result).then(resolve, reject) }; return api; }) };
+let result: { data: unknown; error: unknown } = { data: [], error: null };
+const db = { from: jest.fn(() => { const api: TestBuilder = { select: () => api, eq: () => api, then: <T1 = TestQueryResult, T2 = never>(resolve?: ((v: TestQueryResult) => T1 | PromiseLike<T1>) | null, reject?: ((e: unknown) => T2 | PromiseLike<T2>) | null) => Promise.resolve(result as TestQueryResult).then(resolve ?? undefined, reject ?? undefined) }; return api; }) };
+import type { TestBuilder, TestQueryResult } from './mocks';
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
 import { assertOpenFiscalPeriod } from '@/lib/fiscal-guard';
 

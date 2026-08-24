@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 /**
  * UBL 2.1 XML invoice builder for ZATCA-oriented exports.
  *
@@ -17,7 +18,7 @@ interface UBLInvoiceItem {
   total: number;
 }
 
-interface UBLInvoiceData {
+export interface UBLInvoiceData {
   /** Invoice UUID */
   uuid: string;
   /** Invoice number */
@@ -277,6 +278,5 @@ export function generateUBLInvoice(data: UBLInvoiceData): string {
 
 /** Raw SHA-256 digest helper. This is not a ZATCA signature, stamp or hash chain. */
 export function generateInvoiceHash(xmlContent: string): string {
-  const crypto = require('crypto');
-  return crypto.createHash('sha256').update(xmlContent).digest('base64');
+  return createHash('sha256').update(xmlContent).digest('base64');
 }

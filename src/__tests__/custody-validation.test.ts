@@ -9,7 +9,6 @@ import {
   custodyMoney,
   custodyText,
   openCustodySchema,
-  addCustodyFundsSchema,
   custodyExpenseSchema,
   settleCustodySchema,
   updateCustodySchema,

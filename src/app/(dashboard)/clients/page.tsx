@@ -17,18 +17,58 @@ import { Pagination } from '@/components/ui/Pagination';
 import { toast } from '@/components/ui/Toast';
 import { formatCurrency } from '@/lib/utils';
 
+interface ClientRow {
+  id: string;
+  name: string;
+  category?: string;
+  phone?: string;
+  city?: string;
+  tax_number?: string;
+  balance: number;
+  credit_limit: number;
+}
+interface ClientForm {
+  name: string;
+  type: string;
+  phone: string;
+  email: string;
+  address: string;
+  tax_number: string;
+  commercial_registration: string;
+  credit_limit: number;
+  contact_person?: string;
+  contact_person_phone?: string;
+  contact_person_email?: string;
+  city?: string;
+  region?: string;
+  country?: string;
+  postal_code?: string;
+  website?: string;
+  iban?: string;
+  bank_name?: string;
+  swift_code?: string;
+  opening_balance?: number;
+  opening_balance_type?: string;
+  payment_terms?: string;
+  notes?: string;
+  date_of_birth?: string;
+  gender?: string;
+  national_id?: string;
+  category?: string;
+}
+
 export default function ClientsPage() {
-  const [clients, setClients] = useState<any[]>([]);
+  const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingClient, setEditingClient] = useState<any>(null);
+  const [editingClient, setEditingClient] = useState<ClientRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [total, setTotal] = useState(0);
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<ClientForm>({
     name: '', type: 'client', phone: '', email: '', address: '',
     tax_number: '', commercial_registration: '', credit_limit: 0,
     contact_person: '', contact_person_phone: '', contact_person_email: '',
@@ -82,7 +122,7 @@ export default function ClientsPage() {
     finally { setSaving(false); }
   };
 
-  const handleEdit = async (client: any) => {
+  const handleEdit = async (client: ClientRow) => {
     try {
       const res = await fetch(`/api/clients/${client.id}`);
       const json = await res.json();
@@ -105,7 +145,7 @@ export default function ClientsPage() {
     } catch { toast.error('فشل تحميل البيانات'); }
   };
 
-  const handleDelete = async (client: any) => {
+  const handleDelete = async (client: ClientRow) => {
     try {
       const res = await fetch(`/api/clients/${client.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -119,17 +159,17 @@ export default function ClientsPage() {
   };
 
   const columns = [
-    { key: 'name', label: 'اسم العميل', sortable: true, render: (row: any) => (
+    { key: 'name', label: 'اسم العميل', sortable: true, render: (row: ClientRow) => (
       <div className="flex items-center gap-2">
         <span className="font-medium">{row.name}</span>
         {row.category && <Badge variant="info">{row.category}</Badge>}
       </div>
     ) },
-    { key: 'phone', label: 'الجوال', render: (row: any) => <span dir="ltr">{row.phone || '—'}</span> },
-    { key: 'city', label: 'المدينة', render: (row: any) => row.city || '—' },
+    { key: 'phone', label: 'الجوال', render: (row: ClientRow) => <span dir="ltr">{row.phone || '—'}</span> },
+    { key: 'city', label: 'المدينة', render: (row: ClientRow) => row.city || '—' },
     { key: 'tax_number', label: 'الرقم الضريبي' },
-    { key: 'balance', label: 'الرصيد', render: (row: any) => {
-      const bal = parseFloat(row.balance) || 0;
+    { key: 'balance', label: 'الرصيد', render: (row: ClientRow) => {
+      const bal = Number(row.balance) || 0;
       return (
         <div className="flex items-center gap-2">
           <span className={`font-bold ${bal > 0 ? 'text-green-600' : bal < 0 ? 'text-red-600' : 'text-text-muted'}`}>{formatCurrency(Math.abs(bal))}</span>
@@ -137,8 +177,8 @@ export default function ClientsPage() {
         </div>
       );
     }, sortable: true },
-    { key: 'credit_limit', label: 'الحد الائتماني', render: (row: any) => formatCurrency(row.credit_limit) },
-    { key: 'actions', label: 'إجراءات', render: (row: any) => (
+    { key: 'credit_limit', label: 'الحد الائتماني', render: (row: ClientRow) => formatCurrency(row.credit_limit) },
+    { key: 'actions', label: 'إجراءات', render: (row: ClientRow) => (
       <div className="flex items-center gap-2">
         <a href={`/clients/${row.id}/statement`} target="_blank" rel="noopener noreferrer">
           <Button variant="ghost" size="sm" title="كشف حساب"><FileText size={16} className="text-blue-600" /></Button>

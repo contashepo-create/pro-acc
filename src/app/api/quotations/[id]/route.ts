@@ -1,6 +1,8 @@
-import { NextRequest } from 'next/server';
-import { success, error, notFound, parseBody, requireApiAuth, handleApiError, requireModulePermission } from '@/lib/api-helpers';
-import { getSupabase } from '@/lib/supabase-client';
+import {NextRequest} from 'next/server';
+import {success, error, notFound, parseBody, handleApiError, requireModulePermission} from '@/lib/api-helpers';
+import {getSupabase} from '@/lib/supabase-client';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 
@@ -29,9 +31,9 @@ export async function GET(
       .order('id');
     if (itemsErr) throw itemsErr;
 
-    const result = quotation as Record<string, any>;
+    const result = quotation as Row;
     result.items = items || [];
-    result.contact_name = result.contacts?.name || null;
+    result.contact_name = result.contacts ? String((result.contacts as Row).name) || null : null;
 
     return success(result);
   } catch (err) {
@@ -53,8 +55,8 @@ export async function PUT(
     if (Object.keys(body).some((key)=>!allowed.has(key))) return error('يتضمن الطلب حقولاً غير قابلة للتعديل');
     if (body.items!==undefined && (!Array.isArray(body.items) || body.items.length<1 || body.items.length>1000)) return error('بنود عرض السعر غير صالحة');
     const payload={...body};
-    delete (payload as any).items;
-    delete (payload as any).tax_enabled; // حقل واجهة فقط — لا يُمرَّر إلى RPC
+    delete (payload as Row).items;
+    delete (payload as Row).tax_enabled; // حقل واجهة فقط — لا يُمرَّر إلى RPC
     const { data: updated, error: rpcErr } = await s.rpc('update_draft_quotation', {
       p_company_id:auth.companyId,
       p_quotation_id:id,

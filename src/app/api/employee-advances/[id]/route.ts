@@ -3,6 +3,8 @@ import { success, error, notFound, requireManagerOrAbove, handleApiError, requir
 import { getSupabase } from '@/lib/supabase-client';
 import { employeeAdvanceUpdateSchema, hrUuid } from '@/lib/hr-validation';
 
+import type { Row } from '@/lib/types';
+
 const ADVANCE_COLUMNS = `id,employee_id,amount,remaining_amount,date,reason,journal_entry_id,
   voucher_disbursement_id,custody_id,type,status,approved_at,created_at,employees(name)`;
 
@@ -20,7 +22,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (!hrUuid.safeParse(id).success) return error('معرف السلفة غير صالح');
     const advance = await findAdvance(auth.companyId, id);
     if (!advance) return notFound();
-    return success({ ...advance, employee_name: (advance as any).employees?.name || '', employees: undefined });
+    return success({ ...advance, employee_name: (advance as Row).employees ? String(((advance as Row).employees as Row).name) || '' : '', employees: undefined });
   } catch (cause) {
     return handleApiError(cause);
   }

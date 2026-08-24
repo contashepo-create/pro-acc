@@ -1,3 +1,4 @@
+import type { Row } from '@/lib/types';
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
@@ -98,15 +99,15 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'tax_returns', 'create');
-    const body = await parseBody<any>(request);
-    if (!validPeriod(body.period_from, body.period_to)) return error('فترة الضريبة غير صالحة');
-    if (body.status && !['draft', 'filed'].includes(body.status)) return error('حالة الإقرار غير صالحة');
+    const body = await parseBody<Row>(request);
+    if (!validPeriod(String(body.period_from), String(body.period_to))) return error('فترة الضريبة غير صالحة');
+    if (body.status && !['draft', 'filed'].includes(String(body.status))) return error('حالة الإقرار غير صالحة');
     if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) return error('الملاحظات طويلة جداً');
     const status = body.status || 'draft';
     const fromTime = Date.parse(`${body.period_from}T00:00:00Z`);
     const toTime = Date.parse(`${body.period_to}T00:00:00Z`);
     const today = new Date().toISOString().slice(0, 10);
-    if (body.period_to > today || Math.floor((toTime - fromTime) / 86400000) > 365) {
+    if (String(body.period_to) > today || Math.floor((toTime - fromTime) / 86400000) > 365) {
       return error('فترة الإقرار يجب ألا تتجاوز 366 يوماً أو تنتهي في المستقبل');
     }
     if (status === 'filed' && auth.role !== 'admin') {

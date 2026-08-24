@@ -7,9 +7,11 @@
  */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
@@ -20,28 +22,34 @@ function makeDb(db: Record<string, Row[]>) {
       (db[table] || []).filter((r) =>
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
-          if (o.op === 'gte') return r[o.col!] >= o.val;
-          if (o.op === 'lte') return r[o.col!] <= o.val;
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
+          if (o.op === 'gte') return (r[o.col!] as string) >= (o.val as string);
+          if (o.op === 'lte') return (r[o.col!] as string) <= (o.val as string);
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
       order: () => api,
       range: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
-  return { from, calls };
+  return {
+    from,
+    calls,
+    rpc: undefined as ((name: string, params?: Row) => Promise<{ data: unknown; error: unknown }>) | undefined,
+  };
 }
 
 let mockDb: ReturnType<typeof makeDb>;
@@ -61,7 +69,7 @@ function req(role = 'admin') {
     url: `http://localhost/api/suppliers/${SUPPLIER}/statement`,
     headers: { get: (k: string) => k === 'authorization' ? `Bearer ${token}` : null },
     cookies: { get: () => undefined },
-  } as any;
+  } as unknown as NextRequest;
 }
 
 function baseDb() {
@@ -88,10 +96,10 @@ function baseDb() {
 }
 
 // Stub the contact-statement RPCs used by the route.
-const rpcResults = new Map<string, any>();
-jest.spyOn(global as any, 'fetch'); // noop to keep eslint quiet if needed
+const rpcResults = new Map<string, { data: unknown; error: unknown }>();
+jest.spyOn(globalThis as { fetch: typeof fetch }, 'fetch'); // noop to keep eslint quiet if needed
 function installRpc() {
-  (mockDb as any).rpc = async (name: string) => {
+  mockDb.rpc = async (name: string) => {
     if (name === 'get_contact_statement_summary') return { data: { total_count: 1, opening_balance: 0, period_debit: 100, period_credit: 50, closing_balance: 50 }, error: null };
     if (name === 'get_contact_statement_lines') return { data: [{ line_id: 'l1', entry_date: '2026-01-01', entry_number: 1, reference_type: 'purchase_invoice', reference_id: 'pi1', description: 'فاتورة', debit: 100, credit: 0, running_balance: 100, entry_id: 'e1' }], error: null };
     return rpcResults.get(name) || { data: [], error: null };
@@ -106,31 +114,31 @@ beforeEach(() => {
 
 describe('supplier statement — security & tenant isolation', () => {
   test('returns 404 when a foreign-tenant admin requests this tenant supplier', async () => {
-    const res = await GET(req('foreign') as any, { params: Promise.resolve({ id: SUPPLIER }) } as any);
+    const res = await GET(req('foreign'), { params: Promise.resolve({ id: SUPPLIER }) });
     expect(res.status).toBe(404);
   });
 
   test('a foreign admin can view its own tenant supplier', async () => {
-    const res = await GET(req('foreign') as any, { params: Promise.resolve({ id: FOREIGN_SUPPLIER }) } as any);
+    const res = await GET(req('foreign'), { params: Promise.resolve({ id: FOREIGN_SUPPLIER }) });
     expect(res.status).toBe(200);
   });
 
   test('returns 400 for a malformed supplier id', async () => {
-    const res = await GET(req('admin') as any, { params: Promise.resolve({ id: 'not-a-uuid' }) } as any);
+    const res = await GET(req('admin'), { params: Promise.resolve({ id: 'not-a-uuid' }) });
     expect(res.status).toBe(400);
   });
 
   test('returns 404 for a non-supplier contact id', async () => {
     mockDb = makeDb({ ...baseDb(), contacts: [{ id: SUPPLIER, company_id: C1, name: 'عميل', type: 'client' }] });
     installRpc();
-    const res = await GET(req('admin') as any, { params: Promise.resolve({ id: SUPPLIER }) } as any);
+    const res = await GET(req('admin'), { params: Promise.resolve({ id: SUPPLIER }) });
     expect(res.status).toBe(404);
   });
 });
 
 describe('supplier statement — accounting correctness', () => {
   test('returns opening balance, entries and balance from the ledger', async () => {
-    const res = await GET(req('admin') as any, { params: Promise.resolve({ id: SUPPLIER }) } as any);
+    const res = await GET(req('admin'), { params: Promise.resolve({ id: SUPPLIER }) });
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.data.supplier.name).toBe('مورد');

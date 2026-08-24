@@ -13,16 +13,28 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatCurrency } from '@/lib/utils';
 
+interface BoqRow {
+  id: string;
+  code?: string;
+  description?: string;
+  unit?: string;
+  quantity: number;
+  unit_price: number;
+  project_name?: string;
+}
+interface ProjectOption { id: string; name: string; }
+interface BoqForm { project_id: string; code: string; description: string; unit: string; quantity: number; unit_price: number; }
+
 export default function BoqPage() {
-  const [items, setItems] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [items, setItems] = useState<BoqRow[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<BoqRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<BoqForm>({
     project_id: '', code: '', description: '', unit: 'وحدة', quantity: 0, unit_price: 0,
   });
 
@@ -44,6 +56,8 @@ export default function BoqPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -71,10 +85,10 @@ export default function BoqPage() {
         setForm({ project_id: '', code: '', description: '', unit: 'وحدة', quantity: 0, unit_price: 0 });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (item: any) => {
+  const handleEdit = async (item: BoqRow) => {
     try {
       const res = await fetch(`/api/boq/${item.id}`);
       const json = await res.json();
@@ -95,7 +109,7 @@ export default function BoqPage() {
     }
   };
 
-  const handleDelete = async (item: any) => {
+  const handleDelete = async (item: BoqRow) => {
     try {
       const res = await fetch(`/api/boq/${item.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -104,7 +118,7 @@ export default function BoqPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -114,13 +128,13 @@ export default function BoqPage() {
     { key: 'description', label: 'الوصف', sortable: true },
     { key: 'unit', label: 'الوحدة' },
     { key: 'quantity', label: 'الكمية', sortable: true },
-    { key: 'unit_price', label: 'سعر الوحدة', render: (row: any) => formatCurrency(row.unit_price) },
-    { key: 'total', label: 'الإجمالي', render: (row: any) => formatCurrency(row.quantity * row.unit_price) },
+    { key: 'unit_price', label: 'سعر الوحدة', render: (row: BoqRow) => formatCurrency(row.unit_price) },
+    { key: 'total', label: 'الإجمالي', render: (row: BoqRow) => formatCurrency(row.quantity * row.unit_price) },
     { key: 'project_name', label: 'المشروع', sortable: true },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: BoqRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -140,7 +154,7 @@ export default function BoqPage() {
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingItem(null); }} title={editingItem ? 'تعديل بند BOQ' : 'إضافة بند BOQ'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingItem(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select label="المشروع" value={form.project_id} onChange={(v) => setForm({...form, project_id: v})} options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} className="col-span-2" />
+            <Select label="المشروع" value={form.project_id} onChange={(v) => setForm({...form, project_id: v})} options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} className="col-span-2" />
             <Input label="الرمز" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
             <Input label="الوحدة" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} placeholder="وحدة، متر، كجم" />
             <Input label="الوصف" className="col-span-2" value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} />

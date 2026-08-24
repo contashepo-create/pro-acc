@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { success, serverError, requireApiAuth, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function GET(request: NextRequest) {
@@ -31,9 +33,9 @@ export async function GET(request: NextRequest) {
       .limit(1)
       .maybeSingle();
 
-    let subData: any = null;
+    let subData: unknown = null;
     if (subscription) {
-      const sub = subscription as Record<string, any>;
+      const sub = subscription as Row;
       let daysRemaining = 0;
       let isExpired = false;
       let isExpiringSoon = false;
@@ -41,7 +43,7 @@ export async function GET(request: NextRequest) {
       if (sub.end_date) {
         const now = new Date();
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const endDate = new Date(sub.end_date);
+        const endDate = new Date(String(sub.end_date));
         const diffTime = endDate.getTime() - today.getTime();
         daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         isExpired = daysRemaining <= 0 || sub.status === 'pending' || sub.status === 'cancelled';
@@ -49,7 +51,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Effective limits = plan base + add-ons
-      const plan = sub.subscription_plans as Record<string, any> | null;
+      const plan = sub.subscription_plans as Row | null;
       const extraStorageGb = Number(sub.extra_storage_gb || 0);
       subData = {
         id: sub.id,

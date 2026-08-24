@@ -24,7 +24,58 @@ import {
 // ==========================================
 // Standalone Top-Level Subcomponents (ESLint Safe)
 // ==========================================
-function CompanyBlock({ company, settings }: { company: any; settings: InvoiceTemplateSettings }) {
+type ViewCompany = {
+  name?: string;
+  tax_number?: string;
+  commercial_registration?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  logo_url?: string;
+  currency_symbol?: string;
+  locale?: string;
+};
+type ViewInvoiceItem = {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+};
+type ViewJournalLine = {
+  account_code?: string;
+  account_name?: string;
+  debit?: number;
+  credit?: number;
+};
+type ViewInvoice = {
+  id?: string;
+  number?: string;
+  date?: string;
+  due_date?: string;
+  status?: string;
+  client_name?: string;
+  client_phone?: string;
+  client_email?: string;
+  client_address?: string;
+  client_tax_number?: string;
+  client_commercial_registration?: string;
+  project_name?: string;
+  notes?: string;
+  subtotal?: number;
+  tax_rate?: number;
+  tax_amount?: number;
+  vat_rate?: number;
+  vat_amount?: number;
+  paid_amount?: number;
+  total?: number;
+  items?: ViewInvoiceItem[];
+  journal_lines?: ViewJournalLine[];
+};
+type ZatcaData = { qrData?: string };
+type InvoiceTitleInfo = { titleAr: string; titleEn: string; isSimplified: boolean; reason: string };
+type PaymentStatusInfo = { label: string; variant: 'warning' | 'info' | 'success' | 'danger' };
+
+function CompanyBlock({ company, settings }: { company: ViewCompany | null; settings: InvoiceTemplateSettings }) {
   return (
     <div className="space-y-1 text-right text-xs">
       {settings.showCompanyName && (
@@ -65,7 +116,7 @@ function CompanyBlock({ company, settings }: { company: any; settings: InvoiceTe
   );
 }
 
-function ClientBlock({ invoice, settings }: { invoice: any; settings: InvoiceTemplateSettings }) {
+function ClientBlock({ invoice, settings }: { invoice: ViewInvoice; settings: InvoiceTemplateSettings }) {
   return (
     <div className="space-y-1 text-right text-xs">
       <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
@@ -116,9 +167,10 @@ function ClientBlock({ invoice, settings }: { invoice: any; settings: InvoiceTem
   );
 }
 
-function LogoBlock({ company, settings, primaryColor, className = "w-14 h-14" }: { company: any; settings: InvoiceTemplateSettings; primaryColor: string; className?: string }) {
+function LogoBlock({ company, settings, primaryColor, className = "w-14 h-14" }: { company: ViewCompany | null; settings: InvoiceTemplateSettings; primaryColor: string; className?: string }) {
   if (!settings.showLogo) return null;
   return company?.logo_url ? (
+    // eslint-disable-next-line @next/next/no-img-element
     <img src={company.logo_url} alt={company.name} className={`${className} rounded-xl object-contain border border-slate-100 shadow-sm bg-white p-1`} />
   ) : (
     <div 
@@ -130,7 +182,7 @@ function LogoBlock({ company, settings, primaryColor, className = "w-14 h-14" }:
   );
 }
 
-function TitleBlock({ invoice, settings, titleInfo, primaryColor, status, align = 'left' }: { invoice: any; settings: InvoiceTemplateSettings; titleInfo: any; primaryColor: string; status: any; align?: 'left' | 'right' | 'center' }) {
+function TitleBlock({ invoice, settings, titleInfo, primaryColor, status, align = 'left' }: { invoice: ViewInvoice; settings: InvoiceTemplateSettings; titleInfo: InvoiceTitleInfo; primaryColor: string; status: PaymentStatusInfo; align?: 'left' | 'right' | 'center' }) {
   return (
     <div className={`text-${align}`}>
       <h1 className="text-xl font-black tracking-tight" style={{ color: primaryColor }}>
@@ -161,9 +213,9 @@ function TitleBlock({ invoice, settings, titleInfo, primaryColor, status, align 
 export default function InvoiceViewPage() {
   const params = useParams();
   const router = useRouter();
-  const [invoice, setInvoice] = useState<any>(null);
-  const [company, setCompany] = useState<any>(null);
-  const [zatcaData, setZatcaData] = useState<any>(null);
+  const [invoice, setInvoice] = useState<ViewInvoice | null>(null);
+  const [company, setCompany] = useState<ViewCompany | null>(null);
+  const [zatcaData, setZatcaData] = useState<ZatcaData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
@@ -264,11 +316,11 @@ export default function InvoiceViewPage() {
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
   if (!invoice) return null;
 
-  const vatRate = parseFloat(invoice.tax_rate || invoice.vat_rate || 0);
-  const vatAmount = parseFloat(invoice.tax_amount || invoice.vat_amount || 0);
-  const subtotal = parseFloat(invoice.subtotal || 0);
-  const total = parseFloat(invoice.total || 0);
-  const paidAmount = parseFloat(invoice.paid_amount || 0);
+  const vatRate = Number(invoice.tax_rate || invoice.vat_rate || 0);
+  const vatAmount = Number(invoice.tax_amount || invoice.vat_amount || 0);
+  const subtotal = Number(invoice.subtotal || 0);
+  const total = Number(invoice.total || 0);
+  const paidAmount = Number(invoice.paid_amount || 0);
   const remaining = Math.max(0, total - paidAmount);
   const currencySymbol = company?.currency_symbol || 'ر.س';
   const locale = company?.locale || 'ar-SA';
@@ -282,7 +334,7 @@ export default function InvoiceViewPage() {
     paid: { label: 'مدفوعة بالكامل', variant: 'success' },
     cancelled: { label: 'ملغاة', variant: 'danger' },
   };
-  const status = statusMap[invoice.status] || { label: invoice.status, variant: 'warning' };
+  const status: PaymentStatusInfo = statusMap[invoice.status ?? ''] || { label: invoice.status ?? '', variant: 'warning' };
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-bg-secondary pb-12">
@@ -533,13 +585,13 @@ export default function InvoiceViewPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
-                  {(invoice.items || []).map((item: any, i: number) => (
+                  {(invoice.items || []).map((item: ViewInvoiceItem, i: number) => (
                     <tr key={i} className="hover:bg-slate-50/50">
                       <td className="py-3.5 px-2 text-slate-400 text-xs font-mono">{i + 1}</td>
                       <td className="py-3.5 px-2 font-bold text-slate-800">{item.description}</td>
                       <td className="py-3.5 px-2 text-center text-slate-600 font-mono">{item.quantity}</td>
-                      <td className="py-3.5 px-2 text-center text-slate-600 font-mono">{formatCurrency(parseFloat(item.unit_price), locale, '')}</td>
-                      <td className="py-3.5 px-2 text-left font-black text-slate-900 font-mono">{formatCurrency(parseFloat(item.total), locale, currencySymbol)}</td>
+                      <td className="py-3.5 px-2 text-center text-slate-600 font-mono">{formatCurrency(Number(item.unit_price), locale, '')}</td>
+                      <td className="py-3.5 px-2 text-left font-black text-slate-900 font-mono">{formatCurrency(Number(item.total), locale, currencySymbol)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -551,7 +603,7 @@ export default function InvoiceViewPage() {
                 <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col items-center gap-1.5">
                   {zatcaData?.qrData ? (
                     <>
-                      <QRCode value={zatcaData.qrData} size={110} />
+                      <QRCode value={zatcaData.qrData ?? ''} size={110} />
                       <span className="text-[9px] font-bold text-slate-500">هيئة الزكاة والضريبة والجمارك</span>
                     </>
                   ) : (
@@ -654,13 +706,13 @@ export default function InvoiceViewPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-300">
-                  {(invoice.items || []).map((item: any, i: number) => (
+                  {(invoice.items || []).map((item: ViewInvoiceItem, i: number) => (
                     <tr key={i}>
                       <td className="p-2.5 text-center font-mono border-r border-l border-slate-300">{i + 1}</td>
                       <td className="p-2.5 font-bold text-slate-800 border-r border-slate-300">{item.description}</td>
                       <td className="p-2.5 text-center font-mono border-r border-slate-300">{item.quantity}</td>
-                      <td className="p-2.5 text-center font-mono border-r border-slate-300">{formatCurrency(parseFloat(item.unit_price), locale, '')}</td>
-                      <td className="p-2.5 text-left font-black font-mono border-r border-slate-300">{formatCurrency(parseFloat(item.total), locale, currencySymbol)}</td>
+                      <td className="p-2.5 text-center font-mono border-r border-slate-300">{formatCurrency(Number(item.unit_price), locale, '')}</td>
+                      <td className="p-2.5 text-left font-black font-mono border-r border-slate-300">{formatCurrency(Number(item.total), locale, currencySymbol)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -750,13 +802,13 @@ export default function InvoiceViewPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {(invoice.items || []).map((item: any, i: number) => (
+                {(invoice.items || []).map((item: ViewInvoiceItem, i: number) => (
                   <tr key={i}>
                     <td className="py-1.5 px-2 font-mono text-slate-400">{i + 1}</td>
                     <td className="py-1.5 px-2 font-semibold text-slate-800">{item.description}</td>
                     <td className="py-1.5 px-2 text-center font-mono">{item.quantity}</td>
-                    <td className="py-1.5 px-2 text-center font-mono">{formatCurrency(parseFloat(item.unit_price), locale, '')}</td>
-                    <td className="py-1.5 px-2 text-left font-bold font-mono">{formatCurrency(parseFloat(item.total), locale, currencySymbol)}</td>
+                    <td className="py-1.5 px-2 text-center font-mono">{formatCurrency(Number(item.unit_price), locale, '')}</td>
+                    <td className="py-1.5 px-2 text-left font-bold font-mono">{formatCurrency(Number(item.total), locale, currencySymbol)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -824,13 +876,13 @@ export default function InvoiceViewPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-purple-50">
-                  {(invoice.items || []).map((item: any, i: number) => (
+                  {(invoice.items || []).map((item: ViewInvoiceItem, i: number) => (
                     <tr key={i} className="hover:bg-purple-50/30">
                       <td className="p-3 text-purple-400 font-mono">{i + 1}</td>
                       <td className="p-3 font-bold text-slate-800">{item.description}</td>
                       <td className="p-3 text-center font-mono">{item.quantity}</td>
-                      <td className="p-3 text-center font-mono">{formatCurrency(parseFloat(item.unit_price), locale, '')}</td>
-                      <td className="p-3 text-left font-black text-purple-950 font-mono">{formatCurrency(parseFloat(item.total), locale, currencySymbol)}</td>
+                      <td className="p-3 text-center font-mono">{formatCurrency(Number(item.unit_price), locale, '')}</td>
+                      <td className="p-3 text-left font-black text-purple-950 font-mono">{formatCurrency(Number(item.total), locale, currencySymbol)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -897,13 +949,13 @@ export default function InvoiceViewPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {(invoice.items || []).map((item: any, i: number) => (
+                {(invoice.items || []).map((item: ViewInvoiceItem, i: number) => (
                   <tr key={i} className="hover:bg-amber-50/30">
                     <td className="p-2.5 text-center font-mono">{i + 1}</td>
                     <td className="p-2.5 font-bold text-slate-800">{item.description}</td>
                     <td className="p-2.5 text-center font-mono">{item.quantity}</td>
-                    <td className="p-2.5 text-center font-mono">{formatCurrency(parseFloat(item.unit_price), locale, '')}</td>
-                    <td className="p-2.5 text-left font-bold font-mono">{formatCurrency(parseFloat(item.total), locale, currencySymbol)}</td>
+                    <td className="p-2.5 text-center font-mono">{formatCurrency(Number(item.unit_price), locale, '')}</td>
+                    <td className="p-2.5 text-left font-bold font-mono">{formatCurrency(Number(item.total), locale, currencySymbol)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -939,6 +991,7 @@ export default function InvoiceViewPage() {
           <div className="max-w-[340px] mx-auto bg-white p-4 shadow border border-slate-300 font-mono text-xs text-black invoice-document">
             <div className="text-center pb-2 border-b border-dashed border-black">
               {settings.showLogo && company?.logo_url && (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img src={company.logo_url} alt="" className="w-12 h-12 mx-auto mb-1 object-contain" />
               )}
               <h2 className="font-black text-sm">{company?.name}</h2>
@@ -965,11 +1018,11 @@ export default function InvoiceViewPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-dotted divide-slate-300">
-                {(invoice.items || []).map((item: any, i: number) => (
+                {(invoice.items || []).map((item: ViewInvoiceItem, i: number) => (
                   <tr key={i}>
                     <td className="py-1">{item.description}</td>
                     <td className="py-1 text-center">{item.quantity}</td>
-                    <td className="py-1 text-left">{parseFloat(item.total).toFixed(2)}</td>
+                    <td className="py-1 text-left">{Number(item.total).toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -992,7 +1045,7 @@ export default function InvoiceViewPage() {
 
             {settings.showQR && zatcaData?.qrData && (
               <div className="mt-4 pt-2 border-t border-dashed border-black text-center flex flex-col items-center">
-                <QRCode value={zatcaData.qrData} size={110} />
+                <QRCode value={zatcaData.qrData ?? ''} size={110} />
                 <p className="text-[9px] mt-1">شكراً لزيارتكم</p>
               </div>
             )}
@@ -1031,12 +1084,12 @@ export default function InvoiceViewPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {invoice.journal_lines.map((jl: any, i: number) => (
+                    {(invoice.journal_lines || []).map((jl: ViewJournalLine, i: number) => (
                       <tr key={i} className="text-slate-600 border-b border-slate-100/50 last:border-0">
                         <td className="p-2 font-medium">{jl.account_name}</td>
                         <td className="p-2 text-center font-mono text-slate-400">{jl.account_code}</td>
-                        <td className="p-2 text-left font-mono font-bold text-slate-800">{parseFloat(jl.debit) > 0 ? formatCurrency(parseFloat(jl.debit), locale, '') : '—'}</td>
-                        <td className="p-2 text-left font-mono font-bold text-slate-800">{parseFloat(jl.credit) > 0 ? formatCurrency(parseFloat(jl.credit), locale, '') : '—'}</td>
+                        <td className="p-2 text-left font-mono font-bold text-slate-800">{Number(jl.debit) > 0 ? formatCurrency(Number(jl.debit), locale, '') : '—'}</td>
+                        <td className="p-2 text-left font-mono font-bold text-slate-800">{Number(jl.credit) > 0 ? formatCurrency(Number(jl.credit), locale, '') : '—'}</td>
                       </tr>
                     ))}
                   </tbody>

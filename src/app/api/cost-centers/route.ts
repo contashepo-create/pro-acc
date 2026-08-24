@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { success, error, parseBody, requireApiAuth, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { success, error, parseBody, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 
 const sb = () => getSupabase();
 
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
     const { data, error: err } = await s.from('cost_centers')
       .insert({
         company_id: auth.companyId,
-        code: code.toUpperCase(),
+        code: String(code).toUpperCase(),
         name,
         description: description || null,
         parent_id: parent_id || null,
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       user_id: auth.userId,
       action: 'create_cost_center',
       table_name: 'cost_centers',
-      record_id: data.id,
+      record_id: String(data?.id ?? ''),
       new_values: data,
     });
 

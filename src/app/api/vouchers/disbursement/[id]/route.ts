@@ -3,6 +3,8 @@ import { success, error, notFound, requireModulePermission, requireManagerOrAbov
 import { getSupabase } from '@/lib/supabase-client';
 import { voucherUpdateSchema } from '@/lib/validation';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 export async function GET(
@@ -29,14 +31,14 @@ export async function GET(
       .eq('company_id', ctx.companyId);
 
     return success({
-      ...(voucher as Record<string, any>),
-      contact_name: (voucher as Record<string, any>).contacts?.name || null,
-      bank_safe_name: (voucher as Record<string, any>).banks_safes?.name || null,
-      journal_entry_number: (voucher as Record<string, any>).journal_entries?.number || null,
-      employee_name: (voucher as Record<string, any>).employees?.name || null,
-      invoice_items: (invoiceItems || []).map((di: any) => ({
+      ...(voucher as Row),
+      contact_name: (voucher as Row).contacts ? String(((voucher as Row).contacts as Row).name) || null : null,
+      bank_safe_name: (voucher as Row).banks_safes ? String(((voucher as Row).banks_safes as Row).name) || null : null,
+      journal_entry_number: (voucher as Row).journal_entries ? ((voucher as Row).journal_entries as Row).number || null : null,
+      employee_name: (voucher as Row).employees ? String(((voucher as Row).employees as Row).name) || null : null,
+      invoice_items: (invoiceItems || []).map((di: Row) => ({
         ...di,
-        invoice_number: di.purchase_invoices?.invoice_number || null,
+        invoice_number: di.purchase_invoices ? String((di.purchase_invoices as Row).invoice_number) || null : null,
       })),
     });
   } catch (err) {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, ShoppingCart, DollarSign } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -15,13 +15,24 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface PosSaleRow {
+  id: string;
+  number?: string;
+  date?: string;
+  total: number;
+  payment_method?: string;
+  status?: string;
+}
+interface TerminalOption { id: string; name: string; }
+interface PosForm { terminal_id: string; total: string; payment_method: string; }
+
 export default function POSPage() {
-  const [sales, setSales] = useState<any[]>([]);
-  const [terminals, setTerminals] = useState<any[]>([]);
+  const [sales, setSales] = useState<PosSaleRow[]>([]);
+  const [terminals, setTerminals] = useState<TerminalOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<any>({ terminal_id: '', total: '', payment_method: 'cash' });
+  const [form, setForm] = useState<PosForm>({ terminal_id: '', total: '', payment_method: 'cash' });
   const [error, setError] = useState('');
 
   const fetchData = async () => {
@@ -40,6 +51,8 @@ export default function POSPage() {
     }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -61,19 +74,19 @@ export default function POSPage() {
         setForm({ terminal_id: '', total: '', payment_method: 'cash' });
         fetchData();
       } else setError(json.message || 'فشل الحفظ');
-    } catch (e:any) { setError('خطأ: ' + e.message); } finally { setSaving(false); }
+    } catch (e) { setError('خطأ: ' + (e instanceof Error ? e.message : '')); } finally { setSaving(false); }
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('pos_sale', row.number) },
-    { key: 'date', label: 'التاريخ', sortable: true, render: (r:any) => formatDate(r.date) },
-    { key: 'total', label: 'الإجمالي', render: (r:any) => formatCurrency(r.total) },
-    { key: 'payment_method', label: 'طريقة الدفع', render: (r:any) => <Badge>{r.payment_method}</Badge> },
-    { key: 'status', label: 'الحالة', render: (r:any) => <Badge variant={r.status === 'completed' ? 'success' : 'danger'}>{r.status}</Badge> },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: PosSaleRow) => formatDocumentNumber('pos_sale', row.number) },
+    { key: 'date', label: 'التاريخ', sortable: true, render: (r: PosSaleRow) => formatDate(r.date) },
+    { key: 'total', label: 'الإجمالي', render: (r: PosSaleRow) => formatCurrency(r.total) },
+    { key: 'payment_method', label: 'طريقة الدفع', render: (r: PosSaleRow) => <Badge>{r.payment_method}</Badge> },
+    { key: 'status', label: 'الحالة', render: (r: PosSaleRow) => <Badge variant={r.status === 'completed' ? 'success' : 'danger'}>{r.status}</Badge> },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => <ActionButtons item={row} />,
+      render: (row: PosSaleRow) => <ActionButtons item={row} />,
     },
   ];
 
@@ -86,8 +99,8 @@ export default function POSPage() {
       {sales.length === 0 ? <EmptyState title="لا توجد مبيعات" description="ابدأ بعملية بيع جديدة" actionLabel="بيع جديد" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={sales} searchable searchKeys={['number']} />}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="بيع جديد - نقطة بيع" size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setShowModal(false)}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ البيع'}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Select label="نقطة البيع *" value={form.terminal_id} onChange={(v)=>setForm({...form, terminal_id: v})} options={[{ value: '', label: 'اختر نقطة البيع' }, ...terminals.map((t:any)=>({ value: t.id, label: t.name }))]} />
-          <Input label="الإجمالي *" type="number" value={form.total} onChange={(e:any)=>setForm({...form, total: e.target.value})} placeholder="0" />
+          <Select label="نقطة البيع *" value={form.terminal_id} onChange={(v)=>setForm({...form, terminal_id: v})} options={[{ value: '', label: 'اختر نقطة البيع' }, ...terminals.map((t: TerminalOption) => ({ value: t.id, label: t.name }))]} />
+          <Input label="الإجمالي *" type="number" value={form.total} onChange={(e)=>setForm({...form, total: e.target.value})} placeholder="0" />
           <Select label="طريقة الدفع" value={form.payment_method} onChange={(v)=>setForm({...form, payment_method: v})} options={[{value:'cash',label:'نقدي'},{value:'card',label:'بطاقة'},{value:'transfer',label:'تحويل'}]} />
         </div>
       </Modal>

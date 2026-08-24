@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
+import type { Row } from '@/lib/types';
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,7 +16,7 @@ export async function GET(request: NextRequest) {
       p_as_of: asOf,
     });
     if (queryError) throw queryError;
-    return success((data || []).map((row: Record<string, unknown>) => ({
+    return success(((data ?? []) as Row[]).map((row: Row) => ({
       contact_id: row.contact_id,
       contact_name: row.contact_name,
       balance: Number(row.balance) || 0,

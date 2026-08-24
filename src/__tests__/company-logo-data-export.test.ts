@@ -5,13 +5,15 @@
  */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
   const calls: Array<{ table: string; ops: Op[] }> = [];
-  const rpcResults = new Map<string, any>();
+  const rpcResults = new Map<string, { data: unknown; error: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = [];
     calls.push({ table, ops });
@@ -19,27 +21,29 @@ function makeDb(db: Record<string, Row[]>) {
       (db[table] || []).filter((r) =>
         ops.every((o) => {
           if (o.op === 'eq') return r[o.col!] === o.val;
-          if (o.op === 'in') return (o.val as any[]).includes(r[o.col!]);
+          if (o.op === 'in') return (o.val as unknown[]).includes(r[o.col!]);
           if (o.op === 'lt') return String(r[o.col!]) < String(o.val);
           if (o.op === 'gte') return String(r[o.col!]) >= String(o.val);
           if (o.op === 'lte') return String(r[o.col!]) <= String(o.val);
           return true;
         })
       );
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
       order: () => api, limit: () => api, range: () => api, is: () => api, neq: () => api,
-      or: () => api, lt: (col: string, val: any) => { ops.push({ op: 'lt', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
-      insert: (payload: any) => { db[table] = [...(db[table] || []), payload]; return api; },
+      or: () => api, lt: (col: string, val: unknown) => { ops.push({ op: 'lt', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
+      insert: (payload: Row | Row[]) => { db[table] = [...(db[table] || []), ...(Array.isArray(payload) ? payload : [payload])]; return api; },
       update: () => api, delete: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) =>
-        Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
@@ -70,10 +74,10 @@ const EXPORT_ID = '00000000-0000-4000-8000-00000000c001';
 const CID = '00000000-0000-4000-8000-00000000c0a1';
 const DOC_ID = '00000000-0000-4000-8000-00000000c0b1';
 
-function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: any) {
+function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: Row) {
   const token = createToken('u1', role, 0);
   return { url, method, nextUrl: new URL(url), headers: { get: (k: string) => k === 'authorization' ? `Bearer ${token}` : null },
-    cookies: { get: () => undefined }, json: async () => body } as any;
+    cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 
 function baseDb() {
@@ -203,9 +207,9 @@ describe('company/data-export/[id]/download GET', () => {
   test('streams the storage object as a download', async () => {
     const future = new Date(Date.now() + 86400000).toISOString();
     mockDb = makeDb({ ...baseDb(), company_data_exports: [{ id: EXPORT_ID, company_id: C1, status: 'ready', download_url: `storage:company-exports/${C1}/${EXPORT_ID}.json`, expires_at: future }] });
-    const fetchMock = jest.spyOn(global as any, 'fetch').mockResolvedValue({
+    const fetchMock = jest.spyOn(globalThis as { fetch: typeof fetch }, 'fetch').mockResolvedValue({
       ok: true, body: '{}', headers: { get: () => '2' },
-    });
+    } as unknown as Response);
     try {
       const res = await downloadGET(req('admin', 'GET', 'http://localhost/x'), { params: Promise.resolve({ id: EXPORT_ID }) });
       expect(res.status).toBe(200);
@@ -256,9 +260,9 @@ describe('contracts/[id]/documents/[documentId] GET', () => {
 
   test('streams a stored document', async () => {
     mockDb = makeDb({ ...baseDb(), contract_documents: [{ id: DOC_ID, contract_id: CID, company_id: C1, file_data: `storage:contract-documents/${C1}/${CID}/a.pdf`, filename: 'doc.pdf', content_type: 'application/pdf' }] });
-    const fetchMock = jest.spyOn(global as any, 'fetch').mockResolvedValue({
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true, body: '%PDF-1.4', headers: { get: () => '10' },
-    });
+    } as unknown as Response);
     try {
       const res = await contractDocGET(req('admin', 'GET', 'http://localhost/x'), { params: Promise.resolve({ id: CID, documentId: DOC_ID }) });
       expect(res.status).toBe(200);

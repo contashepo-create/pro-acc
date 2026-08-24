@@ -80,4 +80,13 @@ regexes = [
   # reported because these markers never appear in issued credentials.
   '''(?i)(test-secret-key-for-unit-tests-32chars|test-admin-secret-key-for-unit-tests-32chars|user-test-secret-that-is-at-least-32-characters|admin-test-secret-that-is-at-least-32-characters|tenant-entitlement-test-secret-32-characters|test-admin-separate-secret-32chars|test-portal-secret-that-is-at-least-32-characters-long|portal-test-secret-at-least-32-characters-long|expected-secret-value-32chars)''',
   '''postgres(?:ql)?://(postgres:postgres|user:password)@''',
+  # Pinned known-answer test vectors for the Telegram token at-rest
+  # encryption (migration 081). Non-issued deterministic fixtures shared by
+  # src/__tests__/telegram-token-crypto.test.ts,
+  # src/__tests__/admin-telegram-token-route.test.ts,
+  # scripts/lib/telegram-token-crypto.mjs, and scripts/test-migrations.mjs.
+  '''1234567890:AAKd8sTz4xQ9mPwRvUy2cE3fG5hJ6lN0bXy''',
+  '''00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff''',
+  '''a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90''',
+  '''enc:v1:ABEiM0RVZneImaq7:0ZtcELkpsME3Ckshc86Z7A==:FN2oOYfI8nRm9ei0\+Q\+w3ubNA9qsJjO9WNnGNJ1G/inZNvR996U0dMhEhKWRYA==''',
 ]

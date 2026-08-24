@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error } from '@/lib/api-helpers';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -65,7 +67,7 @@ export async function GET(req: NextRequest) {
             features, features_modules
           )
         `)
-        .eq('company_id', (user as any).company_id)
+        .eq('company_id', (user as Row).company_id)
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -105,7 +107,7 @@ export async function GET(req: NextRequest) {
     if (usersError) throw usersError;
 
     return success(users || []);
-  } catch (e: any) {
+  } catch (e: unknown) {
     return adminJsonError(e);
   }
 }

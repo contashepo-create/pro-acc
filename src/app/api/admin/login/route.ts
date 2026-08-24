@@ -8,6 +8,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { randomInt, randomBytes, createHash } from 'crypto';
 import { auditLog } from '@/lib/admin-auth';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 function cleanEnv(s: string): string {
@@ -73,7 +75,9 @@ export async function POST(request: NextRequest) {
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
 
-    const a = admin as Record<string, any>;
+    const a = admin as Row;
+    const aId = String(a.id);
+    const aEmail = String(a.email || '');
     if (!a.is_active) {
       return error('هذا الحساب غير نشط', 403);
     }
@@ -81,7 +85,7 @@ export async function POST(request: NextRequest) {
     step = 'verify_password';
     let valid = false;
     try {
-      valid = await verifyPassword(password, a.password_hash);
+      valid = await verifyPassword(password, String(a.password_hash));
     } catch (e) {
       console.error(`[ADMIN LOGIN FAILED at ${step}]:`, e);
       return error(e instanceof Error ? e.message : 'حدث خطأ غير متوقع', 500);
@@ -108,11 +112,11 @@ export async function POST(request: NextRequest) {
 
     step = 'set_session';
     const sessionId = randomBytes(32).toString('hex');
-    const sessionPointer = `${a.id}.${sessionId}`;
+    const sessionPointer = `${aId}.${sessionId}`;
     try {
-      await setSession(a.id, {
+      await setSession(aId, {
         sessionId,
-        email: (a.email || '').toLowerCase(),
+        email: aEmail.toLowerCase(),
         codeHash: createHash('sha256').update(code).digest('hex'),
         step: 'code_sent',
         codeSent: false,
@@ -139,7 +143,7 @@ export async function POST(request: NextRequest) {
       // SECURITY: NEVER log the 2FA code even if Telegram fails.
       // Previously the code was printed to server logs which allowed anyone with
       // log access (or noisy error-tracking pipelines) to bypass 2FA.
-      console.warn(`[ADMIN 2FA] Telegram not configured or failed to send code for ${a.email}`);
+      console.warn(`[ADMIN 2FA] Telegram not configured or failed to send code for ${aEmail}`);
       const botToken = cleanEnv(process.env.TELEGRAM_BOT_TOKEN || '');
       if (botToken) {
         return error('تعذر إرسال رمز التحقق عبر تيليجرام. حاول مرة أخرى أو تواصل مع الدعم', 500);
@@ -160,7 +164,7 @@ export async function POST(request: NextRequest) {
 
     const response = success({
       message: 'تم إرسال رمز التحقق إلى تيليجرام',
-      email: a.email,
+      email: aEmail,
     });
 
     // admin_session is a short-lived server-side pointer (UUID), NOT a JWT.
@@ -171,7 +175,7 @@ export async function POST(request: NextRequest) {
 
     // Audit successful step-1
     try {
-      await auditLog(a.id, 'admin_login_step1', 'Password verified, 2FA code sent');
+      await auditLog(aId, 'admin_login_step1', 'Password verified, 2FA code sent');
     } catch {}
 
     return response;

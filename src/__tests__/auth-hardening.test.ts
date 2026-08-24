@@ -34,6 +34,7 @@ jest.mock('@/lib/email', () => ({
 }));
 
 import { POST as registerPOST, GET as registerGET } from '@/app/api/auth/register/route';
+import type { NextRequest } from 'next/server';
 
 // ---------------------------------------------------------------------------
 
@@ -132,7 +133,7 @@ describe('Rate-limit email sanitization (PostgREST injection)', () => {
 
 describe('Stateless math CAPTCHA', () => {
   async function makeChallenge() {
-    const res = await registerGET({} as any);
+    const res = await registerGET();
     const json = await res.json();
     return json.data;
   }
@@ -171,11 +172,11 @@ describe('Stateless math CAPTCHA', () => {
 // ---------------------------------------------------------------------------
 
 describe('Register route — CAPTCHA mandatory', () => {
-  function fakeRequest(body: any) {
+  function fakeRequest(body: Record<string, unknown>) {
     return {
       json: async () => body,
       headers: { get: () => null },
-    } as any;
+    } as unknown as NextRequest;
   }
 
   test('rejects registration that omits CAPTCHA fields entirely', async () => {
@@ -196,7 +197,7 @@ describe('Register route — CAPTCHA mandatory', () => {
   });
 
   test('rejects registration with a wrong CAPTCHA answer', async () => {
-    const { challengeId } = await (await registerGET({} as any)).json().then((j: any) => j.data);
+    const { challengeId } = await (await registerGET()).json().then((j: { data: { challengeId: string } }) => j.data);
     const res = await registerPOST(fakeRequest({
       companyName: 'شركة الاختبار',
       name: 'مستخدم',
@@ -221,7 +222,7 @@ describe('Double-submit CSRF check', () => {
       cookies: {
         get: (k: string) => (k === 'csrf_token' && cookie !== undefined ? { value: cookie } : undefined),
       },
-    } as any;
+    } as unknown as NextRequest;
   }
 
   test('allows safe methods without token', () => {

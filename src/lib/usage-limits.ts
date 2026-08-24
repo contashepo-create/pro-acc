@@ -1,3 +1,4 @@
+
 /**
  * Usage limits for the new three-tier pricing model.
  * Kept as a standalone module so routes that are still on the older
@@ -68,7 +69,7 @@ export async function checkUsageLimit(
   currentCount?: number
 ): Promise<{ allowed: boolean; message?: string; limit: number | null; current: number }> {
   const { checkPlanLimit } = await import('@/lib/plan-limits');
-  return checkPlanLimit(companyId, type, currentCount) as any;
+  return checkPlanLimit(companyId, type, currentCount);
 }
 
 export async function checkModuleAccess(companyId: string, module: string): Promise<boolean> {

@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { hashPassword } from '@/lib/auth';
 import { passwordPolicy } from '@/lib/validation';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -45,7 +47,7 @@ export async function PUT(
     const auth = await requireAdmin(request);
     const { id } = await params;
     const s = sb();
-    const body = await parseBody<Record<string, any>>(request);
+    const body = await parseBody<Record<string, unknown>>(request);
 
     const { data: targetUser } = await s
       .from('users')
@@ -57,7 +59,7 @@ export async function PUT(
     if (!targetUser) return notFound();
 
     const target = targetUser as { id: string; role: string; email: string; name: string; is_active: boolean; token_version?: number };
-    const updateData: Record<string, any> = {};
+    const updateData: Record<string, unknown> = {};
 
     if (id === auth.userId && body.role && body.role !== 'admin') {
       return error('لا يمكنك تغيير دورك الخاص. يجب أن يبقى حساب واحد على الأقل بصلاحيات مدير');
@@ -67,14 +69,14 @@ export async function PUT(
       return error('لا يمكنك تعطيل حسابك الخاص');
     }
 
-    if (body.name !== undefined) updateData.name = body.name.trim();
+    if (body.name !== undefined) updateData.name = String(body.name).trim();
     let emailChanged = false;
     let newEmailForVerify = '';
     if (body.email !== undefined) {
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(body.email))) {
         return error('صيغة البريد الإلكتروني غير صحيحة');
       }
-      const newEmail = body.email.toLowerCase().trim();
+      const newEmail = String(body.email).toLowerCase().trim();
       const { data: emailExists } = await s.from('users')
         .select('id')
         .ilike('email', newEmail)
@@ -88,7 +90,7 @@ export async function PUT(
       updateData.email = newEmail;
       // Changing a login email is an identity change: the new address must be
       // proven (same anti-hijack policy as the self-service profile route).
-      if (newEmail !== String((target as Record<string, any>).email || '').toLowerCase()) {
+      if (newEmail !== String((target as Row).email || '').toLowerCase()) {
         emailChanged = true;
         newEmailForVerify = newEmail;
       }
@@ -96,7 +98,7 @@ export async function PUT(
     
     if (body.role !== undefined) {
       const validRoles = ['admin', 'accountant', 'manager', 'supervisor'];
-      if (!validRoles.includes(body.role)) {
+      if (!validRoles.includes(String(body.role))) {
         return error('الدور غير صالح');
       }
       
@@ -120,7 +122,7 @@ export async function PUT(
       if (!passwordPolicy.safeParse(body.password).success) {
         return error('كلمة المرور لا تفي بسياسة الأمان');
       }
-      updateData.password_hash = await hashPassword(body.password);
+      updateData.password_hash = await hashPassword(String(body.password));
       updateData.token_version = (Number(target.token_version) || 0) + 1;
     }
     if (body.phone !== undefined) updateData.phone = body.phone || null;

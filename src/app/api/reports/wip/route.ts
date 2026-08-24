@@ -3,6 +3,8 @@ import { success, handleApiError, requireModulePermission } from '@/lib/api-help
 import { getSupabase } from '@/lib/supabase-client';
 import { computeWip, type WipInput } from '@/lib/construction';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 
 /**
@@ -19,9 +21,9 @@ export async function GET(request: NextRequest) {
       p_company_id: auth.companyId, p_active_only: true,
     });
     if (projectsError) throw projectsError;
-    const projectIds = (projects || []).map((project: any) => project.project_id);
-    let costsByProject: Record<string, number> = {};
-    let billedByProject: Record<string, number> = {};
+    const projectIds = ((projects ?? []) as Row[]).map((project: Row) => String(project.project_id));
+    const costsByProject: Record<string, number> = {};
+    const billedByProject: Record<string, number> = {};
 
     if (projectIds.length > 0) {
       const { sumProjectsJournal } = await import('@/lib/project-costs');
@@ -33,14 +35,14 @@ export async function GET(request: NextRequest) {
       ]);
       if (billingResult.error) throw billingResult.error;
       for (const id of projectIds) costsByProject[id] = journalMap[id]?.expenses || 0;
-      for (const row of billingResult.data || []) billedByProject[row.project_id] = parseFloat(String(row.net_billed)) || 0;
+      for (const row of (billingResult.data ?? []) as Row[]) billedByProject[String(row.project_id)] = parseFloat(String(row.net_billed)) || 0;
     }
 
-    const rows = (projects || []).map((p: any) => {
+    const rows = ((projects ?? []) as Row[]).map((p: Row) => {
       const input: WipInput = {
         contractAmount: parseFloat(String(p.contract_value)) || 0,
-        costsIncurred: costsByProject[p.project_id] || 0,
-        billedToDate: billedByProject[p.project_id] || 0,
+        costsIncurred: costsByProject[String(p.project_id)] || 0,
+        billedToDate: billedByProject[String(p.project_id)] || 0,
       };
       const wip = computeWip(input);
       return {
@@ -51,7 +53,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Totals
-    const totals = rows.reduce((acc: Record<string, number>, r: Record<string, number>) => {
+    const totals = rows.reduce((acc: Record<string, number>, r) => {
       acc.contract += r.contract_amount;
       acc.costs += r.costs_incurred;
       acc.billed += r.billed_to_date;

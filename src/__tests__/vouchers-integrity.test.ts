@@ -7,57 +7,60 @@
  */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 
+// The DB-backed share of the per-user rate limit is out of scope for these
+// suites (the memory fast path is what they exercise); the authoritative
+// store is covered by shared-rate-limit.test.ts + the 077 migration smoke.
+jest.mock('@/lib/shared-rate-limit', () => ({ hitSharedRateLimit: async () => ({ allowed: true, retryAfterSeconds: 0 }) }));
 import { createToken } from '@/lib/auth';
+import type { TestBuilder } from './mocks';
+import type { NextRequest } from 'next/server';
 
-type Row = Record<string, any>;
-type Op = { op: string; col?: string; val?: any };
-type RpcResult = { data: any; error: any };
+type Row = Record<string, unknown>;
+type Op = { op: string; col?: string; val?: unknown };
+type RpcResult = { data: unknown; error: unknown };
 
 function makeDb(db: Record<string, Row[]>) {
-  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: any } }> = [];
-  const rpcCalls: Array<{ name: string; params: any }> = [];
+  const calls: Array<{ table: string; ops: Op[]; mut: { kind?: string; payload?: Row | Row[] } }> = [];
+  const rpcCalls: Array<{ name: string; params?: Row }> = [];
   const rpcResults = new Map<string, RpcResult>();
   const from = (table: string) => {
     const ops: Op[] = [];
-    const mut: { kind?: string; payload?: any } = {};
+    const mut: { kind?: string; payload?: Row | Row[] } = {};
     calls.push({ table, ops, mut });
     const rows = () => (db[table] || []).filter((row) => ops.every((op) => {
       if (op.op === 'eq') return row[op.col!] === op.val;
       if (op.op === 'neq') return row[op.col!] !== op.val;
-      if (op.op === 'in') return op.val.includes(row[op.col!]);
+      if (op.op === 'in') return (op.val as unknown[]).includes(row[op.col!]);
       if (op.op === 'gte') return String(row[op.col!]) >= String(op.val);
       if (op.op === 'lte') return String(row[op.col!]) <= String(op.val);
       return true;
     }));
-    const api: any = {
+    const api: TestBuilder = {
       select: () => api,
-      eq: (col: string, val: any) => { ops.push({ op: 'eq', col, val }); return api; },
-      neq: (col: string, val: any) => { ops.push({ op: 'neq', col, val }); return api; },
-      in: (col: string, val: any) => { ops.push({ op: 'in', col, val }); return api; },
-      gte: (col: string, val: any) => { ops.push({ op: 'gte', col, val }); return api; },
-      lte: (col: string, val: any) => { ops.push({ op: 'lte', col, val }); return api; },
+      eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
+      neq: (col: string, val: unknown) => { ops.push({ op: 'neq', col, val }); return api; },
+      in: (col: string, val: unknown) => { ops.push({ op: 'in', col, val }); return api; },
+      gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
+      lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
       is: () => api, or: () => api, order: () => api, limit: () => api, range: () => api,
-      insert: (payload: any) => { mut.kind = 'insert'; mut.payload = payload; return api; },
-      update: (payload: any) => { mut.kind = 'update'; mut.payload = payload; return api; },
+      insert: (payload: Row | Row[]) => { mut.kind = 'insert'; mut.payload = payload; return api; },
+      update: (payload: Row) => { mut.kind = 'update'; mut.payload = payload; return api; },
       delete: () => { mut.kind = 'delete'; return api; },
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
-      then: (ok: any, fail: any) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok, fail),
+      then: <T1 = { data: unknown; error: unknown; count?: number }, T2 = never>(
+        ok?: ((v: { data: unknown; error: unknown; count?: number }) => T1 | PromiseLike<T1>) | null,
+        fail?: ((e: unknown) => T2 | PromiseLike<T2>) | null,
+      ) => Promise.resolve({ data: rows(), error: null, count: rows().length }).then(ok ?? undefined, fail ?? undefined),
     };
     return api;
   };
   const client = {
     from, calls, rpcCalls, rpcResults,
-    rpc: async (name: string, params: any) => {
+    rpc: async (name: string, params?: Row): Promise<RpcResult> => {
       rpcCalls.push({ name, params });
       return rpcResults.get(name) || { data: { id: `${name}-id`, status: 'posted' }, error: null };
     },
-  } as {
-    from: (table: string) => any;
-    calls: typeof calls;
-    rpcCalls: Array<{ name: string; params: any }>;
-    rpcResults: Map<string, unknown>;
-    rpc: (name: string, params: any) => Promise<any>;
   };
   return client;
 }
@@ -107,14 +110,14 @@ function baseDb() {
   } as Record<string, Row[]>;
 }
 
-function request(body?: any, method = 'POST', url = 'http://localhost/api/test') {
+function request(body?: Row, method = 'POST', url = 'http://localhost/api/test') {
   const token = createToken(USER, 'admin');
   return {
     url, method,
     headers: { get: (key: string) => key === 'authorization' ? `Bearer ${token}` : null },
     cookies: { get: () => undefined },
     json: async () => body,
-  } as any;
+  } as unknown as NextRequest;
 }
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 const rpc = (name: string) => mockDb.rpcCalls.find((call) => call.name === name);
@@ -211,10 +214,10 @@ describe('voucher atomic route boundaries', () => {
   });
 
   test.each([
-    ['update_voucher_receipt_atomic', (req: any) => receiptPUT(req, params('vr-1'))],
-    ['cancel_voucher_receipt_atomic', (req: any) => receiptDELETE(req, params('vr-1'))],
-    ['update_voucher_disbursement_atomic', (req: any) => disbursementPUT(req, params('vd-1'))],
-    ['cancel_voucher_disbursement_atomic', (req: any) => disbursementDELETE(req, params('vd-1'))],
+    ['update_voucher_receipt_atomic', (req: NextRequest) => receiptPUT(req, params('vr-1'))],
+    ['cancel_voucher_receipt_atomic', (req: NextRequest) => receiptDELETE(req, params('vr-1'))],
+    ['update_voucher_disbursement_atomic', (req: NextRequest) => disbursementPUT(req, params('vd-1'))],
+    ['cancel_voucher_disbursement_atomic', (req: NextRequest) => disbursementDELETE(req, params('vd-1'))],
   ])('%s receives company and actor identity from the session', async (rpcName, invoke) => {
     const response = await invoke(request(rpcName.startsWith('update') ? { amount: 20 } : undefined, rpcName.startsWith('update') ? 'PUT' : 'DELETE'));
     expect(response.status).toBe(200);

@@ -3,6 +3,8 @@ import { success, error, handleApiError, parseBody, getPaginationParams, require
 import { getSupabase } from '@/lib/supabase-client';
 import { isValidDate } from '@/lib/utils';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -30,7 +32,7 @@ export async function GET(request: NextRequest) {
       .range(offset, offset + pageSize - 1);
     if (queryError) throw queryError;
 
-    const rows = (data || []) as Array<Record<string, any>>;
+    const rows = (data || []) as Array<Record<string, unknown>>;
     const contactIds = [...new Set(rows.map((row) => row.contact_id).filter(Boolean))];
     const invoiceIds = [...new Set(rows.map((row) => row.invoice_id).filter(Boolean))];
     const projectIds = [...new Set(rows.map((row) => row.project_id).filter(Boolean))];
@@ -46,16 +48,16 @@ export async function GET(request: NextRequest) {
         : Promise.resolve({ data: [], error: null }),
     ]);
     for (const result of [contactsResult, invoicesResult, projectsResult]) if (result.error) throw result.error;
-    const names = (records: any[] | null, value: string) => Object.fromEntries((records || []).map((record) => [record.id, record[value]]));
+    const names = (records: Row[] | null, value: string) => Object.fromEntries((records || []).map((record) => [record.id, record[value]]));
     const contactNames = names(contactsResult.data, 'name');
     const invoiceNumbers = names(invoicesResult.data, 'number');
     const projectNames = names(projectsResult.data, 'name');
 
     const creditNotes = rows.map((note) => ({
       ...note,
-      contact_name: contactNames[note.contact_id] || null,
-      invoice_number: invoiceNumbers[note.invoice_id] || null,
-      project_name: projectNames[note.project_id] || null,
+      contact_name: contactNames[String(note.contact_id)] || null,
+      invoice_number: invoiceNumbers[String(note.invoice_id)] || null,
+      project_name: projectNames[String(note.project_id)] || null,
     }));
     return success({ credit_notes: creditNotes, total: count || 0, page, pageSize });
   } catch (err) {
@@ -80,11 +82,11 @@ export async function POST(request: NextRequest) {
         && (typeof value !== 'string' || !UUID_RE.test(value))) return error(`معرّف ${label} غير صالح`);
     }
     if (!Array.isArray(items) || items.length === 0 || items.length > 200) return error('يجب إضافة بند واحد على الأقل');
-    const normalizedItems = items.map((item: any) => ({
+    const normalizedItems = items.map((item: Row) => ({
       description: typeof item.description === 'string' ? item.description.trim() : '',
       quantity: Number(item.quantity), unit_price: Number(item.unit_price),
     }));
-    if (normalizedItems.some((item: any) => !item.description || item.description.length > 500 || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unit_price) || item.unit_price < 0)) return error('أحد بنود الإشعار غير صالح');
+    if (normalizedItems.some((item) => !item.description || item.description.length > 500 || !Number.isFinite(item.quantity) || item.quantity <= 0 || !Number.isFinite(item.unit_price) || item.unit_price < 0)) return error('أحد بنود الإشعار غير صالح');
 
     const effectiveDate = date || new Date().toISOString().split('T')[0];
     if (typeof effectiveDate !== 'string' || !isValidDate(effectiveDate)) {

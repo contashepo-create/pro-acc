@@ -3,8 +3,7 @@ import { getSupabase } from '@/lib/supabase-client';
 import { handleApiError, success, requireAdmin } from '@/lib/api-helpers';
 import { createDefaultChartOfAccounts } from '@/lib/default-accounts';
 
-// @ts-ignore
-const sb = () => getSupabase() ;
+const sb = () => getSupabase();
 
 export async function POST(request: NextRequest) {
   try {

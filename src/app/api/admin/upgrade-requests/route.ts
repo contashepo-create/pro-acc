@@ -4,6 +4,8 @@ import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody } from '@/lib/api-helpers';
 import { signPrivateReceiptReference } from '@/lib/storage-references';
 
+import type { Row } from '@/lib/types';
+
 const sb = () => getSupabase();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -28,9 +30,9 @@ export async function GET(req: NextRequest) {
     const { data: requests, error: requestError } = await query;
     if (requestError) throw requestError;
 
-    const companyIds = [...new Set((requests || []).map((r: any) => r.company_id).filter(Boolean))];
-    const planIds = [...new Set((requests || []).map((r: any) => r.requested_plan_id).filter(Boolean))];
-    const userIds = [...new Set((requests || []).map((r: any) => r.user_id).filter(Boolean))];
+    const companyIds = [...new Set((requests || []).map((r: Row) => r.company_id).filter(Boolean))];
+    const planIds = [...new Set((requests || []).map((r: Row) => r.requested_plan_id).filter(Boolean))];
+    const userIds = [...new Set((requests || []).map((r: Row) => r.user_id).filter(Boolean))];
     const s = sb();
     const [companiesResult, plansResult, usersResult] = await Promise.all([
       companyIds.length ? s.from('companies').select('id,name,email,phone').in('id', companyIds) : Promise.resolve({ data: [], error: null }),
@@ -40,14 +42,14 @@ export async function GET(req: NextRequest) {
     if (companiesResult.error) throw companiesResult.error;
     if (plansResult.error) throw plansResult.error;
     if (usersResult.error) throw usersResult.error;
-    const companyMap = new Map((companiesResult.data || []).map((row: any) => [row.id, row]));
-    const planMap = new Map((plansResult.data || []).map((row: any) => [row.id, row]));
-    const userMap = new Map((usersResult.data || []).map((row: any) => [row.id, row]));
+    const companyMap = new Map((companiesResult.data || []).map((row: Row) => [row.id, row]));
+    const planMap = new Map((plansResult.data || []).map((row: Row) => [row.id, row]));
+    const userMap = new Map((usersResult.data || []).map((row: Row) => [row.id, row]));
 
     return success({
-      requests: await Promise.all((requests || []).map(async (row: any) => ({
+      requests: await Promise.all((requests || []).map(async (row: Row) => ({
         ...row,
-        receipt_image_url: await signPrivateReceiptReference(s, row.receipt_image_url),
+        receipt_image_url: await signPrivateReceiptReference(s, row.receipt_image_url == null ? null : String(row.receipt_image_url)),
         companies: companyMap.get(row.company_id) || null,
         subscription_plans: planMap.get(row.requested_plan_id) || null,
         users: userMap.get(row.user_id) || null,

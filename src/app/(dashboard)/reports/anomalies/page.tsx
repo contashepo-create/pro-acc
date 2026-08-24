@@ -14,8 +14,22 @@ const sevMeta: Record<string, { variant: 'success' | 'warning' | 'danger' | 'inf
   critical: { variant: 'danger', label: 'حرجة' },
 };
 
+interface AnomalyFinding {
+  severity?: string;
+  code?: string;
+  message?: string;
+  ref?: string;
+  refId?: string;
+  score?: number;
+}
+interface AnomalyData {
+  findings: AnomalyFinding[];
+  high: number;
+  critical: number;
+}
+
 export default function AnomaliesPage() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<AnomalyData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -39,7 +53,7 @@ export default function AnomaliesPage() {
         icon={ShieldAlert}
         actions={findings.length > 0 ? (
           <div className="flex gap-2">
-            <Badge variant="danger">{data.high + data.critical} عالية</Badge>
+            <Badge variant="danger">{(data?.high ?? 0) + (data?.critical ?? 0)} عالية</Badge>
             <Badge variant="warning">{findings.length} إجمالي</Badge>
           </div>
         ) : <Badge variant="success">لا توجد شذوذات</Badge>}
@@ -52,8 +66,8 @@ export default function AnomaliesPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {[...findings].sort((a, b) => (b.score || 0) - (a.score || 0)).map((f: any, i: number) => {
-            const m = sevMeta[f.severity] || sevMeta.low;
+          {[...findings].sort((a, b) => (b.score || 0) - (a.score || 0)).map((f, i: number) => {
+            const m = sevMeta[f.severity ?? ''] || sevMeta.low;
             return (
               <div key={i} className="card p-4 flex items-start gap-3">
                 <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${f.severity === 'high' || f.severity === 'critical' ? 'bg-danger-light' : 'bg-warning-light'}`}>
@@ -72,7 +86,7 @@ export default function AnomaliesPage() {
           })}
         </div>
       )}
-      <div className="text-xs text-text-muted">المبلغ المعروض كمرجع: {formatCurrency(findings.reduce((s: number, f: any) => s + (f.score || 0), 0))}</div>
+      <div className="text-xs text-text-muted">المبلغ المعروض كمرجع: {formatCurrency(findings.reduce((s: number, f) => s + (f.score || 0), 0))}</div>
     </div>
   );
 }
