@@ -13,20 +13,33 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 
+interface AdvanceRow {
+  id: string;
+  employee_name?: string;
+  amount: number;
+  remaining_amount?: number;
+  date?: string;
+  reason?: string;
+  status?: string;
+}
+interface EmployeeOption { id: string; name: string; }
+interface BankSafeOption { id: string; name: string; is_active?: boolean; }
+interface AdvanceForm { employee_id: string; amount: number; date: string; reason: string; bank_safe_id: string; }
+
 export default function EmployeeAdvancesPage() {
-  const [advances, setAdvances] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [banks, setBanks] = useState<any[]>([]);
+  const [advances, setAdvances] = useState<AdvanceRow[]>([]);
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingAdvance, setEditingAdvance] = useState<any>(null);
+  const [editingAdvance, setEditingAdvance] = useState<AdvanceRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0], reason: '', bank_safe_id: '' });
+  const [form, setForm] = useState<AdvanceForm>({ employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0], reason: '', bank_safe_id: '' });
 
   const fetchData = async () => {
     try {
@@ -45,10 +58,12 @@ export default function EmployeeAdvancesPage() {
       if (advJson.success) setAdvances(advJson.data?.advances || []);
       else setError(advJson.message || 'فشل');
       if (empJson.success) setEmployees(empJson.data?.employees || []);
-      if (bankJson.success) setBanks((bankJson.data?.banks || []).filter((bank: any) => bank.is_active));
+      if (bankJson.success) setBanks((bankJson.data?.banks || []).filter((bank: BankSafeOption) => bank.is_active));
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -79,25 +94,25 @@ export default function EmployeeAdvancesPage() {
         setForm({ employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0], reason: '', bank_safe_id: '' });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (advance: any) => {
+  const handleEdit = async (advance: AdvanceRow) => {
     const { data, error } = await fetchRecord(`/api/employee-advances/${advance.id}`);
     const src = recordOrRow(data, advance);
     if (!data && error) toast.error(error);
     setEditingAdvance(advance);
     setForm(applyDates({
-      employee_id: src.employee_id || '',
-      amount: src.amount || 0,
-      date: src.date,
-      reason: src.reason || '',
+      employee_id: String(src.employee_id ?? ''),
+      amount: Number(src.amount) || 0,
+      date: toDateInput(src.date) ?? '',
+      reason: String(src.reason ?? ''),
       bank_safe_id: '',
     }, ['date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (advance: any) => {
+  const handleDelete = async (advance: AdvanceRow) => {
     try {
       const res = await fetch(`/api/employee-advances/${advance.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -107,21 +122,21 @@ export default function EmployeeAdvancesPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
 
   const columns = [
     { key: 'employee_name', label: 'الموظف', sortable: true },
-    { key: 'amount', label: 'المبلغ', render: (row: any) => formatCurrency(row.amount) },
-    { key: 'remaining_amount', label: 'المتبقي', render: (row: any) => formatCurrency(row.remaining_amount) },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
+    { key: 'amount', label: 'المبلغ', render: (row: AdvanceRow) => formatCurrency(row.amount) },
+    { key: 'remaining_amount', label: 'المتبقي', render: (row: AdvanceRow) => formatCurrency(row.remaining_amount ?? 0) },
+    { key: 'date', label: 'التاريخ', render: (row: AdvanceRow) => formatDate(row.date) },
     { key: 'reason', label: 'السبب' },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: AdvanceRow) => (
         <ActionButtons
           item={row}
           onEdit={row.status !== 'cancelled' ? handleEdit : undefined}
@@ -141,11 +156,11 @@ export default function EmployeeAdvancesPage() {
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingAdvance(null); }} title={editingAdvance ? 'تعديل سلفة' : 'إضافة سلفة موظف'} size="lg" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingAdvance(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select label="الموظف" value={form.employee_id} disabled={!!editingAdvance} onChange={(v) => setForm({...form, employee_id: v})} options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e: any) => ({ value: e.id, label: e.name }))]} className="col-span-2" />
+            <Select label="الموظف" value={form.employee_id} disabled={!!editingAdvance} onChange={(v) => setForm({...form, employee_id: v})} options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e) => ({ value: e.id, label: e.name }))]} className="col-span-2" />
             <Input label="المبلغ" type="number" value={form.amount} disabled={!!editingAdvance} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
             <Input label="التاريخ" type="date" value={form.date} disabled={!!editingAdvance} onChange={(e) => setForm({...form, date: e.target.value})} />
             {!editingAdvance && <Select label="الخزينة/البنك" value={form.bank_safe_id} onChange={(value) => setForm({ ...form, bank_safe_id: value })}
-              options={[{ value: '', label: 'اختر مصدر الصرف' }, ...banks.map((bank: any) => ({ value: bank.id, label: bank.name }))]} />}
+              options={[{ value: '', label: 'اختر مصدر الصرف' }, ...banks.map((bank) => ({ value: bank.id, label: bank.name }))]} />}
 
           </div>
           <Textarea label="السبب" value={form.reason} onChange={(e) => setForm({...form, reason: e.target.value})} placeholder="سبب السلفة" />
