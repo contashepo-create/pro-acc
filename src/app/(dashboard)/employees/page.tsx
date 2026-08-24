@@ -12,17 +12,30 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
+
+interface EmployeeRow {
+  id: string;
+  name?: string;
+  phone?: string;
+  email?: string;
+  salary?: number;
+  department?: string;
+  position?: string;
+  hire_date?: string;
+  is_active?: boolean;
+}
+interface EmployeeForm { name: string; phone: string; email: string; salary: number; department: string; position: string; hire_date: string; }
 
 export default function EmployeesPage() {
-  const [employees, setEmployees] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingEmployee, setEditingEmployee] = useState<any>(null);
+  const [editingEmployee, setEditingEmployee] = useState<EmployeeRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<EmployeeForm>({
     name: '',
     phone: '',
     email: '',
@@ -44,7 +57,7 @@ export default function EmployeesPage() {
         setError(json.message || 'فشل');
         toast.error(json.message || 'فشل تحميل البيانات');
       }
-    } catch (err) {
+    } catch {
       setError('فشل تحميل البيانات');
       toast.error('خطأ في الاتصال بالخادم');
     } finally {
@@ -91,31 +104,31 @@ export default function EmployeesPage() {
       } else {
         setSaveError(json.message || 'فشل الحفظ');
       }
-    } catch (e: any) {
+    } catch {
       setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = async (employee: any) => {
+  const handleEdit = async (employee: EmployeeRow) => {
     const { data, error } = await fetchRecord(`/api/employees/${employee.id}`);
     const src = recordOrRow(data, employee);
     if (!data && error) toast.error(error);
     setEditingEmployee(employee);
     setForm(applyDates({
-      name: src.name || '',
-      phone: src.phone || '',
-      email: src.email || '',
-      salary: src.salary || 0,
-      department: src.department || '',
-      position: src.position || '',
-      hire_date: src.hire_date,
+      name: String(src.name ?? ''),
+      phone: String(src.phone ?? ''),
+      email: String(src.email ?? ''),
+      salary: Number(src.salary ?? 0),
+      department: String(src.department ?? ''),
+      position: String(src.position ?? ''),
+      hire_date: toDateInput(src.hire_date) ?? '',
     }, ['hire_date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (employee: any) => {
+  const handleDelete = async (employee: EmployeeRow) => {
     try {
       const res = await fetch(`/api/employees/${employee.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -125,12 +138,14 @@ export default function EmployeesPage() {
       } else {
         toast.error(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       toast.error('خطأ في الاتصال بالخادم');
     }
   };
 
   useEffect(() => {
+    // Initial load on mount (standard fetch pattern).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
   }, []);
 
@@ -139,12 +154,12 @@ export default function EmployeesPage() {
     { key: 'phone', label: 'الجوال' },
     { key: 'department', label: 'القسم' },
     { key: 'position', label: 'الوظيفة' },
-    { key: 'salary', label: 'الراتب', sortable: true, render: (row: any) => formatCurrency(row.salary) },
-    { key: 'hire_date', label: 'تاريخ التعيين', render: (row: any) => formatDate(row.hire_date) },
+    { key: 'salary', label: 'الراتب', sortable: true, render: (row: EmployeeRow) => formatCurrency(row.salary ?? 0) },
+    { key: 'hire_date', label: 'تاريخ التعيين', render: (row: EmployeeRow) => formatDate(row.hire_date) },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: EmployeeRow) => (
         <ActionButtons
           item={row}
           onEdit={row.is_active ? handleEdit : undefined}

@@ -13,16 +13,30 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatCurrency } from '@/lib/utils';
 
+interface InventoryItemRow {
+  id: string;
+  name?: string;
+  code?: string;
+  unit?: string;
+  quantity?: number;
+  unit_price?: number;
+  warehouse_id?: string;
+  category?: string;
+  warehouse_name?: string;
+}
+interface WarehouseOption { id: string; name: string; is_active?: boolean; }
+interface InventoryItemForm { name: string; code: string; unit: string; quantity: number; unit_price: number; warehouse_id: string; category: string; }
+
 export default function InventoryPage() {
-  const [items, setItems] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [items, setItems] = useState<InventoryItemRow[]>([]);
+  const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<InventoryItemRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({ name: '', code: '', unit: '', quantity: 0, unit_price: 0, warehouse_id: '', category: '' });
+  const [form, setForm] = useState<InventoryItemForm>({ name: '', code: '', unit: '', quantity: 0, unit_price: 0, warehouse_id: '', category: '' });
 
   const fetchData = async () => {
     try {
@@ -35,10 +49,12 @@ export default function InventoryPage() {
       const [json, warehouseJson] = await Promise.all([itemResponse.json(), warehouseResponse.json()]);
       if (json.success) setItems(json.data?.items || []);
       else setError(json.message || 'فشل');
-      if (warehouseJson.success) setWarehouses((warehouseJson.data?.warehouses || []).filter((warehouse: any) => warehouse.is_active));
+      if (warehouseJson.success) setWarehouses((warehouseJson.data?.warehouses || []).filter((warehouse: WarehouseOption) => warehouse.is_active));
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -67,23 +83,23 @@ export default function InventoryPage() {
         setForm({ name: '', code: '', unit: '', quantity: 0, unit_price: 0, warehouse_id: '', category: '' });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (item: any) => {
+  const handleEdit = async (item: InventoryItemRow) => {
     try {
       const res = await fetch(`/api/inventory/${item.id}`);
       const json = await res.json();
       if (json.success) {
         setEditingItem(item);
         setForm({
-          name: json.data.name,
-          code: json.data.code,
-          unit: json.data.unit || '',
-          quantity: json.data.quantity,
-          unit_price: json.data.unit_price,
-          warehouse_id: json.data.warehouse_id || '',
-          category: json.data.category || '',
+          name: String(json.data?.name ?? ''),
+          code: String(json.data?.code ?? ''),
+          unit: String(json.data?.unit ?? ''),
+          quantity: Number(json.data?.quantity ?? 0),
+          unit_price: Number(json.data?.unit_price ?? 0),
+          warehouse_id: String(json.data?.warehouse_id ?? ''),
+          category: String(json.data?.category ?? ''),
         });
         setShowModal(true);
       }
@@ -92,7 +108,7 @@ export default function InventoryPage() {
     }
   };
 
-  const handleDelete = async (item: any) => {
+  const handleDelete = async (item: InventoryItemRow) => {
     try {
       const res = await fetch(`/api/inventory/${item.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -101,7 +117,7 @@ export default function InventoryPage() {
       } else {
         alert(json.message || 'فشل التعطيل');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -112,12 +128,12 @@ export default function InventoryPage() {
     { key: 'unit', label: 'الوحدة' },
     { key: 'warehouse_name', label: 'المستودع', sortable: true },
     { key: 'quantity', label: 'الكمية', sortable: true },
-    { key: 'unit_price', label: 'السعر', render: (row: any) => formatCurrency(row.unit_price) },
+    { key: 'unit_price', label: 'السعر', render: (row: InventoryItemRow) => formatCurrency(row.unit_price ?? 0) },
     { key: 'category', label: 'الفئة' },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: InventoryItemRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -142,7 +158,7 @@ export default function InventoryPage() {
             <Input label="الرمز" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
             <Input label="الوحدة *" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} placeholder="قطعة، كيلو" />
             <Select label="المستودع *" value={form.warehouse_id} onChange={(value) => setForm({ ...form, warehouse_id: value })}
-              options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((warehouse: any) => ({ value: warehouse.id, label: warehouse.name }))]} />
+              options={[{ value: '', label: 'اختر مستودعاً' }, ...warehouses.map((warehouse) => ({ value: warehouse.id, label: warehouse.name }))]} />
             <Input label="الفئة" value={form.category} onChange={(e) => setForm({...form, category: e.target.value})} />
             <div className="sm:col-span-2 rounded-lg border border-info/30 bg-info/10 p-3 text-xs text-text-secondary">
               تُسجل الكمية والتكلفة من «حركات وتسوية المخزون» أو عند استلام أمر شراء؛ ولا تُدخل عند إنشاء بطاقة الصنف حتى يبقى سجل الحركة قابلاً للتدقيق.
