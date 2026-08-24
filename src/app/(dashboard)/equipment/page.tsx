@@ -21,15 +21,36 @@ const costTypes = [
   { value: 'other', label: 'أخرى' },
 ];
 
+interface EquipmentRow {
+  id: string;
+  date?: string;
+  cost_type?: string;
+  usage_hours?: number;
+  amount: number;
+  notes?: string;
+  fixed_assets?: { name?: string };
+  projects?: { name?: string };
+}
+interface NameOption { id: string; name: string; }
+interface EquipmentForm {
+  equipment_id: string;
+  project_id: string;
+  cost_type: string;
+  amount: number;
+  usage_hours: number;
+  date: string;
+  notes: string;
+}
+
 export default function EquipmentCostsPage() {
-  const [rows, setRows] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [assets, setAssets] = useState<any[]>([]);
+  const [rows, setRows] = useState<EquipmentRow[]>([]);
+  const [projects, setProjects] = useState<NameOption[]>([]);
+  const [assets, setAssets] = useState<NameOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<any>({ equipment_id: '', project_id: '', cost_type: 'other', amount: 0, usage_hours: 0, date: new Date().toISOString().split('T')[0], notes: '' });
+  const [form, setForm] = useState<EquipmentForm>({ equipment_id: '', project_id: '', cost_type: 'other', amount: 0, usage_hours: 0, date: new Date().toISOString().split('T')[0], notes: '' });
 
   const fetchData = async () => {
     try {
@@ -44,6 +65,8 @@ export default function EquipmentCostsPage() {
     finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
@@ -62,11 +85,11 @@ export default function EquipmentCostsPage() {
 
   const columns = [
     { key: 'date', label: 'التاريخ' },
-    { key: 'fixed_assets', label: 'المعدة', render: (r: any) => r.fixed_assets?.name || '—' },
-    { key: 'projects', label: 'المشروع', render: (r: any) => r.projects?.name || '—' },
-    { key: 'cost_type', label: 'النوع', render: (r: any) => costTypes.find((c) => c.value === r.cost_type)?.label || r.cost_type },
+    { key: 'fixed_assets', label: 'المعدة', render: (r: EquipmentRow) => r.fixed_assets?.name || '—' },
+    { key: 'projects', label: 'المشروع', render: (r: EquipmentRow) => r.projects?.name || '—' },
+    { key: 'cost_type', label: 'النوع', render: (r: EquipmentRow) => costTypes.find((c) => c.value === r.cost_type)?.label || r.cost_type },
     { key: 'usage_hours', label: 'ساعات الاستخدام' },
-    { key: 'amount', label: 'المبلغ', render: (r: any) => <span className="font-bold">{formatCurrency(r.amount)}</span> },
+    { key: 'amount', label: 'المبلغ', render: (r: EquipmentRow) => <span className="font-bold">{formatCurrency(r.amount)}</span> },
   ];
 
   return (
@@ -89,9 +112,9 @@ export default function EquipmentCostsPage() {
         </>}>
         <div className="space-y-4">
           <Select label="المعدة" value={form.equipment_id} onChange={(v) => setForm({ ...form, equipment_id: v })}
-            options={[{ value: '', label: '— بدون —' }, ...assets.map((a: any) => ({ value: a.id, label: a.name }))]} />
+            options={[{ value: '', label: '— بدون —' }, ...assets.map((a: NameOption) => ({ value: a.id, label: a.name }))]} />
           <Select label="المشروع" value={form.project_id} onChange={(v) => setForm({ ...form, project_id: v })}
-            options={[{ value: '', label: '— بدون —' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} />
+            options={[{ value: '', label: '— بدون —' }, ...projects.map((p: NameOption) => ({ value: p.id, label: p.name }))]} />
           <Select label="نوع التكلفة" value={form.cost_type} onChange={(v) => setForm({ ...form, cost_type: v })} options={costTypes} />
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <Input label="المبلغ *" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
