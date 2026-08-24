@@ -21,18 +21,45 @@ import { toDateInput } from '@/lib/form-utils';
 import { openPrintWindow } from '@/lib/print';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface QuotationItem { description: string; quantity: number; unit_price: number; total: number; }
+interface QuotationRow {
+  id: string;
+  number?: string;
+  date?: string;
+  contact_name?: string;
+  total: number;
+  status?: string;
+  valid_until?: string;
+  tax_amount?: number;
+  subtotal?: number;
+  notes?: string;
+  terms?: string;
+  items?: QuotationItem[];
+}
+interface ClientOption { id: string; name: string; }
+interface CompanyInfo { name?: string; tax_number?: string; phone?: string; }
+interface QuotationForm {
+  date: string;
+  contact_id: string;
+  valid_until: string;
+  notes: string;
+  tax_rate: number;
+  tax_enabled?: boolean;
+  items: QuotationItem[];
+}
+
 export default function QuotationsPage() {
-  const [quotations, setQuotations] = useState<any[]>([]);
-  const [clients, setClients] = useState<any[]>([]);
+  const [quotations, setQuotations] = useState<QuotationRow[]>([]);
+  const [clients, setClients] = useState<ClientOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingQuotation, setEditingQuotation] = useState<any>(null);
-  const [viewingQuotation, setViewingQuotation] = useState<any>(null);
+  const [editingQuotation, setEditingQuotation] = useState<QuotationRow | null>(null);
+  const [viewingQuotation, setViewingQuotation] = useState<QuotationRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [company, setCompany] = useState<any>(null);
-  const [form, setForm] = useState<any>({
+  const [company, setCompany] = useState<CompanyInfo | null>(null);
+  const [form, setForm] = useState<QuotationForm>({
     date: new Date().toISOString().split('T')[0],
     contact_id: '',
     valid_until: '',
@@ -63,18 +90,20 @@ export default function QuotationsPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
     if (!form.contact_id) { setSaveError('يجب اختيار عميل'); return; }
-    const validItems = (form.items || []).filter((it: any) => String(it.description || '').trim() !== '');
+    const validItems = (form.items || []).filter((it: QuotationItem) => String(it.description || '').trim() !== '');
     if (validItems.length === 0) { setSaveError('يجب إضافة بند واحد على الأقل بعرض السعر'); return; }
     setSaving(true); setSaveError('');
     try {
       const url = editingQuotation ? `/api/quotations/${editingQuotation.id}` : '/api/quotations';
       const method = editingQuotation ? 'PUT' : 'POST';
       const payload = { ...form, items: validItems, tax_rate: form.tax_enabled ? Number(form.tax_rate || 0.15) : 0 };
-      delete (payload as any).tax_enabled;
+      delete payload.tax_enabled;
 
       const res = await fetch(url, {
         method,
@@ -96,10 +125,10 @@ export default function QuotationsPage() {
         });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = async (quotation: any) => {
+  const handleEdit = async (quotation: QuotationRow) => {
     try {
       const res = await fetch(`/api/quotations/${quotation.id}`);
       const json = await res.json();
@@ -127,7 +156,7 @@ export default function QuotationsPage() {
     }
   };
 
-  const handleDelete = async (quotation: any) => {
+  const handleDelete = async (quotation: QuotationRow) => {
     try {
       const res = await fetch(`/api/quotations/${quotation.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -136,14 +165,14 @@ export default function QuotationsPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
 
   // طباعة عرض السعر بشكل احترافي كفاتورة، بعنوان "عرض سعر" في الأعلى.
-  const printQuotation = async (quotation: any) => {
-    let items = quotation.items;
+  const printQuotation = async (quotation: QuotationRow) => {
+    let items: QuotationItem[] | undefined = quotation.items;
     if (!items || !items.length) {
       try {
         const res = await fetch(`/api/quotations/${quotation.id}`);
@@ -152,7 +181,7 @@ export default function QuotationsPage() {
       } catch { /* ignore */ }
     }
     const itemsHtml = (items || [])
-      .map((it: any) => `<tr>
+      .map((it: QuotationItem) => `<tr>
         <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:right">${escapeHtml(String(it.description || ''))}</td>
         <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.quantity || 0)}</td>
         <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.unit_price || 0).toFixed(2)}</td>
@@ -246,15 +275,15 @@ export default function QuotationsPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('quotation', row.number) },
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date) },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: QuotationRow) => formatDocumentNumber('quotation', row.number) },
+    { key: 'date', label: 'التاريخ', render: (row: QuotationRow) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true },
-    { key: 'total', label: 'الإجمالي', render: (row: any) => formatCurrency(row.total) },
-    { key: 'status', label: 'الحالة', render: (row: any) => statusBadge(row.status) },
+    { key: 'total', label: 'الإجمالي', render: (row: QuotationRow) => formatCurrency(row.total) },
+    { key: 'status', label: 'الحالة', render: (row: QuotationRow) => statusBadge(row.status ?? '') },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: QuotationRow) => (
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
@@ -294,16 +323,16 @@ export default function QuotationsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />
             <Input label="صالح حتى" type="date" value={form.valid_until} onChange={(e) => setForm({...form, valid_until: e.target.value})} />
-            <Select label="العميل" value={form.contact_id} onChange={(v) => setForm({...form, contact_id: v})} options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]} className="col-span-2" />
+            <Select label="العميل" value={form.contact_id} onChange={(v) => setForm({...form, contact_id: v})} options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]} className="col-span-2" />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات عرض السعر" />
-          <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
+          <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={!!form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-bold">بنود العرض</h4>
               <Button type="button" size="sm" variant="ghost" onClick={() => setForm({ ...form, items: [...form.items, { description: '', quantity: 1, unit_price: 0, total: 0 }] })}>إضافة بند</Button>
             </div>
-            {form.items.map((item: any, idx: number) => (
+            {form.items.map((item: QuotationItem, idx: number) => (
               <div key={idx} className="grid grid-cols-12 gap-2">
                 <input className="input-base col-span-5 text-sm" placeholder="البيان" value={item.description} onChange={(e) => {
                   const items = [...form.items]; items[idx] = { ...items[idx], description: e.target.value }; setForm({ ...form, items });
@@ -350,7 +379,7 @@ export default function QuotationsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {viewingQuotation.items.map((it: any, idx: number) => (
+                {(viewingQuotation.items || []).map((it: QuotationItem, idx: number) => (
                   <tr key={idx}>
                     <td className="p-2 font-medium">{it.description}</td>
                     <td className="p-2 text-center font-mono">{it.quantity}</td>
