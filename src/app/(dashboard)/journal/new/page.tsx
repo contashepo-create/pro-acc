@@ -13,7 +13,12 @@ import { toDateInput } from '@/lib/form-utils';
 
 interface JournalLine { accountCode: string; debit: number; credit: number; description: string; }
 
-function flatten(accounts: any[], depth = 0, out: any[] = []): any[] {
+interface AccountNode { code: string; name: string; is_header?: boolean; children?: AccountNode[]; }
+interface FlatAccount { code: string; name: string; label: string; depth: number; isParent: boolean; }
+interface RawLine { account_code?: string; accountCode?: string; debit?: number; credit?: number; description?: string; }
+interface JournalForm { date: string; type: string; description: string; lines: JournalLine[]; }
+
+function flatten(accounts: AccountNode[], depth = 0, out: FlatAccount[] = []): FlatAccount[] {
   for (const a of accounts || []) {
     const isParent = Boolean(a.is_header) || Boolean(a.children && a.children.length > 0);
     out.push({
@@ -35,10 +40,10 @@ function moneyInput(value: number) {
 export default function NewJournalPage() {
   const router = useRouter();
   const [editId, setEditId] = useState<string | null>(null);
-  const [accounts, setAccounts] = useState<any[]>([]);
+  const [accounts, setAccounts] = useState<FlatAccount[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<JournalForm>({
     date: new Date().toISOString().split('T')[0],
     type: 'general',
     description: '',
@@ -50,6 +55,7 @@ export default function NewJournalPage() {
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search).get('edit');
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEditId(p);
     fetch(`/api/accounts?_ts=${Date.now()}`, { cache: 'no-store', credentials: 'same-origin' })
       .then((r) => r.json())
@@ -66,7 +72,7 @@ export default function NewJournalPage() {
               type: d.type || 'general',
               description: d.description || '',
               lines:
-                (d.lines || []).map((l: any) => ({
+                (d.lines || []).map((l: RawLine) => ({
                   accountCode: l.account_code || l.accountCode || '',
                   debit: Number(l.debit) || 0,
                   credit: Number(l.credit) || 0,
@@ -81,10 +87,10 @@ export default function NewJournalPage() {
     }
   }, []);
 
-  const updateLine = (i: number, field: string, value: any) => {
-    setForm((f: any) => {
+  const updateLine = (i: number, field: string, value: string | number) => {
+    setForm((f) => {
       const lines = [...f.lines];
-      const line: any = { ...lines[i], [field]: value };
+      const line: JournalLine = { ...lines[i], [field]: value };
       if (field === 'debit' && Number(value) > 0) line.credit = 0;
       if (field === 'credit' && Number(value) > 0) line.debit = 0;
       lines[i] = line;
@@ -93,27 +99,27 @@ export default function NewJournalPage() {
   };
 
   const addLine = () =>
-    setForm((f: any) => ({
+    setForm((f) => ({
       ...f,
       lines: [...f.lines, { accountCode: '', debit: 0, credit: 0, description: '' }],
     }));
 
   const removeLine = (i: number) =>
-    setForm((f: any) => ({ ...f, lines: f.lines.filter((_: any, idx: number) => idx !== i) }));
+    setForm((f) => ({ ...f, lines: f.lines.filter((_o: JournalLine, idx: number) => idx !== i) }));
 
-  const totalDebit = form.lines.reduce((s: number, l: any) => s + (Number(l.debit) || 0), 0);
-  const totalCredit = form.lines.reduce((s: number, l: any) => s + (Number(l.credit) || 0), 0);
+  const totalDebit = form.lines.reduce((s: number, l) => s + (Number(l.debit) || 0), 0);
+  const totalCredit = form.lines.reduce((s: number, l) => s + (Number(l.credit) || 0), 0);
   const balanced = Math.abs(totalDebit - totalCredit) < 0.01 && totalDebit > 0;
 
   const handleSave = async () => {
     if (!form.date) { setSaveError('يجب إدخال التاريخ'); return; }
     if (!form.description) { setSaveError('يجب إدخال البيان'); return; }
     if (form.lines.length < 2) { setSaveError('يجب إضافة سطرين على الأقل'); return; }
-    if (form.lines.some((l: any) => !l.accountCode)) { setSaveError('يجب اختيار حساب لجميع السطور'); return; }
-    if (form.lines.some((l: any) => Number(l.debit) > 0 && Number(l.credit) > 0)) {
+    if (form.lines.some((l) => !l.accountCode)) { setSaveError('يجب اختيار حساب لجميع السطور'); return; }
+    if (form.lines.some((l) => Number(l.debit) > 0 && Number(l.credit) > 0)) {
       setSaveError('لا يمكن إدخال مدين ودائن معاً في نفس السطر'); return;
     }
-    if (form.lines.some((l: any) => !(Number(l.debit) > 0 || Number(l.credit) > 0))) {
+    if (form.lines.some((l) => !(Number(l.debit) > 0 || Number(l.credit) > 0))) {
       setSaveError('كل سطر يجب أن يكون مديناً أو دائناً (قيمة أكبر من صفر)'); return;
     }
     if (!balanced) {
@@ -132,7 +138,7 @@ export default function NewJournalPage() {
           date: form.date,
           type: form.type,
           description: form.description,
-          lines: form.lines.map((l: any) => ({
+          lines: form.lines.map((l) => ({
             accountCode: l.accountCode,
             debit: Number(l.debit) || 0,
             credit: Number(l.credit) || 0,
@@ -201,7 +207,7 @@ export default function NewJournalPage() {
           </div>
 
           <div className="space-y-3">
-            {form.lines.map((line: any, i: number) => (
+            {form.lines.map((line: JournalLine, i: number) => (
               <div
                 key={i}
                 className="rounded-xl border border-border bg-bg-card p-3 sm:p-4 space-y-3"

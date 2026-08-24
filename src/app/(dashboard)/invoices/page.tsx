@@ -36,26 +36,49 @@ const emptyItem: InvoiceItem = {
   item_type: 'service', unit: 'وحدة', save_to_inventory: false,
 };
 
+interface RawApiItem { id?: string; description?: string; quantity?: number; unit_price?: number; total?: number; item_type?: string; unit?: string; }
+interface SalesInvoiceRow {
+  id: string;
+  number?: string;
+  date?: string;
+  contact_name?: string;
+  client_name?: string;
+  status?: string;
+  total: number;
+  paid_amount: number;
+}
+interface ClientOption { id: string; name: string; }
+interface ProjectOption { id: string; name: string; }
+interface InvoiceForm {
+  client_id: string;
+  project_id: string;
+  date: string;
+  due_date: string;
+  notes: string;
+  vat_enabled: boolean;
+  items: InvoiceItem[];
+}
+
 export default function InvoicesPage() {
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [clients, setClients] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [invoices, setInvoices] = useState<SalesInvoiceRow[]>([]);
+  const [clients, setClients] = useState<ClientOption[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showEditor, setShowEditor] = useState(false);
-  const [editingInvoice, setEditingInvoice] = useState<any>(null);
+  const [editingInvoice, setEditingInvoice] = useState<SalesInvoiceRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [statusTab, setStatusTab] = useState('all');
 
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<InvoiceForm>({
     client_id: '',
     project_id: '',
     date: new Date().toISOString().split('T')[0],
     due_date: '',
     notes: '',
     vat_enabled: true,
-    items: [{ ...emptyItem }] as InvoiceItem[],
+    items: [{ ...emptyItem }],
   });
 
   const fetchData = async () => {
@@ -77,6 +100,8 @@ export default function InvoicesPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const openNewInvoice = () => {
@@ -94,7 +119,7 @@ export default function InvoicesPage() {
     setShowEditor(true);
   };
 
-  const handleEdit = async (invoice: any) => {
+  const handleEdit = async (invoice: SalesInvoiceRow) => {
     try {
       const res = await fetch(`/api/invoices/${invoice.id}`);
       const json = await res.json();
@@ -107,14 +132,14 @@ export default function InvoicesPage() {
           due_date: toDateInput(json.data.due_date),
           notes: json.data.notes || '',
           vat_enabled: Number(json.data.vat_rate || json.data.tax_rate || 0) > 0,
-          items: json.data.items?.map((i: any) => ({
+          items: (json.data.items || []).map((i: RawApiItem) => ({
             id: i.id,
-            description: i.description,
-            quantity: i.quantity,
-            unitPrice: i.unit_price,
+            description: String(i.description ?? ''),
+            quantity: Number(i.quantity) || 0,
+            unitPrice: Number(i.unit_price) || 0,
             discount: 0,
-            total: i.total,
-            item_type: i.item_type || 'service',
+            total: Number(i.total) || 0,
+            item_type: (i.item_type as InvoiceItem['item_type']) || 'service',
             unit: i.unit || 'وحدة',
             save_to_inventory: false,
           })) || [{ ...emptyItem }],
@@ -150,7 +175,7 @@ export default function InvoicesPage() {
           dueDate: form.due_date || form.date,
           items: validItems.map((i: InvoiceItem) => ({
             description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, total: i.total,
-            discount: Number((i as any).discount) || 0,
+            discount: Number(i.discount) || 0,
             item_type: i.item_type || 'service', unit: i.unit || 'وحدة',
             save_to_inventory: i.save_to_inventory || false, item_code: i.item_code || undefined,
           })),
@@ -167,7 +192,7 @@ export default function InvoicesPage() {
     } catch { setSaveError('خطأ في الاتصال بالخادم'); } finally { setSaving(false); }
   };
 
-  const handleDelete = async (invoice: any) => {
+  const handleDelete = async (invoice: SalesInvoiceRow) => {
     if (!confirm('سيتم إلغاء الفاتورة مع عكس قيدها المحاسبي. متابعة؟')) return;
     try {
       // الإلغاء (وليس الحذف المادي) — المسار الصحيح هو PATCH status=cancelled
@@ -187,7 +212,7 @@ export default function InvoicesPage() {
   // ضريبة) مع إضافة الضريبة فوقها، وتُرتبط بالعميل تلقائياً، مع بقاء كل
   // البنود قابلة للتعديل.
   const handleProjectChange = async (projectId: string) => {
-    setForm((prev: any) => ({ ...prev, project_id: projectId }));
+    setForm((prev) => ({ ...prev, project_id: projectId }));
     if (!projectId) return;
     try {
       const res = await fetch(`/api/projects/${projectId}`);
@@ -197,7 +222,7 @@ export default function InvoicesPage() {
         return;
       }
       const d = json.data;
-      const boq = (d.boq_items || []).map((it: any) => ({
+      const boq = (d.boq_items || []).map((it: Record<string, unknown>) => ({
         description: String(it.description || '').trim(),
         quantity: Number(it.quantity) || 1,
         unitPrice: Number(it.unit_price) || 0,
@@ -207,7 +232,7 @@ export default function InvoicesPage() {
         unit: String(it.unit || 'وحدة').trim(),
         save_to_inventory: false,
       }));
-      setForm((prev: any) => ({
+      setForm((prev) => ({
         ...prev,
         project_id: projectId,
         client_id: prev.client_id || d.client_id || '',
@@ -224,10 +249,10 @@ export default function InvoicesPage() {
 
   const removeItem = (index: number) => {
     if (form.items.length === 1) return;
-    setForm({ ...form, items: form.items.filter((_: any, i: number) => i !== index) });
+    setForm({ ...form, items: form.items.filter((_o: InvoiceItem, i: number) => i !== index) });
   };
 
-  const updateItem = (index: number, field: keyof InvoiceItem, value: any) => {
+  const updateItem = (index: number, field: keyof InvoiceItem, value: string | number | boolean | undefined) => {
     const newItems = [...form.items];
     newItems[index] = { ...newItems[index], [field]: value };
     if (field === 'quantity' || field === 'unitPrice' || field === 'discount') {
@@ -249,12 +274,12 @@ export default function InvoicesPage() {
   const filtered = statusTab === 'all' ? invoices : invoices.filter(i => i.status === statusTab);
 
   const columns = [
-    { key: 'number', label: 'رقم الفاتورة', sortable: true, render: (row: any) => formatDocumentNumber('sales_invoice', row.number) },
-    { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
-    { key: 'contact_name', label: 'العميل', sortable: true, render: (row: any) => row.contact_name || row.client_name || '—' },
-    { key: 'total', label: 'الإجمالي', sortable: true, render: (row: any) => formatCurrency(row.total) },
-    { key: 'paid_amount', label: 'المدفوع', render: (row: any) => formatCurrency(row.paid_amount) },
-    { key: 'actions', label: '', render: (row: any) => (
+    { key: 'number', label: 'رقم الفاتورة', sortable: true, render: (row: SalesInvoiceRow) => formatDocumentNumber('sales_invoice', row.number) },
+    { key: 'date', label: 'التاريخ', sortable: true, render: (row: SalesInvoiceRow) => formatDate(row.date) },
+    { key: 'contact_name', label: 'العميل', sortable: true, render: (row: SalesInvoiceRow) => row.contact_name || row.client_name || '—' },
+    { key: 'total', label: 'الإجمالي', sortable: true, render: (row: SalesInvoiceRow) => formatCurrency(row.total) },
+    { key: 'paid_amount', label: 'المدفوع', render: (row: SalesInvoiceRow) => formatCurrency(row.paid_amount) },
+    { key: 'actions', label: '', render: (row: SalesInvoiceRow) => (
       <div className="flex items-center gap-1">
         <ActionButtons
           item={row}
@@ -305,13 +330,13 @@ export default function InvoicesPage() {
                     label="العميل"
                     value={form.client_id}
                     onChange={(v) => setForm({ ...form, client_id: v })}
-                    options={[{ value: '', label: '— اختر العميل —' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]}
+                    options={[{ value: '', label: '— اختر العميل —' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
                   />
                   <Select
                     label="المشروع (اختياري — تستمد البنود منه)"
                     value={form.project_id}
                     onChange={handleProjectChange}
-                    options={[{ value: '', label: '— بدون مشروع —' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]}
+                    options={[{ value: '', label: '— بدون مشروع —' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
                   />
                 </div>
                 <div className="space-y-4">
