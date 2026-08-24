@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Users, AlertTriangle, Crown, MapPin, Phone, Calendar, Shield } from 'lucide-react';
+import { Plus, Users, AlertTriangle, Crown, MapPin, Phone, Shield } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -14,18 +14,37 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 
+interface UserRow {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  city?: string;
+  role: string;
+  is_active?: boolean;
+}
+interface UserForm {
+  name: string;
+  email: string;
+  password: string;
+  role: string;
+  phone: string;
+  birth_date: string;
+  city: string;
+}
+
 export default function UsersPage() {
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingUser, setEditingUser] = useState<any>(null);
+  const [editingUser, setEditingUser] = useState<UserRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [currentCount, setCurrentCount] = useState(0);
   const [maxUsers, setMaxUsers] = useState<number | null>(null);
   const [planName, setPlanName] = useState<string | null>(null);
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<UserForm>({
     name: '',
     email: '',
     password: '',
@@ -52,6 +71,8 @@ export default function UsersPage() {
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const canAddUser = (): boolean => {
@@ -89,7 +110,7 @@ export default function UsersPage() {
       const url = editingUser ? `/api/company/users/${editingUser.id}` : '/api/company/users';
       const method = editingUser ? 'PUT' : 'POST';
 
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         name: form.name,
         email: form.email,
         role: form.role,
@@ -123,7 +144,7 @@ export default function UsersPage() {
     }
   };
 
-  const handleEdit = async (user: any) => {
+  const handleEdit = async (user: UserRow) => {
     try {
       const res = await fetch(`/api/company/users/${user.id}`);
       const json = await res.json();
@@ -146,7 +167,7 @@ export default function UsersPage() {
     }
   };
 
-  const handleDelete = async (user: any) => {
+  const handleDelete = async (user: UserRow) => {
     try {
       const res = await fetch(`/api/company/users/${user.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -186,7 +207,7 @@ export default function UsersPage() {
       key: 'name',
       label: 'المستخدم',
       sortable: true,
-      render: (row: any) => (
+      render: (row: UserRow) => (
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
             {row.name?.charAt(0) || '?'}
@@ -201,7 +222,7 @@ export default function UsersPage() {
     {
       key: 'phone',
       label: 'الجوال',
-      render: (row: any) => row.phone ? (
+      render: (row: UserRow) => row.phone ? (
         <span className="flex items-center gap-1 text-sm" dir="ltr">
           <Phone size={12} /> {row.phone}
         </span>
@@ -210,7 +231,7 @@ export default function UsersPage() {
     {
       key: 'city',
       label: 'المدينة',
-      render: (row: any) => row.city ? (
+      render: (row: UserRow) => row.city ? (
         <span className="flex items-center gap-1 text-sm">
           <MapPin size={12} /> {row.city}
         </span>
@@ -219,12 +240,12 @@ export default function UsersPage() {
     {
       key: 'role',
       label: 'الدور',
-      render: (row: any) => roleBadge(row.role),
+      render: (row: UserRow) => roleBadge(row.role),
     },
     {
       key: 'is_active',
       label: 'الحالة',
-      render: (row: any) => (
+      render: (row: UserRow) => (
         <Badge variant={row.is_active ? 'success' : 'danger'}>
           {row.is_active ? 'نشط' : 'غير نشط'}
         </Badge>
@@ -233,7 +254,7 @@ export default function UsersPage() {
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: UserRow) => (
         <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} />
       ),
     },
@@ -421,7 +442,7 @@ export default function UsersPage() {
                 <Crown size={14} className="text-yellow-500" />
                 <span>
                   المتاح: <strong>{maxUsers - currentCount}</strong> مستخدم من أصل <strong>{maxUsers}</strong> 
-                  {planName && <> في باقة "{planName}"</>}
+                  {planName && <> في باقة &quot;{planName}&quot;</>}
                 </span>
               </div>
             </div>

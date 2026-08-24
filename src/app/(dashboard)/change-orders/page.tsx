@@ -26,16 +26,31 @@ const statusMeta: Record<string, { variant: 'success' | 'warning' | 'danger' | '
   invoiced: { variant: 'accent', label: 'تمت فوترته' },
 };
 
+interface ChangeOrderRow {
+  id: string;
+  number?: string;
+  title?: string;
+  description?: string;
+  project_id?: string;
+  projects?: { name?: string };
+  base_contract_amount?: number;
+  change_amount: number;
+  new_contract_amount: number;
+  status: string;
+}
+interface ProjectOption { id: string; name: string; }
+interface ChangeOrderForm { project_id: string; title: string; description: string; change_amount: number; status: string; }
+
 export default function ChangeOrdersPage() {
-  const [rows, setRows] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [rows, setRows] = useState<ChangeOrderRow[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [viewing, setViewing] = useState<any>(null);
+  const [viewing, setViewing] = useState<ChangeOrderRow | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<any>({ project_id: '', title: '', description: '', change_amount: 0, status: 'draft' });
+  const [form, setForm] = useState<ChangeOrderForm>({ project_id: '', title: '', description: '', change_amount: 0, status: 'draft' });
 
   const fetchData = async () => {
     try {
@@ -49,6 +64,8 @@ export default function ChangeOrdersPage() {
     finally { setLoading(false); }
   };
 
+  // Initial load on mount (standard fetch pattern).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
   const openNew = () => {
@@ -57,22 +74,22 @@ export default function ChangeOrdersPage() {
     setShowModal(true);
   };
 
-  const handleEdit = async (row: any) => {
+  const handleEdit = async (row: ChangeOrderRow) => {
     const { data, error } = await fetchRecord(`/api/change-orders/${row.id}`);
     const src = recordOrRow(data, row);
     if (!data && error) toast.error(error);
     setEditingId(row.id);
     setForm({
-      project_id: src.project_id || '',
-      title: src.title || '',
-      description: src.description || '',
-      change_amount: src.change_amount ?? 0,
-      status: src.status || 'draft',
+      project_id: String(src.project_id ?? ''),
+      title: String(src.title ?? ''),
+      description: String(src.description ?? ''),
+      change_amount: Number(src.change_amount) || 0,
+      status: String(src.status ?? 'draft'),
     });
     setShowModal(true);
   };
 
-  const handleDelete = async (row: any) => {
+  const handleDelete = async (row: ChangeOrderRow) => {
     if (!confirm(`حذف أمر التغيير ${row.number}؟`)) return;
     try {
       const res = await fetch(`/api/change-orders/${row.id}`, { method: 'DELETE' });
@@ -106,22 +123,22 @@ export default function ChangeOrdersPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', render: (row: any) => formatDocumentNumber('change_order', row.number) },
+    { key: 'number', label: 'الرقم', render: (row: ChangeOrderRow) => formatDocumentNumber('change_order', row.number) },
     { key: 'title', label: 'العنوان' },
-    { key: 'projects', label: 'المشروع', render: (r: any) => r.projects?.name || r.project_id },
-    { key: 'base_contract_amount', label: 'العقد الأساسي', render: (r: any) => formatCurrency(r.base_contract_amount) },
-    { key: 'change_amount', label: 'قيمة التغيير', render: (r: any) => <span className={r.change_amount >= 0 ? 'text-success font-bold' : 'text-danger font-bold'}>{formatCurrency(r.change_amount)}</span> },
-    { key: 'new_contract_amount', label: 'العقد بعد التعديل', render: (r: any) => <span className="font-bold">{formatCurrency(r.new_contract_amount)}</span> },
-    { key: 'status', label: 'الحالة', render: (r: any) => { const m = statusMeta[r.status] || statusMeta.draft; return <Badge variant={m.variant}>{m.label}</Badge>; } },
+    { key: 'projects', label: 'المشروع', render: (r: ChangeOrderRow) => r.projects?.name || r.project_id },
+    { key: 'base_contract_amount', label: 'العقد الأساسي', render: (r: ChangeOrderRow) => formatCurrency(r.base_contract_amount ?? 0) },
+    { key: 'change_amount', label: 'قيمة التغيير', render: (r: ChangeOrderRow) => <span className={r.change_amount >= 0 ? 'text-success font-bold' : 'text-danger font-bold'}>{formatCurrency(r.change_amount)}</span> },
+    { key: 'new_contract_amount', label: 'العقد بعد التعديل', render: (r: ChangeOrderRow) => <span className="font-bold">{formatCurrency(r.new_contract_amount)}</span> },
+    { key: 'status', label: 'الحالة', render: (r: ChangeOrderRow) => { const m = statusMeta[r.status] || statusMeta.draft; return <Badge variant={m.variant}>{m.label}</Badge>; } },
     {
       key: 'actions', label: 'إجراءات',
-      render: (r: any) => (
+      render: (r: ChangeOrderRow) => (
         <ActionButtons
           item={r}
           onView={async () => {
             const { data, error } = await fetchRecord(`/api/change-orders/${r.id}`);
             if (!data && error) { toast.error(error); return; }
-            setViewing(data);
+            setViewing(data as ChangeOrderRow | null);
           }}
           onEdit={() => handleEdit(r)}
           onDelete={() => handleDelete(r)}
@@ -150,7 +167,7 @@ export default function ChangeOrdersPage() {
         </>}>
         <div className="space-y-4">
           <Select label="المشروع *" value={form.project_id} onChange={(v) => setForm({ ...form, project_id: v })}
-            options={[{ value: '', label: '— اختر المشروع —' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} />
+            options={[{ value: '', label: '— اختر المشروع —' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
           <Input label="العنوان *" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
           <Input label="قيمة التغيير (شامل الضريبة) *" type="number" value={form.change_amount} onChange={(e) => setForm({ ...form, change_amount: parseFloat(e.target.value) || 0 })} />
           <Select label="الحالة" value={form.status} onChange={(v) => setForm({ ...form, status: v })}

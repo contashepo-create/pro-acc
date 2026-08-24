@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowRight, Plus, Receipt, Lock, Wallet } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -33,21 +33,71 @@ const EXPENSE_ACCOUNT_OPTIONS = [
   { value: '5400', label: 'مصروفات إدارية وعمومية' },
 ];
 
+interface CustodyTransaction {
+  id: string;
+  type: string;
+  date?: string;
+  description?: string;
+  amount?: number;
+}
+interface CustodyFile {
+  id: string;
+  file_number?: string;
+  employee_name?: string;
+  date?: string;
+  status?: string;
+  computed_status?: string;
+  is_closed?: boolean;
+  bank_safe_id?: string;
+  project_id?: string;
+  project_name?: string;
+  reason?: string;
+  description?: string;
+  amount?: number;
+  total_received?: number;
+  total_expenses?: number;
+  remaining_amount?: number;
+  transactions?: CustodyTransaction[];
+}
+interface BankSafeOption { id: string; name: string; }
+interface ContactOption { id: string; name: string; }
+interface ProjectOption { id: string; name: string; }
+interface CustodyForm {
+  amount?: number;
+  date: string;
+  bank_safe_id?: string;
+  description?: string;
+  allow_excess?: boolean;
+  returned_cash?: number;
+  supplier_id?: string;
+  project_mode?: string;
+  project_id?: string;
+}
+interface ExpenseForm {
+  amount: number;
+  date: string;
+  description?: string;
+  expense_account_code: string;
+  project_mode?: string;
+  project_id?: string;
+  allow_excess: boolean;
+}
+
 export default function CustodyFilePage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const [file, setFile] = useState<any>(null);
-  const [banks, setBanks] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [file, setFile] = useState<CustodyFile | null>(null);
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
+  const [suppliers, setSuppliers] = useState<ContactOption[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [modal, setModal] = useState<'add' | 'expense' | 'general' | 'close' | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<any>({ amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: '', description: '', allow_excess: false, returned_cash: 0 });
-  const [expenseForm, setExpenseForm] = useState<any>({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', expense_account_code: '5100', project_mode: 'none', project_id: '', allow_excess: false });
+  const [form, setForm] = useState<CustodyForm>({ amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: '', description: '', allow_excess: false, returned_cash: 0 });
+  const [expenseForm, setExpenseForm] = useState<ExpenseForm>({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', expense_account_code: '5100', project_mode: 'none', project_id: '', allow_excess: false });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [fRes, bRes, sRes, pRes] = await Promise.all([
@@ -61,13 +111,16 @@ export default function CustodyFilePage() {
       if (pJson.success) setProjects(pJson.data?.projects || pJson.data || []);
     } catch { setError('خطأ في الاتصال'); }
     finally { setLoading(false); }
-  };
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
 
   const closed = file?.is_closed || file?.status === 'settled';
 
-  const post = async (url: string, body: any) => {
+  const post = async (url: string, body: Record<string, unknown>) => {
     setSaving(true);
     try {
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -88,7 +141,7 @@ export default function CustodyFilePage() {
     partially_settled: { label: 'مسوّاة جزئياً', variant: 'info' },
     settled: { label: 'مغلقة', variant: 'success' },
   };
-  const st = statusMap[file.computed_status || file.status] || statusMap.open;
+  const st = statusMap[file.computed_status || file.status || ''] || statusMap.open;
 
   return (
     <div className="space-y-6">
@@ -137,11 +190,11 @@ export default function CustodyFilePage() {
               {(file.transactions || []).length === 0 && (
                 <tr><td colSpan={3} className="py-6 text-center text-text-muted">لا حركات بعد الافتتاح</td></tr>
               )}
-              {(file.transactions || []).map((t: any) => (
+              {(file.transactions || []).map((t: CustodyTransaction) => (
                 <tr key={t.id} className="border-b border-border/60">
                   <td className="py-2">{t.type === 'addition' ? 'تعزيز' : t.type === 'expense' ? 'مصروف' : t.type === 'shortage' ? 'عجز' : t.type === 'surplus' ? 'زيادة' : t.type === 'return' ? 'مرتجع' : t.type}</td>
                   <td className="py-2">{t.description}</td>
-                  <td className="py-2 font-mono">{formatCurrency(parseFloat(t.amount) || 0)}</td>
+                  <td className="py-2 font-mono">{formatCurrency(Number(t.amount) || 0)}</td>
                 </tr>
               ))}
             </tbody>
@@ -157,7 +210,7 @@ export default function CustodyFilePage() {
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <Select label="المصدر" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}
-            options={[{ value: '', label: 'اختر' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]} />
+            options={[{ value: '', label: 'اختر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />
           <Input label="البيان" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
         </div>
       </Modal>
@@ -180,7 +233,7 @@ export default function CustodyFilePage() {
         <div className="space-y-3">
           <p className="text-xs text-text-muted">فاتورة رسمية مدفوعة: مدين مصروف / دائن 1150. المشروع افتراضي من الملف ويمكن فكه أو تغييره.</p>
           <Select label="المورد" value={form.supplier_id || ''} onChange={(v) => setForm({ ...form, supplier_id: v })}
-            options={[{ value: '', label: 'اختر المورد' }, ...suppliers.map((s: any) => ({ value: s.id, label: s.name }))]} />
+            options={[{ value: '', label: 'اختر المورد' }, ...suppliers.map((s) => ({ value: s.id, label: s.name }))]} />
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <Input label="بيان الفاتورة" value={form.description || ''} onChange={(e) => setForm({ ...form, description: e.target.value })} />
@@ -196,13 +249,13 @@ export default function CustodyFilePage() {
           />
           {form.project_mode === 'other' && (
             <Select label="المشروع" value={form.project_id || ''} onChange={(v) => setForm({ ...form, project_id: v })}
-              options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} />
+              options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
           )}
         </div>
       </Modal>
 
       <Modal isOpen={modal === 'general'} onClose={() => setModal(null)} title="مصروف من العهدة (عام / تشغيلي)" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>إلغاء</Button><Button disabled={saving} onClick={() => {
-        if (!expenseForm.amount || !expenseForm.description.trim()) { toast.error('المبلغ والبيان مطلوبان'); return; }
+        if (!expenseForm.amount || !expenseForm.description?.trim()) { toast.error('المبلغ والبيان مطلوبان'); return; }
         post(`/api/custodies/${id}/expense`, {
           amount: expenseForm.amount,
           date: expenseForm.date,
@@ -232,7 +285,7 @@ export default function CustodyFilePage() {
           />
           {expenseForm.project_mode === 'other' && (
             <Select label="المشروع" value={expenseForm.project_id || ''} onChange={(v) => setExpenseForm({ ...expenseForm, project_id: v })}
-              options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]} />
+              options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
           )}
           <Checkbox checked={expenseForm.allow_excess} onChange={(v) => setExpenseForm({ ...expenseForm, allow_excess: v })}
             label="السماح بالزيادة (أنفق الموظف من ماله الخاص)" />
@@ -241,11 +294,11 @@ export default function CustodyFilePage() {
 
       <Modal isOpen={modal === 'close'} onClose={() => setModal(null)} title="تأكيد إغلاق الملف" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>تراجع</Button><Button disabled={saving} onClick={() => post(`/api/custodies/${id}/settle`, { confirm: true, returned_cash: form.returned_cash, bank_safe_id: form.bank_safe_id, date: form.date, description: form.description })}>أؤكد الإغلاق</Button></div>}>
         <div className="space-y-3">
-          <p className="text-sm">المتبقي الحالي: <b>{formatCurrency(file.remaining_amount)}</b></p>
+          <p className="text-sm">المتبقي الحالي: <b>{formatCurrency(file.remaining_amount ?? 0)}</b></p>
           <p className="text-xs text-text-muted">المرتجع يدخل الخزينة. ما يزيد عن المرتجع يُسجَّل سلفة (1160) على راتب الموظف. لا يُغلق الملف مرتين.</p>
           <Input label="مرتجع نقدي" type="number" value={form.returned_cash} onChange={(e) => setForm({ ...form, returned_cash: parseFloat(e.target.value) || 0 })} />
           <Select label="خزينة المرتجع" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}
-            options={[{ value: '', label: 'اختر' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]} />
+            options={[{ value: '', label: 'اختر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />
         </div>
       </Modal>
     </div>
