@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { 
-  BarChart3, TrendingUp, Users, Eye, 
-  MousePointer2, Calendar, Download, Filter,
+  BarChart3, TrendingUp, Eye, 
+  MousePointer2, Calendar, Download,
   CheckCircle, XCircle, Clock, Bell
 } from 'lucide-react';
 
@@ -12,6 +12,7 @@ interface AdReport {
   title: string;
   type: string;
   display_mode: string;
+  status: string;
   views: number;
   clicks: number;
   notifications_sent: number;
@@ -42,11 +43,7 @@ export default function ReportsPage() {
   
   const [showExport, setShowExport] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [activeTab, dateRange]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -74,7 +71,12 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeTab, dateRange]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
+    loadData();
+  }, [loadData]);
 
   const handleExport = async () => {
     try {
@@ -93,10 +95,11 @@ export default function ReportsPage() {
     }
   };
 
-  const generateCSV = (data: any[], type: string): string => {
+  const generateCSV = (data: AdReport[] | ApprovalReport[], type: string): string => {
     if (type === 'ads') {
+      const ads = data as AdReport[];
       const headers = ['العنوان', 'النوع', 'طريقة العرض', 'المشاهدات', 'النقرات', 'الإشعارات', 'المستخدمين الفريدين', 'الشركات الفريدة', 'معدل النقر', 'تاريخ الإنشاء'];
-      const rows = data.map(ad => [
+      const rows = ads.map(ad => [
         ad.title,
         ad.type,
         ad.display_mode,
@@ -110,8 +113,9 @@ export default function ReportsPage() {
       ]);
       return [headers, ...rows].map(row => row.join(',')).join('\n');
     } else {
+      const approvals = data as ApprovalReport[];
       const headers = ['نوع المعاملة', 'المبلغ', 'صاحب الطلب', 'الحالة', 'تاريخ الطلب', 'تاريخ الاعتماد'];
-      const rows = data.map(app => [
+      const rows = approvals.map(app => [
         app.transaction_type,
         app.amount.toFixed(2),
         app.requester_name,
@@ -128,44 +132,44 @@ export default function ReportsPage() {
     return ((clicks / views) * 100).toFixed(1);
   };
 
-  const calculateStats = (data: any[], type: string) => {
+  const calculateStats = (data: AdReport[] | ApprovalReport[], type: string) => {
     if (data.length === 0) return null;
 
     if (type === 'ads') {
-      const totalViews = data.reduce((sum, ad) => sum + ad.views, 0);
-      const totalClicks = data.reduce((sum, ad) => sum + ad.clicks, 0);
-      const totalNotifications = data.reduce((sum, ad) => sum + ad.notifications_sent, 0);
-      const uniqueUsers = new Set(data.flatMap(ad => []));
-      const uniqueCompanies = new Set(data.flatMap(ad => []));
+      const ads = data as AdReport[];
+      const totalViews = ads.reduce((sum, ad) => sum + ad.views, 0);
+      const totalClicks = ads.reduce((sum, ad) => sum + ad.clicks, 0);
+      const totalNotifications = ads.reduce((sum, ad) => sum + ad.notifications_sent, 0);
       
       return {
         totalViews,
         totalClicks,
         totalNotifications,
         avgCTR: calculateCTR(totalViews, totalClicks),
-        totalAds: data.length,
-        activeAds: data.filter(ad => ad.status === 'active').length,
+        totalAds: ads.length,
+        activeAds: ads.filter(ad => ad.status === 'active').length,
       };
     } else {
-      const totalAmount = data.reduce((sum, app) => sum + app.amount, 0);
-      const approvedAmount = data
+      const approvals = data as ApprovalReport[];
+      const totalAmount = approvals.reduce((sum, app) => sum + app.amount, 0);
+      const approvedAmount = approvals
         .filter(app => app.status === 'approved')
         .reduce((sum, app) => sum + app.amount, 0);
-      const rejectedAmount = data
+      const rejectedAmount = approvals
         .filter(app => app.status === 'rejected')
         .reduce((sum, app) => sum + app.amount, 0);
-      const pendingAmount = data
+      const pendingAmount = approvals
         .filter(app => app.status === 'pending')
         .reduce((sum, app) => sum + app.amount, 0);
 
       return {
-        totalRequests: data.length,
+        totalRequests: approvals.length,
         totalAmount,
         approvedAmount,
         rejectedAmount,
         pendingAmount,
-        approvalRate: data.length > 0 ? ((data.filter(a => a.status === 'approved').length / data.length) * 100).toFixed(1) : '0',
-        rejectionRate: data.length > 0 ? ((data.filter(a => a.status === 'rejected').length / data.length) * 100).toFixed(1) : '0',
+        approvalRate: approvals.length > 0 ? ((approvals.filter(a => a.status === 'approved').length / approvals.length) * 100).toFixed(1) : '0',
+        rejectionRate: approvals.length > 0 ? ((approvals.filter(a => a.status === 'rejected').length / approvals.length) * 100).toFixed(1) : '0',
       };
     }
   };
@@ -271,21 +275,21 @@ export default function ReportsPage() {
               <Eye size={18} />
               <span className="text-sm font-medium">إجمالي المشاهدات</span>
             </div>
-            <div className="text-2xl font-bold text-blue-700">{adStats.totalViews.toLocaleString()}</div>
+            <div className="text-2xl font-bold text-blue-700">{(adStats.totalViews ?? 0).toLocaleString()}</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-green-600 mb-2">
               <MousePointer2 size={18} />
               <span className="text-sm font-medium">إجمالي النقرات</span>
             </div>
-            <div className="text-2xl font-bold text-green-700">{adStats.totalClicks.toLocaleString()}</div>
+            <div className="text-2xl font-bold text-green-700">{(adStats.totalClicks ?? 0).toLocaleString()}</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-purple-600 mb-2">
               <Bell size={18} />
               <span className="text-sm font-medium">إجمالي الإشعارات</span>
             </div>
-            <div className="text-2xl font-bold text-purple-700">{adStats.totalNotifications.toLocaleString()}</div>
+            <div className="text-2xl font-bold text-purple-700">{(adStats.totalNotifications ?? 0).toLocaleString()}</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-accent mb-2">
@@ -309,21 +313,21 @@ export default function ReportsPage() {
               <CheckCircle size={18} />
               <span className="text-sm font-medium">المبلغ المعتمد</span>
             </div>
-            <div className="text-2xl font-bold text-green-700">{approvalStats.approvedAmount.toLocaleString()} ر.س</div>
+            <div className="text-2xl font-bold text-green-700">{(approvalStats.approvedAmount ?? 0).toLocaleString()} ر.س</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-red-600 mb-2">
               <XCircle size={18} />
               <span className="text-sm font-medium">المبلغ المرفوض</span>
             </div>
-            <div className="text-2xl font-bold text-red-700">{approvalStats.rejectedAmount.toLocaleString()} ر.س</div>
+            <div className="text-2xl font-bold text-red-700">{(approvalStats.rejectedAmount ?? 0).toLocaleString()} ر.س</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-accent mb-2">
               <Clock size={18} />
               <span className="text-sm font-medium">قيد الاعتماد</span>
             </div>
-            <div className="text-2xl font-bold text-accent">{approvalStats.pendingAmount.toLocaleString()} ر.س</div>
+            <div className="text-2xl font-bold text-accent">{(approvalStats.pendingAmount ?? 0).toLocaleString()} ر.س</div>
           </div>
         </div>
       ) : null}

@@ -5,6 +5,7 @@ import {
   Megaphone, Plus, Loader2, Trash2, EyeOff, Eye, Edit2, BarChart3, Users,
   Gift, Image, Crown, AlertTriangle, Info, Bell, Zap, Star
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 interface Ad {
   id: string;
@@ -23,8 +24,30 @@ interface Ad {
   created_at: string;
 }
 
+interface TrackingView { companies?: { name?: string }; users?: { name?: string }; viewed_at: string; }
+interface TrackingClick { companies?: { name?: string }; users?: { name?: string }; clicked_at: string; }
+interface TrackingNotification {
+  companies?: { name?: string };
+  users?: { name?: string };
+  sent_at: string;
+  delivered?: boolean;
+  delivery_method?: string;
+}
+interface TrackingData {
+  views: TrackingView[];
+  clicks: TrackingClick[];
+  notifications: TrackingNotification[];
+  statistics: {
+    totalViews: number;
+    totalClicks: number;
+    totalNotifications: number;
+    uniqueCompaniesViewed: number;
+    uniqueUsersViewed: number;
+  };
+}
+
 // تعريف كل نوع مع الأيقونة واللون الخاص به
-const AD_TYPES: Record<string, { label: string; icon: any; iconClass: string; bgClass: string; badgeClass: string; description: string }> = {
+const AD_TYPES: Record<string, { label: string; icon: LucideIcon; iconClass: string; bgClass: string; badgeClass: string; description: string }> = {
   announcement: {
     label: 'إعلان',
     icon: Megaphone,
@@ -105,9 +128,9 @@ export default function AdminAdvertisementsPage() {
   const [showDuration, setShowDuration] = useState('7'); // أيام
   const [saving, setSaving] = useState(false);
   const [showTracking, setShowTracking] = useState(false);
-  const [selectedAdId, setSelectedAdId] = useState<string | null>(null);
-  const [trackingData, setTrackingData] = useState<any>(null);
-  const [loadingTracking, setLoadingTracking] = useState(false);
+  const [, setSelectedAdId] = useState<string | null>(null);
+  const [trackingData, setTrackingData] = useState<TrackingData | null>(null);
+  const [, setLoadingTracking] = useState(false);
 
   const loadAds = async () => {
     const res = await fetch('/api/admin/advertisements');
@@ -134,6 +157,7 @@ export default function AdminAdvertisementsPage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
     loadAds();
   }, []);
 
@@ -365,7 +389,7 @@ export default function AdminAdvertisementsPage() {
                 {trackingData.views.length === 0 ? (
                   <p className="text-sm text-text-muted">لا توجد مشاهدات</p>
                 ) : (
-                  trackingData.views.map((view: any, idx: number) => (
+                  trackingData.views.map((view, idx: number) => (
                     <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
                       <div className="font-medium text-text-primary">{view.companies?.name || 'غير معروف'}</div>
                       <div className="text-xs text-text-muted flex items-center justify-between mt-1">
@@ -390,7 +414,7 @@ export default function AdminAdvertisementsPage() {
                 {trackingData.clicks.length === 0 ? (
                   <p className="text-sm text-text-muted">لا توجد نقرات</p>
                 ) : (
-                  trackingData.clicks.map((click: any, idx: number) => (
+                  trackingData.clicks.map((click, idx: number) => (
                     <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
                       <div className="font-medium text-text-primary">{click.companies?.name || 'غير معروف'}</div>
                       <div className="text-xs text-text-muted flex items-center justify-between mt-1">
@@ -413,7 +437,7 @@ export default function AdminAdvertisementsPage() {
                 {trackingData.notifications.length === 0 ? (
                   <p className="text-sm text-text-muted">لا توجد إشعارات مرسلة</p>
                 ) : (
-                  trackingData.notifications.map((notif: any, idx: number) => (
+                  trackingData.notifications.map((notif, idx: number) => (
                     <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
                       <div className="font-medium text-text-primary">{notif.companies?.name || 'غير معروف'}</div>
                       <div className="text-xs text-text-muted flex items-center justify-between mt-1">
@@ -525,7 +549,7 @@ export default function AdminAdvertisementsPage() {
             <div className="text-text-muted text-sm text-center py-12">
               <Megaphone size={40} className="mx-auto mb-3 opacity-30" />
               <p>لا توجد إعلانات</p>
-              <p className="text-xs mt-1">اضغط "إعلان جديد" لإنشاء أول إعلان</p>
+              <p className="text-xs mt-1">اضغط &quot;إعلان جديد&quot; لإنشاء أول إعلان</p>
             </div>
           )}
         </div>
