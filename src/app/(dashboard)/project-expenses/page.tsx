@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Plus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
@@ -25,18 +25,44 @@ const EXPENSE_TYPES: Record<string, { label: string; variant: 'info' | 'success'
   other: { label: 'أخرى', variant: 'info' },
 };
 
+interface ExpenseRow {
+  id: string;
+  project_id?: string;
+  project_name?: string;
+  expense_type: string;
+  description: string;
+  amount: number;
+  date: string;
+  contact_id?: string;
+  contact_name?: string;
+  notes?: string;
+}
+interface ProjectOption { id: string; name: string; }
+interface ContactOption { id: string; name: string; }
+interface ExpenseForm {
+  project_id: string;
+  expense_type: string;
+  description: string;
+  amount: number;
+  date: string;
+  contact_id: string;
+  notes: string;
+  tax_enabled?: boolean;
+  tax_rate?: number;
+}
+
 export default function ProjectExpensesPage() {
-  const [expenses, setExpenses] = useState<any[]>([]);
-  const [projects, setProjects] = useState<any[]>([]);
-  const [contacts, setContacts] = useState<any[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingItem, setEditingItem] = useState<any>(null);
+  const [editingItem, setEditingItem] = useState<ExpenseRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [filterProject, setFilterProject] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<ExpenseForm>({
     project_id: '',
     expense_type: 'materials',
     description: '',
@@ -48,7 +74,7 @@ export default function ProjectExpensesPage() {
     tax_rate: 0.15,
   });
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -67,9 +93,12 @@ export default function ProjectExpensesPage() {
       if (projJson.success) setProjects(projJson.data?.projects || projJson.data?.rows || []);
       if (conJson.success) setContacts(conJson.data?.contacts || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
-  };
+  }, [filterProject]);
 
-  useEffect(() => { fetchData(); }, [filterProject]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+  }, [fetchData]);
 
   const handleSave = async () => {
     if (!editingItem && (!form.project_id || !form.description || !form.amount || !form.date)) {
@@ -100,13 +129,13 @@ export default function ProjectExpensesPage() {
         fetchData();
         toast.success(editingItem ? 'تم تحديث المصروف' : 'تم تسجيل المصروف');
       } else setSaveError(json.message || 'فشل الحفظ');
-    } catch (e: any) { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
   };
 
-  const handleEdit = (item: any) => {
+  const handleEdit = (item: ExpenseRow) => {
     setEditingItem(item);
     setForm({
-      project_id: item.project_id,
+      project_id: item.project_id || '',
       expense_type: item.expense_type,
       description: item.description,
       amount: item.amount,
@@ -117,7 +146,7 @@ export default function ProjectExpensesPage() {
     setShowModal(true);
   };
 
-  const handleDelete = async (item: any) => {
+  const handleDelete = async (item: ExpenseRow) => {
     try {
       const res = await fetch(`/api/project-expenses/${item.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -127,7 +156,7 @@ export default function ProjectExpensesPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
@@ -138,16 +167,16 @@ export default function ProjectExpensesPage() {
   };
 
   const columns = [
-    { key: 'date', label: 'التاريخ', render: (row: any) => formatDate(row.date), sortable: true },
+    { key: 'date', label: 'التاريخ', render: (row: ExpenseRow) => formatDate(row.date), sortable: true },
     { key: 'project_name', label: 'المشروع', sortable: true },
-    { key: 'expense_type', label: 'النوع', render: (row: any) => expenseBadge(row.expense_type) },
+    { key: 'expense_type', label: 'النوع', render: (row: ExpenseRow) => expenseBadge(row.expense_type) },
     { key: 'description', label: 'الوصف', sortable: true },
-    { key: 'amount', label: 'المبلغ', render: (row: any) => formatCurrency(row.amount), sortable: true },
+    { key: 'amount', label: 'المبلغ', render: (row: ExpenseRow) => formatCurrency(row.amount), sortable: true },
     { key: 'contact_name', label: 'الطرف' },
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: ExpenseRow) => (
         <ActionButtons item={row} onEdit={handleEdit} onDelete={handleDelete} />
       ),
     },
@@ -156,7 +185,7 @@ export default function ProjectExpensesPage() {
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
 
-  const totalAmount = expenses.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+  const totalAmount = expenses.reduce((sum, e) => sum + (parseFloat(String(e.amount)) || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -175,7 +204,7 @@ export default function ProjectExpensesPage() {
           label=""
           value={filterProject}
           onChange={(v) => setFilterProject(v)}
-          options={[{ value: '', label: 'كل المشاريع' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]}
+          options={[{ value: '', label: 'كل المشاريع' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
           className="w-64"
         />
         <div className="text-sm text-text-secondary">
@@ -208,7 +237,7 @@ export default function ProjectExpensesPage() {
               value={form.project_id}
               onChange={(v) => setForm({ ...form, project_id: v })}
               disabled={!!editingItem}
-              options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p: any) => ({ value: p.id, label: p.name }))]}
+              options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
               className="col-span-2"
             />
             <Select
@@ -245,7 +274,7 @@ export default function ProjectExpensesPage() {
               value={form.contact_id}
               onChange={(v) => setForm({ ...form, contact_id: v })}
               disabled={!!editingItem}
-              options={[{ value: '', label: 'بدون' }, ...contacts.map((c: any) => ({ value: c.id, label: c.name }))]}
+              options={[{ value: '', label: 'بدون' }, ...contacts.map((c) => ({ value: c.id, label: c.name }))]}
             />
           </div>
           <Textarea
@@ -256,7 +285,7 @@ export default function ProjectExpensesPage() {
           />
           <Checkbox
             label="تطبيق ضريبة مدخلات (15%)"
-            checked={form.tax_enabled}
+            checked={!!form.tax_enabled}
             disabled={!!editingItem}
             onChange={(checked: boolean) => setForm({ ...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0 })}
           />

@@ -13,21 +13,42 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { fetchRecord, applyDates, recordOrRow } from '@/lib/form-utils';
+import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
 
+interface ReceiptRow {
+  id: string;
+  number?: string;
+  date?: string;
+  receipt_type: string;
+  contact_name?: string;
+  amount: number;
+  bank_name?: string;
+  status?: string;
+}
+interface BankOption { id: string; name: string; }
+interface ClientOption { id: string; name: string; }
+interface ReceiptForm {
+  date: string;
+  receipt_type: string;
+  bank_safe_id: string;
+  contact_id: string;
+  amount: number;
+  reason: string;
+}
+
 export default function ReceiptPage() {
-  const [receipts, setReceipts] = useState<any[]>([]);
-  const [banks, setBanks] = useState<any[]>([]);
-  const [clients, setClients] = useState<any[]>([]);
+  const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
+  const [banks, setBanks] = useState<BankOption[]>([]);
+  const [clients, setClients] = useState<ClientOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [editingReceipt, setEditingReceipt] = useState<any>(null);
+  const [editingReceipt, setEditingReceipt] = useState<ReceiptRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<ReceiptForm>({
     date: new Date().toISOString().split('T')[0],
     receipt_type: 'client',
     bank_safe_id: '',
@@ -104,30 +125,30 @@ export default function ReceiptPage() {
         const reference = json.errorId ? ` (مرجع الخطأ: ${json.errorId})` : '';
         setSaveError(`${json.message || 'فشل الحفظ'}${reference}`);
       }
-    } catch (e: any) {
+    } catch {
       setSaveError('خطأ في الاتصال بالخادم');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleEdit = async (receipt: any) => {
+  const handleEdit = async (receipt: ReceiptRow) => {
     const { data, error } = await fetchRecord(`/api/vouchers/receipt/${receipt.id}`);
     const src = recordOrRow(data, receipt);
     if (!data && error) toast.error(error);
     setEditingReceipt(receipt);
     setForm(applyDates({
-      date: src.date,
-      receipt_type: src.receipt_type || 'client',
-      bank_safe_id: src.bank_safe_id || '',
-      contact_id: src.contact_id || '',
-      amount: src.amount || 0,
-      reason: src.reason || '',
+      date: toDateInput(src.date) ?? '',
+      receipt_type: String(src.receipt_type ?? 'client'),
+      bank_safe_id: String(src.bank_safe_id ?? ''),
+      contact_id: String(src.contact_id ?? ''),
+      amount: Number(src.amount) || 0,
+      reason: String(src.reason ?? ''),
     }, ['date']));
     setShowModal(true);
   };
 
-  const handleDelete = async (receipt: any) => {
+  const handleDelete = async (receipt: ReceiptRow) => {
     try {
       const res = await fetch(`/api/vouchers/receipt/${receipt.id}`, { method: 'DELETE' });
       const json = await res.json();
@@ -136,12 +157,13 @@ export default function ReceiptPage() {
       } else {
         alert(json.message || 'فشل الحذف');
       }
-    } catch (e) {
+    } catch {
       alert('خطأ في الاتصال بالخادم');
     }
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchData();
   }, [fetchData]);
 
@@ -156,13 +178,13 @@ export default function ReceiptPage() {
   };
 
   const columns = [
-    { key: 'number', label: 'الرقم', sortable: true, render: (row: any) => formatDocumentNumber('receipt_voucher', row.number) },
-    { key: 'date', label: 'التاريخ', sortable: true, render: (row: any) => formatDate(row.date) },
-    { key: 'receipt_type', label: 'النوع', sortable: true, render: (row: any) => typeBadge(row.receipt_type) },
+    { key: 'number', label: 'الرقم', sortable: true, render: (row: ReceiptRow) => formatDocumentNumber('receipt_voucher', row.number) },
+    { key: 'date', label: 'التاريخ', sortable: true, render: (row: ReceiptRow) => formatDate(row.date) },
+    { key: 'receipt_type', label: 'النوع', sortable: true, render: (row: ReceiptRow) => typeBadge(row.receipt_type) },
     { key: 'contact_name', label: 'الطرف', sortable: true },
-    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: any) => formatCurrency(row.amount) },
+    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: ReceiptRow) => formatCurrency(row.amount) },
     { key: 'bank_name', label: 'الخزينة/البنك', sortable: true },
-    { key: 'status', label: 'الحالة', render: (row: any) => (
+    { key: 'status', label: 'الحالة', render: (row: ReceiptRow) => (
       <Badge variant={row.status === 'approved' ? 'success' : row.status === 'rejected' ? 'danger' : 'warning'}>
         {row.status === 'approved' ? 'مؤكدة' : row.status === 'rejected' ? 'مرفوضة' : 'قيد الانتظار'}
       </Badge>
@@ -170,7 +192,7 @@ export default function ReceiptPage() {
     {
       key: 'actions',
       label: 'إجراءات',
-      render: (row: any) => (
+      render: (row: ReceiptRow) => (
         <ActionButtons
           item={row}
           onEdit={handleEdit}
@@ -230,14 +252,14 @@ export default function ReceiptPage() {
               label="الخزينة/البنك"
               value={form.bank_safe_id}
               onChange={(v) => setForm({...form, bank_safe_id: v})}
-              options={[{ value: '', label: 'اختر' }, ...banks.map((b: any) => ({ value: b.id, label: b.name }))]}
+              options={[{ value: '', label: 'اختر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]}
             />
             {form.receipt_type === 'client' && (
               <Select
                 label="العميل (اختياري)"
                 value={form.contact_id}
                 onChange={(v) => setForm({...form, contact_id: v})}
-                options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c: any) => ({ value: c.id, label: c.name }))]}
+                options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
               />
             )}
             <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
