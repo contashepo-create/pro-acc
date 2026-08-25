@@ -27,9 +27,14 @@ interface CashTransactionRow {
   reason?: string;
 }
 interface BankSafeOption { id: string; name: string; account_id?: string; }
-interface AccountOption { id: string; code: string; name: string; is_header?: boolean; children?: AccountOption[]; }
+interface AccountOption { id: string; code: string; name: string; type?: string; is_header?: boolean; children?: AccountOption[]; }
 interface ContactOption { id: string; name: string; }
 interface CashForm { date: string; type: string; amount: number; account_id: string; bank_safe_id: string; contact_id: string; reason: string; }
+
+/** Disabled option used as a visual section header inside the Select dropdown. */
+function groupHeader(label: string) {
+  return { value: `__hdr_${label}__`, label, disabled: true };
+}
 
 export default function CashPage() {
   const [transactions, setTransactions] = useState<CashTransactionRow[]>([]);
@@ -42,6 +47,7 @@ export default function CashPage() {
   const [editingTransaction, setEditingTransaction] = useState<CashTransactionRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [advancedAccounts, setAdvancedAccounts] = useState(false);
   const [form, setForm] = useState<CashForm>({
     date: new Date().toISOString().split('T')[0],
     type: 'receipt',
@@ -100,7 +106,7 @@ export default function CashPage() {
       return;
     }
     if (!editingTransaction && (!form.account_id || !form.bank_safe_id)) {
-      setSaveError('يجب اختيار الحساب والخزينة/البنك');
+      setSaveError('اختر غرض الحركة (من أين جاء المال / على ماذا صُرف) والخزينة أو البنك');
       return;
     }
     if (!form.reason?.trim()) {
@@ -207,7 +213,57 @@ export default function CashPage() {
   const filtered = typeTab === 'all' ? transactions : transactions.filter(t =>
     typeTab === 'receipt' ? t.type === 'receipt' || t.type === 'revenue' : t.type === typeTab,
   );
-  
+
+  // ── Simplified "purpose" picker ──────────────────────────────────────────
+  // The owner thinks in purposes ("rent", "sales income"), not in GL codes.
+  // We group real chart-of-accounts entries under plain-language headers.
+  // The API still receives a genuine account id, so the journal entry and
+  // double-entry integrity are untouched. Advanced mode exposes every account
+  // with its code for accountants.
+  const selectedBankAccount = banks.find((b) => b.id === form.bank_safe_id)?.account_id;
+  const selectableAccounts = accounts.filter((a) => a.id !== selectedBankAccount);
+  const byType = (t: string) => selectableAccounts.filter((a) => a.type === t);
+  const accountLabel = (a: AccountOption) =>
+    advancedAccounts ? `${a.code} - ${a.name}` : a.name;
+
+  const accountOptions: Array<{ value: string; label: string; disabled?: boolean }> = (() => {
+    const opts: Array<{ value: string; label: string; disabled?: boolean }> = [
+      { value: '', label: form.type === 'receipt' ? 'اختر مصدر القبض' : 'اختر بند الصرف' },
+    ];
+    const pushGroup = (title: string, list: AccountOption[]) => {
+      if (!list.length) return;
+      opts.push(groupHeader(title));
+      for (const a of list) opts.push({ value: a.id, label: accountLabel(a) });
+    };
+    if (form.type === 'receipt') {
+      pushGroup('إيرادات النشاط (مبيعات، خدمات...)', byType('revenue'));
+      pushGroup('أموال المالك / رأس المال', byType('equity'));
+    } else {
+      pushGroup('المصروفات (إيجار، رواتب، كهرباء...)', byType('expense'));
+    }
+    if (advancedAccounts) {
+      const groupedIds = new Set([...byType('revenue'), ...byType('equity'), ...byType('expense')].map((a) => a.id));
+      pushGroup('حسابات أخرى', selectableAccounts.filter((a) => !groupedIds.has(a.id)));
+    }
+    // Keep the currently-selected account visible even when its group is hidden
+    // (e.g. editing an old transaction in simple mode).
+    const current = selectableAccounts.find((a) => a.id === form.account_id);
+    if (current && !opts.some((o) => o.value === current.id)) {
+      opts.push({ value: current.id, label: `${current.code} - ${current.name}` });
+    }
+    return opts;
+  })();
+
+  const handleTypeChange = (nextType: string) => {
+    // Switching direction invalidates a purpose picked from the opposite group.
+    const currentAccount = accounts.find((a) => a.id === form.account_id);
+    const mismatch =
+      currentAccount &&
+      ((nextType === 'receipt' && currentAccount.type !== 'revenue' && currentAccount.type !== 'equity') ||
+        (nextType === 'expense' && currentAccount.type !== 'expense'));
+    setForm({ ...form, type: nextType, account_id: mismatch ? '' : form.account_id });
+  };
+
   const columns = [
     { key: 'number', label: 'الرقم', sortable: true, render: (row: CashTransactionRow) => formatDocumentNumber('cash_transaction', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: CashTransactionRow) => formatDate(row.date) },
@@ -274,19 +330,20 @@ export default function CashPage() {
               label="النوع"
               value={form.type}
               disabled={!!editingTransaction}
-              onChange={(v) => setForm({...form, type: v})}
+              onChange={handleTypeChange}
               options={[
-                { value: 'receipt', label: 'قبض' },
-                { value: 'expense', label: 'صرف' },
+                { value: 'receipt', label: 'قبض (دخل أموال)' },
+                { value: 'expense', label: 'صرف (خروج أموال)' },
               ]}
             />
             <Input label="المبلغ" type="number" value={form.amount} disabled={!!editingTransaction} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
             <Select
-              label="الحساب المقابل (إيراد/مصروف)"
+              label="غرض الحركة"
               value={form.account_id}
               disabled={!!editingTransaction}
+              searchable
               onChange={(v) => setForm({...form, account_id: v})}
-              options={[{ value: '', label: 'اختر حساب الإيراد أو المصروف' }, ...accounts.filter((account) => account.id !== banks.find((bank) => bank.id === form.bank_safe_id)?.account_id).map((a) => ({ value: a.id, label: `${a.code} - ${a.name}` }))]}
+              options={accountOptions}
             />
             <Select
               label="الخزينة/البنك"
@@ -303,6 +360,10 @@ export default function CashPage() {
               options={[{ value: '', label: 'بدون' }, ...contacts.map((c) => ({ value: c.id, label: c.name }))]}
             />
             <Input label="البيان" value={form.reason} onChange={(e) => setForm({...form, reason: e.target.value})} placeholder="سبب المعاملة" className="col-span-2" />
+            <label className="col-span-2 flex items-center gap-2 text-xs text-text-secondary cursor-pointer select-none">
+              <input type="checkbox" checked={advancedAccounts} onChange={(e) => setAdvancedAccounts(e.target.checked)} />
+              وضع المحاسب — عرض دليل الحسابات كاملاً بالأكواد
+            </label>
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
