@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowRight, Printer, FileDown, AlertTriangle, Eye, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { PrintButton } from '@/components/ui/PrintButton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { printCurrentPage } from '@/lib/print';
 import { getClientBalanceMeaning } from '@/lib/contact-balance';
@@ -356,6 +357,6 @@ interface StatementData {
           @page { margin: 1.2cm; size: A4; }
         }
       `}</style>
-    </div>
+    <PrintButton /></div>
   );
 }

@@ -13,6 +13,7 @@ import { Select } from '@/components/ui/Select';
 import { Checkbox } from '@/components/ui/Checkbox';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
+import { PrintButton } from '@/components/ui/PrintButton';
 
 // حسابات مصروف شائعة من شجرة الحسابات الافتراضية:
 // 5100–5140 تكلفة مشروع، 5200/5300/5400 مصروفات تشغيلية/عمومية للشركة.
@@ -305,6 +306,6 @@ export default function CustodyFilePage() {
             options={[{ value: '', label: 'اختر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />
         </div>
       </Modal>
-    </div>
+    <PrintButton /></div>
   );
 }
