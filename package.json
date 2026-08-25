@@ -20,7 +20,7 @@
     "audit:fuzz": "npx tsx scripts/audit-fuzz.mts",
     "audit:db": "MIGRATION_DRIVER=postgres node scripts/audit-live-db.mjs",
     "schema:generate": "node scripts/generate-full-schema.mjs",
-    "test:db": "NODE_OPTIONS=\"--experimental-vm-modules\" jest --testMatch=\"**/*.db.test.ts\" --testPathIgnorePatterns=\"[]\" --verbose",
+    "test:db": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testMatch=\"**/*.db.test.ts\" --testPathIgnorePatterns=\"[]\" --verbose",
     "test:ui": "jest -c jest.ui.config.js --runInBand",
     "test:ui:coverage": "jest -c jest.ui.config.js --runInBand --coverage",
     "test:e2e": "playwright test",

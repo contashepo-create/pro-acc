@@ -26,7 +26,7 @@ function listFiles(dir: string, ext = '.tsx'): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...listFiles(full, ext));
-    else if (entry.name.endsWith(ext)) out.push(full);
+    else if (entry.name.endsWith(ext)) out.push(full.replace(/\\/g, '/'));
   }
   return out;
 }

@@ -8,7 +8,12 @@ export function toDateInput(value: unknown): string {
   const iso = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
   if (iso) return iso[1];
   const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  if (!Number.isNaN(d.getTime())) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
   return '';
 }
 
