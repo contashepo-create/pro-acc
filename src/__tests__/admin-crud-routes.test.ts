@@ -249,6 +249,24 @@ describe('admin/reports GET', () => {
     expect(json.data[0].ctr).toBe(20);
   });
 
+  test('counts distinct viewers per ad and never claims truncation below the ceiling', async () => {
+    mockDb = makeDb({
+      ...baseDb(),
+      advertisements: [{ id: SUB, title: 'ad', type: 'banner', display_mode: 'top_bar', views: 3, clicks: 1, notifications_sent: 0 }],
+      ad_views: [
+        { id: 'v1', advertisement_id: SUB, user_id: UID, company_id: C1 },
+        { id: 'v2', advertisement_id: SUB, user_id: UID, company_id: C1 },
+        { id: 'v3', advertisement_id: SUB, user_id: A1, company_id: null },
+      ],
+    });
+    const res = await reportsGET(adminReq('GET', 'http://localhost/api/admin/reports?type=ads'));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data[0].unique_users).toBe(2);
+    expect(json.data[0].unique_companies).toBe(1);
+    expect(json.data[0].views_truncated).toBe(false);
+  });
+
   test('returns approvals report', async () => {
     const res = await reportsGET(adminReq('GET', 'http://localhost/api/admin/reports?type=approvals'));
     expect(res.status).toBe(200);

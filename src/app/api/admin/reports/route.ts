@@ -47,14 +47,19 @@ export async function GET(request: NextRequest) {
 
       // Get detailed statistics for each ad
       const enrichedAds = await Promise.all(
-        (ads || []).map(async (ad: Row) => {
+        (ads || []).map(async (ad: any) => {
           // Distinct counts must consider every view. Capping the read at
           // 5,000 rows silently understated reach for any popular ad, and the
           // understatement was invisible because the number still looked
-          // plausible. Page through instead of truncating.
+          // plausible. Page through instead of truncating — but keep a hard
+          // safety ceiling so a viral ad cannot pin this endpoint forever,
+          // and surface any truncation explicitly instead of hiding it.
           const uniqueUsers = new Set<string>();
           const uniqueCompanies = new Set<string>();
           const viewPageSize = 1000;
+          const maxViewRows = 100_000;
+          let scannedRows = 0;
+          let viewsTruncated = false;
           for (let offset = 0; ; offset += viewPageSize) {
             const { data: views, error: viewsError } = await s.from('ad_views')
               .select('user_id, company_id')
@@ -63,18 +68,24 @@ export async function GET(request: NextRequest) {
               .range(offset, offset + viewPageSize - 1);
             if (viewsError) throw viewsError;
             const page = views || [];
-            for (const view of page as Row[]) {
-              if (view.user_id) uniqueUsers.add(String(view.user_id));
-              if (view.company_id) uniqueCompanies.add(String(view.company_id));
+            for (const view of page as any[]) {
+              if (view.user_id) uniqueUsers.add(view.user_id);
+              if (view.company_id) uniqueCompanies.add(view.company_id);
             }
+            scannedRows += page.length;
             if (page.length < viewPageSize) break;
+            if (scannedRows >= maxViewRows) {
+              viewsTruncated = true;
+              break;
+            }
           }
 
           return {
             ...ad,
             unique_users: uniqueUsers.size,
             unique_companies: uniqueCompanies.size,
-            ctr: calculateCTR(Number(ad.views || 0), Number(ad.clicks || 0)),
+            views_truncated: viewsTruncated,
+            ctr: calculateCTR(ad.views || 0, ad.clicks || 0),
           };
         })
       );
