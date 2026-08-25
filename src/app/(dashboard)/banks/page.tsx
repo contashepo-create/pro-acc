@@ -121,6 +121,18 @@ export default function BanksPage() {
     { key: 'balance', label: 'الرصيد الحالي', render: (row: BankRow) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(row.balance)}</span> },
     { key: 'is_active', label: 'الحالة', render: (row: BankRow) => <Badge variant={row.is_active ? 'success' : 'danger'}>{row.is_active ? 'نشط' : 'غير نشط'}</Badge> },
     {
+      key: 'statement',
+      label: 'الكشف',
+      render: (row: BankRow) => (
+        <a
+          href={`/banks/${row.id}/statement`}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs bg-sky-950/20 text-sky-400 border border-sky-800/30 hover:bg-sky-950/40"
+        >
+          🧾 كشف حساب
+        </a>
+      ),
+    },
+    {
       key: 'actions',
       label: 'إجراءات',
       render: (row: BankRow) => (
