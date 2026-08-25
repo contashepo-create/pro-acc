@@ -37,6 +37,7 @@ interface CustodyTransaction {
   id: string;
   type: string;
   date?: string;
+  created_at?: string;
   description?: string;
   amount?: number;
 }
@@ -108,7 +109,7 @@ export default function CustodyFilePage() {
       else setFile(fJson.data);
       if (bJson.success) setBanks(bJson.data?.banks || []);
       if (sJson.success) setSuppliers(sJson.data?.suppliers || sJson.data?.contacts || []);
-      if (pJson.success) setProjects(pJson.data?.projects || pJson.data || []);
+      if (pJson.success) setProjects(pJson.data?.projects || pJson.data?.rows || []);
     } catch { setError('خطأ في الاتصال'); }
     finally { setLoading(false); }
   }, [id]);
@@ -181,6 +182,7 @@ export default function CustodyFilePage() {
           <table className="w-full text-sm text-right">
             <thead>
               <tr className="text-text-muted border-b border-border">
+                <th className="py-2">التاريخ</th>
                 <th className="py-2">النوع</th>
                 <th className="py-2">البيان</th>
                 <th className="py-2">المبلغ</th>
@@ -192,7 +194,8 @@ export default function CustodyFilePage() {
               )}
               {(file.transactions || []).map((t: CustodyTransaction) => (
                 <tr key={t.id} className="border-b border-border/60">
-                  <td className="py-2">{t.type === 'addition' ? 'تعزيز' : t.type === 'expense' ? 'مصروف' : t.type === 'shortage' ? 'عجز' : t.type === 'surplus' ? 'زيادة' : t.type === 'return' ? 'مرتجع' : t.type}</td>
+                  <td className="py-2 whitespace-nowrap">{t.created_at ? new Date(t.created_at).toISOString().slice(0, 10) : '—'}</td>
+                  <td className="py-2">{t.type === 'addition' ? (Number(t.amount) === Number(file.total_received) && String(t.description || '').startsWith('افتتاح') ? 'افتتاح' : 'تعزيز') : t.type === 'expense' ? 'مصروف' : t.type === 'shortage' ? 'عجز' : t.type === 'surplus' ? 'زيادة' : t.type === 'return' ? 'مرتجع' : t.type}</td>
                   <td className="py-2">{t.description}</td>
                   <td className="py-2 font-mono">{formatCurrency(Number(t.amount) || 0)}</td>
                 </tr>
@@ -208,6 +211,7 @@ export default function CustodyFilePage() {
       })}>ترحيل التعزيز</Button></div>}>
         <div className="space-y-3">
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
+          <Input label="الملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="سبب التعزيز (اختياري)" />
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <Select label="المصدر" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}
             options={[{ value: '', label: 'اختر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />
