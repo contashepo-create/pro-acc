@@ -14,9 +14,10 @@ function makeDb(db: Record<string, Row[]>) {
   const rpcResults = new Map<string, { data: unknown; error: unknown }>();
   const from = (table: string) => {
     const ops: Op[] = [];
+    let pendingUpdate: Row | null = null;
     calls.push({ table, ops });
-    const rows = () =>
-      (db[table] || []).filter((r) =>
+    const rows = () => {
+      const filtered = (db[table] || []).filter((r) =>
         ops.every((o) => {
           const get = (col: string): unknown => {
             let cur: unknown = r;
@@ -33,6 +34,8 @@ function makeDb(db: Record<string, Row[]>) {
           return true;
         })
       );
+      return pendingUpdate ? filtered.map((r) => ({ ...r, ...pendingUpdate })) : filtered;
+    };
     const api: TestBuilder = {
       select: () => api,
       eq: (col: string, val: unknown) => { ops.push({ op: 'eq', col, val }); return api; },
@@ -41,7 +44,7 @@ function makeDb(db: Record<string, Row[]>) {
       or: () => api, lt: () => api, gte: (col: string, val: unknown) => { ops.push({ op: 'gte', col, val }); return api; },
       lte: (col: string, val: unknown) => { ops.push({ op: 'lte', col, val }); return api; },
       insert: (payload: Row | Row[]) => { db[table] = [...(db[table] || []), ...(Array.isArray(payload) ? payload : [payload])]; return api; },
-      update: (payload: Row) => { const r = (db[table] || [])[0]; if (r) Object.assign(r, payload); return api; },
+      update: (payload: Row) => { pendingUpdate = payload; return api; },
       delete: () => api,
       maybeSingle: async () => ({ data: rows()[0] || null, error: null }),
       single: async () => ({ data: rows()[0] || null, error: rows()[0] ? null : { message: 'not found' } }),
@@ -181,9 +184,21 @@ describe('timesheets/[id] PUT', () => {
   });
 
   test('approves a timesheet', async () => {
-    mockDb = makeDb({ ...baseDb(), timesheets: [{ id: ID1, company_id: C1, status: 'submitted' }] });
+    mockDb = makeDb({ ...baseDb(), timesheets: [{ id: ID1, company_id: C1, status: 'completed' }] });
     const res = await tsPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'approve' }), { params: Promise.resolve({ id: ID1 }) });
     expect(res.status).toBe(200);
+  });
+
+  test('rejects approval of an already-decided timesheet', async () => {
+    mockDb = makeDb({ ...baseDb(), timesheets: [{ id: ID1, company_id: C1, status: 'approved' }] });
+    const res = await tsPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'approve' }), { params: Promise.resolve({ id: ID1 }) });
+    expect(res.status).toBe(409);
+  });
+
+  test('rejects clock-out before clock-in instead of producing negative hours', async () => {
+    mockDb = makeDb({ ...baseDb(), timesheets: [{ id: ID1, company_id: C1, check_in: '2026-01-01T08:00:00Z', status: 'in_progress', break_minutes: 0 }] });
+    const res = await tsPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'clock_out', check_out: '2026-01-01T07:00:00Z' }), { params: Promise.resolve({ id: ID1 }) });
+    expect(res.status).toBe(400);
   });
 
   test('rejects an invalid action', async () => {
