@@ -57,10 +57,10 @@ export default function EquipmentCostsPage() {
       setLoading(true); setError('');
       const [eqRes, projRes, asRes] = await Promise.all([fetch('/api/equipment-costs'), fetch('/api/projects'), fetch('/api/fixed-assets')]);
       const [eqJson, projJson, asJson] = await Promise.all([eqRes.json(), projRes.json(), asRes.json()]);
-      if (eqJson.success) setRows(eqJson.data.rows || []);
+      if (eqJson.success) setRows(eqJson.data?.rows ?? []);
       else setError(eqJson.message || 'فشل التحميل');
-      if (projJson.success) setProjects(projJson.data.rows || []);
-      if (asJson.success) setAssets((asJson.data.rows || asJson.data || []));
+      if (projJson.success) setProjects(projJson.data?.rows ?? projJson.data ?? []);
+      if (asJson.success) setAssets(asJson.data?.rows ?? asJson.data ?? []);
     } catch { setError('فشل تحميل البيانات'); }
     finally { setLoading(false); }
   };
