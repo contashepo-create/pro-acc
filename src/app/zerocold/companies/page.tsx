@@ -154,18 +154,20 @@ interface DetailData {
     finally { setActionLoading(null); }
   };
 
-  const doExtend = async (company: Company, days: number) => {
+  const doExtend = async (company: Company) => {
     const mp = prompt('كلمة السر الرئيسية:');
     if (!mp) return;
+    const reason = prompt('سبب التمديد (اختياري):') || '';
+    if (!confirm('تمديد الفترة التجريبية 7 أيام لـ ' + company.name + '؟')) return;
     setActionLoading('extend');
     try {
-      const res = await fetch(`/api/admin/companies/${company.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'x-master-password': mp },
-        body: JSON.stringify({ action: 'extend_subscription', days }),
+      const res = await fetch(`/api/admin/companies/${company.id}/extend-trial`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: 7, reason, masterPassword: mp }),
       });
       const body = await res.json();
-      if (body.success) { fetchCompanies(); alert(body.message); }
+      if (body.success) { fetchCompanies(); alert(body.message || 'تم التمديد'); }
       else alert(body.message || 'فشل');
     } catch { alert('خطأ في الاتصال'); }
     finally { setActionLoading(null); }
@@ -279,7 +281,7 @@ interface DetailData {
                           <button onClick={() => openDetail(c)} title="تفاصيل" className="p-1.5 rounded-lg bg-sky-950/20 text-sky-400/70 border border-sky-800/20 hover:bg-sky-950/40"><Eye size={13} /></button>
                           <button onClick={() => openEdit(c)} title="تعديل" className="p-1.5 rounded-lg bg-amber-950/20 text-text-secondary border border-amber-800/20 hover:bg-amber-950/40"><Edit3 size={13} /></button>
                           <button onClick={() => openPlanChange(c)} title="تغيير الباقة" className="p-1.5 rounded-lg bg-purple-950/20 text-purple-400/70 border border-purple-800/20 hover:bg-purple-950/40"><CreditCard size={13} /></button>
-                          <button onClick={() => doExtend(c, 30)} disabled={actionLoading === 'extend'} title="تمديد 30 يوم" className="p-1.5 rounded-lg bg-emerald-950/20 text-emerald-400/70 border border-emerald-800/20 hover:bg-emerald-950/40"><Calendar size={13} /></button>
+                          <button onClick={() => doExtend(c)} disabled={actionLoading === 'extend'} title="تمديد التجربة 7 أيام" className="p-1.5 rounded-lg bg-emerald-950/20 text-emerald-400/70 border border-emerald-800/20 hover:bg-emerald-950/40"><Calendar size={13} /></button>
                           <button onClick={() => doCancel(c)} disabled={actionLoading === 'cancel'} title="إلغاء الاشتراك" className="p-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40"><Ban size={13} /></button>
                           <button onClick={() => doToggleStatus(c)} disabled={actionLoading === c.id} title={c.is_active ? 'تعليق' : 'تفعيل'} className={`p-1.5 rounded-lg border ${c.is_active ? 'bg-red-950/20 text-red-400/70 border-red-800/20' : 'bg-emerald-950/20 text-emerald-400/70 border-emerald-800/20'}`}>
                             {actionLoading === c.id ? <Loader2 size={13} className="animate-spin" /> : c.is_active ? <XCircle size={13} /> : <CheckCircle size={13} />}

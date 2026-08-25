@@ -18,9 +18,10 @@ export default function CodesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
-  const [planCode, setPlanCode] = useState('monthly');
+  const [plans, setPlans] = useState<Array<{ code: string; name: string }>>([]);
+  const [planCode, setPlanCode] = useState('');
   const [duration, setDuration] = useState(12);
-  const [generatedCode, setGeneratedCode] = useState('');
+  const [generatedCodes, setGeneratedCodes] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -44,7 +45,26 @@ export default function CodesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/subscription-plans');
+        if (res.status === 401) return;
+        const body = await res.json();
+        if (body.success && Array.isArray(body.data)) {
+          const active = body.data.filter((p: { is_active?: boolean; code?: string }) => p.is_active !== false && !!p.code);
+          setPlans(active.map((p: { code: string; name: string }) => ({ code: p.code, name: p.name })));
+          if (active.length) {
+            setPlanCode((current) => (active.some((p: { code: string }) => p.code === current) ? current : active[0].code));
+          }
+        }
+      } catch { /* fallback to manual entry below */ }
+    })();
+  }, []);
+
   const generateCode = async () => {
+    setError('');
+    if (!planCode) { setError('اختر الباقة أولاً'); return; }
     setSaving(true);
     try {
       const res = await fetch('/api/admin/activation-codes', {
@@ -52,12 +72,20 @@ export default function CodesPage() {
         body: JSON.stringify({ planCode, durationMonths: duration }),
       });
       const body = await res.json();
-      if (body.success) { setGeneratedCode(body.data.code); fetchCodes(); }
+      if (body.success) {
+        const list: string[] = Array.isArray(body.data?.codes) ? body.data.codes : [];
+        setGeneratedCodes(list);
+        fetchCodes();
+      } else {
+        setError(body.message || 'تعذر توليد الكود');
+      }
+    } catch {
+      setError('حدث خطأ في الاتصال بالخادم');
     } finally { setSaving(false); }
   };
 
   const copyCode = () => {
-    navigator.clipboard.writeText(generatedCode);
+    navigator.clipboard.writeText(generatedCodes.join('\n'));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -87,7 +115,7 @@ export default function CodesPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => { setShowForm(true); setGeneratedCode(''); }} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm flex items-center gap-2 transition-colors">
+            <button onClick={() => { setShowForm(true); setGeneratedCodes([]); }} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm flex items-center gap-2 transition-colors">
               <Plus size={16} />توليد كود
             </button>
             <button onClick={fetchCodes} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-amber-400 transition-all" title="تحديث">
@@ -108,14 +136,13 @@ export default function CodesPage() {
             <div className="flex gap-3 items-end flex-wrap">
               <div className="flex-1 min-w-40">
                 <label className="block text-xs text-text-secondary mb-1">الخطة</label>
-                <select value={planCode} onChange={(e) => setPlanCode(e.target.value)} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm">
-                  <option value="trial">تجريبي</option>
-                  <option value="monthly">شهري</option>
-                  <option value="yearly">سنوي</option>
-                  <option value="starter">مبتدئ</option>
-                  <option value="professional">احترافي</option>
-                  <option value="enterprise">مؤسسات</option>
-                </select>
+                {plans.length > 0 ? (
+                  <select value={planCode} onChange={(e) => setPlanCode(e.target.value)} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm">
+                    {plans.map((p) => <option key={p.code} value={p.code}>{p.name} ({p.code})</option>)}
+                  </select>
+                ) : (
+                  <input value={planCode} onChange={(e) => setPlanCode(e.target.value)} placeholder="كود الباقة (مثل monthly)" dir="ltr" className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm" />
+                )}
               </div>
               <div className="w-32">
                 <label className="block text-xs text-text-secondary mb-1">المدة (أشهر)</label>
@@ -123,11 +150,17 @@ export default function CodesPage() {
               </div>
               <button onClick={generateCode} disabled={saving} className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-800 text-white rounded-xl text-sm flex items-center gap-2">{saving && <Loader2 size={16} className="animate-spin" />}توليد</button>
             </div>
-            {generatedCode && (
-              <div className="mt-4 p-3 bg-amber-950/30 border border-amber-700/30 rounded-xl flex items-center gap-3">
-                <code className="flex-1 text-amber-300 text-sm font-mono">{generatedCode}</code>
-                <button onClick={copyCode} className="p-2 hover:bg-amber-900/30 rounded-lg transition-colors">
-                  {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} className="text-amber-400" />}
+            {generatedCodes.length > 0 && (
+              <div className="mt-4 p-3 bg-amber-950/30 border border-amber-700/30 rounded-xl">
+                <p className="text-[0.7rem] text-amber-500/80 mb-2">⚠️ هذه الأكواد تُعرض مرة واحدة فقط — انسخها واحفظها الآن:</p>
+                {generatedCodes.map((code) => (
+                  <div key={code} className="flex items-center gap-3 py-1">
+                    <code className="flex-1 text-amber-300 text-sm font-mono">{code}</code>
+                  </div>
+                ))}
+                <button onClick={copyCode} className="mt-2 p-2 hover:bg-amber-900/30 rounded-lg transition-colors flex items-center gap-2 text-xs text-amber-400">
+                  {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                  {copied ? 'تم النسخ' : 'نسخ الكود'}
                 </button>
               </div>
             )}

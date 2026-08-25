@@ -216,6 +216,7 @@ export default function InvoiceViewPage() {
   const [invoice, setInvoice] = useState<ViewInvoice | null>(null);
   const [company, setCompany] = useState<ViewCompany | null>(null);
   const [zatcaData, setZatcaData] = useState<ZatcaData | null>(null);
+  const [zatcaError, setZatcaError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
@@ -240,7 +241,11 @@ export default function InvoiceViewPage() {
         } else {
           setError(invJson.message || 'فشل تحميل الفاتورة');
         }
-        if (zatcaJson.success) setZatcaData(zatcaJson.data);
+        if (zatcaJson.success) { setZatcaData(zatcaJson.data); setZatcaError(''); }
+        else if (invJson.success) {
+          // Surface why the tax QR is missing instead of rendering silently without it.
+          setZatcaError(zatcaJson.message || 'تعذر إنشاء الرمز الضريبي');
+        }
 
         // Load invoice template settings from DB
         try {
@@ -338,6 +343,12 @@ export default function InvoiceViewPage() {
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-bg-secondary pb-12">
+      {/* Tax QR failure notice (screen only — never printed) */}
+      {zatcaError && (
+        <div className="no-print mx-6 mt-4 bg-amber-500/10 border border-amber-600/30 text-amber-700 dark:text-amber-400 rounded-lg px-4 py-2.5 text-sm">
+          ⚠️ الرمز الضريبي (QR) غير ظاهر على الفاتورة: {zatcaError}
+        </div>
+      )}
       {/* Top Toolbar */}
       <div className="flex items-center justify-between px-6 py-3 border-b border-border bg-bg-primary no-print flex-wrap gap-3 sticky top-0 z-30 shadow-sm">
         <div className="flex items-center gap-3">
