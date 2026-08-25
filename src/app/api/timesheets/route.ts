@@ -75,6 +75,38 @@ export async function POST(request: NextRequest) {
     if (!body.employee_id || !body.date) {
       return error('رقم الموظف والتاريخ مطلوبان');
     }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(body.date))) return error('تاريخ الوردية غير صالح');
+
+    // Validate numeric inputs coming from the client — these feed payroll cost.
+    const breakMinutes = Number(body.break_minutes || 0);
+    if (!Number.isFinite(breakMinutes) || breakMinutes < 0 || breakMinutes > 1440) return error('دقائق الراحة غير صالحة');
+    const standardDay = Number(body.standard_hours || 8);
+    if (!Number.isFinite(standardDay) || standardDay < 1 || standardDay > 24) return error('ساعات اليوم القياسية غير صالحة');
+    let hourlyRate: number | null = null;
+    if (body.hourly_rate !== undefined && body.hourly_rate !== null && body.hourly_rate !== '') {
+      hourlyRate = Number(body.hourly_rate);
+      if (!Number.isFinite(hourlyRate) || hourlyRate < 0 || hourlyRate > 100000) return error('أجر الساعة غير صالح');
+    }
+
+    const checkIn = String(body.check_in || new Date().toISOString());
+    const checkOut = body.check_out ? String(body.check_out) : null;
+    const inTime = new Date(checkIn).getTime();
+    if (Number.isNaN(inTime)) return error('وقت الدخول غير صالح');
+    let outTime: number | null = null;
+    if (checkOut) {
+      outTime = new Date(checkOut).getTime();
+      if (Number.isNaN(outTime)) return error('وقت الخروج غير صالح');
+      if (outTime <= inTime) return error('وقت الخروج يجب أن يكون بعد وقت الدخول');
+      if ((outTime - inTime) / 3600000 > 24 * 7) return error('مدة الوردية غير منطقية');
+    }
+
+    // One open shift per employee — a second clock-in without clock-out is a data error.
+    if (!outTime) {
+      const { data: openShift } = await s.from('timesheets')
+        .select('id').eq('company_id', auth.companyId).eq('employee_id', body.employee_id)
+        .eq('status', 'in_progress').limit(1).maybeSingle();
+      if (openShift) return error('لدي هذا الموظف وردية مفتوحة بالفعل — أغلقها أولاً', 409);
+    }
 
     // عزل مستأجرين: الموظف والمشروع (إن وُجد) يجب أن ينتميا لهذه الشركة
     const { data: emp } = await s.from('employees')
@@ -87,16 +119,13 @@ export async function POST(request: NextRequest) {
     }
 
     const timesheetId = generateId();
-    const checkIn = String(body.check_in || new Date().toISOString());
-    const checkOut = body.check_out ? String(body.check_out) : null;
 
     // Calculate hours
     let regularHours = 0;
     let overtimeHours = 0;
-    if (checkOut) {
-      const totalMinutes = (new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 60000;
-      const totalHours = totalMinutes / 60;
-      const standardDay = Number(body.standard_hours || 8);
+    if (outTime !== null) {
+      const totalMinutes = (outTime - inTime) / 60000;
+      const totalHours = Math.max(0, (totalMinutes - breakMinutes) / 60);
       regularHours = Math.min(totalHours, standardDay);
       overtimeHours = Math.max(0, totalHours - standardDay);
     }
@@ -112,9 +141,9 @@ export async function POST(request: NextRequest) {
         check_out: checkOut,
         regular_hours: regularHours,
         overtime_hours: overtimeHours,
-        break_minutes: body.break_minutes || 0,
+        break_minutes: breakMinutes,
         work_type: body.work_type || 'normal', // normal, overtime, holiday, weekend
-        hourly_rate: body.hourly_rate || null,
+        hourly_rate: hourlyRate,
         description: body.description || null,
         status: checkOut ? 'completed' : 'in_progress',
         approved_by: null,
