@@ -25,21 +25,29 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (safeErr) throw safeErr;
     if (!safe || !(safe as Record<string, unknown>).account_id) return error('الخزينة/البنك غير موجود أو بلا حساب مرتبط', 404);
 
-    let q = s.from('journal_lines').select(`
-        debit, credit, description,
-        journal_entries!inner(id,number,date,status,reference_type)
-      `)
-      .eq('company_id', auth.companyId)
-      .eq('account_id', (safe as Record<string, unknown>).account_id as string)
-      .eq('journal_entries.status', 'posted');
-    if (from) q = q.gte('journal_entries.date', from);
-    if (to) q = q.lte('journal_entries.date', to);
-
-    const { data, error: qErr } = await q.order('date', { referencedTable: 'journal_entries' }).limit(5000);
-    if (qErr) throw qErr;
+    // Page through the full ledger instead of capping reads.
+    const raw: Array<Record<string, unknown>> = [];
+    const pageSize = 1000;
+    for (let offset = 0; ; offset += pageSize) {
+      let q = s.from('journal_lines').select(`
+          debit, credit, description,
+          journal_entries!inner(id,number,date,status,reference_type)
+        `)
+        .eq('company_id', auth.companyId)
+        .eq('account_id', (safe as Record<string, unknown>).account_id as string)
+        .eq('journal_entries.status', 'posted');
+      if (from) q = q.gte('journal_entries.date', from);
+      if (to) q = q.lte('journal_entries.date', to);
+      const { data, error: qErr } = await q
+        .order('date', { referencedTable: 'journal_entries' })
+        .range(offset, offset + pageSize - 1);
+      if (qErr) throw qErr;
+      raw.push(...(data || []));
+      if ((data || []).length < pageSize) break;
+    }
 
     let balance = 0; let totalDebit = 0; let totalCredit = 0;
-    const rows = (data || []).map((line: Record<string, unknown>, i: number) => {
+    const rows = raw.map((line: Record<string, unknown>, i: number) => {
       const je = line.journal_entries as Record<string, unknown> | null;
       const debit = Number(line.debit) || 0;
       const credit = Number(line.credit) || 0;
