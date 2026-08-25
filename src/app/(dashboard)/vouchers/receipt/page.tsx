@@ -29,11 +29,13 @@ interface ReceiptRow {
 }
 interface BankOption { id: string; name: string; }
 interface ClientOption { id: string; name: string; }
+interface ProjectOption { id: string; name: string; }
 interface ReceiptForm {
   date: string;
   receipt_type: string;
   bank_safe_id: string;
   contact_id: string;
+  project_id?: string;
   amount: number;
   reason: string;
 }
@@ -42,6 +44,7 @@ export default function ReceiptPage() {
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [banks, setBanks] = useState<BankOption[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -61,20 +64,23 @@ export default function ReceiptPage() {
     try {
       if (showSkeleton) setLoading(true);
       setError('');
-      const [recRes, bankRes, cliRes] = await Promise.all([
+      const [recRes, bankRes, cliRes, projRes] = await Promise.all([
         fetch('/api/vouchers/receipt'),
         fetch('/api/banks'),
         fetch('/api/clients'),
+        fetch('/api/projects'),
       ]);
-      const [recJson, bankJson, cliJson] = await Promise.all([
+      const [recJson, bankJson, cliJson, projJson] = await Promise.all([
         recRes.json(),
         bankRes.json(),
         cliRes.json(),
+        projRes.json(),
       ]);
       if (recJson.success) setReceipts(recJson.data?.receipts || []);
       else setError(recJson.message || 'فشل');
       if (bankJson.success) setBanks(bankJson.data?.banks || []);
       if (cliJson.success) setClients(cliJson.data?.clients || []);
+      if (projJson.success) setProjects(projJson.data?.rows || projJson.data || []);
     } catch {
       setError('فشل تحميل البيانات');
     } finally {
@@ -262,6 +268,12 @@ export default function ReceiptPage() {
                 options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
               />
             )}
+            <Select
+              label="المشروع (اختياري — لاحتساب أرباح المشروع)"
+              value={form.project_id ?? ''}
+              onChange={(v) => setForm({...form, project_id: v})}
+              options={[{ value: '', label: 'بدون مشروع' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+            />
             <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
             <Input label="البيان" value={form.reason} onChange={(e) => setForm({...form, reason: e.target.value})} placeholder="سبب القبض" className="col-span-2" />
           </div>

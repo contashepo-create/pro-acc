@@ -143,6 +143,7 @@ export async function POST(request: NextRequest) {
       p_auto_fifo: autoFifo,
       p_request_approval: threshold.requiresApproval,
       p_user_id: auth.userId,
+      p_project_id: (parsed.data as { project_id?: string | null }).project_id || null,
     });
     if (createErr) throw createErr;
     const voucher = data as Row;

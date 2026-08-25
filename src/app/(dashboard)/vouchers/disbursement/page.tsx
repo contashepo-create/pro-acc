@@ -36,6 +36,7 @@ interface DisbursementForm {
   bank_safe_id: string;
   contact_id: string;
   employee_id: string;
+  project_id?: string;
   amount: number;
   reason: string;
 }
@@ -45,6 +46,7 @@ export default function DisbursementPage() {
   const [banks, setBanks] = useState<BankSafeOption[]>([]);
   const [suppliers, setSuppliers] = useState<ContactOption[]>([]);
   const [employees, setEmployees] = useState<ContactOption[]>([]);
+  const [projects, setProjects] = useState<ContactOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -65,23 +67,26 @@ export default function DisbursementPage() {
     try {
       setLoading(true);
       setError('');
-      const [disRes, bankRes, supRes, empRes] = await Promise.all([
+      const [disRes, bankRes, supRes, empRes, projRes] = await Promise.all([
         fetch('/api/vouchers/disbursement'),
         fetch('/api/banks'),
         fetch('/api/contacts?type=supplier'),
         fetch('/api/employees'),
+        fetch('/api/projects'),
       ]);
-      const [disJson, bankJson, supJson, empJson] = await Promise.all([
+      const [disJson, bankJson, supJson, empJson, projJson] = await Promise.all([
         disRes.json(),
         bankRes.json(),
         supRes.json(),
         empRes.json(),
+        projRes.json(),
       ]);
       if (disJson.success) setDisbursements(disJson.data?.disbursements || []);
       else setError(disJson.message || 'فشل تحميل البيانات');
       if (bankJson.success) setBanks(bankJson.data?.banks || []);
       if (supJson.success) setSuppliers(supJson.data?.contacts || []);
       if (empJson.success) setEmployees(empJson.data?.employees || []);
+      if (projJson.success) setProjects(projJson.data?.rows || projJson.data || []);
     } catch (err) {
       setError('فشل تحميل البيانات');
       console.error('Failed to fetch disbursement data:', err);
@@ -291,6 +296,12 @@ export default function DisbursementPage() {
                 className="col-span-2"
               />
             )}
+            <Select
+              label="المشروع (اختياري — لاحتساب تكاليف المشروع)"
+              value={form.project_id ?? ''}
+              onChange={(v) => setForm({...form, project_id: v})}
+              options={[{ value: '', label: 'بدون مشروع' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+            />
             <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({...form, amount: parseFloat(e.target.value) || 0})} />
             <Input label="البيان" value={form.reason} onChange={(e) => setForm({...form, reason: e.target.value})} placeholder="سبب الصرف" className="col-span-2" />
           </div>
