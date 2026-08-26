@@ -147,6 +147,19 @@ interface PlanForm {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const togglePlan = async (plan: Plan) => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/admin/subscription-plans/' + plan.id, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: !plan.is_active }),
+      });
+      const body = await res.json();
+      if (body.success) fetchPlans(); else alert(body.message || 'فشل');
+    } catch { alert('خطأ في الاتصال'); }
+    finally { setSaving(false); }
+  };
+
   const openEdit = (plan: Plan) => {
     setEditingPlan(plan);
     setForm({

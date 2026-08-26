@@ -101,13 +101,7 @@ interface DetailData {
     });
     setSelectedCompany(company);
     setShowEditModal(true);
-  };
-
-  const openPlanChange = (company: Company) => {
-    setSelectedCompany(company);
-    setPlanForm({ plan_id: '', duration_days: 30, auto_renew: false });
-    setShowPlanModal(true);
-  };
+  };
 
   const doToggleStatus = (company: Company) => setMpAction({ kind: 'toggle', company });
   const doExtend = (company: Company) => setMpAction({ kind: 'extend', company });
@@ -152,22 +146,7 @@ interface DetailData {
       else alert(body.message || 'فشل');
     } catch { alert('خطأ في الاتصال'); }
     finally { setActionLoading(null); }
-  };
-
-  const doChangePlan = async () => {
-    setActionLoading('plan');
-    try {
-      const res = await fetch(`/api/admin/companies/${selectedCompany!.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'x-master-password': masterPassword },
-        body: JSON.stringify({ action: 'change_plan', ...planForm }),
-      });
-      const body = await res.json();
-      if (body.success) { setShowPlanModal(false); setMasterPassword(''); fetchCompanies(); }
-      else alert(body.message || 'فشل');
-    } catch { alert('خطأ في الاتصال'); }
-    finally { setActionLoading(null); }
-  };
+  };
 
 
   const filtered = companies.filter(c =>
@@ -258,8 +237,7 @@ interface DetailData {
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => openDetail(c)} title="تفاصيل" className="p-1.5 rounded-lg bg-sky-950/20 text-sky-400/70 border border-sky-800/20 hover:bg-sky-950/40"><Eye size={13} /></button>
-                          <button onClick={() => openEdit(c)} title="تعديل" className="p-1.5 rounded-lg bg-amber-950/20 text-text-secondary border border-amber-800/20 hover:bg-amber-950/40"><Edit3 size={13} /></button>
-                          <button onClick={() => openPlanChange(c)} title="تغيير الباقة" className="p-1.5 rounded-lg bg-purple-950/20 text-purple-400/70 border border-purple-800/20 hover:bg-purple-950/40"><CreditCard size={13} /></button>
+                          <button onClick={() => openEdit(c)} title="تعديل" className="p-1.5 rounded-lg bg-amber-950/20 text-text-secondary border border-amber-800/20 hover:bg-amber-950/40"><Edit3 size={13} /></button>
                           <button onClick={() => doExtend(c)} disabled={actionLoading === 'extend'} title="تمديد التجربة 7 أيام" className="p-1.5 rounded-lg bg-emerald-950/20 text-emerald-400/70 border border-emerald-800/20 hover:bg-emerald-950/40"><Calendar size={13} /></button>
                           <button onClick={() => doCancel(c)} disabled={actionLoading === 'cancel'} title="إلغاء الاشتراك" className="p-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40"><Ban size={13} /></button>
                           <button onClick={() => doToggleStatus(c)} disabled={actionLoading === c.id} title={c.is_active ? 'تعليق' : 'تفعيل'} className={`p-1.5 rounded-lg border ${c.is_active ? 'bg-red-950/20 text-red-400/70 border-red-800/20' : 'bg-emerald-950/20 text-emerald-400/70 border-emerald-800/20'}`}>
@@ -343,33 +321,11 @@ interface DetailData {
             </div>
           </div>
         )}
-
-        {/* Change Plan Modal */}
-        {showPlanModal && selectedCompany && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowPlanModal(false)}>
-            <div className="bg-bg-card border border-border rounded-2xl max-w-md w-full" onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between p-4 border-b border-border">
-                <h3 className="font-bold text-text-primary">تغيير باقة: {selectedCompany.name}</h3>
-                <button onClick={() => setShowPlanModal(false)} className="text-text-secondary/50"><X size={18} /></button>
-              </div>
-              <div className="p-4 space-y-3">
-                <select className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-amber-600" value={planForm.plan_id} onChange={e => setPlanForm({ ...planForm, plan_id: e.target.value })}>
-                  <option value="">— اختر الباقة —</option>
-                  {plans.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.price_monthly || 0}/شهر)</option>)}
-                </select>
-                <input type="number" className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-amber-600" placeholder="عدد الأيام" value={planForm.duration_days} onChange={e => setPlanForm({ ...planForm, duration_days: parseInt(e.target.value) || 30 })} />
-                <label className="flex items-center gap-2 text-sm text-amber-200"><input type="checkbox" checked={planForm.auto_renew} onChange={e => setPlanForm({ ...planForm, auto_renew: e.target.checked })} /> تجديد تلقائي</label>
-                <input className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-amber-600" placeholder="كلمة السر الرئيسية" type="password" value={masterPassword} onChange={e => setMasterPassword(e.target.value)} />
-                <button onClick={doChangePlan} disabled={actionLoading === 'plan'} className="w-full py-2.5 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-500 disabled:opacity-50">
-                  {actionLoading === 'plan' ? <Loader2 size={16} className="animate-spin mx-auto" /> : 'تغيير الباقة'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
+
+
 
 
