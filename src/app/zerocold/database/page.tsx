@@ -217,7 +217,7 @@ export default function ZerocoldDatabasePage() {
               </div>
               {dbInfo?.indexHealth?.issues && dbInfo.indexHealth.issues.length > 0 && (
                 <div className="mt-2">
-                  <p className="text-[0.65rem] text-red-400/70 mb-1.5">المشكلات:</p>
+                  <p className="text-[0.65rem] font-semibold text-red-300 mb-1.5">المشكلات:</p>
                   {dbInfo.indexHealth.issues.map((issue, i) => (
                     <p key={i} className="text-[0.65rem] text-text-muted mr-2">• {issue}</p>
                   ))}
@@ -272,7 +272,7 @@ export default function ZerocoldDatabasePage() {
                 <div key={i} className="p-2.5 rounded-lg bg-bg-secondary border border-border">
                   <p className="text-[0.65rem] text-text-secondary font-mono truncate mb-1" dir="ltr">{sq.query}</p>
                   <div className="flex items-center gap-3">
-                    <span className="text-[0.6rem] text-red-400/60">متوسط الوقت: {sq.avg_time}</span>
+                    <span className="text-[0.6rem] font-medium text-red-300">متوسط الوقت: {sq.avg_time}</span>
                     <span className="text-[0.6rem] text-text-secondary">العدد: {sq.count}</span>
                   </div>
                 </div>

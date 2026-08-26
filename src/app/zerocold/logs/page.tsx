@@ -169,7 +169,7 @@ export default function ZerocoldLogsPage() {
             <button
               onClick={handleClearLogs}
               disabled={clearing || logs.length === 0}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-bg-card border border-red-800/30 text-red-400/70 hover:text-red-400 hover:border-red-800/50 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-xs"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-bg-card border bg-red-950/60 border-red-700/60 text-red-200 hover:text-white hover:bg-red-800/70 hover:border-red-600 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-xs"
             >
               {clearing ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
               مسح السجل

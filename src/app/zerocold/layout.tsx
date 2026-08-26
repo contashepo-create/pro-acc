@@ -215,7 +215,7 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
           <div className="flex items-center gap-1 px-3">
             <button
               onClick={handleLogout}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-red-400/70 hover:text-red-400 hover:bg-red-950/20 transition-all"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-300 hover:text-white hover:bg-red-600/60 transition-all"
             >
               <LogOut size={14} />
               <span className="hidden sm:inline">تسجيل الخروج</span>
