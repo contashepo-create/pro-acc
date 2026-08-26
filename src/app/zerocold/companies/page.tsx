@@ -76,7 +76,12 @@ interface DetailData {
   const fetchPlans = async () => {
     const res = await fetch('/api/admin/subscription-plans');
     const body = await res.json();
-    if (body.success) setPlans(body.data || []);
+    if (body.success) {
+      const planList = Array.isArray(body.data?.plans)
+        ? body.data.plans
+        : (Array.isArray(body.data) ? body.data : []);
+      setPlans(planList);
+    }
   };
 
   // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- standard fetch pattern

@@ -41,7 +41,12 @@ export default function SubscriptionsPage() {
       if (subRes.status === 401) { router.replace('/zerocold/login'); return; }
       const [subBody, planBody] = await Promise.all([subRes.json(), planRes.json()]);
       if (subBody.success) setData(subBody.data?.subscriptions || subBody.data || []);
-      if (planBody.success) setPlans(planBody.data || []);
+      if (planBody.success) {
+        const planList = Array.isArray(planBody.data?.plans)
+          ? planBody.data.plans
+          : (Array.isArray(planBody.data) ? planBody.data : []);
+        setPlans(planList);
+      }
     } catch { setError('خطأ في الاتصال'); }
     finally { setLoading(false); }
   };

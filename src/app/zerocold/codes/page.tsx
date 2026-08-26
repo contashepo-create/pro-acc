@@ -51,8 +51,11 @@ export default function CodesPage() {
         const res = await fetch('/api/admin/subscription-plans');
         if (res.status === 401) return;
         const body = await res.json();
-        if (body.success && Array.isArray(body.data)) {
-          const active = body.data.filter((p: { is_active?: boolean; code?: string }) => p.is_active !== false && !!p.code);
+        const list = Array.isArray(body?.data?.plans)
+          ? body.data.plans
+          : (Array.isArray(body?.data) ? body.data : []);
+        if (body.success && list.length > 0) {
+          const active = list.filter((p: { is_active?: boolean; code?: string }) => p.is_active !== false && !!p.code);
           setPlans(active.map((p: { code: string; name: string }) => ({ code: p.code, name: p.name })));
           if (active.length) {
             setPlanCode((current) => (active.some((p: { code: string }) => p.code === current) ? current : active[0].code));
