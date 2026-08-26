@@ -110,7 +110,7 @@ interface DetailData {
     setMpAction({ kind: 'cancel', company });
   };
 
-  const runMasterAction = async (password: string) => {
+  const runMasterAction = async (password: string, extra?: string) => {
     if (!mpAction?.company) return;
     const company = mpAction.company;
     const headers = { 'Content-Type': 'application/json', 'x-master-password': password };
@@ -119,10 +119,9 @@ interface DetailData {
       res = await fetch('/api/admin/companies/' + company.id, { method: 'PATCH', headers,
         body: JSON.stringify({ action: 'toggle_status', is_active: !company.is_active }) });
     } else if (mpAction.kind === 'extend') {
-      const reason = mpAction.kind === 'extend' ? '' : '';
-      res = await fetch('/api/admin/companies/' + company.id + '/extend-trial', { method: 'POST',
+            res = await fetch('/api/admin/companies/' + company.id + '/extend-trial', { method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ days: 7, reason, masterPassword: password }) });
+        body: JSON.stringify({ days: 7, reason: extra, masterPassword: password }) });
     } else {
       res = await fetch('/api/admin/companies/' + company.id, { method: 'PATCH', headers,
         body: JSON.stringify({ action: 'cancel_subscription' }) });
@@ -325,6 +324,7 @@ interface DetailData {
     </div>
   );
 }
+
 
 
 

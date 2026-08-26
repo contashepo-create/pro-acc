@@ -8,16 +8,20 @@ export function MasterPasswordModal({
   isOpen,
   title,
   description,
+  extraLabel,
   onCancel,
   onSubmit,
 }: {
   isOpen: boolean;
   title: string;
   description?: string;
+  /** Optional secondary text field (e.g. reason for trial extension). */
+  extraLabel?: string;
   onCancel: () => void;
-  onSubmit: (masterPassword: string) => Promise<void>;
+  onSubmit: (masterPassword: string, extra?: string) => Promise<void>;
 }) {
   const [password, setPassword] = useState('');
+  const [extra, setExtra] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -27,8 +31,8 @@ export function MasterPasswordModal({
     if (!password) { setError('أدخل كلمة المرور الرئيسية'); return; }
     setBusy(true); setError('');
     try {
-      await onSubmit(password);
-      setPassword('');
+      await onSubmit(password, extra.trim() || undefined);
+      setPassword(''); setExtra('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'فشلت العملية');
     } finally { setBusy(false); }
@@ -53,6 +57,15 @@ export function MasterPasswordModal({
           onChange={(e) => setPassword(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
         />
+        {extraLabel && (
+          <input
+            type="text"
+            className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-amber-600"
+            placeholder={extraLabel}
+            value={extra}
+            onChange={(e) => setExtra(e.target.value)}
+          />
+        )}
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex gap-2 pt-1">
           <button onClick={onCancel} disabled={busy} className="flex-1 py-2 rounded-lg border border-border text-text-secondary text-sm hover:bg-bg-hover">إلغاء</button>
