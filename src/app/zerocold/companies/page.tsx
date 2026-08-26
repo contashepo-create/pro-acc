@@ -105,10 +105,7 @@ interface DetailData {
 
   const doToggleStatus = (company: Company) => setMpAction({ kind: 'toggle', company });
   const doExtend = (company: Company) => setMpAction({ kind: 'extend', company });
-  const doCancel = (company: Company) => {
-    if (!confirm('إلغاء اشتراك ' + company.name + '؟')) return;
-    setMpAction({ kind: 'cancel', company });
-  };
+  const doCancel = (company: Company) => setMpAction({ kind: 'cancel', company });
 
   const runMasterAction = async (password: string, extra?: string) => {
     if (!mpAction?.company) return;
@@ -124,7 +121,7 @@ interface DetailData {
         body: JSON.stringify({ days: 7, reason: extra, masterPassword: password }) });
     } else {
       res = await fetch('/api/admin/companies/' + company.id, { method: 'PATCH', headers,
-        body: JSON.stringify({ action: 'cancel_subscription' }) });
+        body: JSON.stringify({ action: 'cancel_subscription', ...(extra ? { cancel_reason: extra } : {}) }) });
     }
     const body = await res.json();
     if (!body.success) throw new Error(body.message || 'فشلت العملية');
@@ -296,6 +293,33 @@ interface DetailData {
               ) : <div className="p-8 text-center text-text-secondary/50"><Loader2 size={24} className="animate-spin mx-auto" /></div>}
             </div>
           </div>
+        )}
+
+        {/* Master-password modal for sensitive actions (toggle / extend / cancel) */}
+        {mpAction?.company && (
+          <MasterPasswordModal
+            isOpen={true}
+            title={
+              mpAction.kind === 'toggle'
+                ? (mpAction.company.is_active ? 'تعليق شركة: ' : 'تفعيل شركة: ') + mpAction.company.name
+                : mpAction.kind === 'extend'
+                ? 'تمديد فترة التجربة: ' + mpAction.company.name
+                : 'إلغاء اشتراك شركة: ' + mpAction.company.name
+            }
+            extraLabel={
+              mpAction.kind === 'extend' ? 'سبب التمديد (اختياري)'
+                : mpAction.kind === 'cancel' ? 'سبب الإلغاء (اختياري)'
+                : undefined
+            }
+            submitLabel={
+              mpAction.kind === 'toggle'
+                ? (mpAction.company.is_active ? 'تأكيد التعليق' : 'تأكيد التفعيل')
+                : mpAction.kind === 'cancel' ? 'تأكيد الإلغاء' : 'تأكيد التمديد'
+            }
+            submitClassName={mpAction.kind === 'cancel' ? 'bg-red-600 hover:bg-red-500' : 'bg-amber-600 hover:bg-amber-500'}
+            onCancel={() => setMpAction(null)}
+            onSubmit={(password, extra) => runMasterAction(password, extra)}
+          />
         )}
 
         {/* Edit Modal */}
