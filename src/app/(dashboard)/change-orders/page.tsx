@@ -15,6 +15,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { fetchRecord, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { PrintButton } from '@/components/ui/PrintButton';
 import { formatCurrency } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
 
@@ -182,6 +183,6 @@ export default function ChangeOrdersPage() {
         title={viewing ? `أمر تغيير ${viewing.number}` : 'عرض أمر التغيير'}
         record={viewing}
       />
-    </div>
+    <PrintButton /></div>
   );
 }

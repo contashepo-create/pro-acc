@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { PrintButton } from '@/components/ui/PrintButton';
 
 interface WarehouseRow { id: string; name: string; location?: string; is_active?: boolean; }
 interface WarehouseForm { name: string; location: string; }
@@ -122,6 +123,6 @@ export default function WarehousesPage() {
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
-    </div>
+    <PrintButton /></div>
   );
 }

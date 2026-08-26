@@ -5,6 +5,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
+import { PrintButton } from '@/components/ui/PrintButton';
 import { formatCurrency } from '@/lib/utils';
 
 interface WipRow {
@@ -74,6 +75,6 @@ export default function WipReportPage() {
           <DataTable columns={columns} data={rows} pageSize={20} />
         </>
       )}
-    </div>
+    <PrintButton /></div>
   );
 }

@@ -14,6 +14,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatCurrency } from '@/lib/utils';
 import { fetchRecord, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { PrintButton } from '@/components/ui/PrintButton';
 
 interface WorkerRow { id: string; name: string; phone?: string; daily_wage?: number; is_active?: boolean; }
 interface WorkerForm { name: string; phone: string; daily_wage: number; }
@@ -124,6 +125,6 @@ export default function DailyWorkersPage() {
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
-    </div>
+    <PrintButton /></div>
   );
 }

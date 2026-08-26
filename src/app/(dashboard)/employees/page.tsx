@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
+import { PrintButton } from '@/components/ui/PrintButton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 
@@ -216,6 +217,6 @@ export default function EmployeesPage() {
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
-    </div>
+    <PrintButton /></div>
   );
 }

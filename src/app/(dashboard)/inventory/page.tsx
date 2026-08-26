@@ -11,6 +11,7 @@ import { Select } from '@/components/ui/Select';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
+import { PrintButton } from '@/components/ui/PrintButton';
 import { formatCurrency } from '@/lib/utils';
 
 interface InventoryItemRow {
@@ -167,6 +168,6 @@ export default function InventoryPage() {
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
-    </div>
+    <PrintButton /></div>
   );
 }

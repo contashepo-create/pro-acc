@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { toast } from '@/components/ui/Toast';
+import { PrintButton } from '@/components/ui/PrintButton';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { apiFetch } from '@/lib/api-client';
 import { formatDocumentNumber } from '@/lib/document-number';
@@ -135,6 +136,6 @@ export default function JournalPage() {
           </div>
         ) : null}
       />
-    </div>
+    <PrintButton /></div>
   );
 }

@@ -18,6 +18,7 @@ import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { PrintButton } from '@/components/ui/PrintButton';
 import { formatDocumentNumber } from '@/lib/document-number';
 
 interface OrderItem {
@@ -350,6 +351,6 @@ export default function PurchaseOrdersPage() {
           </div>
         ) : null}
       />
-    </div>
+    <PrintButton /></div>
   );
 }

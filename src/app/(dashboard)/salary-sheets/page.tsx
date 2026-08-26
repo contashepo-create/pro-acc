@@ -14,6 +14,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { PrintButton } from '@/components/ui/PrintButton';
 
 interface SalarySheetRow {
   id: string;
@@ -156,6 +157,6 @@ export default function SalarySheetsPage() {
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
-    </div>
+    <PrintButton /></div>
   );
 }

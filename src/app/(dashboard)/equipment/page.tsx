@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
+import { PrintButton } from '@/components/ui/PrintButton';
 import { formatCurrency } from '@/lib/utils';
 
 const costTypes = [
@@ -121,6 +122,6 @@ export default function EquipmentCostsPage() {
           <Input label="ساعات الاستخدام" type="number" value={form.usage_hours} onChange={(e) => setForm({ ...form, usage_hours: parseFloat(e.target.value) || 0 })} />
         </div>
       </Modal>
-    </div>
+    <PrintButton /></div>
   );
 }
