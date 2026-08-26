@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, notFound, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { isValidDate } from '@/lib/utils';
 
 import type { Row } from '@/lib/types';
 

@@ -17,6 +17,8 @@ export interface LookupDef {
   /** Comma-separated extra fields to fetch alongside id. */
   fields: string;
   label: (row: Row, maps: LookupMaps) => string;
+  /** Other lookup tables this label depends on (fetched too). */
+  deps?: string[];
 }
 
 export interface ReportColumn {
@@ -60,6 +62,7 @@ export const LOOKUP_DEFS: Record<string, LookupDef> = {
   journal_entries: { fields: 'number, date, description', label: (r) => (r.number != null ? `#${r.number}` : '') },
   custodies: {
     fields: 'employee_id, date',
+    deps: ['employees'],
     label: (r, maps) => {
       const emp = r.employee_id ? maps.employees?.get(String(r.employee_id)) : null;
       const who = emp ? String(emp.name ?? '') : '';
@@ -480,11 +483,17 @@ export function getReport(id: string): ReportSpec | undefined {
 /** Lookup tables required by a set of reports (excluding self-referencing ones the source already provides). */
 export function requiredLookupTables(specs: ReportSpec[], companyId: string): { table: string; companyId: string }[] {
   const needed = new Set<string>();
+  const addWithDeps = (table: string) => {
+    if (needed.has(table)) return;
+    needed.add(table);
+    // اجلب جداول يعتمد عليها عرض هذا الجدول (مثل custodies → employees)
+    for (const dep of LOOKUP_DEFS[table]?.deps ?? []) addWithDeps(dep);
+  };
   for (const spec of specs) {
     for (const col of spec.columns) {
       if (col.lookupTable) {
         // A table can be both source and lookup (accounts parent) — fetching it is still fine.
-        needed.add(col.lookupTable);
+        addWithDeps(col.lookupTable);
       }
     }
   }

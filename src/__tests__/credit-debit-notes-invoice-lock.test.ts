@@ -276,4 +276,16 @@ describe('ميجريشن 090 — قفل الفواتير والصافي (فحص 
     expect(sql).toContain('الأصل + المدين − الدائن المعتمد');
     expect(sql).not.toContain('v_credited+v_total>v_invoice.total');
   });
+
+  test('ميجريشن 091 — الإشعارات المدينة تدخل صافي المبيعات الضريبية وبيلينغ المشاريع', () => {
+    const netting = fs.readFileSync(path.join(process.cwd(), 'src', 'migrations', '091-debit-notes-report-netting.sql'), 'utf8');
+    expect(netting).toContain('CREATE OR REPLACE FUNCTION public.get_vat_return_summary(');
+    expect(netting).toContain("'totalSales',GREATEST(sales.total_sales+debits.debit_sales-credits.credit_sales,0)");
+    expect(netting).toContain('CREATE OR REPLACE FUNCTION public.get_project_billing_totals(');
+    // عمود credits = الدائن − المدين لتبقى هوية net = billed − credits
+    expect(netting).toContain('COALESCE(c.amount,0)-COALESCE(d.amount,0)');
+    // التمييز الصريح بين النوعين في CTEs
+    expect((netting.match(/cn\.note_type='credit'/g) || []).length).toBeGreaterThanOrEqual(2);
+    expect((netting.match(/cn\.note_type='debit'/g) || []).length).toBeGreaterThanOrEqual(2);
+  });
 });
