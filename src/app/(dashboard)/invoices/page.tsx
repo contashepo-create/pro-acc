@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, ArrowRight, FileText, Save, X } from 'lucide-react';
+import { Plus, Trash2, ArrowRight, FileText, Save, X, FileMinus, FilePlus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -15,7 +15,6 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { toDateInput } from '@/lib/form-utils';
 import { formatDocumentNumber } from '@/lib/document-number';
 
 interface InvoiceItem {
@@ -36,7 +35,6 @@ const emptyItem: InvoiceItem = {
   item_type: 'service', unit: 'وحدة', save_to_inventory: false,
 };
 
-interface RawApiItem { id?: string; description?: string; quantity?: number; unit_price?: number; total?: number; item_type?: string; unit?: string; }
 interface SalesInvoiceRow {
   id: string;
   number?: string;
@@ -66,7 +64,6 @@ export default function InvoicesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showEditor, setShowEditor] = useState(false);
-  const [editingInvoice, setEditingInvoice] = useState<SalesInvoiceRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [statusTab, setStatusTab] = useState('all');
@@ -105,7 +102,6 @@ export default function InvoicesPage() {
   useEffect(() => { fetchData(); }, []);
 
   const openNewInvoice = () => {
-    setEditingInvoice(null);
     setForm({
       client_id: '',
       project_id: '',
@@ -119,36 +115,8 @@ export default function InvoicesPage() {
     setShowEditor(true);
   };
 
-  const handleEdit = async (invoice: SalesInvoiceRow) => {
-    try {
-      const res = await fetch(`/api/invoices/${invoice.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingInvoice(invoice);
-        setForm({
-          client_id: json.data.contact_id || json.data.client_id || '',
-          project_id: json.data.project_id || '',
-          date: toDateInput(json.data.date),
-          due_date: toDateInput(json.data.due_date),
-          notes: json.data.notes || '',
-          vat_enabled: Number(json.data.vat_rate || json.data.tax_rate || 0) > 0,
-          items: (json.data.items || []).map((i: RawApiItem) => ({
-            id: i.id,
-            description: String(i.description ?? ''),
-            quantity: Number(i.quantity) || 0,
-            unitPrice: Number(i.unit_price) || 0,
-            discount: 0,
-            total: Number(i.total) || 0,
-            item_type: (i.item_type as InvoiceItem['item_type']) || 'service',
-            unit: i.unit || 'وحدة',
-            save_to_inventory: false,
-          })) || [{ ...emptyItem }],
-        });
-        setSaveError('');
-        setShowEditor(true);
-      } else { toast.error(json.message || 'فشل تحميل الفاتورة'); }
-    } catch { toast.error('خطأ في الاتصال بالخادم'); }
-  };
+  // ⛔ لا يوجد تعديل للفاتورة: المستند غير قابل للتعديل نهائياً بعد الإنشاء
+  // (مفروض بمُشغِّل قاعدة البيانات). التصحيح عبر إشعار دائن/مدين فقط.
 
   const handleSave = async () => {
     if (!form.client_id) { setSaveError('يجب اختيار عميل'); return; }
@@ -162,11 +130,8 @@ export default function InvoicesPage() {
       const vatAmount = subtotal * vatRate;
       const total = subtotal + vatAmount;
 
-      const url = editingInvoice ? `/api/invoices/${editingInvoice.id}` : '/api/invoices';
-      const method = editingInvoice ? 'PUT' : 'POST';
-
-      const res = await fetch(url, {
-        method,
+      const res = await fetch('/api/invoices', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clientId: form.client_id,
@@ -185,8 +150,7 @@ export default function InvoicesPage() {
       const json = await res.json();
       if (json.success) {
         setShowEditor(false);
-        setEditingInvoice(null);
-        toast.success(editingInvoice ? 'تم تحديث الفاتورة بنجاح' : 'تم إضافة الفاتورة بنجاح');
+        toast.success('تم إضافة الفاتورة بنجاح');
         fetchData();
       } else { setSaveError(json.message || 'فشل الحفظ'); }
     } catch { setSaveError('خطأ في الاتصال بالخادم'); } finally { setSaving(false); }
@@ -281,11 +245,27 @@ export default function InvoicesPage() {
     { key: 'paid_amount', label: 'المدفوع', render: (row: SalesInvoiceRow) => formatCurrency(row.paid_amount) },
     { key: 'actions', label: '', render: (row: SalesInvoiceRow) => (
       <div className="flex items-center gap-1">
+        {/* بديل التعديل: إشعار دائن (تخفيض) / إشعار مدين (زيادة) */}
+        <button
+          type="button"
+          title="إشعار دائن (تخفيض) — بديل التعديل"
+          className="p-2 rounded-md text-success hover:bg-success/10 transition-colors"
+          onClick={() => { window.location.href = `/credit-notes?invoice=${row.id}&type=credit`; }}
+        >
+          <FileMinus size={16} />
+        </button>
+        <button
+          type="button"
+          title="إشعار مدين (زيادة) — بديل التعديل"
+          className="p-2 rounded-md text-warning hover:bg-warning/10 transition-colors"
+          onClick={() => { window.location.href = `/credit-notes?invoice=${row.id}&type=debit`; }}
+        >
+          <FilePlus size={16} />
+        </button>
         <ActionButtons
           item={row}
           onView={() => { window.location.href = `/invoices/${row.id}/view`; }}
           onPrint={() => { window.open(`/invoices/${row.id}/view?print=1`, '_blank', 'noopener,noreferrer'); }}
-          onEdit={handleEdit}
           onDelete={handleDelete}
         />
       </div>
@@ -299,18 +279,18 @@ export default function InvoicesPage() {
         {/* Editor Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-border bg-bg-secondary">
           <div className="flex items-center gap-3 min-w-0">
-            <Button variant="ghost" size="sm" onClick={() => { setShowEditor(false); setEditingInvoice(null); }}>
+            <Button variant="ghost" size="sm" onClick={() => { setShowEditor(false); }}>
               <ArrowRight size={20} />
             </Button>
             <div className="flex items-center gap-2 min-w-0">
               <FileText size={24} className="text-accent shrink-0" />
               <h1 className="text-lg sm:text-xl font-bold text-text-primary truncate">
-                {editingInvoice ? `تعديل فاتورة #${editingInvoice.number}` : 'فاتورة جديدة'}
+                فاتورة جديدة — غير قابلة للتعديل بعد الحفظ
               </h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" onClick={() => { setShowEditor(false); setEditingInvoice(null); }}>
+            <Button variant="ghost" onClick={() => { setShowEditor(false); }}>
               <X size={18} /> إلغاء
             </Button>
             <Button onClick={handleSave} disabled={saving} leftIcon={<Save size={18} />}>
@@ -537,9 +517,9 @@ export default function InvoicesPage() {
               {/* Action buttons */}
               <div className="px-6 py-4 border-t border-border space-y-2">
                 <Button onClick={handleSave} disabled={saving} className="w-full" leftIcon={<Save size={18} />}>
-                  {saving ? 'جاري الحفظ...' : editingInvoice ? 'تحديث الفاتورة' : 'حفظ الفاتورة'}
+                  {saving ? 'جاري الحفظ...' : 'حفظ الفاتورة'}
                 </Button>
-                <Button variant="ghost" className="w-full" onClick={() => { setShowEditor(false); setEditingInvoice(null); }}>
+                <Button variant="ghost" className="w-full" onClick={() => { setShowEditor(false); }}>
                   إلغاء
                 </Button>
               </div>

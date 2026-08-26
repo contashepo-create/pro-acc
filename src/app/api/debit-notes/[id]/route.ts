@@ -18,7 +18,7 @@ export async function GET(
     const s = sb();
 
     const { data: note, error: noteError } = await s.from('credit_notes')
-      .select('*').eq('id', id).eq('company_id', auth.companyId).eq('note_type', 'credit').maybeSingle();
+      .select('*').eq('id', id).eq('company_id', auth.companyId).eq('note_type', 'debit').maybeSingle();
     if (noteError) throw noteError;
     if (!note) return notFound();
     const row = note as Row;
@@ -41,7 +41,7 @@ export async function GET(
     for (const result of [contactResult, invoiceResult, projectResult]) if (result.error) throw result.error;
     if ((row.contact_id && !contactResult.data) || (row.invoice_id && !invoiceResult.data)
       || (row.project_id && !projectResult.data)) {
-      throw new Error('Credit note contains a missing or cross-tenant relationship');
+      throw new Error('Debit note contains a missing or cross-tenant relationship');
     }
 
     return success({
@@ -56,6 +56,7 @@ export async function GET(
   }
 }
 
+/** DELETE = إلغاء الإشعار المدين مع قيد عكسي (لا حذف مادي). */
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }

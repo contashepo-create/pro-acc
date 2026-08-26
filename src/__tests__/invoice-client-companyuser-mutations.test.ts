@@ -1,6 +1,6 @@
 /**
- * Route-boundary tests for invoices/[id] PUT/PATCH, clients/[id] PUT/DELETE,
- * company/users/[id] DELETE.
+ * Route-boundary tests for invoices/[id] immutability (no PUT) + PATCH cancel,
+ * clients/[id] PUT/DELETE, company/users/[id] DELETE.
  */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
@@ -57,7 +57,7 @@ function makeDb(db: Record<string, Row[]>) {
 let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
-import { PUT as invPUT, PATCH as invPATCH } from '@/app/api/invoices/[id]/route';
+import * as invRoute from '@/app/api/invoices/[id]/route';
 import type { TestBuilder } from './mocks';
 import type { NextRequest } from 'next/server';
 import { PUT as clPUT, DELETE as clDELETE } from '@/app/api/clients/[id]/route';
@@ -85,37 +85,24 @@ function baseDb() {
 
 beforeEach(() => { resetRateLimits(); mockDb = makeDb(baseDb()); });
 
-describe('invoices/[id] PUT', () => {
-  test('updates presentation metadata', async () => {
-    mockDb.rpcResults.set('update_sales_invoice_metadata', { data: { id: ID1 }, error: null });
-    const res = await invPUT(req('admin', 'PUT', 'http://localhost/x', { notes: 'ملاحظة' }), { params: Promise.resolve({ id: ID1 }) });
-    expect(res.status).toBe(200);
+describe('invoices/[id] immutability (المحور الثاني)', () => {
+  test('لا يوجد مسار تعديل (PUT) للفاتورة نهائياً — البديل الإشعارات الدائنة/المدينة', async () => {
+    expect((invRoute as Record<string, unknown>).PUT).toBeUndefined();
+    expect(typeof invRoute.GET).toBe('function');
+    // الإلغاء فقط مسموح عبر PATCH
+    expect(typeof invRoute.PATCH).toBe('function');
   });
 
-  test('rejects changing immutable accounting fields (409)', async () => {
-    const res = await invPUT(req('admin', 'PUT', 'http://localhost/x', { total: 100 }), { params: Promise.resolve({ id: ID1 }) });
-    expect(res.status).toBe(409);
-  });
-
-  test('rejects no editable fields and invalid due date', async () => {
-    const res1 = await invPUT(req('admin', 'PUT', 'http://localhost/x', {}), { params: Promise.resolve({ id: ID1 }) });
+  test('PATCH يرفض أي حالة غير الإلغاء', async () => {
+    const res1 = await invRoute.PATCH(req('admin', 'PATCH', 'http://localhost/x', { status: 'paid' }), { params: Promise.resolve({ id: ID1 }) });
     expect(res1.status).toBe(400);
-    const res2 = await invPUT(req('admin', 'PUT', 'http://localhost/x', { due_date: 'bad' }), { params: Promise.resolve({ id: ID1 }) });
-    expect(res2.status).toBe(400);
-  });
-});
-
-describe('invoices/[id] PATCH', () => {
-  test('rejects marking paid manually and non-cancelled status', async () => {
-    const res1 = await invPATCH(req('admin', 'PATCH', 'http://localhost/x', { status: 'paid' }), { params: Promise.resolve({ id: ID1 }) });
-    expect(res1.status).toBe(400);
-    const res2 = await invPATCH(req('admin', 'PATCH', 'http://localhost/x', { status: 'partial' }), { params: Promise.resolve({ id: ID1 }) });
+    const res2 = await invRoute.PATCH(req('admin', 'PATCH', 'http://localhost/x', { status: 'partial' }), { params: Promise.resolve({ id: ID1 }) });
     expect(res2.status).toBe(400);
   });
 
-  test('cancels an invoice', async () => {
+  test('PATCH يلغي الفاتورة عبر cancel_sales_invoice_atomic', async () => {
     mockDb.rpcResults.set('cancel_sales_invoice_atomic', { data: { id: ID1 }, error: null });
-    const res = await invPATCH(req('admin', 'PATCH', 'http://localhost/x', { status: 'cancelled' }), { params: Promise.resolve({ id: ID1 }) });
+    const res = await invRoute.PATCH(req('admin', 'PATCH', 'http://localhost/x', { status: 'cancelled' }), { params: Promise.resolve({ id: ID1 }) });
     expect(res.status).toBe(200);
   });
 });

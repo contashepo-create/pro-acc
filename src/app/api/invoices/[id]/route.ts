@@ -98,49 +98,12 @@ export async function GET(
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params: paramsPromise }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const auth = await requireModulePermission(request, 'invoices', 'update');
-    const { id } = await paramsPromise;
-    if (!UUID_RE.test(id)) return error('معرّف الفاتورة غير صالح');
-    const s = sb();
-    const body = await parseBody<Row>(request);
-    // Posted financial fields are immutable; only presentation metadata can
-    // change, under a row lock that cannot race with cancellation.
-    const immutableFields = [
-      'items', 'date', 'clientId', 'contact_id', 'projectId', 'project_id',
-      'vatRate', 'vat_rate', 'vatAmount', 'vat_amount', 'tax_rate', 'tax_amount',
-      'vatEnabled', 'subtotal', 'total',
-    ];
-    if (immutableFields.some((field) => body[field] !== undefined)) {
-      return error('لا يمكن تعديل البيانات المحاسبية لفاتورة مرحّلة؛ ألغِ الفاتورة وأنشئ أخرى', 409);
-    }
-    if (body.notes !== undefined && (typeof body.notes !== 'string' || body.notes.length > 2000)) {
-      return error('الملاحظات طويلة جداً');
-    }
-    const dueDate = body.dueDate ?? body.due_date;
-    if (dueDate !== undefined && (typeof dueDate !== 'string' || !isValidDate(dueDate))) {
-      return error('تاريخ الاستحقاق غير صالح');
-    }
-    if (body.notes === undefined && dueDate === undefined) return error('لا توجد حقول قابلة للتعديل');
-    const { data: updated, error: updateError } = await s.rpc('update_sales_invoice_metadata', {
-      p_company_id: auth.companyId,
-      p_invoice_id: id,
-      p_due_date: dueDate || null,
-      p_notes: typeof body.notes === 'string' ? body.notes : '',
-      p_notes_set: body.notes !== undefined,
-      p_user_id: auth.userId,
-    });
-    if (updateError) throw updateError;
-    return success(updated);
-  } catch (err) {
-    return handleApiError(err);
-  }
-}
-
+/**
+ * ⛔ لا يوجد PUT/PATCH للتعديل هنا — فاتورة البيع بعد إنشائها مستند غير قابل
+ * للتعديل نهائياً (مفروض أيضاً بمُشغِّل قاعدة البيانات trg_sales_invoices_immutable).
+ * كل تصحيح يمر عبر الإشعارات الدائنة/المدينة:
+ *   POST /api/credit-notes  (تخفيض)   —   POST /api/debit-notes (زيادة)
+ */
 export async function PATCH(
   request: NextRequest,
   { params: paramsPromise }: { params: Promise<{ id: string }> }

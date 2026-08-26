@@ -8,7 +8,7 @@ import type { Row } from '@/lib/types';
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/** GET /api/credit-notes?projectId=&invoiceId= */
+/** GET /api/debit-notes?invoiceId=&projectId= — قائمة الإشعارات المدينة */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'credit_notes', 'read');
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     let query = s.from('credit_notes')
       .select('*', { count: 'exact' })
       .eq('company_id', auth.companyId)
-      .eq('note_type', 'credit');
+      .eq('note_type', 'debit');
     if (projectId) query = query.eq('project_id', projectId);
     if (invoiceId) query = query.eq('invoice_id', invoiceId);
 
@@ -54,21 +54,22 @@ export async function GET(request: NextRequest) {
     const invoiceNumbers = names(invoicesResult.data, 'number');
     const projectNames = names(projectsResult.data, 'name');
 
-    const creditNotes = rows.map((note) => ({
+    const debitNotes = rows.map((note) => ({
       ...note,
       contact_name: contactNames[String(note.contact_id)] || null,
       invoice_number: invoiceNumbers[String(note.invoice_id)] || null,
       project_name: projectNames[String(note.project_id)] || null,
     }));
-    return success({ credit_notes: creditNotes, total: count || 0, page, pageSize });
+    return success({ debit_notes: debitNotes, total: count || 0, page, pageSize });
   } catch (err) {
     return handleApiError(err);
   }
 }
 
 /**
- * POST /api/credit-notes
- * Create a credit note with proper journal entry
+ * POST /api/debit-notes
+ * إشعار مدين: زيادة مستحقات العميل بديلاً عن تعديل الفاتورة (ممنوع تعديلها).
+ * القيد: من ح/ العملاء إلى ح/ الإيراد + ضريبة القيمة المضافة.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -98,9 +99,9 @@ export async function POST(request: NextRequest) {
       return error('نسبة الضريبة غير صالحة');
     }
 
-    // The linked invoice is row-locked before the remaining credit is checked.
-    // Number, note, lines, journal and audit then commit in one transaction.
-    const { data: creditNote, error: createError } = await s.rpc('create_credit_note_atomic', {
+    // The linked invoice is row-locked inside the RPC; number, note, lines,
+    // journal and audit commit in one atomic transaction.
+    const { data: debitNote, error: createError } = await s.rpc('create_debit_note_atomic', {
       p_company_id: auth.companyId,
       p_invoice_id: invoice_id || null,
       p_project_id: project_id || null,
@@ -112,7 +113,7 @@ export async function POST(request: NextRequest) {
       p_user_id: auth.userId,
     });
     if (createError) throw createError;
-    return success(creditNote, 201);
+    return success(debitNote, 201);
   } catch (err) {
     return handleApiError(err);
   }

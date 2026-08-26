@@ -146,7 +146,7 @@ describe('change-orders/[id]', () => {
 
 describe('credit-notes', () => {
   test('GET lists credit notes with names', async () => {
-    mockDb = makeDb({ ...baseDb(), credit_notes: [{ id: ID1, company_id: C1, contact_id: 'c1', invoice_id: 'i1', project_id: 'p1' }],
+    mockDb = makeDb({ ...baseDb(), credit_notes: [{ id: ID1, company_id: C1, note_type: 'credit', contact_id: 'c1', invoice_id: 'i1', project_id: 'p1' }],
       contacts: [{ id: 'c1', name: 'عميل', company_id: C1 }], invoices: [{ id: 'i1', number: 'INV-1', company_id: C1 }], projects: [{ id: 'p1', name: 'مشروع', company_id: C1 }] });
     const res = await cnGET(req('admin', 'GET', 'http://localhost/api/credit-notes'));
     expect(res.status).toBe(200);
@@ -178,7 +178,7 @@ describe('credit-notes', () => {
 
 describe('credit-notes/[id]', () => {
   test('GET returns a credit note with items and names', async () => {
-    mockDb = makeDb({ ...baseDb(), credit_notes: [{ id: ID1, company_id: C1, contact_id: 'c1', invoice_id: 'i1', project_id: 'p1' }],
+    mockDb = makeDb({ ...baseDb(), credit_notes: [{ id: ID1, company_id: C1, note_type: 'credit', contact_id: 'c1', invoice_id: 'i1', project_id: 'p1' }],
       credit_note_items: [{ id: 'it1', credit_note_id: ID1, company_id: C1 }],
       contacts: [{ id: 'c1', name: 'عميل', company_id: C1 }], invoices: [{ id: 'i1', number: 'INV-1', company_id: C1 }], projects: [{ id: 'p1', name: 'مشروع', company_id: C1 }] });
     const res = await cnDetailGET(req('admin', 'GET', `http://localhost/x/${ID1}`), { params: Promise.resolve({ id: ID1 }) });

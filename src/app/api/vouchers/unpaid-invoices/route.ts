@@ -4,6 +4,12 @@ import { getSupabase } from '@/lib/supabase-client';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/**
+ * GET /api/vouchers/unpaid-invoices?contactId=...
+ * الفواتير المفتوحة للعميل مع المتبقي القابل للتحصيل.
+ * المتبقي = (الأصل + الإشعارات المدينة المعتمدة − الدائنة المعتمدة) − المدفوع
+ * وهو نفس الحد المفروض في قاعدة البيانات عند تخصيص سند القبض.
+ */
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'receipts', 'read');
@@ -22,11 +28,40 @@ export async function GET(request: NextRequest) {
       .in('status', ['unpaid', 'partial']).is('deleted_at', null)
       .order('date', { ascending: false });
     if (invoiceError) throw invoiceError;
+
+    const openIds = (invoices || []).map((invoice: Record<string, unknown>) => String(invoice.id));
+    const notesByInvoice: Record<string, { debit: number; credit: number }> = {};
+    if (openIds.length) {
+      const { data: notes, error: notesError } = await s.from('credit_notes')
+        .select('invoice_id, note_type, total')
+        .eq('company_id', auth.companyId)
+        .in('invoice_id', openIds)
+        .eq('status', 'approved').is('deleted_at', null);
+      if (notesError) throw notesError;
+      for (const note of (notes || []) as Array<Record<string, unknown>>) {
+        const key = String(note.invoice_id);
+        const bucket = notesByInvoice[key] || { debit: 0, credit: 0 };
+        if (note.note_type === 'debit') bucket.debit += Number(note.total) || 0;
+        else bucket.credit += Number(note.total) || 0;
+        notesByInvoice[key] = bucket;
+      }
+    }
+
     return success({
       invoices: (invoices || []).map((invoice: Record<string, unknown>) => {
         const total = Number(invoice.total) || 0;
         const paid = Number(invoice.paid_amount) || 0;
-        return { ...invoice, total, paid_amount: paid, remaining: Math.max(0, total - paid) };
+        const notes = notesByInvoice[String(invoice.id)] || { debit: 0, credit: 0 };
+        const netTotal = total + notes.debit - notes.credit;
+        return {
+          ...invoice,
+          total,
+          net_total: netTotal,
+          notes_debit: notes.debit,
+          notes_credit: notes.credit,
+          paid_amount: paid,
+          remaining: Math.max(0, netTotal - paid),
+        };
       }),
     });
   } catch (err) {

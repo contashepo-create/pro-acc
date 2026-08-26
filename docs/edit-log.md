@@ -4697,3 +4697,32 @@ src/store/auth-store.ts
     try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch {}
     set({ user: null, company: null, isAuthenticated: false });
   },
+## 2026-08-26 — المحور الثاني: نظام الإشعارات الدائنة/المدينة بديلاً عن تعديل الفاتورة + منع التعديل نهائياً
+
+### قاعدة البيانات (`src/migrations/090-credit-debit-notes-invoice-immutability.sql`)
+- عمود `note_type` على `credit_notes` (credit/debit) + قيد CHECK وفهارس.
+- جدول `debit_note_sequences` ودالة `next_debit_note_number` — تسلسل DN مستقل.
+- `invoice_net_total()` — صافي الفاتورة = الأصل + المدين المعتمد − الدائن المعتمد.
+- `create_debit_note_atomic` — إشعار مدين ذري بقيد (من العملاء إلى الإيراد+الضريبة).
+- `create_credit_note_atomic` — حد الإشعار الدائن على الصافي بدل الأصل فقط.
+- `cancel_credit_note_atomic` — موحّد للنوعين بعنوان صحيح لكل نوع.
+- سندات القبض (`create_voucher_receipt_atomic` 083، `respond_voucher_receipt_approval_v49_internal`، `cancel_voucher_receipt_atomic`) و`finalize_gateway_payment` — كل حدود التخصيص والحالات على الصافي.
+- `cancel_sales_invoice_atomic` — يمنع الإلغاء مع إشعارات مدينة معتمدة أيضاً.
+- مُشغِّل `trg_sales_invoices_immutable` — منع أي UPDATE يغير الحقول المحاسبية/التعريفية (حتى عبر service role)، ومنع الملاحظات إلا لحظة الإلغاء، ومنع إعادة فتح ملغاة.
+- مُشغِّل `trg_invoice_items_immutable` — منع UPDATE/DELETE لبنود الفاتورة.
+- حذف `update_sales_invoice_metadata` — لا مسار تعديل حتى في القاعدة.
+
+### API
+- حذف `PUT /api/invoices/[id]` نهائياً (405 تلقائياً) — الإلغاء فقط عبر PATCH.
+- مسارات جديدة `/api/debit-notes` و`/api/debit-notes/[id]` (GET/POST/GET/DELETE).
+- `credit-notes` و`credit-notes/[id]` تصفية `note_type='credit'`.
+- `vouchers/unpaid-invoices` — `net_total` و`remaining` على أساس الصافي.
+
+### الواجهة
+- صفحة الفواتير: إزالة زر التعديل ومسار PUT، أزرار سريعة لإشعار دائن/مدين لكل فاتورة.
+- صفحة الإشعارات: تبويبان (دائنة/مدينة)، ترقيم CN/DN، دعم الربط العميق `?invoice=&type=`، اشتقاق تلقائي للعميل/المشروع/الضريبة، عرض الضريبة والصافي.
+- صفحة عرض الفاتورة: لوحة «الفاتورة غير قابلة للتعديل» مع ملخص الإشعارات والصافي وأزرار الإنشاء.
+
+### التحقق
+- `npx tsc --noEmit` نظيف، `npm run lint` بلا أخطاء، `npx jest` 195 مجموعة / 2128 اختبار ناجح.
+- إعادة توليد `supabase-full-schema.sql` (91 ميجريشن). توثيق السياسة: `docs/credit-debit-notes-policy.md`.
