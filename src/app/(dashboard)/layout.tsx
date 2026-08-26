@@ -22,11 +22,11 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { isAuthenticated, isLoading, checkSession } = useAuthStore();
+  const { isAuthenticated, isLoading, checkSession, subscription } = useAuthStore();
   const { isCollapsed, mobileOpen, setMobileOpen } = useSidebarStore(); // FIXED: Read isCollapsed
   const { setSectionAccent } = useThemeStore();
 
-  // Check authentication status
+  // Check authentication status (also refreshes subscription state)
   useEffect(() => {
     checkSession();
   }, [checkSession]);
@@ -37,6 +37,17 @@ export default function DashboardLayout({
       router.push(`/login?redirect=${encodeURIComponent(pathname)}`);
     }
   }, [isLoading, isAuthenticated, pathname, router]);
+
+  // انتهاء الاشتراك يغلق كل الأقسام: لا يتصفح العميل أي صفحة بعده، بل
+  // يوجَّه إلى قسم التجديد أو تحميل جداول بياناته فقط (Excel/CSV) —
+  // وفق سياسة المنتج ومعايير البرامج المحاسبية.
+  // (تظل /subscription و /export-data متاحتين؛ والأخيرة خارج هذا الـ layout.)
+  const subscriptionExpired = !!subscription?.is_expired;
+  useEffect(() => {
+    if (!isLoading && isAuthenticated && subscriptionExpired && pathname !== '/subscription') {
+      router.replace('/subscription?renew=1');
+    }
+  }, [isLoading, isAuthenticated, subscriptionExpired, pathname, router]);
 
   // Close mobile sidebar on route change
   useEffect(() => {
@@ -71,6 +82,19 @@ export default function DashboardLayout({
   // Don't render dashboard content until authenticated
   if (!isAuthenticated) {
     return null;
+  }
+
+  // انتهى الاشتراك: لا تُعرض أي صفحة قسم — فقط شاشة توجيه للتجديد.
+  // (الإعادة الفعلية في الـ effect أعلاه؛ هذا يمنع وميض محتوى محمي.)
+  if (subscriptionExpired && pathname !== '/subscription') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary">
+        <div className="text-center max-w-md px-6">
+          <Loader2 className="w-10 h-10 animate-spin text-accent mx-auto mb-4" />
+          <p className="text-text-secondary text-sm">انتهى الاشتراك — جاري تحويلك لصفحة التجديد...</p>
+        </div>
+      </div>
+    );
   }
 
   return (

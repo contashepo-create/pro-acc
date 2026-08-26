@@ -1,14 +1,13 @@
 /**
  * End-to-end lifecycle tests for the operational surfaces that sit outside the
- * accounting core: backup download/restore, company data export, receipt
- * upload, and the Telegram webhook.
+ * accounting core: the company TABLE export (Excel/CSV — the only self-service
+ * data download left) and the Telegram webhook.
  *
  * The behaviours pinned here are the ones whose failure is silent and
  * therefore most dangerous:
- *  - a backup/export must be COMPLETE or fail loudly. Truncating at a row cap,
- *    or swallowing a read error into an empty array, produces a file that still
- *    hashes correctly, still passes restore verification, and then destroys the
- *    rows it never contained.
+ *  - an export must be COMPLETE or fail loudly. Truncating at a row cap, or
+ *    swallowing a read error into an empty array, produces a file the client
+ *    trusts and then loses the rows it never contained when migrating away.
  *  - the Telegram webhook is an unauthenticated internet endpoint: it must
  *    verify the shared secret whenever one is configured and reject a
  *    present-but-mismatched header, while still processing updates from bots
@@ -27,9 +26,7 @@ import { randomBytes } from 'crypto';
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 process.env.TELEGRAM_WEBHOOK_SECRET = randomBytes(24).toString('hex');
 process.env.TELEGRAM_BOT_TOKEN = randomBytes(16).toString('hex');
-process.env.BACKUP_SECRET = randomBytes(32).toString('hex');
 
-import { createHmac } from 'crypto';
 import { createToken } from '@/lib/auth';
 import type { TestBuilder } from './mocks';
 import type { NextRequest } from 'next/server';
@@ -103,9 +100,7 @@ function makeDb(db: Record<string, Row[]>) {
 let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
-import { GET as backupDownloadGET } from '@/app/api/backup/download/route';
-import { POST as backupUploadPOST } from '@/app/api/backup/upload/route';
-import { POST as backupValidatePOST } from '@/app/api/backup/validate/route';
+import { POST as exportDownloadPOST } from '@/app/api/company/export-download/route';
 import { POST as telegramWebhookPOST } from '@/app/api/telegram/webhook/route';
 
 const C1 = 'company-1';
@@ -123,11 +118,11 @@ function baseDb(): Record<string, Row[]> {
     accounts: [], journal_entries: [], journal_lines: [], invoices: [], invoice_items: [],
     contacts: [], clients: [], projects: [], banks_safes: [], cash_transactions: [],
     inventory_items: [], employees: [], payroll: [],
-    backup_logs: [], security_audit_log: [], audit_log: [],
+    security_audit_log: [], audit_log: [],
   };
 }
 
-function adminRequest(method = 'GET', body?: Row, url = 'http://localhost/api/test') {
+function adminRequest(body?: Row, method = 'POST', url = 'http://localhost/api/company/export-download') {
   const token = createToken(ADMIN, 'admin');
   return {
     url, method,
@@ -153,7 +148,7 @@ beforeEach(() => {
   global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as unknown as typeof fetch;
 });
 
-describe('backup download completeness', () => {
+describe('company table export completeness (Excel/CSV only)', () => {
   test('a table larger than one page is exported in full, not truncated', async () => {
     const db = baseDb();
     // 2,500 rows spans three 1,000-row pages.
@@ -162,13 +157,13 @@ describe('backup download completeness', () => {
     }));
     mockDb = makeDb(db);
 
-    const response = await backupDownloadGET(adminRequest());
+    const response = await exportDownloadPOST(adminRequest({ tables: ['journal_lines'], format: 'csv' }));
     expect(response.status).toBe(200);
-    const payload = JSON.parse(await response.text());
-    // Every row must be present: a backup that quietly drops rows will delete
-    // them from the live company when it is restored.
-    expect(payload.data.journal_lines).toHaveLength(2500);
-    expect(payload.data.journal_lines[2499].id).toBe('jl-02499');
+    const text = await response.text();
+    // The CSV bundle prints a per-table row count header; a table that quietly
+    // drops rows would show fewer than were exported.
+    expect(text).toContain('# journal_lines (2500)');
+    expect(text).toContain('jl-02499');
   });
 
   test('every exported page stays scoped to the caller company', async () => {
@@ -179,208 +174,49 @@ describe('backup download completeness', () => {
     ];
     mockDb = makeDb(db);
 
-    const response = await backupDownloadGET(adminRequest());
-    const payload = JSON.parse(await response.text());
-    expect(payload.data.invoices.map((row: Row) => row.id)).toEqual(['i-1']);
+    const response = await exportDownloadPOST(adminRequest({ tables: ['invoices'], format: 'csv' }));
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain('i-1');
+    expect(text).not.toContain('i-2');
+    expect(text).not.toContain('999');
     for (const call of mockDb.calls.filter((entry) => entry.table === 'invoices')) {
       expect(call.ops).toEqual(expect.arrayContaining([{ op: 'eq', col: 'company_id', val: C1 }]));
     }
   });
 
-  test('a read failure fails the backup instead of yielding a silently empty table', async () => {
+  test('a read failure fails the export instead of yielding a silently empty table', async () => {
     mockDb = makeDb(baseDb());
     mockDb.tableErrors.set('journal_entries', { message: 'connection reset' });
 
-    const response = await backupDownloadGET(adminRequest());
-    // Previously this produced a 200 with journal_entries: [] — a corrupt
-    // backup that still hashed correctly and passed restore verification.
+    const response = await exportDownloadPOST(adminRequest({ tables: ['journal_entries'], format: 'csv' }));
+    // Previously this could produce a 200 with an empty table — a file the
+    // client trusts while it silently misses rows.
     expect(response.status).toBeGreaterThanOrEqual(400);
     const payload = JSON.parse(await response.text());
     expect(payload.success).toBe(false);
-    // A failed export must never be recorded as a valid, restorable backup.
-    expect(mockDb.calls.filter((call) => call.mut.kind === 'insert' && call.table === 'backup_logs')).toHaveLength(0);
   });
 
-  test('a successful export is logged for later restore verification', async () => {
-    const response = await backupDownloadGET(adminRequest());
+  test('a JSON database dump is permanently refused (Excel/CSV only)', async () => {
+    for (const format of ['json', 'pdf', 'sql', '']) {
+      const response = await exportDownloadPOST(adminRequest({ tables: ['invoices'], format }));
+      expect(response.status).toBe(400);
+      const payload = await response.json();
+      expect(payload.success).toBe(false);
+      expect(String(payload.message)).toContain('Excel أو CSV فقط');
+    }
+  });
+
+  test('unknown table names are filtered out and an empty selection is rejected', async () => {
+    const response = await exportDownloadPOST(adminRequest({ tables: ['users', 'admin_users', 'companies'], format: 'csv' }));
+    expect(response.status).toBe(400);
+  });
+
+  test('excel format produces an .xls attachment', async () => {
+    const response = await exportDownloadPOST(adminRequest({ tables: ['invoices'], format: 'excel' }));
     expect(response.status).toBe(200);
-    const log = mockDb.calls.find((call) => call.mut.kind === 'insert' && call.table === 'backup_logs');
-    expect(log).toBeDefined();
-    expect(log!.mut.payload).toMatchObject({ company_id: C1, user_id: ADMIN });
-    // The HMAC signature is what makes tamper detection possible on restore.
-    expect(typeof (log!.mut.payload as Row).hmac_signature).toBe('string');
-    expect(String((log!.mut.payload as Row).hmac_signature).length).toBeGreaterThan(0);
     expect(response.headers.get('Content-Disposition')).toContain('attachment');
-  });
-});
-
-/** A request whose JSON body is read via .text() (as the backup routes do). */
-function backupUploadRequest(payload: unknown, path = '/api/backup/upload') {
-  const token = createToken(ADMIN, 'admin');
-  return {
-    url: `http://localhost${path}`,
-    method: 'POST',
-    headers: {
-      get: (key: string) => (
-        key === 'authorization' ? `Bearer ${token}`
-          : key === 'x-forwarded-for' ? '1.2.3.4'
-            : null
-      ),
-    },
-    cookies: { get: () => undefined },
-    text: async () => JSON.stringify(payload),
-  } as unknown as NextRequest;
-}
-
-/** Build a backup file exactly like the download endpoint produces it. */
-function makeSignedBackupFile(overrides?: { data?: Record<string, unknown>; metadata?: Record<string, unknown> }) {
-  const backupData = {
-    metadata: {
-      company_id: C1,
-      company_name: 'شركة',
-      email: 'co@example.com',
-      phone: '0500',
-      exported_at: new Date().toISOString(),
-      version: '1.0',
-      format: 'json',
-      ...(overrides?.metadata || {}),
-    },
-    data: {
-      accounts: [{ id: '99999999-8888-4777-8666-555555555555', company_id: C1, code: '1110', name: 'نقدية' }],
-      ...(overrides?.data || {}),
-    },
-  };
-  const json = JSON.stringify(backupData, null, 2);
-  const hmac = createHmac('sha256', process.env.BACKUP_SECRET!).update(json).digest('hex');
-  return { backupData, hmac, fileHash: hmac.substring(0, 16) };
-}
-
-/** Seed the provenance log so the file counts as a genuine system export. */
-function seedBackupLog(hmac: string) {
-  mockDb.calls.length = 0;
-  mockDb = makeDb({
-    ...baseDb(),
-    backup_logs: [{ id: 'bl-1', company_id: C1, hmac_signature: hmac }],
-  });
-}
-
-describe('company backup restore safety', () => {
-  test('the dry-run endpoint validates a genuine backup without writing anything', async () => {
-    const file = makeSignedBackupFile();
-    seedBackupLog(file.hmac);
-    const response = await backupValidatePOST(backupUploadRequest(
-      { backupData: file.backupData, fileHash: file.fileHash },
-      '/api/backup/validate',
-    ));
-    expect(response.status).toBe(200);
-    const payload = JSON.parse(await response.text());
-    expect(payload.data.valid).toBe(true);
-    expect(payload.data.summary.totalRows).toBe(1);
-    // Dry-run must NEVER reach the restore RPC.
-    expect(mockDb.rpcCalls.some((call) => call.name === 'restore_company_backup_atomic')).toBe(false);
-  });
-
-  test('the dry-run rejects a tampered file', async () => {
-    const file = makeSignedBackupFile();
-    seedBackupLog(file.hmac);
-    const tampered = JSON.parse(JSON.stringify(file.backupData));
-    tampered.data.accounts[0].name = 'معدل';
-    const response = await backupValidatePOST(backupUploadRequest(
-      { backupData: tampered, fileHash: file.fileHash },
-      '/api/backup/validate',
-    ));
-    expect(response.status).toBe(400);
-  });
-
-  test('the dry-run rejects a file whose HMAC was never logged by the system', async () => {
-    const file = makeSignedBackupFile();
-    // No backup_logs row — a foreign/crafted file can never pass even with a
-    // self-consistent signature.
-    const response = await backupValidatePOST(backupUploadRequest(
-      { backupData: file.backupData, fileHash: file.fileHash },
-      '/api/backup/validate',
-    ));
-    expect(response.status).toBe(400);
-  });
-
-  test('the dry-run rejects a file containing another company\'s rows', async () => {
-    const file = makeSignedBackupFile({
-      data: { employees: [{ id: '88888888-7777-4666-8555-444444444444', company_id: 'company-2', name: 'غريب' }] },
-    });
-    seedBackupLog(file.hmac);
-    const response = await backupValidatePOST(backupUploadRequest(
-      { backupData: file.backupData, fileHash: file.fileHash },
-      '/api/backup/validate',
-    ));
-    // Structural violations are reported in the dry-run report (200), never
-    // applied — the apply endpoint would hard-reject the same file.
-    expect(response.status).toBe(200);
-    const payload = JSON.parse(await response.text());
-    expect(payload.data.valid).toBe(false);
-    expect(payload.data.issues.some((issue: Row) => issue.code === 'CROSS_COMPANY')).toBe(true);
-  });
-
-  test('the dry-run rejects a file for another company', async () => {
-    const file = makeSignedBackupFile({ metadata: { company_id: 'company-2' } });
-    seedBackupLog(file.hmac);
-    const response = await backupValidatePOST(backupUploadRequest(
-      { backupData: file.backupData, fileHash: file.fileHash },
-      '/api/backup/validate',
-    ));
-    expect(response.status).toBe(403);
-  });
-
-  test('a genuine backup restores through the atomic RPC scoped to this company', async () => {
-    const file = makeSignedBackupFile();
-    seedBackupLog(file.hmac);
-    const response = await backupUploadPOST(backupUploadRequest({
-      backupData: file.backupData, fileHash: file.fileHash,
-    }));
-    expect(response.status).toBe(200);
-    const restoreCall = mockDb.rpcCalls.find((call) => call.name === 'restore_company_backup_atomic');
-    expect(restoreCall).toBeDefined();
-    expect((restoreCall!.params as Row).p_company_id).toBe(C1);
-    expect((restoreCall!.params as Row).p_hmac_signature).toBe(file.hmac);
-  });
-
-  test('the restore refuses to touch data before the RPC when a foreign row is present', async () => {
-    const file = makeSignedBackupFile({
-      data: { contacts: [{ id: '77777777-6666-4555-8444-333333333333', company_id: 'company-2' }] },
-    });
-    seedBackupLog(file.hmac);
-    const response = await backupUploadPOST(backupUploadRequest({
-      backupData: file.backupData, fileHash: file.fileHash,
-    }));
-    expect(response.status).toBe(400);
-    expect(mockDb.rpcCalls.some((call) => call.name === 'restore_company_backup_atomic')).toBe(false);
-  });
-
-  test('the restore rejects malformed row ids before reaching the database', async () => {
-    const file = makeSignedBackupFile({
-      data: { accounts: [{ id: "x' OR '1'='1", company_id: C1, code: '1110', name: 'حقن' }] },
-    });
-    seedBackupLog(file.hmac);
-    const response = await backupUploadPOST(backupUploadRequest({
-      backupData: file.backupData, fileHash: file.fileHash,
-    }));
-    expect(response.status).toBe(400);
-    expect(mockDb.rpcCalls.some((call) => call.name === 'restore_company_backup_atomic')).toBe(false);
-  });
-
-  test('the restore is admin-only', async () => {
-    const file = makeSignedBackupFile();
-    seedBackupLog(file.hmac);
-    const nonAdmin = createToken('u-other', 'accountant');
-    const request = {
-      url: 'http://localhost/api/backup/upload',
-      method: 'POST',
-      headers: { get: (key: string) => (key === 'authorization' ? `Bearer ${nonAdmin}` : null) },
-      cookies: { get: () => undefined },
-      text: async () => JSON.stringify({ backupData: file.backupData, fileHash: file.fileHash }),
-    } as unknown as NextRequest;
-    const response = await backupUploadPOST(request);
-    expect(response.status).toBe(401);
-    expect(mockDb.rpcCalls).toHaveLength(0);
+    expect(response.headers.get('Content-Disposition')).toContain('.xls');
   });
 });
 
@@ -478,13 +314,12 @@ describe('telegram webhook security', () => {
     expect(response.status).toBe(200);
   });
 
-  test('a rejected reset request cancels the session instead of issuing a code', async () => {
+  test('reset callbacks are acknowledged as permanently disabled and never touch the database', async () => {
     const response = await telegramWebhookPOST(webhookRequest({
-      callback_query: { id: 'q1', data: 'reset:reject', message: { chat: { id: '55' }, message_id: 9 } },
+      callback_query: { id: 'q1', data: 'reset:approve', message: { chat: { id: '55' }, message_id: 9 } },
     }));
     expect(response.status).toBe(200);
-    expect(mockDb.rpcCalls.some((call) => call.name === 'reject_telegram_reset_session_atomic')).toBe(true);
-    // Rejecting must never mint a confirmation code.
-    expect(mockDb.rpcCalls.some((call) => call.name === 'approve_telegram_reset_session_atomic')).toBe(false);
+    // The feature is gone: no RPC may run and no confirmation code may be minted.
+    expect(mockDb.rpcCalls.length).toBe(0);
   });
 });

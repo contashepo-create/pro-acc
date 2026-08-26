@@ -43,12 +43,14 @@ const PUBLIC_ADMIN_PAGE_PREFIXES = [
  * URL). Now enforced server-side before any HTML is served.
  * NOTE: the JWT role is signed so it cannot be forged; the API layer still
  * re-checks the authoritative DB role on every request.
+ * /subscription is deliberately NOT here: it is the renewal/billing surface
+ * that EVERY company user must reach when the subscription expires (see the
+ * dashboard layout redirect + subscription-guard).
  */
 const ADMIN_ONLY_PAGE_PREFIXES = [
   '/settings',
   '/permissions',
   '/users',
-  '/subscription',
   '/fiscal',
 ];
 

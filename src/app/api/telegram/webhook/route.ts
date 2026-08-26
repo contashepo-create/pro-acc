@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHash, randomInt } from 'crypto';
 import { getSupabase } from '@/lib/supabase-client';
 import { verifyWebhookSecret } from '@/lib/webhook-guard';
 import { escapeTelegramHtml } from '@/lib/telegram';
@@ -68,44 +67,12 @@ export async function POST(request: NextRequest) {
       return ok();
     }
 
+    // ميزة تصفير قاعدة البيانات أُلغيت نهائياً (قرار تشغيلي): لا تصدر
+    // رموز تأكيد ولا تُستدعى أي RPC للتصفير. نقرّ بالتحديث فقط حتى لا
+    // يعيد تيليجرام الإرسال، ونخبر المدير أن الطلب غير متاح.
     if (callbackData.startsWith('reset:')) {
-      const [, action] = callbackData.split(':'); // Ignore legacy company/requester segments.
-      if (!['approve', 'reject'].includes(action)) {
-        await answerCallback(token, callbackId, 'طلب غير صالح', true); return ok();
-      }
-      if (action === 'reject') {
-        const { error: rpcError } = await supabase.rpc('reject_telegram_reset_session_atomic', { p_chat_id: chatId });
-        if (rpcError) {
-          await answerCallback(token, callbackId, 'انتهى الطلب أو تمت معالجته', true); return ok();
-        }
-        await answerCallback(token, callbackId, 'تم رفض وإلغاء الطلب ❌');
-        await editMessage(token, chatId, messageId, '🔴 <b>تم رفض وإلغاء طلب تصفير البيانات.</b>');
-        return ok();
-      }
-      const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
-      const codeHash = createHash('sha256').update(code).digest('hex');
-      const { data: session, error: rpcError } = await supabase.rpc('approve_telegram_reset_session_atomic', {
-        p_chat_id: chatId, p_code_hash: codeHash, p_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
-      });
-      if (rpcError) {
-        await answerCallback(token, callbackId, 'انتهى الطلب أو تمت معالجته', true); return ok();
-      }
-      try {
-        await telegramCall(token, 'sendMessage', {
-          chat_id: chatId, parse_mode: 'HTML',
-          text: `🔐 <b>رمز تأكيد تصفير البيانات</b>\n\n<code>${code}</code>\n\nصالح لمدة خمس دقائق فقط.`,
-        });
-      } catch {
-        const details = session as { company_id?: string; requester_id?: string } | null;
-        if (details?.company_id && details.requester_id) {
-          await supabase.rpc('cancel_telegram_reset_session_atomic', {
-            p_company_id: details.company_id, p_requester_id: details.requester_id, p_reason: 'otp_delivery_failed',
-          });
-        }
-        await answerCallback(token, callbackId, 'تعذر إرسال الرمز؛ أُلغي الطلب بأمان', true); return ok();
-      }
-      await answerCallback(token, callbackId, 'تم إصدار رمز التأكيد 🔐');
-      await editMessage(token, chatId, messageId, '🟢 <b>تمت الموافقة وأُرسل رمز التأكيد للمدير.</b>');
+      await answerCallback(token, callbackId, 'ميزة تصفير البيانات أُلغيت نهائياً', true);
+      await editMessage(token, chatId, messageId, '⛔ <b>ميزة تصفير بيانات الشركة أُلغيت نهائياً.</b>');
       return ok();
     }
 

@@ -121,19 +121,12 @@ describe('permissions GET', () => {
   });
 });
 
-describe('company/reset request', () => {
-  test('starts a telegram reset session', async () => {
-    process.env.TELEGRAM_BOT_TOKEN = 'bot';
-    mockDb.rpcResults.set('start_telegram_reset_session_atomic', { data: { chat_id: '123' }, error: null });
-    const fetchMock = jest.spyOn(globalThis as { fetch: typeof fetch }, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ ok: true }) } as unknown as Response);
-    try {
-      const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'request' }));
-      expect(res.status).toBe(201);
-      const json = await res.json();
-      expect(json.data.status).toBe('pending_approval');
-    } finally {
-      fetchMock.mockRestore();
-      delete process.env.TELEGRAM_BOT_TOKEN;
-    }
+describe('company/reset request (ميزة ملغاة نهائياً)', () => {
+  test('refuses to start a reset session with 410 and performs no DB work', async () => {
+    const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'request' }));
+    expect(res.status).toBe(410);
+    const json = await res.json();
+    expect(json.success).toBe(false);
+    expect(mockDb.calls.length).toBe(0);
   });
 });

@@ -4,18 +4,20 @@
  * Central module-gating + subscription-expiry enforcement.
  *
  * Design principles:
- *  1. Read-only access (GET/HEAD/OPTIONS) is always allowed for any
- *     authenticated user — even expired/trial-ended accounts — so they
- *     can VIEW their data, download an export, contact support, pay or
- *     enter an activation code. WRITE operations (POST/PUT/PATCH/DELETE)
- *     REQUIRE an active, non-expired subscription.
+ *  1. When the subscription is EXPIRED (or trial ended / cancelled /
+ *     pending / missing) the account loses access to every module — READS
+ *     INCLUDED. The only reachable surface is the renewal flow (payment,
+ *     activation code, add-ons, support) plus the self-service TABLE
+ *     download of the company's own data (Excel/CSV). This mirrors how
+ *     mainstream accounting SaaS handles lapsed subscriptions: you get a
+ *     billing screen and your data, nothing else.
  *  2. Module gating uses subscription_plans.features_modules JSONB.
  *     The 'dashboard', 'settings', 'subscription', and 'accounts'
- *     modules are always accessible (required to manage billing / read
- *     the chart of accounts).
- *  3. Routes under the "bypass" list may bypass the WRITE block —
- *     payment flow, activation codes, support tickets, password change,
- *     logout, company logo read-only, etc. — even after expiry.
+ *     modules are always accessible for LIVE subscriptions (required to
+ *     manage billing / read the chart of accounts).
+ *  3. The EXPIRED_ACCESS_WHITELIST below is the complete list of routes
+ *     that keep working after expiry — renewal, support and the table
+ *     export.
  *  4. Trial accounts (status='trial' within trial_days window) have
  *     full WRITE access matching their plan's enabled modules.
  *  5. NULL in any features_modules key is treated as "allowed" for
@@ -61,7 +63,7 @@ export const ALWAYS_AVAILABLE_MODULES = new Set<string>([
 ]);
 
 /** Route prefixes that keep full (read+write) access even when subscription is expired. */
-const EXPIRED_WRITE_WHITELIST: (path: string) => boolean = (() => {
+const EXPIRED_ACCESS_WHITELIST: (path: string) => boolean = (() => {
   const prefixes = [
     '/api/auth/logout',
     '/api/auth/me',            // change password / fetch self
@@ -70,23 +72,27 @@ const EXPIRED_WRITE_WHITELIST: (path: string) => boolean = (() => {
     '/api/auth/subscribe',              // initiate a payment; never activates a paid plan
     '/api/subscription/upgrade-request',    // submit payment proof
     '/api/subscription/activate-code',      // enter activation code
+    '/api/subscription/addon-request',      // buy add-ons while renewing
     '/api/support',
     '/api/support/',
-    '/api/company/export',    // download data export
-    '/api/company/data-export',
-    '/api/upload',            // allow upload for support receipts? No — restrict below.
+    '/api/company/export-download',  // TABLE export (Excel/CSV) of the company's own data
+    '/api/upload/receipt',           // attach a payment receipt while renewing
+    '/api/payment-methods',          // list active payment methods on the renewal page
   ];
   // More specific matcher
   return (p: string) => {
     if (prefixes.some((pfx) => p === pfx || p.startsWith(pfx + '/') || p.startsWith(pfx + '?'))) {
       return true;
     }
-    // Company logo GET/POST? Logo is self-service — allow both read+write even expired? Keep safe: allow only GET via path prefix is hard, so block writes, reads already allowed by GET rule.
     return false;
   };
 })();
 
-/** Routes that should be accessible even when the company is inactive (very narrow). */
+/**
+ * Legacy helper kept for rate-limit budgets and tests: identifies read-only
+ * HTTP methods. NOTE: since expiry now blocks reads too, this NO LONGER
+ * grants any access on its own — see assertSubscriptionAccess.
+ */
 export function isSubscriptionReadOnlyMethod(method: string | undefined): boolean {
   const m = (method || 'GET').toUpperCase();
   return m === 'GET' || m === 'HEAD' || m === 'OPTIONS';
@@ -272,18 +278,19 @@ export async function assertSubscriptionAccess(
 ): Promise<SubscriptionAccess> {
   const access = await getSubscriptionAccess(companyId);
 
-  const readOnly = isSubscriptionReadOnlyMethod(method);
-  const whitelisted = EXPIRED_WRITE_WHITELIST(pathname);
+  const whitelisted = EXPIRED_ACCESS_WHITELIST(pathname);
 
-  // WRITE operations are blocked on expired/missing subs UNLESS whitelisted.
-  if (!readOnly && !whitelisted && access.isExpired) {
-    // Check module gating first for better error message? No — expiry is the root cause.
+  // An expired/missing/cancelled/pending subscription locks EVERY module —
+  // reads included — except the renewal flow and the table data download.
+  // This is the enforcement point behind "لا يتصفح العميل أي قسم بعد انتهاء
+  // اشتراكه؛ يوجَّه لتجديد الاشتراك أو تحميل جداول بياناته فقط".
+  if (access.isExpired && !whitelisted) {
     throw new AuthError(
       access.status === 'trial_expired'
-        ? 'انتهت المدة التجريبية. يرجى الاشتراك أو إدخال كود تفعيل أو التواصل مع الدعم للمتابعة. يمكنك عرض بياناتك وتحميل نسخة منها.'
+        ? 'انتهت المدة التجريبية. يرجى الاشتراك أو إدخال كود تفعيل أو التواصل مع الدعم للمتابعة. يمكنك تحميل جداول بياناتك (Excel/CSV) من صفحة الباقات والاشتراك.'
         : access.status === 'missing'
-          ? 'لا يوجد اشتراك فعال لهذه الشركة.'
-          : 'انتهت صلاحية الاشتراك. يرجى التجديد أو إدخال كود تفعيل أو التواصل مع الدعم. يمكنك عرض بياناتك وتحميل نسخة منها.',
+          ? 'لا يوجد اشتراك فعال لهذه الشركة. يمكنك تفعيل اشتراك أو تحميل جداول بياناتك (Excel/CSV) من صفحة الباقات والاشتراك.'
+          : 'انتهت صلاحية الاشتراك. يرجى التجديد أو إدخال كود تفعيل أو التواصل مع الدعم. يمكنك تحميل جداول بياناتك (Excel/CSV) من صفحة الباقات والاشتراك.',
       403,
     );
   }

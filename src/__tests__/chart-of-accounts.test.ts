@@ -99,6 +99,8 @@ const C1 = 'company-1';
 function baseDb() {
   return {
     users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
+    subscriptions: [{ id: 's1', company_id: C1, status: 'active', end_date: '2099-01-01', plan_code: 'enterprise',
+      subscription_plans: { code: 'enterprise', name: 'Enterprise', features_modules: {} } }],
     companies: [{ id: C1, is_active: true, token_version: 0 }],
     accounts: [] as Row[],
     journal_lines: [] as Row[],
