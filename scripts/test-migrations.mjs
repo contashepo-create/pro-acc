@@ -1524,6 +1524,17 @@ async function smokeAtomicWriters(ids) {
   await assert.rejects(()=>db.query(`UPDATE boq_items SET quantity=3 WHERE id=$1`,[guardedBoq.id]));
   await assert.rejects(()=>db.query(`SELECT update_boq_item_atomic($1,$2,'{"quantity":3}'::jsonb,$3)`,[c2,guardedBoq.id,u2]));
 
+  // Empty code auto-generates a project-scoped BOQ-#### code instead of asking
+  // the user to type one. This is 086-boq-auto-item-code.sql behaviour.
+  const autoBoq1=(await db.query(`SELECT create_boq_item_atomic($1,$2,'','auto-a','u',1,5,$3) result`,[c,guardedProject.id,u])).rows[0].result;
+  const autoBoq2=(await db.query(`SELECT create_boq_item_atomic($1,$2,'','auto-b','u',1,6,$3) result`,[c,guardedProject.id,u])).rows[0].result;
+  assert.equal(autoBoq1.item_code,'BOQ-0001');
+  assert.equal(autoBoq2.item_code,'BOQ-0002');
+  // A blank code in an update never wipes the existing code.
+  await db.query(`SELECT update_boq_item_atomic($1,$2,'{"quantity":7}'::jsonb,$3)`,[c,autoBoq1.id,u]);
+  const keptCode=(await db.query(`SELECT item_code FROM boq_items WHERE id=$1`,[autoBoq1.id])).rows[0].item_code;
+  assert.equal(keptCode,'BOQ-0001');
+
   const changeRace=await Promise.all([1,2].map((index)=>db.query(
     `SELECT create_change_order_atomic($1,$2,$3,'',25,'submitted',$4) result`,[c,guardedProject.id,`Change ${index}`,u],
   )));

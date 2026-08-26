@@ -155,7 +155,7 @@ export default function BoqPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select label="المشروع" value={form.project_id} onChange={(v) => setForm({...form, project_id: v})} options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} className="col-span-2" />
-            <Input label="الرمز" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} />
+            <Input label="الرمز (اختياري — يُولَّد تلقائيًا)" value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} placeholder="يُولَّد تلقائيًا مثل BOQ-0001" />
             <Input label="الوحدة" value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} placeholder="وحدة، متر، كجم" />
             <Input label="الوصف" className="col-span-2" value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} />
             <Input label="الكمية" type="number" value={form.quantity} onChange={(e) => setForm({...form, quantity: parseFloat(e.target.value) || 0})} />
