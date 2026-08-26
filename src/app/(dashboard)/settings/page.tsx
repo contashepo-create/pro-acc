@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import {
   Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone,
-  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, ExternalLink, Trash2, Key, Globe, MessageSquare,
+  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, ExternalLink, Trash2, Key, Globe, MessageSquare, Download,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -113,12 +113,6 @@ interface TelegramSettings {
   const [testRunId, setTestRunId] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<string>(''); // '', 'pending', 'accepted', 'rejected', 'expired'
   const [testLoading, setTestLoading] = useState(false);
-
-  // 🛑 تصفير قاعدة بيانات الشركة - المصادقة الثنائية 🛑
-  const [resetStep, setResetStep] = useState<string>(''); // '', 'pending_approval', 'reset_success'
-  const [resetCode, setResetCode] = useState('');
-  const [resetLoading, setResetLoading] = useState(false);
-  const [resetError, setResetError] = useState('');
 
   // تليجرام الموحد للمنصة - يتم تعديله من خلال متغيرات المطور
   const TELEGRAM_BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || 'Proaccwebcontroller_bot';
@@ -428,71 +422,6 @@ interface TelegramSettings {
       setTestLoading(false);
     }
   };
-
-  // 🛑 إرسال طلب تصفير البيانات لتيليجرام 🛑
-  const handleRequestReset = async () => {
-    if (!confirm('⚠️ تنبيه حرج للغاية: هل أنت متأكد تماماً من رغبتك في تصفير وإعادة تهيئة كامل القيود والفواتير للشركة؟ لا يمكن التراجع عن هذا الإجراء!')) return;
-    setResetLoading(true);
-    setResetError('');
-    setResetStep('');
-    try {
-      // أولاً حفظ الإعدادات لضمان الربط
-      await fetch('/api/settings/telegram', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(telegramConfig),
-      });
-
-      const res = await fetch('/api/company/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'request' })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setResetStep('pending_approval');
-        showToast('تم إرسال طلب تصفير البيانات لتيليجرام المدير');
-      } else {
-        setResetError(data.message || 'فشل تقديم طلب تصفير البيانات');
-      }
-    } catch {
-      setResetError('خطأ في الاتصال بالخادم');
-    } finally {
-      setResetLoading(false);
-    }
-  };
-
-  // 🛑 تأكيد كود المصادقة وتصفير قاعدة البيانات 🛑
-  const handleConfirmReset = async () => {
-    if (!resetCode || !/^\d{6}$/.test(resetCode)) {
-      setResetError('يرجى إدخال رمز مصادقة ثنائية صحيح مكون من 6 أرقام');
-      return;
-    }
-    setResetLoading(true);
-    setResetError('');
-    try {
-      const res = await fetch('/api/company/reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'confirm', code: resetCode })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setResetStep('reset_success');
-        showToast('تم تصفير البيانات ماليًا وإعادة التهيئة بنجاح! 🎉');
-        setTimeout(() => {
-          window.location.reload();
-        }, 4000);
-      } else {
-        setResetError(data.message || 'فشل التصفير. الرمز قد يكون خاطئاً أو منتهي الصلاحية.');
-      }
-    } catch {
-      setResetError('خطأ في الاتصال بالخادم أثناء التطهير المالي');
-    } finally {
-      setResetLoading(false);
-    }
-  };
-
 
   return (
     <div className="space-y-6">
@@ -885,6 +814,9 @@ interface TelegramSettings {
               <Button onClick={() => window.location.href = '/subscription'} leftIcon={<CreditCard size={16} />}>
                 ترقية / تجديد الاشتراك
               </Button>
+              <a href="/export-data" className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-bg-secondary border border-border text-text-secondary hover:text-amber-400 text-sm transition-colors">
+                <Download size={16} /> تصدير بياناتي (Excel / PDF / CSV)
+              </a>
             </>
           ) : (
             <Card><div className="text-center py-8 text-text-muted">لا يوجد اشتراك. <a href="/subscription" className="text-accent">اشترك الآن</a></div></Card>
@@ -1328,82 +1260,6 @@ interface TelegramSettings {
                       </div>
                     )}
                   </div>
-                </div>
-              </Card>
-
-              {/* 🛑 Critical Danger Zone: Hard Reset Data via Telegram 2FA 🛑 */}
-              <Card title="⚠️ منطقة الخطر الأمني الحرج - تصفير الدفاتر المحاسبية">
-                <div className="space-y-4">
-                  <div className="p-4 rounded-xl bg-red-50 border border-red-200 flex items-start gap-3 text-red-800 text-sm">
-                    <AlertCircle size={22} className="shrink-0 mt-0.5" />
-                    <div className="space-y-1">
-                      <h4 className="font-bold">تنبيه حرج للغاية ولا يمكن التراجع عنه!</h4>
-                      <p className="text-xs leading-relaxed">
-                        هذا الإجراء سيقوم بمسح وتطهير وتصفير كامل البيانات والعمليات المحاسبية والحركات لشركتك نهائياً (بما يشمل الفواتير والقيود اليومية وسندات الصرف والقبض والحركات النقدية)، ويعيد بدء تسلسلات الأرقام من الرقم 1 مجدداً. 
-                        <br />
-                        <b>البيانات التي ستبقى آمنة:</b> شجرة الحسابات التأسيسية، إعدادات الشركة، والمسؤولين النشطين.
-                      </p>
-                    </div>
-                  </div>
-
-                  {resetError && (
-                    <div className="bg-red-100 border border-red-300 text-red-700 text-xs rounded-lg p-3">
-                      ⚠️ {resetError}
-                    </div>
-                  )}
-
-                  {/* الخطوة 1: طلب الموافقة ورمز 2FA */}
-                  {resetStep === '' && (
-                    <div className="pt-2">
-                      <Button 
-                        onClick={handleRequestReset} 
-                        disabled={resetLoading} 
-                        className="bg-red-600 hover:bg-red-700 text-white flex items-center gap-2"
-                        leftIcon={<Trash2 size={16} />}
-                      >
-                        {resetLoading ? 'جاري معالجة الطلب المالي...' : 'طلب تصفير كامل الدفاتر والقيود عبر تليجرام 🚨'}
-                      </Button>
-                    </div>
-                  )}
-
-                  {/* الخطوة 2: انتظار إدخال الرمز السري ثنائي المصادقة */}
-                  {resetStep === 'pending_approval' && (
-                    <div className="space-y-3 p-4 rounded-lg bg-amber-50/50 border border-amber-200 animate-pulse">
-                      <div className="flex items-center gap-2 text-amber-800 text-sm font-semibold">
-                        <Key size={16} />
-                        <span>انتظار كود المصادقة ثنائي الأبعاد (2FA) من تليجرام...</span>
-                      </div>
-                      <p className="text-xs text-amber-700">
-                        الرجاء فتح تليجرام المدير والموافقة على الطلب التفاعلي، ثم نسخ الرمز السري المكون من 6 أرقام المستلم وكتابته هنا:
-                      </p>
-                      
-                      <div className="flex flex-col sm:flex-row items-end gap-3 max-w-md pt-2">
-                        <Input 
-                          label="رمز المصادقة السداسي (2FA Code)" 
-                          placeholder="مثال: 123456" 
-                          value={resetCode} 
-                          onChange={(e) => setResetCode(e.target.value)} 
-                          dir="ltr"
-                          className="font-mono font-bold text-center"
-                        />
-                        <Button 
-                          onClick={handleConfirmReset} 
-                          disabled={resetLoading}
-                          className="bg-red-600 hover:bg-red-700 text-white h-10"
-                        >
-                          {resetLoading ? 'جاري المسح والتطهير...' : 'تأكيد تصفير البيانات والمسح النهائي 💀'}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* الخطوة 3: نجاح التصفير */}
-                  {resetStep === 'reset_success' && (
-                    <div className="p-4 rounded-lg bg-success/10 border border-success/30 text-success text-sm font-bold text-center space-y-2">
-                      <p>🎉 تم تصفير قاعدة بيانات شركتك بالكامل والبدء من الصفر بنجاح!</p>
-                      <p className="text-xs text-text-muted font-normal">جاري إعادة تحميل لوحة التحكم المحاسبية خلال 3 ثوانٍ...</p>
-                    </div>
-                  )}
                 </div>
               </Card>
             </>
