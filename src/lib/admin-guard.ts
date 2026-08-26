@@ -29,9 +29,18 @@ export class AdminAuthError extends Error {
  *  - Never reads Authorization header — admin_token cookie is HttpOnly, SameSite=Lax.
  */
 export async function requireAdmin(request: RequestLike): Promise<AdminAuthContext> {
+  // Read the admin cookie straight from the raw Cookie header first. Going
+  // through NextRequest.cookies hit a production-only Next internals bug
+  // ("Cannot read properties of undefined (reading '_parsed')") that 500'd
+  // admin routes on Vercel while working locally.
+  const headers = (request as unknown as { headers?: { get?: (k: string) => string | null } })?.headers;
+  const cookieHeader = typeof headers?.get === 'function' ? (headers.get('cookie') || '') : '';
+  const raw = cookieHeader.match(/(?:^|;\s*)admin_token=([^;]*)/)?.[1];
   const cookies = request?.cookies;
   const getCookie = typeof cookies?.get === 'function' ? (cookies as CookieJarLike).get : null;
-  const token = getCookie ? getCookie('admin_token')?.value ?? null : null;
+  const token = raw
+    ? decodeURIComponent(raw)
+    : getCookie ? getCookie('admin_token')?.value ?? null : null;
   if (!token) throw new AdminAuthError('Unauthorized');
 
   const payload = verifyAdminToken(token);
