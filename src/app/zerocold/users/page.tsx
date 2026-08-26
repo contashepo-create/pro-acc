@@ -76,7 +76,7 @@ export default function AdminUsersPage() {
 
   const statusBadge = (active: boolean) => (
     <span className={`px-2 py-0.5 rounded-full text-xs border ${
-      active ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-100 text-gray-700 border-gray-200'
+      active ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/30' : 'bg-gray-800/40 text-gray-400 border-gray-700/30'
     }`}>{active ? 'نشط' : 'غير نشط'}</span>
   );
 
@@ -139,7 +139,7 @@ export default function AdminUsersPage() {
       {/* Users grouped by company */}
       {Object.keys(companyGroups).length === 0 ? (
         <div className="text-center py-12">
-          <Users size={40} className="mx-auto text-gray-700 mb-3" />
+          <Users size={40} className="mx-auto text-text-muted mb-3" />
           <p className="text-gray-500">لا توجد نتائج</p>
         </div>
       ) : (
@@ -231,3 +231,4 @@ export default function AdminUsersPage() {
     </div>
   );
 }
+

@@ -391,7 +391,7 @@ export default function AdminAdvertisementsPage() {
                   <p className="text-sm text-text-muted">لا توجد مشاهدات</p>
                 ) : (
                   trackingData.views.map((view, idx: number) => (
-                    <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
+                    <div key={idx} className="bg-bg-secondary rounded-lg p-3 text-sm">
                       <div className="font-medium text-text-primary">{view.companies?.name || 'غير معروف'}</div>
                       <div className="text-xs text-text-muted flex items-center justify-between mt-1">
                         <span>{view.users?.name || 'مستخدم'}</span>
@@ -416,7 +416,7 @@ export default function AdminAdvertisementsPage() {
                   <p className="text-sm text-text-muted">لا توجد نقرات</p>
                 ) : (
                   trackingData.clicks.map((click, idx: number) => (
-                    <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
+                    <div key={idx} className="bg-bg-secondary rounded-lg p-3 text-sm">
                       <div className="font-medium text-text-primary">{click.companies?.name || 'غير معروف'}</div>
                       <div className="text-xs text-text-muted flex items-center justify-between mt-1">
                         <span>{click.users?.name || 'مستخدم'}</span>
@@ -439,14 +439,14 @@ export default function AdminAdvertisementsPage() {
                   <p className="text-sm text-text-muted">لا توجد إشعارات مرسلة</p>
                 ) : (
                   trackingData.notifications.map((notif, idx: number) => (
-                    <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
+                    <div key={idx} className="bg-bg-secondary rounded-lg p-3 text-sm">
                       <div className="font-medium text-text-primary">{notif.companies?.name || 'غير معروف'}</div>
                       <div className="text-xs text-text-muted flex items-center justify-between mt-1">
                         <span>{notif.users?.name || 'مستخدم'}</span>
                         <span dir="ltr">{new Date(notif.sent_at).toLocaleString('ar-SA')}</span>
                       </div>
                       <div className="mt-2 flex items-center gap-2 text-xs">
-                        <span className={`px-2 py-0.5 rounded ${notif.delivered ? 'bg-green-100 text-emerald-400' : 'bg-gray-100 text-gray-600'}`}>
+                        <span className={`px-2 py-0.5 rounded ${notif.delivered ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/30' : 'bg-gray-800/40 text-gray-400'}`}>
                           {notif.delivered ? '✓ تم التوصيل' : 'قيد الانتظار'}
                         </span>
                         <span className="px-2 py-0.5 rounded bg-blue-950/40 text-blue-400 border border-blue-800/30">
@@ -490,13 +490,13 @@ export default function AdminAdvertisementsPage() {
                           {typeInfo.label}
                         </span>
                         {!ad.is_active && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200">
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800/40 text-gray-400 border border-gray-700/30">
                             مخفي
                           </span>
                         )}
                         {/* عرض طريقة العرض */}
                         {ad.display_mode && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800/40 text-gray-400 border border-gray-700/30">
                             {ad.display_mode === 'banner' ? 'بانر' : ad.display_mode === 'popup' ? 'نافذة منبثقة' : 'إشعار'}
                           </span>
                         )}
@@ -567,3 +567,4 @@ export default function AdminAdvertisementsPage() {
     </div>
   );
 }
+

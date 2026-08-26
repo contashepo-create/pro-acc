@@ -189,7 +189,7 @@ export default function ReportsPage() {
   if (error) {
     return (
       <div className="p-6">
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-700">
+        <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-4 text-red-400">
           {error}
         </div>
       </div>
@@ -221,7 +221,7 @@ export default function ReportsPage() {
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             activeTab === 'ads'
               ? 'bg-accent text-white'
-              : 'bg-gray-100 text-text-muted hover:bg-gray-200'
+              : 'bg-bg-secondary text-text-muted hover:bg-bg-hover'
           }`}
         >
           <Eye size={16} className="inline mr-2" />
@@ -232,7 +232,7 @@ export default function ReportsPage() {
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             activeTab === 'approvals'
               ? 'bg-accent text-white'
-              : 'bg-gray-100 text-text-muted hover:bg-gray-200'
+              : 'bg-bg-secondary text-text-muted hover:bg-bg-hover'
           }`}
         >
           <CheckCircle size={16} className="inline mr-2" />
@@ -275,21 +275,21 @@ export default function ReportsPage() {
               <Eye size={18} />
               <span className="text-sm font-medium">إجمالي المشاهدات</span>
             </div>
-            <div className="text-2xl font-bold text-blue-700">{(adStats.totalViews ?? 0).toLocaleString()}</div>
+            <div className="text-2xl font-bold text-blue-400">{(adStats.totalViews ?? 0).toLocaleString()}</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-green-600 mb-2">
               <MousePointer2 size={18} />
               <span className="text-sm font-medium">إجمالي النقرات</span>
             </div>
-            <div className="text-2xl font-bold text-green-700">{(adStats.totalClicks ?? 0).toLocaleString()}</div>
+            <div className="text-2xl font-bold text-emerald-400">{(adStats.totalClicks ?? 0).toLocaleString()}</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-purple-600 mb-2">
               <Bell size={18} />
               <span className="text-sm font-medium">إجمالي الإشعارات</span>
             </div>
-            <div className="text-2xl font-bold text-purple-700">{(adStats.totalNotifications ?? 0).toLocaleString()}</div>
+            <div className="text-2xl font-bold text-purple-400">{(adStats.totalNotifications ?? 0).toLocaleString()}</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-accent mb-2">
@@ -306,21 +306,21 @@ export default function ReportsPage() {
               <Bell size={18} />
               <span className="text font-medium">إجمالي الطلبات</span>
             </div>
-            <div className="text-2xl font-bold text-blue-700">{approvalStats.totalRequests}</div>
+            <div className="text-2xl font-bold text-blue-400">{approvalStats.totalRequests}</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-green-600 mb-2">
               <CheckCircle size={18} />
               <span className="text-sm font-medium">المبلغ المعتمد</span>
             </div>
-            <div className="text-2xl font-bold text-green-700">{(approvalStats.approvedAmount ?? 0).toLocaleString()} ر.س</div>
+            <div className="text-2xl font-bold text-emerald-400">{(approvalStats.approvedAmount ?? 0).toLocaleString()} ر.س</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-red-600 mb-2">
               <XCircle size={18} />
               <span className="text-sm font-medium">المبلغ المرفوض</span>
             </div>
-            <div className="text-2xl font-bold text-red-700">{(approvalStats.rejectedAmount ?? 0).toLocaleString()} ر.س</div>
+            <div className="text-2xl font-bold text-red-400">{(approvalStats.rejectedAmount ?? 0).toLocaleString()} ر.س</div>
           </div>
           <div className="glass rounded-lg p-4">
             <div className="flex items-center gap-2 text-accent mb-2">
@@ -335,7 +335,7 @@ export default function ReportsPage() {
       {/* Data Table */}
       <div className="glass rounded-lg overflow-hidden">
         <table className="w-full">
-          <thead className="bg-gray-50">
+          <thead className="bg-bg-secondary">
             <tr>
               {activeTab === 'ads' ? (
                 <>
@@ -362,7 +362,7 @@ export default function ReportsPage() {
           <tbody>
             {activeTab === 'ads' ? (
               adData.map((ad) => (
-                <tr key={ad.id} className="border-t border-gray-200 hover:bg-gray-50">
+                <tr key={ad.id} className="border-t border-border hover:bg-bg-secondary">
                   <td className="px-4 py-3 text-right text-sm">{ad.title}</td>
                   <td className="px-4 py-3 text-center text-sm">{ad.type}</td>
                   <td className="px-4 py-3 text-center text-sm">{ad.display_mode}</td>
@@ -374,15 +374,15 @@ export default function ReportsPage() {
               ))
             ) : (
               approvalData.map((app) => (
-                <tr key={app.id} className="border-t border-gray-200 hover:bg-gray-50">
+                <tr key={app.id} className="border-t border-border hover:bg-bg-secondary">
                   <td className="px-4 py-3 text-right text-sm">{app.transaction_type}</td>
                   <td className="px-4 py-3 text-center text-sm">{app.amount.toFixed(2)} ر.س</td>
                   <td className="px-4 py-3 text-center text-sm">{app.requester_name}</td>
                   <td className="px-4 py-3 text-center text-sm">
                     <span className={`px-2 py-1 rounded-full text-xs ${
-                      app.status === 'approved' ? 'bg-green-100 text-green-700' :
-                      app.status === 'rejected' ? 'bg-red-100 text-red-700' :
-                      'bg-yellow-100 text-yellow-700'
+                      app.status === 'approved' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/30' :
+                      app.status === 'rejected' ? 'bg-red-950/40 text-red-400 border-red-800/30' :
+                      'bg-yellow-950/40 text-yellow-400 border-yellow-800/30'
                     }`}>
                       {app.status === 'approved' ? 'معتمد' : app.status === 'rejected' ? 'مرفوض' : 'قيد الانتظار'}
                     </span>
