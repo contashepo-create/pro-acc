@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Database, HardDrive, Table2, Upload, Download, Loader2,
-  RefreshCw, ChevronLeft, AlertTriangle, CheckCircle
+  Database, HardDrive, Table2, Download, Loader2,
+  RefreshCw, ChevronLeft, AlertTriangle, CheckCircle, ShieldAlert
 } from 'lucide-react';
 import Link from 'next/link';
+import { MasterPasswordModal } from '@/components/ui/MasterPasswordModal';
 
 interface TableInfo {
   name: string;
@@ -29,10 +30,9 @@ export default function ZerocoldDatabasePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [backingUp, setBackingUp] = useState(false);
-  const [restoring, setRestoring] = useState(false);
   const [backupMessage, setBackupMessage] = useState('');
   const [restoreMessage, setRestoreMessage] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showBackupModal, setShowBackupModal] = useState(false);
 
   const fetchDbInfo = async () => {
     setLoading(true);
@@ -65,17 +65,18 @@ export default function ZerocoldDatabasePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleBackup = async () => {
+  const handleBackup = async (masterPassword: string) => {
     setBackingUp(true);
     setBackupMessage('');
     try {
       const res = await fetch('/api/admin/database/backup', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ masterPassword }),
       });
-
       const body = await res.json();
       if (body.success) {
-        setBackupMessage('تم إنشاء النسخة الاحتياطية وإرسالها إلى التليجرام بنجاح');
+        setBackupMessage(body.message || 'تم تسجيل طلب النسخة الاحتياطية في السجلات. استخدم أداة النسخ في Supabase أو pg_dump لإنشاء النسخة الفعلية.');
       } else {
         setBackupMessage(body.message || 'فشل إنشاء النسخة الاحتياطية');
       }
@@ -83,36 +84,6 @@ export default function ZerocoldDatabasePage() {
       setBackupMessage('حدث خطأ في الاتصال بالخادم');
     } finally {
       setBackingUp(false);
-    }
-  };
-
-  const handleRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setRestoring(true);
-    setRestoreMessage('');
-    try {
-      const formData = new FormData();
-      formData.append('backup', file);
-
-      const res = await fetch('/api/admin/database/restore', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const body = await res.json();
-      if (body.success) {
-        setRestoreMessage('تمت استعادة قاعدة البيانات بنجاح');
-        fetchDbInfo();
-      } else {
-        setRestoreMessage(body.message || 'فشلت عملية الاستعادة');
-      }
-    } catch {
-      setRestoreMessage('حدث خطأ في الاتصال بالخادم');
-    } finally {
-      setRestoring(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -190,7 +161,7 @@ export default function ZerocoldDatabasePage() {
             <h2 className="text-sm font-bold text-amber-300/80 mb-3">النسخ الاحتياطي والاستعادة</h2>
             <div className="space-y-3">
               <button
-                onClick={handleBackup}
+                onClick={() => setShowBackupModal(true)}
                 disabled={backingUp}
                 className="w-full flex items-center justify-center gap-2 py-2.5 bg-gradient-to-l from-amber-600 to-orange-700 hover:from-amber-500 hover:to-orange-600 disabled:from-amber-800 disabled:to-orange-900 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all text-sm shadow-lg shadow-amber-900/20"
               >
@@ -202,25 +173,16 @@ export default function ZerocoldDatabasePage() {
                 {backingUp ? 'جاري إنشاء النسخة...' : 'نسخ احتياطي'}
               </button>
 
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".db,.sqlite,.sqlite3,.backup"
-                onChange={handleRestore}
-                className="hidden"
-              />
               <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={restoring}
-                className="w-full flex items-center justify-center gap-2 py-2.5 bg-bg-secondary border border-border hover:border-[#3a2f1a] disabled:opacity-50 disabled:cursor-not-allowed text-amber-300/80 font-semibold rounded-xl transition-all text-sm"
+                onClick={() => setRestoreMessage('استعادة قاعدة البيانات عبر الويب معطلة لأسباب أمنية. استخدم لوحة تحكم Supabase مع ملف نسخة احتياطية موثّق وموقّع.')}
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-bg-secondary border border-border hover:border-[#3a2f1a] text-amber-300/80 font-semibold rounded-xl transition-all text-sm"
               >
-                {restoring ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <Upload size={16} />
-                )}
-                {restoring ? 'جاري الاستعادة...' : 'استعادة نسخة احتياطية'}
+                <ShieldAlert size={16} />
+                استعادة نسخة احتياطية
               </button>
+              <p className="text-[0.65rem] text-text-muted leading-relaxed text-center px-1">
+                الاستعادة تتم عبر لوحة تحكم Supabase فقط لضمان الأمان. هذا الزر يوضّح الإجراء المطلوب.
+              </p>
 
               {backupMessage && (
                 <div className={`text-xs text-center px-3 py-2 rounded-lg ${
@@ -318,6 +280,15 @@ export default function ZerocoldDatabasePage() {
             </div>
           </div>
         )}
+
+        <MasterPasswordModal
+          isOpen={showBackupModal}
+          title="تأكيد النسخ الاحتياطي"
+          description="سيتم تسجيل العملية في سجلات التدقيق. أنشئ النسخة الفعلية عبر أداة Supabase أو pg_dump."
+          submitLabel="تأكيد النسخ الاحتياطي"
+          onCancel={() => setShowBackupModal(false)}
+          onSubmit={(mp) => { setShowBackupModal(false); return handleBackup(mp); }}
+        />
       </div>
     </div>
   );
