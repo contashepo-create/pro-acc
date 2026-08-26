@@ -9,6 +9,10 @@ export function MasterPasswordModal({
   title,
   description,
   extraLabel,
+  extraRequired,
+  submitLabel = 'تأكيد',
+  submitClassName = 'bg-amber-600 hover:bg-amber-500',
+  disabled,
   onCancel,
   onSubmit,
 }: {
@@ -17,6 +21,14 @@ export function MasterPasswordModal({
   description?: string;
   /** Optional secondary text field (e.g. reason for trial extension). */
   extraLabel?: string;
+  /** Require the secondary field to be filled before submitting. */
+  extraRequired?: boolean;
+  /** Label for the confirm button (default "تأكيد"). */
+  submitLabel?: string;
+  /** Tailwind classes for the confirm button (default amber). */
+  submitClassName?: string;
+  /** Disable the confirm button (e.g. when a prerequisite is missing). */
+  disabled?: boolean;
   onCancel: () => void;
   onSubmit: (masterPassword: string, extra?: string) => Promise<void>;
 }) {
@@ -29,6 +41,7 @@ export function MasterPasswordModal({
 
   const submit = async () => {
     if (!password) { setError('أدخل كلمة المرور الرئيسية'); return; }
+    if (extraRequired && !extra.trim()) { setError(extraLabel ? `${extraLabel} مطلوب` : 'الحقل الإضافي مطلوب'); return; }
     setBusy(true); setError('');
     try {
       await onSubmit(password, extra.trim() || undefined);
@@ -69,7 +82,7 @@ export function MasterPasswordModal({
         {error && <p className="text-xs text-red-400">{error}</p>}
         <div className="flex gap-2 pt-1">
           <button onClick={onCancel} disabled={busy} className="flex-1 py-2 rounded-lg border border-border text-text-secondary text-sm hover:bg-bg-hover">إلغاء</button>
-          <button onClick={() => void submit()} disabled={busy} className="flex-1 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center">
+          <button onClick={() => void submit()} disabled={busy || disabled} className={`flex-1 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center ${submitClassName}`}>
             {busy ? <Loader2 size={15} className="animate-spin" /> : 'تأكيد'}
           </button>
         </div>

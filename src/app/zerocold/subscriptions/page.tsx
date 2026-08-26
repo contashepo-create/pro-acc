@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Users, Loader2, ChevronLeft, Calendar, Ban, CreditCard, RefreshCw, X, Hash } from 'lucide-react';
 import Link from 'next/link';
+import { MasterPasswordModal } from '@/components/ui/MasterPasswordModal';
 
 interface Subscription {
   id: string; company_id: string; company_name: string; plan_code: string; plan_name: string;
@@ -25,10 +26,10 @@ export default function SubscriptionsPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [showExtendModal, setShowExtendModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
   const [selectedSub, setSelectedSub] = useState<Subscription | null>(null);
   const [planForm, setPlanForm] = useState({ plan_id: '', duration_days: 30, auto_renew: false });
   const [extendDays, setExtendDays] = useState(30);
-  const [masterPassword, setMasterPassword] = useState('');
 
   const fetchData = async () => {
     setLoading(true);
@@ -48,17 +49,17 @@ export default function SubscriptionsPage() {
   // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- standard fetch pattern
   useEffect(() => { fetchData(); }, []);
 
-  const doAction = async (sub: Subscription, action: string, extra: Record<string, unknown> = {}) => {
+  const doAction = async (sub: Subscription, action: string, extra: Record<string, unknown> = {}, password?: string) => {
     setActionLoading(action + sub.id);
     try {
       const res = await fetch(`/api/admin/companies/${sub.company_id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'x-master-password': masterPassword },
+        headers: { 'Content-Type': 'application/json', 'x-master-password': password || '' },
         body: JSON.stringify({ action, ...extra }),
       });
       const body = await res.json();
       if (body.success) {
-        setShowPlanModal(false); setShowExtendModal(false); setMasterPassword('');
+        setShowPlanModal(false); setShowExtendModal(false); setShowCancelModal(false);
         fetchData();
         alert(body.message);
       } else alert(body.message || 'فشل');
@@ -68,6 +69,7 @@ export default function SubscriptionsPage() {
 
   const openPlanModal = (sub: Subscription) => { setSelectedSub(sub); setPlanForm({ plan_id: '', duration_days: 30, auto_renew: false }); setShowPlanModal(true); };
   const openExtendModal = (sub: Subscription) => { setSelectedSub(sub); setExtendDays(30); setShowExtendModal(true); };
+  const openCancelModal = (sub: Subscription) => { setSelectedSub(sub); setShowCancelModal(true); };
 
   const filtered = data.filter(s => !filter || s.status === filter);
 
@@ -131,7 +133,7 @@ export default function SubscriptionsPage() {
                   <button onClick={() => openExtendModal(sub)} disabled={actionLoading === 'extend_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-950/20 text-emerald-400/70 border border-emerald-800/20 hover:bg-emerald-950/40 text-xs">
                     {actionLoading === 'extend_subscription' + sub.id ? <Loader2 size={12} className="animate-spin" /> : <Calendar size={12} />} تمديد
                   </button>
-                  <button onClick={() => { if (confirm('إلغاء الاشتراك؟')) { const mp = prompt('كلمة السر الرئيسية:'); if (mp) { setMasterPassword(mp); doAction(sub, 'cancel_subscription'); } } }} disabled={actionLoading === 'cancel_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40 text-xs">
+                  <button onClick={() => { if (confirm('إلغاء الاشتراك؟')) openCancelModal(sub); }} disabled={actionLoading === 'cancel_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40 text-xs">
                     {actionLoading === 'cancel_subscription' + sub.id ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} إلغاء
                   </button>
                 </div>
@@ -155,8 +157,14 @@ export default function SubscriptionsPage() {
                 </select>
                 <input type="number" className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary" placeholder="عدد الأيام" value={planForm.duration_days} onChange={e => setPlanForm({ ...planForm, duration_days: parseInt(e.target.value) || 30 })} />
                 <label className="flex items-center gap-2 text-sm text-amber-200"><input type="checkbox" checked={planForm.auto_renew} onChange={e => setPlanForm({ ...planForm, auto_renew: e.target.checked })} /> تجديد تلقائي</label>
-                <input className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary" type="password" placeholder="كلمة السر الرئيسية" value={masterPassword} onChange={e => setMasterPassword(e.target.value)} />
-                <button onClick={() => doAction(selectedSub, 'change_plan', planForm)} disabled={!masterPassword || !planForm.plan_id} className="w-full py-2.5 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-500 disabled:opacity-50">تغيير الباقة</button>
+                <MasterPasswordModal
+                  isOpen={true}
+                  title="تأكيد كلمة السر لتغيير الباقة"
+                  submitLabel="تغيير الباقة"
+                  disabled={!planForm.plan_id}
+                  onCancel={() => setShowPlanModal(false)}
+                  onSubmit={(mp: string) => doAction(selectedSub, 'change_plan', planForm, mp)}
+                />
               </div>
             </div>
           </div>
@@ -172,11 +180,29 @@ export default function SubscriptionsPage() {
               </div>
               <div className="p-4 space-y-3">
                 <input type="number" className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary" placeholder="عدد الأيام" value={extendDays} onChange={e => setExtendDays(parseInt(e.target.value) || 30)} />
-                <input className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary" type="password" placeholder="كلمة السر الرئيسية" value={masterPassword} onChange={e => setMasterPassword(e.target.value)} />
-                <button onClick={() => doAction(selectedSub, 'extend_subscription', { days: extendDays })} disabled={!masterPassword} className="w-full py-2.5 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-500 disabled:opacity-50">تمديد الاشتراك</button>
+                <MasterPasswordModal
+                  isOpen={true}
+                  title="تأكيد كلمة السر لتمديد الاشتراك"
+                  submitLabel="تمديد الاشتراك"
+                  onCancel={() => setShowExtendModal(false)}
+                  onSubmit={(mp: string) => doAction(selectedSub, 'extend_subscription', { days: extendDays }, mp)}
+                />
               </div>
             </div>
           </div>
+        )}
+
+        {/* Cancel Subscription Modal */}
+        {showCancelModal && selectedSub && (
+          <MasterPasswordModal
+            isOpen={true}
+            title={`إلغاء اشتراك: ${selectedSub.company_name}`}
+            submitLabel="تأكيد الإلغاء"
+            submitClassName="bg-red-600 hover:bg-red-500"
+            extraLabel="سبب الإلغاء (اختياري)"
+            onCancel={() => setShowCancelModal(false)}
+            onSubmit={(mp: string, reason?: string) => doAction(selectedSub, 'cancel_subscription', reason ? { cancel_reason: reason } : {}, mp)}
+          />
         )}
       </div>
     </div>

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, Loader2, Check, X, DollarSign, Image as ImageIcon, Calendar, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
+import { MasterPasswordModal } from '@/components/ui/MasterPasswordModal';
 
 interface UpgradeRequest {
   id: string;
@@ -29,6 +30,7 @@ export default function UpgradeRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('pending');
   const [processing, setProcessing] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<{ id: string; name: string } | null>(null);
 
   const fetchRequests = async () => {
     setLoading(true);
@@ -46,12 +48,12 @@ export default function UpgradeRequestsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
-  const handleAction = async (id: string, status: 'approved' | 'rejected', notes?: string) => {
+  const handleAction = async (id: string, status: 'approved' | 'rejected', notes?: string, password?: string) => {
     setProcessing(id);
     try {
       const res = await fetch('/api/admin/upgrade-requests', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(password ? { 'x-master-password': password } : {}) },
         body: JSON.stringify({ id, status, admin_notes: notes }),
       });
       const data = await res.json();
@@ -122,7 +124,7 @@ export default function UpgradeRequestsPage() {
                   <button disabled={!!processing} onClick={() => handleAction(req.id, 'approved')} className="flex-1 py-2.5 bg-green-700 hover:bg-green-600 text-white rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-50">
                     {processing === req.id ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} قبول وترقية
                   </button>
-                  <button disabled={!!processing} onClick={() => { const reason = prompt('سبب الرفض:'); if (reason !== null) handleAction(req.id, 'rejected', reason); }} className="flex-1 py-2.5 bg-danger-light hover:bg-danger hover:text-white text-danger border border-danger rounded-xl text-sm flex items-center justify-center gap-2">
+                  <button disabled={!!processing} onClick={() => setRejectTarget({ id: req.id, name: req.companies?.name || 'الشركة' })} className="flex-1 py-2.5 bg-danger-light hover:bg-danger hover:text-white text-danger border border-danger rounded-xl text-sm flex items-center justify-center gap-2">
                     <X size={16} /> رفض
                   </button>
                 </div>
@@ -131,6 +133,19 @@ export default function UpgradeRequestsPage() {
           ))}
         </div>
       </div>
+
+      {rejectTarget && (
+        <MasterPasswordModal
+          isOpen={true}
+          title={`رفض طلب: ${rejectTarget.name}`}
+          submitLabel="تأكيد الرفض"
+          submitClassName="bg-red-600 hover:bg-red-500"
+          extraLabel="سبب الرفض (مطلوب)"
+          extraRequired
+          onCancel={() => setRejectTarget(null)}
+          onSubmit={(mp: string, reason?: string) => (reason ? handleAction(rejectTarget.id, 'rejected', reason, mp).then(() => setRejectTarget(null)) : Promise.resolve())}
+        />
+      )}
     </div>
   );
 }
