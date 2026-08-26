@@ -33,10 +33,12 @@ export async function POST(req: NextRequest) {
     const parsed = boqCreateSchema.safeParse(await parseBody(req));
     if (!parsed.success) return error(parsed.error.issues[0]?.message || 'بيانات بند المقايسة غير صالحة');
     const input = parsed.data;
+    // When no explicit code is supplied the database generates a project-scoped
+    // sequential code (BOQ-0001, BOQ-0002, ...) automatically.
     const { data, error: rpcError } = await getSupabase().rpc('create_boq_item_atomic', {
       p_company_id: auth.companyId,
       p_project_id: input.project_id,
-      p_item_code: input.item_code || input.code,
+      p_item_code: input.item_code || input.code || '',
       p_description: input.description,
       p_unit: input.unit,
       p_quantity: input.quantity,

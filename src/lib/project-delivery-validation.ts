@@ -12,16 +12,16 @@ const positiveMoney = money.positive();
 
 export const boqCreateSchema = z.object({
   project_id: deliveryUuid,
-  item_code: z.string().trim().min(1).max(80).optional(),
-  code: z.string().trim().min(1).max(80).optional(),
+  item_code: z.string().trim().max(80).optional(),
+  code: z.string().trim().max(80).optional(),
   description: z.string().trim().min(1).max(1000),
   unit: z.string().trim().min(1).max(40),
   quantity: positiveMoney,
   unit_price: nonnegativeMoney,
-}).strict().refine((value) => !!(value.item_code || value.code), { message: 'كود البند مطلوب', path: ['item_code'] });
+}).strict();
 export const boqUpdateSchema = z.object({
-  item_code: z.string().trim().min(1).max(80).optional(),
-  code: z.string().trim().min(1).max(80).optional(),
+  item_code: z.string().trim().max(80).optional(),
+  code: z.string().trim().max(80).optional(),
   description: z.string().trim().min(1).max(1000).optional(),
   unit: z.string().trim().min(1).max(40).optional(),
   quantity: positiveMoney.optional(),
