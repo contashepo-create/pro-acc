@@ -288,4 +288,17 @@ describe('ميجريشن 090 — قفل الفواتير والصافي (فحص 
     expect((netting.match(/cn\.note_type='credit'/g) || []).length).toBeGreaterThanOrEqual(2);
     expect((netting.match(/cn\.note_type='debit'/g) || []).length).toBeGreaterThanOrEqual(2);
   });
+
+  test('ميجريشن 092 — تقادم الذمم ومؤشرات الفواتير صافية بعد المدين/الدائن', () => {
+    const aging = fs.readFileSync(path.join(process.cwd(), 'src', 'migrations', '092-notes-aware-aging-and-kpis.sql'), 'utf8');
+    // إعادة تعريف دوال التقادم والمؤشرات الثلاث
+    expect(aging).toContain('CREATE OR REPLACE FUNCTION public.get_aging_by_contact(');
+    expect(aging).toContain('CREATE OR REPLACE FUNCTION public.get_receivable_aging(');
+    expect(aging).toContain('CREATE OR REPLACE FUNCTION public.get_assistant_company_snapshot(');
+    // القيد في دوال التقادم صافٍ موقّع: المدين يُعاد للرصيد لا أن يخصم
+    expect((aging.match(/sum\(CASE WHEN cn\.note_type='debit' THEN -cn\.total ELSE cn\.total END\)/g) || []).length).toBe(2);
+    // مؤشرات المساعد: المستحق والمتأخر = الأصل − المدفوع + صافي الإشعارات
+    expect((aging.match(/i\.total-COALESCE\(i\.paid_amount,0\)\+COALESCE\(nn\.net,0\)/g) || []).length).toBe(2);
+    expect(aging).toContain('LEFT JOIN notes_net nn ON nn.invoice_id=i.id');
+  });
 });
