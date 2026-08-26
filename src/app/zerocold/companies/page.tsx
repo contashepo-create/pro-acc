@@ -7,6 +7,7 @@ import {
   CreditCard, Edit3, Calendar, Ban, Eye, X
 } from 'lucide-react';
 import Link from 'next/link';
+import { MasterPasswordModal } from '@/components/ui/MasterPasswordModal';
 
 interface Company {
   id: string;
@@ -56,6 +57,7 @@ interface DetailData {
   const [editForm, setEditForm] = useState<EditForm>({} as EditForm);
   const [planForm, setPlanForm] = useState<PlanChangeForm>({ plan_id: '', duration_days: 30, auto_renew: false });
   const [masterPassword, setMasterPassword] = useState('');
+  const [mpAction, setMpAction] = useState<null | { kind: 'toggle' | 'extend' | 'cancel' | 'edit' | 'plan'; company?: Company }>(null);
   const [detailData, setDetailData] = useState<DetailData | null>(null);
 
   const fetchCompanies = async () => {
@@ -107,21 +109,34 @@ interface DetailData {
     setShowPlanModal(true);
   };
 
-  const doToggleStatus = async (company: Company) => {
-    const mp = prompt('كلمة السر الرئيسية:');
-    if (!mp) return;
-    setActionLoading(company.id);
-    try {
-      const res = await fetch(`/api/admin/companies/${company.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'x-master-password': mp },
-        body: JSON.stringify({ action: 'toggle_status', is_active: !company.is_active }),
-      });
-      const body = await res.json();
-      if (body.success) { fetchCompanies(); }
-      else alert(body.message || 'فشل');
-    } catch { alert('خطأ في الاتصال'); }
-    finally { setActionLoading(null); }
+  const doToggleStatus = (company: Company) => setMpAction({ kind: 'toggle', company });
+  const doExtend = (company: Company) => setMpAction({ kind: 'extend', company });
+  const doCancel = (company: Company) => {
+    if (!confirm('إلغاء اشتراك ' + company.name + '؟')) return;
+    setMpAction({ kind: 'cancel', company });
+  };
+
+  const runMasterAction = async (password: string) => {
+    if (!mpAction?.company) return;
+    const company = mpAction.company;
+    const headers = { 'Content-Type': 'application/json', 'x-master-password': password };
+    let res: Response;
+    if (mpAction.kind === 'toggle') {
+      res = await fetch('/api/admin/companies/' + company.id, { method: 'PATCH', headers,
+        body: JSON.stringify({ action: 'toggle_status', is_active: !company.is_active }) });
+    } else if (mpAction.kind === 'extend') {
+      const reason = mpAction.kind === 'extend' ? '' : '';
+      res = await fetch('/api/admin/companies/' + company.id + '/extend-trial', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: 7, reason, masterPassword: password }) });
+    } else {
+      res = await fetch('/api/admin/companies/' + company.id, { method: 'PATCH', headers,
+        body: JSON.stringify({ action: 'cancel_subscription' }) });
+    }
+    const body = await res.json();
+    if (!body.success) throw new Error(body.message || 'فشلت العملية');
+    setMpAction(null);
+    fetchCompanies();
   };
 
   const doEdit = async () => {
@@ -154,42 +169,6 @@ interface DetailData {
     finally { setActionLoading(null); }
   };
 
-  const doExtend = async (company: Company) => {
-    const mp = prompt('كلمة السر الرئيسية:');
-    if (!mp) return;
-    const reason = prompt('سبب التمديد (اختياري):') || '';
-    if (!confirm('تمديد الفترة التجريبية 7 أيام لـ ' + company.name + '؟')) return;
-    setActionLoading('extend');
-    try {
-      const res = await fetch(`/api/admin/companies/${company.id}/extend-trial`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ days: 7, reason, masterPassword: mp }),
-      });
-      const body = await res.json();
-      if (body.success) { fetchCompanies(); alert(body.message || 'تم التمديد'); }
-      else alert(body.message || 'فشل');
-    } catch { alert('خطأ في الاتصال'); }
-    finally { setActionLoading(null); }
-  };
-
-  const doCancel = async (company: Company) => {
-    if (!confirm(`إلغاء اشتراك ${company.name}؟`)) return;
-    const mp = prompt('كلمة السر الرئيسية:');
-    if (!mp) return;
-    setActionLoading('cancel');
-    try {
-      const res = await fetch(`/api/admin/companies/${company.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'x-master-password': mp },
-        body: JSON.stringify({ action: 'cancel_subscription' }),
-      });
-      const body = await res.json();
-      if (body.success) { fetchCompanies(); alert(body.message); }
-      else alert(body.message || 'فشل');
-    } catch { alert('خطأ في الاتصال'); }
-    finally { setActionLoading(null); }
-  };
 
   const filtered = companies.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -392,3 +371,5 @@ interface DetailData {
     </div>
   );
 }
+
+
