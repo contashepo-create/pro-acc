@@ -131,11 +131,11 @@ function VerifyTelegramPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0a0a0f] to-[#1a0f0a] p-4">
+    <div className="min-h-screen flex items-center justify-center bg-bg-primary p-4">
       <div className="w-full max-w-sm">
         <button
           onClick={handleBack}
-          className="flex items-center gap-1.5 text-amber-600/60 hover:text-amber-400 text-sm mb-6 transition-colors"
+          className="flex items-center gap-1.5 text-text-secondary hover:text-accent text-sm mb-6 transition-colors"
         >
           <ArrowLeft size={16} />
           العودة لتسجيل الدخول
@@ -151,7 +151,7 @@ function VerifyTelegramPage() {
           </p>
         </div>
 
-        <div className="bg-bg-card border border-border rounded-2xl p-6 shadow-2xl">
+        <div className="bg-bg-card border border-border rounded-2xl p-6 shadow-xl">
           <div className="flex items-center justify-center gap-1.5 sm:gap-2.5 mb-6" dir="ltr">
             {code.map((digit, index) => (
               <input
@@ -166,7 +166,7 @@ function VerifyTelegramPage() {
                 onChange={(e) => handleChange(index, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(index, e)}
                 onPaste={index === 0 ? handlePaste : undefined}
-                className="w-10 h-12 sm:w-11 sm:h-14 text-center text-lg font-bold bg-bg-secondary border border-border rounded-xl text-text-primary focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all"
+                className="w-10 h-12 sm:w-11 sm:h-14 text-center text-lg font-bold bg-bg-secondary border border-border rounded-xl text-text-primary focus:outline-none focus:border-accent transition-all"
               />
             ))}
           </div>
@@ -190,7 +190,7 @@ function VerifyTelegramPage() {
             {canResend ? (
               <button
                 onClick={handleResend}
-                className="text-text-secondary hover:text-amber-400 text-sm transition-colors"
+                className="text-text-secondary hover:text-accent text-sm transition-colors"
               >
                 إعادة إرسال الرمز
               </button>

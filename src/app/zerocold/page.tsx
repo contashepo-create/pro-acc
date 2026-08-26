@@ -78,7 +78,7 @@ export default function ZerocoldDashboardPage() {
         <div className="text-center">
           <ShieldAlert className="w-12 h-12 text-red-500 mx-auto mb-3" />
           <p className="text-red-400 text-sm">{error}</p>
-          <button onClick={fetchDashboard} className="mt-4 text-text-secondary hover:text-amber-400 text-sm underline">
+          <button onClick={fetchDashboard} className="mt-4 text-text-secondary hover:text-accent text-sm underline">
             إعادة المحاولة
           </button>
         </div>
@@ -90,7 +90,7 @@ export default function ZerocoldDashboardPage() {
     { label: 'الشركات', value: data?.companiesCount ?? 0, icon: Building2, color: 'from-sky-600 to-blue-700' },
     { label: 'المستخدمين', value: data?.usersCount ?? 0, icon: Users, color: 'from-emerald-600 to-green-700' },
     { label: 'اشتراكات نشطة', value: data?.activeSubscriptions ?? 0, icon: CheckCircle, color: 'from-green-600 to-teal-700' },
-    { label: 'الإيراد الشهري', value: `${(data?.monthlyRevenue ?? 0).toLocaleString()} ر.س`, icon: TrendingUp, color: 'from-amber-600 to-orange-700' },
+    { label: 'الإيراد الشهري', value: `${(data?.monthlyRevenue ?? 0).toLocaleString()} ر.س`, icon: TrendingUp, color: 'from-accent to-accent-hover' },
     { label: 'أكواد غير مستخدمة', value: data?.unusedCodes ?? 0, icon: Key, color: 'from-purple-600 to-fuchsia-700' },
     { label: 'حجم قاعدة البيانات', value: data?.dbSize ?? '--', icon: HardDrive, color: 'from-violet-600 to-purple-700' },
   ];
@@ -103,18 +103,18 @@ export default function ZerocoldDashboardPage() {
     { label: 'رسائل الشركات', href: '/zerocold/messages', icon: MessageSquare, color: 'border-blue-700/30 hover:border-blue-600/50' },
     { label: 'تذاكر الدعم', href: '/zerocold/support', icon: MessageSquareWarning, color: 'border-orange-700/30 hover:border-orange-600/50' },
     { label: 'الإعلانات', href: '/zerocold/advertisements', icon: Megaphone, color: 'border-pink-700/30 hover:border-pink-600/50' },
-    { label: 'خطط الاشتراك المرنة', href: '/zerocold/plans', icon: Package, color: 'border-amber-700/30 hover:border-amber-600/50' },
+    { label: 'خطط الاشتراك المرنة', href: '/zerocold/plans', icon: Package, color: 'border-accent/30 hover:border-accent/50' },
     { label: 'الاشتراكات', href: '/zerocold/subscriptions', icon: Users, color: 'border-purple-700/30 hover:border-purple-600/50' },
     { label: 'طلبات الإضافات ➕', href: '/zerocold/addon-requests', icon: TrendingUp, color: 'border-cyan-700/30 hover:border-cyan-600/50' },
     { label: 'أكواد التفعيل', href: '/zerocold/codes', icon: Key, color: 'border-green-700/30 hover:border-green-600/50' },
     { label: 'قاعدة البيانات', href: '/zerocold/database', icon: Database, color: 'border-violet-700/30 hover:border-violet-600/50' },
-    { label: 'سجل الأحداث', href: '/zerocold/logs', icon: Activity, color: 'border-amber-700/30 hover:border-amber-600/50' },
+    { label: 'سجل الأحداث', href: '/zerocold/logs', icon: Activity, color: 'border-accent/30 hover:border-accent/50' },
     { label: 'إحصائيات الزوار', href: '/zerocold/visitors', icon: Eye, color: 'border-cyan-700/30 hover:border-cyan-600/50' },
   ];
 
   const healthItems = data?.systemHealth ? [
     { label: 'حالة قاعدة البيانات', value: data.systemHealth.dbStatus, color: 'text-emerald-400' },
-    { label: 'زمن استجابة API', value: data.systemHealth.apiResponseTime, color: 'text-amber-400' },
+    { label: 'زمن استجابة API', value: data.systemHealth.apiResponseTime, color: 'text-accent' },
     { label: 'مدة التشغيل', value: data.systemHealth.uptime, color: 'text-sky-400' },
   ] : [];
 
@@ -125,7 +125,7 @@ export default function ZerocoldDashboardPage() {
       <div className="max-w-6xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center shadow-lg shadow-amber-900/20">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-accent-hover flex items-center justify-center shadow-md shadow-accent/20">
               <ShieldAlert className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -136,7 +136,7 @@ export default function ZerocoldDashboardPage() {
           <div className="flex items-center gap-3">
             <button
               onClick={fetchDashboard}
-              className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-amber-400 hover:border-amber-700/50 transition-all"
+              className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-accent hover:border-accent/50 transition-all"
               title="تحديث"
             >
               <RefreshCw size={16} />
@@ -146,7 +146,7 @@ export default function ZerocoldDashboardPage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
           {stats.map((stat) => (
-            <div key={stat.label} className="bg-bg-card border border-border rounded-xl p-4 hover:border-[#3a2f1a] transition-all">
+            <div key={stat.label} className="bg-bg-card border border-border rounded-xl p-4 hover:border-accent/40 transition-all">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-[0.7rem] text-text-secondary font-medium">{stat.label}</span>
                 <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${stat.color} flex items-center justify-center`}>
@@ -160,7 +160,7 @@ export default function ZerocoldDashboardPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
           <div className="bg-bg-card border border-border rounded-xl p-5">
-            <h2 className="text-sm font-bold text-amber-300/80 mb-3">الوصول السريع</h2>
+            <h2 className="text-sm font-bold text-text-primary mb-3">الوصول السريع</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {quickActions.map((action) => (
                 <Link
@@ -168,18 +168,18 @@ export default function ZerocoldDashboardPage() {
                   href={action.href}
                   className={`flex items-center gap-3 p-3 rounded-xl bg-bg-secondary border ${action.color} transition-all group`}
                 >
-                  <div className="w-9 h-9 rounded-lg bg-bg-card border border-border flex items-center justify-center group-hover:border-amber-700/50 transition-all">
-                    <action.icon size={16} className="text-text-secondary group-hover:text-amber-400 transition-all" />
+                  <div className="w-9 h-9 rounded-lg bg-bg-card border border-border flex items-center justify-center group-hover:border-accent/50 transition-all">
+                    <action.icon size={16} className="text-text-secondary group-hover:text-accent transition-all" />
                   </div>
-                  <span className="text-xs text-amber-300/70 group-hover:text-amber-200 transition-all">{action.label}</span>
-                  <ChevronLeft size={14} className="mr-auto text-amber-600/30 group-hover:text-text-secondary/50 transition-all" />
+                  <span className="text-xs text-text-primary group-hover:text-accent transition-all">{action.label}</span>
+                  <ChevronLeft size={14} className="mr-auto text-text-muted group-hover:text-text-secondary transition-all" />
                 </Link>
               ))}
             </div>
           </div>
 
           <div className="bg-bg-card border border-border rounded-xl p-5">
-            <h2 className="text-sm font-bold text-amber-300/80 mb-3">حالة النظام</h2>
+            <h2 className="text-sm font-bold text-text-primary mb-3">حالة النظام</h2>
             <div className="space-y-3">
               {healthItems.length > 0 ? healthItems.map((item) => (
                 <div key={item.label} className="flex items-center justify-between p-2.5 rounded-lg bg-bg-secondary border border-border">
@@ -191,8 +191,8 @@ export default function ZerocoldDashboardPage() {
                 </div>
               )) : (
                 <div className="flex items-center justify-center py-6">
-                  <Activity size={20} className="text-amber-600/30" />
-                  <span className="text-xs text-amber-600/40 mr-2">بيانات غير متوفرة</span>
+                  <Activity size={20} className="text-text-muted" />
+                  <span className="text-xs text-text-muted mr-2">بيانات غير متوفرة</span>
                 </div>
               )}
             </div>
@@ -202,22 +202,22 @@ export default function ZerocoldDashboardPage() {
         {planData.length > 0 && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <div className="bg-bg-card border border-border rounded-xl p-5">
-              <h2 className="text-sm font-bold text-amber-300/80 mb-3">توزيع الخطط</h2>
+              <h2 className="text-sm font-bold text-text-primary mb-3">توزيع الخطط</h2>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={planData}>
-                  <XAxis dataKey="name" tick={{ fill: '#f59e0b', fontSize: 10 }} axisLine={{ stroke: '#2a1f0a' }} />
-                  <YAxis tick={{ fill: '#f59e0b', fontSize: 10 }} axisLine={{ stroke: '#2a1f0a' }} />
+                  <XAxis dataKey="name" tick={{ fill: 'var(--color-text-secondary)', fontSize: 10 }} axisLine={{ stroke: 'var(--color-border)' }} />
+                  <YAxis tick={{ fill: 'var(--color-text-secondary)', fontSize: 10 }} axisLine={{ stroke: 'var(--color-border)' }} />
                   <Tooltip
-                    contentStyle={{ background: '#12101a', border: '1px solid #2a1f0a', borderRadius: '8px', fontSize: '12px' }}
-                    labelStyle={{ color: '#f59e0b' }}
+                    contentStyle={{ background: 'var(--color-bg-card)', border: '1px solid var(--color-border)', borderRadius: '8px', fontSize: '12px' }}
+                    labelStyle={{ color: 'var(--color-text-primary)' }}
                   />
-                  <Bar dataKey="value" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="value" fill="var(--color-accent, #3b82f6)" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
 
             <div className="bg-bg-card border border-border rounded-xl p-5">
-              <h2 className="text-sm font-bold text-amber-300/80 mb-3">آخر الشركات</h2>
+              <h2 className="text-sm font-bold text-text-primary mb-3">آخر الشركات</h2>
               {data?.recentCompanies && data.recentCompanies.length > 0 ? (
                 <div className="space-y-1">
                   {data.recentCompanies.map((company) => (
@@ -228,16 +228,16 @@ export default function ZerocoldDashboardPage() {
                         ) : (
                           <XCircle size={14} className="text-red-400" />
                         )}
-                        <span className="text-xs text-amber-300/80">{company.name}</span>
+                        <span className="text-xs text-text-primary">{company.name}</span>
                       </div>
-                      <span className="text-[0.65rem] text-amber-600/40">{company.created_at}</span>
+                      <span className="text-[0.65rem] text-text-muted">{company.created_at}</span>
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="flex items-center justify-center py-6">
-                  <Building2 size={20} className="text-amber-600/30" />
-                  <span className="text-xs text-amber-600/40 mr-2">لا توجد شركات</span>
+                  <Building2 size={20} className="text-text-muted" />
+                  <span className="text-xs text-text-muted mr-2">لا توجد شركات</span>
                 </div>
               )}
             </div>
@@ -245,28 +245,28 @@ export default function ZerocoldDashboardPage() {
         )}
 
         <div className="bg-bg-card border border-border rounded-xl p-5">
-          <h2 className="text-sm font-bold text-amber-300/80 mb-3">آخر النشاطات</h2>
+          <h2 className="text-sm font-bold text-text-primary mb-3">آخر النشاطات</h2>
           {data?.recentActivity && data.recentActivity.length > 0 ? (
             <div className="space-y-1">
               {data.recentActivity.map((activity, i) => (
                 <div key={i} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-bg-secondary transition-all">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-1.5 h-1.5 rounded-full bg-amber-600/50 flex-shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-accent/60 flex-shrink-0" />
                     <div className="min-w-0">
-                      <p className="text-xs text-amber-300/80 truncate">{activity.action}</p>
+                      <p className="text-xs text-text-primary truncate">{activity.action}</p>
                       {activity.details && (
                         <p className="text-[0.7rem] text-text-muted truncate">{activity.details}</p>
                       )}
                     </div>
                   </div>
-                  <span className="text-[0.65rem] text-amber-600/40 flex-shrink-0">{activity.timestamp}</span>
+                  <span className="text-[0.65rem] text-text-muted flex-shrink-0">{activity.timestamp}</span>
                 </div>
               ))}
             </div>
           ) : (
             <div className="flex items-center justify-center py-6">
-              <Activity size={20} className="text-amber-600/30" />
-              <span className="text-xs text-amber-600/40 mr-2">لا توجد نشاطات حديثة</span>
+              <Activity size={20} className="text-text-muted" />
+              <span className="text-xs text-text-muted mr-2">لا توجد نشاطات حديثة</span>
             </div>
           )}
         </div>

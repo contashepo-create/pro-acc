@@ -41,7 +41,12 @@ export default function SubscriptionsPage() {
       if (subRes.status === 401) { router.replace('/zerocold/login'); return; }
       const [subBody, planBody] = await Promise.all([subRes.json(), planRes.json()]);
       if (subBody.success) setData(subBody.data?.subscriptions || subBody.data || []);
-      if (planBody.success) setPlans(planBody.data || []);
+      if (planBody.success) {
+        const planList = Array.isArray(planBody.data?.plans)
+          ? planBody.data.plans
+          : (Array.isArray(planBody.data) ? planBody.data : []);
+        setPlans(planList);
+      }
     } catch { setError('خطأ في الاتصال'); }
     finally { setLoading(false); }
   };
@@ -84,12 +89,12 @@ export default function SubscriptionsPage() {
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-fuchsia-700 flex items-center justify-center"><Users className="w-5 h-5 text-white" /></div>
             <div><h1 className="text-lg font-bold text-text-primary">الاشتراكات</h1><p className="text-[0.7rem] text-text-muted">{data.length} اشتراك</p></div>
           </div>
-          <button onClick={fetchData} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary"><RefreshCw size={16} /></button>
+          <button onClick={fetchData} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-accent transition-colors"><RefreshCw size={16} /></button>
         </div>
 
         <div className="flex gap-2 mb-4">
           {['', 'active', 'trial', 'expired', 'cancelled'].map(s => (
-            <button key={s} onClick={() => setFilter(s)} className={`px-3 py-1.5 rounded-xl text-xs transition-colors ${filter === s ? 'bg-amber-600 text-white' : 'bg-bg-secondary border border-border text-text-secondary'}`}>
+            <button key={s} onClick={() => setFilter(s)} className={`px-3 py-1.5 rounded-xl text-xs transition-colors ${filter === s ? 'bg-accent text-white' : 'bg-bg-secondary border border-border text-text-secondary hover:bg-bg-card'}`}>
               {s ? statusLabels[s] : 'الكل'}
             </button>
           ))}
@@ -98,18 +103,18 @@ export default function SubscriptionsPage() {
         {error && <div className="bg-red-950/40 border border-red-800/40 text-red-400 text-sm rounded-xl px-4 py-2.5 text-center mb-4">{error}</div>}
 
         {filtered.length === 0 ? (
-          <div className="bg-bg-card border border-border rounded-xl p-8 text-center"><Users size={32} className="text-amber-600/30 mx-auto mb-2" /><p className="text-text-muted text-sm">لا توجد اشتراكات</p></div>
+          <div className="bg-bg-card border border-border rounded-xl p-8 text-center"><Users size={32} className="text-text-muted opacity-40 mx-auto mb-2" /><p className="text-text-muted text-sm">لا توجد اشتراكات</p></div>
         ) : (
           <div className="space-y-3">
             {filtered.map(sub => (
               <div key={sub.id} className="bg-bg-card border border-border rounded-2xl p-4">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-amber-900/30 flex items-center justify-center"><Users size={18} className="text-amber-400" /></div>
+                    <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center"><Users size={18} className="text-accent" /></div>
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="text-text-primary font-medium">{sub.company_name}</h3>
-                        {sub.subscriber_number && <span className="flex items-center gap-1 text-xs px-2 py-0.5 bg-amber-900/30 text-amber-400 rounded font-mono"><Hash size={10} />{sub.subscriber_number}</span>}
+                        {sub.subscriber_number && <span className="flex items-center gap-1 text-xs px-2 py-0.5 bg-accent/10 text-accent rounded font-mono font-bold"><Hash size={10} />{sub.subscriber_number}</span>}
                       </div>
                       <p className="text-text-muted text-xs">{sub.plan_name || sub.plan_code}</p>
                     </div>
@@ -122,18 +127,18 @@ export default function SubscriptionsPage() {
                       sub.status === 'expired' ? 'bg-red-950/40 text-red-400 border border-red-800/30' :
                       'bg-gray-800 text-gray-400'
                     }`}>{statusLabels[sub.status] || sub.status}</span>
-                    <span className={`text-xs ${sub.auto_renew ? 'text-green-400' : 'text-amber-600'}`}>{sub.auto_renew ? 'تلقائي' : 'يدوي'}</span>
+                    <span className={`text-xs ${sub.auto_renew ? 'text-green-400' : 'text-text-muted'}`}>{sub.auto_renew ? 'تلقائي' : 'يدوي'}</span>
                   </div>
                 </div>
                 {/* Action buttons */}
                 <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border">
-                  <button onClick={() => openPlanModal(sub)} disabled={actionLoading === 'change_plan' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-950/20 text-purple-400/70 border border-purple-800/20 hover:bg-purple-950/40 text-xs">
+                  <button onClick={() => openPlanModal(sub)} disabled={actionLoading === 'change_plan' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-950/20 text-purple-400/70 border border-purple-800/20 hover:bg-purple-950/40 text-xs transition-colors">
                     {actionLoading === 'change_plan' + sub.id ? <Loader2 size={12} className="animate-spin" /> : <CreditCard size={12} />} تغيير الباقة
                   </button>
-                  <button onClick={() => openExtendModal(sub)} disabled={actionLoading === 'extend_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-950/20 text-emerald-400/70 border border-emerald-800/20 hover:bg-emerald-950/40 text-xs">
+                  <button onClick={() => openExtendModal(sub)} disabled={actionLoading === 'extend_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-950/20 text-emerald-400/70 border border-emerald-800/20 hover:bg-emerald-950/40 text-xs transition-colors">
                     {actionLoading === 'extend_subscription' + sub.id ? <Loader2 size={12} className="animate-spin" /> : <Calendar size={12} />} تمديد
                   </button>
-                  <button onClick={() => { if (confirm('إلغاء الاشتراك؟')) openCancelModal(sub); }} disabled={actionLoading === 'cancel_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40 text-xs">
+                  <button onClick={() => { if (confirm('إلغاء الاشتراك؟')) openCancelModal(sub); }} disabled={actionLoading === 'cancel_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40 text-xs transition-colors">
                     {actionLoading === 'cancel_subscription' + sub.id ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} إلغاء
                   </button>
                 </div>
@@ -151,12 +156,12 @@ export default function SubscriptionsPage() {
                 <button onClick={() => setShowPlanModal(false)} className="text-text-secondary/50"><X size={18} /></button>
               </div>
               <div className="p-4 space-y-3">
-                <select className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-amber-600" value={planForm.plan_id} onChange={e => setPlanForm({ ...planForm, plan_id: e.target.value })}>
+                <select className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent" value={planForm.plan_id} onChange={e => setPlanForm({ ...planForm, plan_id: e.target.value })}>
                   <option value="">— اختر الباقة —</option>
                   {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 <input type="number" className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary" placeholder="عدد الأيام" value={planForm.duration_days} onChange={e => setPlanForm({ ...planForm, duration_days: parseInt(e.target.value) || 30 })} />
-                <label className="flex items-center gap-2 text-sm text-amber-200"><input type="checkbox" checked={planForm.auto_renew} onChange={e => setPlanForm({ ...planForm, auto_renew: e.target.checked })} /> تجديد تلقائي</label>
+                <label className="flex items-center gap-2 text-sm text-text-secondary"><input type="checkbox" checked={planForm.auto_renew} onChange={e => setPlanForm({ ...planForm, auto_renew: e.target.checked })} /> تجديد تلقائي</label>
                 <MasterPasswordModal
                   isOpen={true}
                   title="تأكيد كلمة السر لتغيير الباقة"

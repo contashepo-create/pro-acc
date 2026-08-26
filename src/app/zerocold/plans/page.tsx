@@ -265,14 +265,14 @@ interface PlanForm {
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <Link href="/zerocold/" className="p-2 rounded-lg hover:bg-bg-card"><ChevronLeft size={18} className="text-text-secondary" /></Link>
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center"><Package className="w-5 h-5 text-white" /></div>
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-accent-hover flex items-center justify-center"><Package className="w-5 h-5 text-white" /></div>
             <div>
               <h1 className="text-lg font-bold">تخصيص الباقات المرن</h1>
               <p className="text-[0.7rem] text-text-muted">{plans.length} باقة - تحكم كامل في الأقسام والحدود</p>
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={openNew} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm flex items-center gap-2"><Plus size={16} />إضافة باقة</button>
+            <button onClick={openNew} className="px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm flex items-center gap-2"><Plus size={16} />إضافة باقة</button>
             <button onClick={fetchPlans} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary"><RefreshCw size={16} /></button>
           </div>
         </div>
@@ -281,10 +281,10 @@ interface PlanForm {
 
         <div className="grid gap-4">
           {plans.map((plan) => (
-            <div key={plan.id} className="bg-bg-card border border-border rounded-2xl p-5 hover:border-amber-800/50 transition-colors">
+            <div key={plan.id} className="bg-bg-card border border-border rounded-2xl p-5 hover:border-accent/40 transition-colors">
               <div className="flex justify-between items-start">
                 <div className="cursor-pointer flex-1" onClick={() => openEdit(plan)}>
-                  <h3 className="font-bold text-lg flex items-center gap-2">{plan.name} <code className="text-xs bg-amber-950/30 px-2 py-0.5 rounded text-amber-600">{plan.code}</code></h3>
+                  <h3 className="font-bold text-lg flex items-center gap-2">{plan.name} <code className="text-xs bg-accent/10 px-2 py-0.5 rounded text-accent font-mono font-bold">{plan.code}</code></h3>
                   <p className="text-text-muted text-sm mt-1">{plan.description_ar || plan.description}</p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -316,7 +316,7 @@ interface PlanForm {
               </div>
               <div className="mt-3 flex flex-wrap gap-1">
                 {Object.entries(plan.features_modules || {}).filter(([k, v]) => v && ALL_MODULES.some(m => m.id === k)).map(([k]) => (
-                  <span key={k} className="text-[10px] bg-amber-950/30 border border-amber-900/30 text-amber-400 px-2 py-1 rounded-full">{ALL_MODULES.find(m=>m.id===k)?.label || k}</span>
+                  <span key={k} className="text-[10px] bg-accent/10 border border-accent/20 text-accent px-2 py-1 rounded-full">{ALL_MODULES.find(m=>m.id===k)?.label || k}</span>
                 ))}
               </div>
             </div>
@@ -367,8 +367,8 @@ interface PlanForm {
                   <h3 className="font-bold flex items-center gap-2 mb-3"><Settings size={16} /> الأقسام المسموحة (علم لإتاحة القسم)</h3>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-60 overflow-y-auto p-2 bg-bg-primary rounded-xl">
                     {ALL_MODULES.map((mod) => (
-                      <label key={mod.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${form.features_modules[mod.id] ? 'bg-amber-900/30 border border-amber-700/50' : 'bg-bg-secondary border border-transparent hover:border-border'}`}>
-                        <input type="checkbox" checked={!!form.features_modules[mod.id]} onChange={() => toggleModule(mod.id)} className="w-4 h-4 rounded accent-amber-600" />
+                      <label key={mod.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${form.features_modules[mod.id] ? 'bg-accent/15 border border-accent/40' : 'bg-bg-secondary border border-transparent hover:border-border'}`}>
+                        <input type="checkbox" checked={!!form.features_modules[mod.id]} onChange={() => toggleModule(mod.id)} className="w-4 h-4 rounded accent-accent" />
                         <span className="text-sm">{mod.icon}</span>
                         <span className="text-xs">{mod.label}</span>
                       </label>
@@ -379,8 +379,8 @@ interface PlanForm {
               </div>
 
               <div className="flex gap-3 mt-8">
-                <button onClick={() => setShowForm(false)} className="flex-1 py-3 bg-bg-secondary border border-border text-amber-300 rounded-xl text-sm">إلغاء</button>
-                <button onClick={savePlan} disabled={saving || !form.name} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm flex items-center justify-center gap-2">{saving && <Loader2 size={16} className="animate-spin" />}حفظ الباقة المرنة</button>
+                <button onClick={() => setShowForm(false)} className="flex-1 py-3 bg-bg-secondary border border-border text-text-secondary rounded-xl text-sm hover:bg-bg-hover">إلغاء</button>
+                <button onClick={savePlan} disabled={saving || !form.name} className="flex-1 py-3 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm flex items-center justify-center gap-2">{saving && <Loader2 size={16} className="animate-spin" />}حفظ الباقة المرنة</button>
               </div>
             </div>
           </div>
@@ -403,7 +403,7 @@ interface PlanForm {
                   ))}
                 </select>
                 <div className="flex gap-3">
-                  <button onClick={() => setShowDeleteModal(false)} className="flex-1 py-2.5 bg-bg-secondary border border-border text-amber-300 rounded-xl text-sm">إلغاء</button>
+                  <button onClick={() => setShowDeleteModal(false)} className="flex-1 py-2.5 bg-bg-secondary border border-border text-text-secondary rounded-xl text-sm hover:bg-bg-hover">إلغاء</button>
                   <button onClick={doDelete} disabled={deleting} className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-sm flex items-center justify-center gap-2">
                     {deleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />} حذف الباقة
                   </button>

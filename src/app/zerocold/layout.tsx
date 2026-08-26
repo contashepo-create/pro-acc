@@ -41,12 +41,12 @@ function SidebarContent({ collapsed, pathname, onNavigate, onCollapseToggle }: {
       {/* Brand */}
       <div className="flex items-center h-14 px-4 border-b border-border shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-accent-hover flex items-center justify-center shrink-0 shadow-sm">
             <ShieldAlert className="w-4 h-4 text-white" />
           </div>
           {!collapsed && (
             <span className="text-base font-bold text-text-primary whitespace-nowrap">
-              لوحة <span className="text-amber-400">المطور</span>
+              لوحة <span className="text-accent">المطور</span>
             </span>
           )}
         </div>
@@ -63,7 +63,7 @@ function SidebarContent({ collapsed, pathname, onNavigate, onCollapseToggle }: {
               onClick={onNavigate}
               className={`flex items-center gap-3 px-3 h-10 rounded-lg text-sm transition-colors ${
                 active
-                  ? 'bg-amber-600/15 text-amber-400 border border-amber-700/30'
+                  ? 'bg-accent/15 text-accent border border-accent/30 font-semibold'
                   : 'text-text-secondary hover:text-text-primary hover:bg-sidebar-hover'
               }`}
               title={collapsed ? item.label : undefined}
@@ -205,7 +205,7 @@ export default function ZerocoldLayout({ children }: { children: React.ReactNode
               <Menu size={20} />
             </button>
             <Link href="/zerocold" className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center lg:hidden">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-accent to-accent-hover flex items-center justify-center lg:hidden shadow-sm">
                 <ShieldAlert className="w-3.5 h-3.5 text-white" />
               </div>
               <span className="text-sm font-bold text-text-primary">لوحة تحكم المطور</span>
