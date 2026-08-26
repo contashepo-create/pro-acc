@@ -22,7 +22,7 @@ export async function GET(
 
     // Get company info — safe column list (no secrets / internal metadata)
     const { data: company, error: companyErr } = await s.from('companies')
-      .select('id, name, commercial_registration, tax_number, address, phone, email, country, country_code, currency_code, currency_symbol, vat_rate, is_active, created_at, updated_at, trial_end_date')
+      .select('id, name, commercial_registration, tax_number, address, phone, email, country, country_code, currency_code, currency_symbol, vat_rate, is_active, created_at, updated_at')
       .eq('id', id)
       .maybeSingle();
 

@@ -71,18 +71,18 @@ export default function UpgradeRequestsPage() {
       <div className="max-w-6xl mx-auto px-4 py-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <Link href="/zerocold/"><ChevronLeft size={18} className="text-text-secondary" /></Link>
+            <Link href="/zerocold/"><ChevronLeft size={18} className="text-text-secondary hover:text-accent transition-colors" /></Link>
             <h1 className="text-lg font-bold">طلبات الترقية والدفع</h1>
-            <span className="text-xs bg-amber-950/50 px-2 py-1 rounded-full">{requests.length}</span>
+            <span className="text-xs bg-accent/10 border border-accent/20 text-accent font-semibold px-2.5 py-0.5 rounded-full">{requests.length}</span>
           </div>
           <div className="flex gap-2">
-            <select value={filter} onChange={(e) => setFilter(e.target.value)} className="px-3 py-2 bg-bg-card border border-border rounded-xl text-sm">
+            <select value={filter} onChange={(e) => setFilter(e.target.value)} className="px-3 py-2 bg-bg-card border border-border rounded-xl text-sm text-text-primary focus:outline-none focus:border-accent">
               <option value="pending">معلق</option>
               <option value="approved">مقبول</option>
               <option value="rejected">مرفوض</option>
               <option value="all">الكل</option>
             </select>
-            <button onClick={fetchRequests} className="p-2 bg-bg-card border border-border rounded-xl"><RefreshCw size={16} /></button>
+            <button onClick={fetchRequests} className="p-2 bg-bg-card border border-border rounded-xl text-text-secondary hover:text-accent transition-colors"><RefreshCw size={16} /></button>
           </div>
         </div>
 
@@ -96,8 +96,8 @@ export default function UpgradeRequestsPage() {
                   <h3 className="font-bold">{req.companies?.name || 'شركة'} - {req.subscription_plans?.name || req.requested_plan_id}</h3>
                   <p className="text-xs text-text-secondary">{req.users?.name} ({req.users?.email}) - {req.companies?.phone}</p>
                   <div className="flex gap-2 mt-2 text-xs">
-                    <span className="bg-bg-secondary px-2 py-1 rounded">المدة: {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</span>
-                    <span className="bg-bg-secondary px-2 py-1 rounded">الدفع: {req.payment_method_code}</span>
+                    <span className="bg-bg-secondary px-2 py-1 rounded text-text-secondary">المدة: {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</span>
+                    <span className="bg-bg-secondary px-2 py-1 rounded text-text-secondary">الدفع: {req.payment_method_code}</span>
                     <span className={`px-2 py-1 rounded ${req.status === 'pending' ? 'bg-warning-light text-warning font-semibold' : req.status === 'approved' ? 'bg-success-light text-success font-semibold' : 'bg-danger-light text-danger font-semibold'}`}>{req.status}</span>
                   </div>
                 </div>
@@ -107,24 +107,24 @@ export default function UpgradeRequestsPage() {
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm bg-bg-primary rounded-xl p-3">
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm bg-bg-secondary rounded-xl p-3 border border-border">
                 <div>تاريخ التحويل: {req.payment_date} {req.payment_time}</div>
                 <div>المبلغ: {req.payment_amount}</div>
                 <div className="col-span-2">ملاحظات: {req.notes || 'لا يوجد'}</div>
                 {req.receipt_image_url && (
                   <div className="col-span-2 flex items-center gap-2">
-                    <ImageIcon size={14} />
-                    <a href={req.receipt_image_url} target="_blank" className="text-amber-400 underline text-xs">عرض صورة الإيصال</a>
+                    <ImageIcon size={14} className="text-accent" />
+                    <a href={req.receipt_image_url} target="_blank" className="text-accent hover:underline text-xs font-semibold">عرض صورة الإيصال</a>
                   </div>
                 )}
               </div>
 
               {req.status === 'pending' && (
                 <div className="flex gap-2 mt-4">
-                  <button disabled={!!processing} onClick={() => handleAction(req.id, 'approved')} className="flex-1 py-2.5 bg-green-700 hover:bg-green-600 text-white rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-50">
+                  <button disabled={!!processing} onClick={() => handleAction(req.id, 'approved')} className="flex-1 py-2.5 bg-green-700 hover:bg-green-600 text-white rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-colors">
                     {processing === req.id ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} قبول وترقية
                   </button>
-                  <button disabled={!!processing} onClick={() => setRejectTarget({ id: req.id, name: req.companies?.name || 'الشركة' })} className="flex-1 py-2.5 bg-danger-light hover:bg-danger hover:text-white text-danger border border-danger rounded-xl text-sm flex items-center justify-center gap-2">
+                  <button disabled={!!processing} onClick={() => setRejectTarget({ id: req.id, name: req.companies?.name || 'الشركة' })} className="flex-1 py-2.5 bg-danger-light hover:bg-danger hover:text-white text-danger border border-danger rounded-xl text-sm flex items-center justify-center gap-2 transition-colors">
                     <X size={16} /> رفض
                   </button>
                 </div>

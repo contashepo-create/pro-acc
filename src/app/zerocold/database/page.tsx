@@ -113,7 +113,7 @@ export default function ZerocoldDatabasePage() {
           </div>
           <button
             onClick={fetchDbInfo}
-            className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-amber-400 transition-all"
+            className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-accent transition-all"
             title="تحديث"
           >
             <RefreshCw size={16} />
@@ -146,7 +146,7 @@ export default function ZerocoldDatabasePage() {
               {dbInfo?.healthStatus === 'good' ? (
                 <CheckCircle size={16} className="text-emerald-400" />
               ) : (
-                <AlertTriangle size={16} className="text-amber-400" />
+                <AlertTriangle size={16} className="text-warning" />
               )}
               <span className="text-xs text-text-secondary font-medium">حالة قاعدة البيانات</span>
             </div>
@@ -158,12 +158,12 @@ export default function ZerocoldDatabasePage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
           <div className="bg-bg-card border border-border rounded-xl p-5">
-            <h2 className="text-sm font-bold text-amber-300/80 mb-3">النسخ الاحتياطي والاستعادة</h2>
+            <h2 className="text-sm font-bold text-text-primary mb-3">النسخ الاحتياطي والاستعادة</h2>
             <div className="space-y-3">
               <button
                 onClick={() => setShowBackupModal(true)}
                 disabled={backingUp}
-                className="w-full flex items-center justify-center gap-2 py-2.5 bg-gradient-to-l from-amber-600 to-orange-700 hover:from-amber-500 hover:to-orange-600 disabled:from-amber-800 disabled:to-orange-900 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all text-sm shadow-lg shadow-amber-900/20"
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all text-sm shadow-md"
               >
                 {backingUp ? (
                   <Loader2 size={16} className="animate-spin" />
@@ -175,7 +175,7 @@ export default function ZerocoldDatabasePage() {
 
               <button
                 onClick={() => setRestoreMessage('استعادة قاعدة البيانات عبر الويب معطلة لأسباب أمنية. استخدم لوحة تحكم Supabase مع ملف نسخة احتياطية موثّق وموقّع.')}
-                className="w-full flex items-center justify-center gap-2 py-2.5 bg-bg-secondary border border-border hover:border-[#3a2f1a] text-amber-300/80 font-semibold rounded-xl transition-all text-sm"
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-bg-secondary border border-border hover:bg-bg-hover text-text-primary font-semibold rounded-xl transition-all text-sm"
               >
                 <ShieldAlert size={16} />
                 استعادة نسخة احتياطية
@@ -203,15 +203,15 @@ export default function ZerocoldDatabasePage() {
           </div>
 
           <div className="bg-bg-card border border-border rounded-xl p-5">
-            <h2 className="text-sm font-bold text-amber-300/80 mb-3">مؤشرات قاعدة البيانات</h2>
+            <h2 className="text-sm font-bold text-text-primary mb-3">مؤشرات قاعدة البيانات</h2>
             <div className="space-y-2">
               <div className="flex items-center justify-between p-2.5 rounded-lg bg-bg-secondary border border-border">
                 <span className="text-xs text-text-secondary">إجمالي المؤشرات</span>
-                <span className="text-xs font-mono text-amber-200">{dbInfo?.indexHealth?.total ?? 0}</span>
+                <span className="text-xs font-mono text-accent font-bold">{dbInfo?.indexHealth?.total ?? 0}</span>
               </div>
               <div className="flex items-center justify-between p-2.5 rounded-lg bg-bg-secondary border border-border">
                 <span className="text-xs text-text-secondary">مؤشرات مفقودة</span>
-                <span className={`text-xs font-mono ${(dbInfo?.indexHealth?.missing ?? 0) > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                <span className={`text-xs font-mono ${(dbInfo?.indexHealth?.missing ?? 0) > 0 ? 'text-red-400 font-bold' : 'text-emerald-400'}`}>
                   {dbInfo?.indexHealth?.missing ?? 0}
                 </span>
               </div>
@@ -228,7 +228,7 @@ export default function ZerocoldDatabasePage() {
         </div>
 
         <div className="bg-bg-card border border-border rounded-xl p-5 mb-6">
-          <h2 className="text-sm font-bold text-amber-300/80 mb-3">جداول قاعدة البيانات</h2>
+          <h2 className="text-sm font-bold text-text-primary mb-3">جداول قاعدة البيانات</h2>
           {dbInfo?.tables && dbInfo.tables.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -241,9 +241,9 @@ export default function ZerocoldDatabasePage() {
                 </thead>
                 <tbody>
                   {dbInfo.tables.map((table) => (
-                    <tr key={table.name} className="border-b border-[#1f1725] last:border-0 hover:bg-bg-secondary transition-all">
+                    <tr key={table.name} className="border-b border-border last:border-0 hover:bg-bg-secondary transition-all">
                       <td className="p-2.5">
-                        <span className="text-xs text-amber-300/80 font-mono">{table.name}</span>
+                        <span className="text-xs text-accent font-mono font-medium">{table.name}</span>
                       </td>
                       <td className="p-2.5 text-center">
                         <span className="text-xs text-text-secondary font-mono">{table.row_count}</span>
@@ -258,15 +258,15 @@ export default function ZerocoldDatabasePage() {
             </div>
           ) : (
             <div className="flex items-center justify-center py-6">
-              <Table2 size={20} className="text-amber-600/30" />
-              <span className="text-xs text-amber-600/40 mr-2">لا توجد بيانات</span>
+              <Table2 size={20} className="text-text-muted" />
+              <span className="text-xs text-text-muted mr-2">لا توجد بيانات</span>
             </div>
           )}
         </div>
 
         {dbInfo?.slowQueries && dbInfo.slowQueries.length > 0 && (
           <div className="bg-bg-card border border-border rounded-xl p-5">
-            <h2 className="text-sm font-bold text-amber-300/80 mb-3">الاستعلامات البطيئة</h2>
+            <h2 className="text-sm font-bold text-text-primary mb-3">الاستعلامات البطيئة</h2>
             <div className="space-y-2">
               {dbInfo.slowQueries.map((sq, i) => (
                 <div key={i} className="p-2.5 rounded-lg bg-bg-secondary border border-border">

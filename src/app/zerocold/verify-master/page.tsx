@@ -9,7 +9,7 @@ const BLOCK_DURATION = 15 * 60 * 1000;
 
 export default function VerifyMasterPageWrapper() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 size={24} className="animate-spin text-amber-600" /></div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 size={24} className="animate-spin text-accent" /></div>}>
       <VerifyMasterPage />
     </Suspense>
   );
@@ -56,7 +56,6 @@ function VerifyMasterPage() {
     if (blockedUntil && now >= blockedUntil) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setBlockedUntil(null);
-       
       setAttempts(0);
       localStorage.removeItem('zerocold_master_blocked');
       localStorage.removeItem('zerocold_master_attempts');
@@ -131,11 +130,11 @@ function VerifyMasterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0a0a0f] to-[#1a0f0a] p-4">
+    <div className="min-h-screen flex items-center justify-center bg-bg-primary p-4">
       <div className="w-full max-w-sm">
         <button
           onClick={handleBack}
-          className="flex items-center gap-1.5 text-amber-600/60 hover:text-amber-400 text-sm mb-6 transition-colors"
+          className="flex items-center gap-1.5 text-text-secondary hover:text-accent text-sm mb-6 transition-colors"
         >
           <ArrowLeft size={16} />
           العودة لتسجيل الدخول
@@ -151,17 +150,17 @@ function VerifyMasterPage() {
           </p>
         </div>
 
-        <div className="bg-bg-card border border-border rounded-2xl p-6 shadow-2xl">
+        <div className="bg-bg-card border border-border rounded-2xl p-6 shadow-xl">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-amber-300/80 mb-1.5">كلمة السر الرئيسية</label>
+              <label className="block text-sm font-medium text-text-secondary mb-1.5">كلمة السر الرئيسية</label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
                   value={masterPassword}
                   onChange={(e) => setMasterPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary placeholder-amber-700/50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm pl-10"
+                  className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent transition-all text-sm pl-10"
                   dir="ltr"
                   autoFocus
                   disabled={!!(blockedUntil && now < blockedUntil)}
@@ -169,7 +168,7 @@ function VerifyMasterPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-600/60 hover:text-amber-400 transition-colors"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors"
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>

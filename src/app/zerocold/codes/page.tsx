@@ -28,9 +28,9 @@ export default function CodesPage() {
   const fetchCodes = async () => {
     setLoading(true);
     setError('');
-      try {
-        const res = await fetch('/api/admin/activation-codes');
-        if (res.status === 401) { router.replace('/zerocold/login'); return; }
+    try {
+      const res = await fetch('/api/admin/activation-codes');
+      if (res.status === 401) { router.replace('/zerocold/login'); return; }
       const body = await res.json();
       if (body.success) setCodes(body.data?.codes ?? (Array.isArray(body.data) ? body.data : []));
       else setError(body.message || 'حدث خطأ');
@@ -118,10 +118,10 @@ export default function CodesPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => { setShowForm(true); setGeneratedCodes([]); }} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm flex items-center gap-2 transition-colors">
+            <button onClick={() => { setShowForm(true); setGeneratedCodes([]); }} className="px-4 py-2 bg-accent hover:bg-accent-hover text-white rounded-xl text-sm flex items-center gap-2 transition-colors">
               <Plus size={16} />توليد كود
             </button>
-            <button onClick={fetchCodes} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-amber-400 transition-all" title="تحديث">
+            <button onClick={fetchCodes} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-accent transition-all" title="تحديث">
               <RefreshCw size={16} />
             </button>
           </div>
@@ -140,28 +140,28 @@ export default function CodesPage() {
               <div className="flex-1 min-w-40">
                 <label className="block text-xs text-text-secondary mb-1">الخطة</label>
                 {plans.length > 0 ? (
-                  <select value={planCode} onChange={(e) => setPlanCode(e.target.value)} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm">
+                  <select value={planCode} onChange={(e) => setPlanCode(e.target.value)} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm focus:outline-none focus:border-accent">
                     {plans.map((p) => <option key={p.code} value={p.code}>{p.name} ({p.code})</option>)}
                   </select>
                 ) : (
-                  <input value={planCode} onChange={(e) => setPlanCode(e.target.value)} placeholder="كود الباقة (مثل monthly)" dir="ltr" className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm" />
+                  <input value={planCode} onChange={(e) => setPlanCode(e.target.value)} placeholder="كود الباقة (مثل monthly)" dir="ltr" className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm focus:outline-none focus:border-accent" />
                 )}
               </div>
               <div className="w-32">
                 <label className="block text-xs text-text-secondary mb-1">المدة (أشهر)</label>
-                <input type="number" value={duration} onChange={(e) => setDuration(Number(e.target.value))} min={1} max={120} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm" />
+                <input type="number" value={duration} onChange={(e) => setDuration(Number(e.target.value))} min={1} max={120} className="w-full px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-text-primary text-sm focus:outline-none focus:border-accent" />
               </div>
-              <button onClick={generateCode} disabled={saving} className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-800 text-white rounded-xl text-sm flex items-center gap-2">{saving && <Loader2 size={16} className="animate-spin" />}توليد</button>
+              <button onClick={generateCode} disabled={saving} className="px-6 py-2.5 bg-accent hover:bg-accent-hover disabled:opacity-50 text-white rounded-xl text-sm flex items-center gap-2">{saving && <Loader2 size={16} className="animate-spin" />}توليد</button>
             </div>
             {generatedCodes.length > 0 && (
-              <div className="mt-4 p-3 bg-amber-950/30 border border-amber-700/30 rounded-xl">
-                <p className="text-[0.7rem] text-amber-500/80 mb-2">⚠️ هذه الأكواد تُعرض مرة واحدة فقط — انسخها واحفظها الآن:</p>
+              <div className="mt-4 p-3 bg-accent/10 border border-accent/20 rounded-xl">
+                <p className="text-[0.7rem] text-accent mb-2">⚠️ هذه الأكواد تُعرض مرة واحدة فقط — انسخها واحفظها الآن:</p>
                 {generatedCodes.map((code) => (
                   <div key={code} className="flex items-center gap-3 py-1">
-                    <code className="flex-1 text-amber-300 text-sm font-mono">{code}</code>
+                    <code className="flex-1 text-accent text-sm font-mono font-bold">{code}</code>
                   </div>
                 ))}
-                <button onClick={copyCode} className="mt-2 p-2 hover:bg-amber-900/30 rounded-lg transition-colors flex items-center gap-2 text-xs text-amber-400">
+                <button onClick={copyCode} className="mt-2 p-2 hover:bg-accent/20 rounded-lg transition-colors flex items-center gap-2 text-xs text-accent">
                   {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
                   {copied ? 'تم النسخ' : 'نسخ الكود'}
                 </button>
@@ -173,18 +173,18 @@ export default function CodesPage() {
         <div className="bg-bg-card border border-border rounded-xl overflow-x-auto">
           {codes.length === 0 ? (
             <div className="p-8 text-center">
-              <Key size={32} className="text-amber-600/30 mx-auto mb-2" />
+              <Key size={32} className="text-text-muted mx-auto mb-2 opacity-40" />
               <p className="text-text-muted text-sm">لا توجد أكواد تفعيل</p>
             </div>
           ) : (
-            <div className="divide-y divide-[#1f1725]">
+            <div className="divide-y divide-border">
               {codes.map((c) => (
                 <div key={c.id} className="flex items-center gap-3 p-3 hover:bg-bg-secondary transition-all">
-                  <Key size={16} className="text-amber-600 shrink-0" />
-                  <code className="flex-1 text-amber-300/80 text-sm font-mono">{c.code}</code>
+                  <Key size={16} className="text-accent shrink-0" />
+                  <code className="flex-1 text-accent font-semibold text-sm font-mono">{c.code}</code>
                   <span className="text-xs text-text-secondary">{c.plan_code}</span>
                   <span className="text-xs text-text-secondary">{c.duration_months} أشهر</span>
-                  <span className={`text-xs px-2 py-0.5 rounded ${c.is_used ? 'bg-amber-900/30 text-amber-400' : 'bg-success-light text-success font-semibold'}`}>{c.is_used ? 'مستخدم' : 'جديد'}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded ${c.is_used ? 'bg-bg-secondary text-text-muted' : 'bg-success-light text-success font-semibold'}`}>{c.is_used ? 'مستخدم' : 'جديد'}</span>
                   {c.company_name && <span className="text-xs text-text-secondary">{c.company_name}</span>}
                 </div>
               ))}

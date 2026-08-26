@@ -3,8 +3,14 @@
 import { useState, useEffect } from 'react';
 import { Eye, Loader2, TrendingUp, Users, Calendar } from 'lucide-react';
 
+interface VisitorStats {
+  today?: { visits: number; unique_visitors: number };
+  totalVisits?: number;
+  weekly?: Array<{ date: string; visits: number }>;
+}
+
 export default function VisitorsPage() {
-  const [stats, setStats] = useState<any>(null);
+  const [stats, setStats] = useState<VisitorStats | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,10 +24,12 @@ export default function VisitorsPage() {
     return <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-text-secondary" /></div>;
   }
 
+  const maxWeeklyVisits = Math.max(1, ...(stats?.weekly?.map((w) => w.visits) || [1]));
+
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <Eye size={24} className="text-text-secondary" />
+        <Eye size={24} className="text-accent" />
         <h1 className="text-2xl font-bold text-text-primary">إحصائيات الزوار</h1>
       </div>
 
@@ -34,7 +42,7 @@ export default function VisitorsPage() {
             </div>
           </div>
           <p className="text-2xl font-bold text-text-primary font-mono">{stats?.today?.visits || 0}</p>
-          <p className="text-xs text-amber-400/40 mt-1">زيارة اليوم</p>
+          <p className="text-xs text-text-muted mt-1">زيارة اليوم</p>
         </div>
 
         <div className="bg-bg-card border border-border rounded-xl p-5">
@@ -45,7 +53,7 @@ export default function VisitorsPage() {
             </div>
           </div>
           <p className="text-2xl font-bold text-text-primary font-mono">{stats?.today?.unique_visitors || 0}</p>
-          <p className="text-xs text-amber-400/40 mt-1">زائر فريد اليوم</p>
+          <p className="text-xs text-text-muted mt-1">زائر فريد اليوم</p>
         </div>
 
         <div className="bg-bg-card border border-border rounded-xl p-5">
@@ -56,24 +64,24 @@ export default function VisitorsPage() {
             </div>
           </div>
           <p className="text-2xl font-bold text-text-primary font-mono">{stats?.totalVisits || 0}</p>
-          <p className="text-xs text-amber-400/40 mt-1">إجمالي الزيارات</p>
+          <p className="text-xs text-text-muted mt-1">إجمالي الزيارات</p>
         </div>
       </div>
 
       {stats?.weekly && stats.weekly.length > 0 && (
         <div className="bg-bg-card border border-border rounded-xl p-5">
-          <h2 className="text-sm font-bold text-amber-300/80 mb-4">آخر 7 أيام</h2>
+          <h2 className="text-sm font-bold text-text-primary mb-4">آخر 7 أيام</h2>
           <div className="space-y-2">
-            {stats.weekly.map((day: any) => (
+            {stats.weekly.map((day) => (
               <div key={day.date} className="flex items-center gap-3">
                 <span className="text-xs text-text-secondary w-28" dir="ltr">{day.date}</span>
                 <div className="flex-1 h-6 rounded-full bg-bg-secondary overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-gradient-to-l from-amber-600 to-orange-600 transition-all duration-500"
-                    style={{ width: `${Math.min(100, (day.visits / (stats.today?.visits || 1)) * 100)}%` }}
+                    className="h-full rounded-full bg-accent transition-all duration-500"
+                    style={{ width: `${Math.min(100, (day.visits / maxWeeklyVisits) * 100)}%` }}
                   />
                 </div>
-                <span className="text-xs text-amber-300/80 font-mono w-16 text-left">{day.visits}</span>
+                <span className="text-xs text-text-primary font-mono w-16 text-left">{day.visits}</span>
               </div>
             ))}
           </div>

@@ -149,7 +149,7 @@ export default function ZerocoldLogsPage() {
             <Link href="/zerocold/" className="p-2 rounded-lg hover:bg-bg-card transition-all">
               <ChevronLeft size={18} className="text-text-secondary" />
             </Link>
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-600 to-orange-700 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-accent-hover flex items-center justify-center">
               <Activity className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -161,7 +161,7 @@ export default function ZerocoldLogsPage() {
             <button
               onClick={handleExportCsv}
               disabled={logs.length === 0}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-amber-400 disabled:opacity-40 disabled:cursor-not-allowed transition-all text-xs"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed transition-all text-xs"
             >
               <Download size={14} />
               تصدير CSV
@@ -176,7 +176,7 @@ export default function ZerocoldLogsPage() {
             </button>
             <button
               onClick={fetchLogs}
-              className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-amber-400 transition-all"
+              className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-accent transition-all"
               title="تحديث"
             >
               <RefreshCw size={16} />
@@ -192,7 +192,7 @@ export default function ZerocoldLogsPage() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="بحث..."
-              className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary placeholder-amber-700/50 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm"
+              className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent transition-all text-sm"
             />
           </div>
           <div className="relative">
@@ -200,7 +200,7 @@ export default function ZerocoldLogsPage() {
             <select
               value={actionFilter}
               onChange={(e) => setActionFilter(e.target.value)}
-              className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm appearance-none cursor-pointer"
+              className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary focus:outline-none focus:border-accent transition-all text-sm appearance-none cursor-pointer"
             >
               {actionTypes.map((at) => (
                 <option key={at.value} value={at.value}>{at.label}</option>
@@ -213,7 +213,7 @@ export default function ZerocoldLogsPage() {
               type="date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
-              className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm"
+              className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary focus:outline-none focus:border-accent transition-all text-sm"
             />
           </div>
           <div className="relative">
@@ -222,7 +222,7 @@ export default function ZerocoldLogsPage() {
               type="date"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
-              className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-600/30 transition-all text-sm"
+              className="w-full pr-10 pl-4 py-2.5 bg-bg-card border border-border rounded-xl text-text-primary focus:outline-none focus:border-accent transition-all text-sm"
             />
           </div>
         </div>
@@ -230,7 +230,7 @@ export default function ZerocoldLogsPage() {
         <div className="flex justify-end mb-3">
           <button
             onClick={fetchLogs}
-            className="px-4 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 text-xs font-medium rounded-xl transition-all border border-amber-700/30"
+            className="px-4 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-medium rounded-xl transition-all"
           >
             بحث
           </button>
@@ -244,7 +244,7 @@ export default function ZerocoldLogsPage() {
 
         {filtered.length === 0 && !error ? (
           <div className="bg-bg-card border border-border rounded-xl p-8 text-center">
-            <Activity size={32} className="text-amber-600/30 mx-auto mb-2" />
+            <Activity size={32} className="text-text-muted opacity-40 mx-auto mb-2" />
             <p className="text-text-muted text-sm">لا توجد أحداث مسجلة</p>
           </div>
         ) : (
@@ -252,21 +252,21 @@ export default function ZerocoldLogsPage() {
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-right p-3 text-[0.7rem] text-text-secondary/60 font-medium">التاريخ</th>
-                    <th className="text-right p-3 text-[0.7rem] text-text-secondary/60 font-medium">الإجراء</th>
-                    <th className="text-right p-3 text-[0.7rem] text-text-secondary/60 font-medium">التفاصيل</th>
-                    <th className="text-left p-3 text-[0.7rem] text-text-secondary/60 font-medium" dir="ltr">IP</th>
+                  <tr className="border-b border-border bg-bg-secondary/40">
+                    <th className="text-right p-3 text-xs text-text-secondary font-medium">التاريخ</th>
+                    <th className="text-right p-3 text-xs text-text-secondary font-medium">الإجراء</th>
+                    <th className="text-right p-3 text-xs text-text-secondary font-medium">التفاصيل</th>
+                    <th className="text-left p-3 text-xs text-text-secondary font-medium" dir="ltr">IP</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-border">
                   {filtered.map((log) => (
-                    <tr key={log.id} className="border-b border-[#1f1725] last:border-0 hover:bg-bg-secondary transition-all">
+                    <tr key={log.id} className="hover:bg-bg-secondary/50 transition-all">
                       <td className="p-3">
                         <span className="text-xs text-text-secondary">{log.timestamp}</span>
                       </td>
                       <td className="p-3">
-                        <span className="text-xs text-amber-300/80">{actionLabels[log.action] || log.action}</span>
+                        <span className="text-xs text-accent font-medium">{actionLabels[log.action] || log.action}</span>
                       </td>
                       <td className="p-3">
                         <span className="text-xs text-text-secondary">{log.details || '--'}</span>
