@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Lock, FileText, Trash2, ShieldCheck } from 'lucide-react';
+import { Plus, Lock, Trash2 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -32,15 +32,12 @@ interface ProjectRow {
 }
 interface ClientOption { id: string; name: string; }
 interface QuotationOption { id: string; number: string; contact_name?: string; }
-interface BankOption { id: string; name: string; }
 interface CloseForm { close_date: string; notes: string; }
-interface InvoiceForm { date: string; dueDate: string; vatRate: number; collected_amount: number; bank_safe_id: string; notes: string; }
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [quotations, setQuotations] = useState<QuotationOption[]>([]); // عروض الأسعار المقبولة للاستيراد
-  const [banks, setBanks] = useState<BankOption[]>([]); // جلب البنوك لغايات سند القبض الفوري
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   
@@ -75,40 +72,23 @@ export default function ProjectsPage() {
   const [closing, setClosing] = useState(false);
   const [closeError, setCloseError] = useState('');
 
-  // 🛑 شاشة الفاتورة النقدية والتحصيل الفوري المدمج من المشروع 🛑
-  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
-  const [invoiceProject, setInvoiceProject] = useState<ProjectRow | null>(null);
-  const [invoiceForm, setInvoiceForm] = useState<InvoiceForm>({
-    date: new Date().toISOString().split('T')[0],
-    dueDate: new Date().toISOString().split('T')[0],
-    vatRate: 0.15,
-    collected_amount: 0, // المبلغ المحصل مسبقاً قبل الحفظ
-    bank_safe_id: '', // البنك المستلم
-    notes: '',
-  });
-  const [invoiceLoading, setInvoiceLoading] = useState(false);
-  const [invoiceError, setInvoiceError] = useState('');
-
   const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
-      const [projRes, cliRes, bankRes, quotRes] = await Promise.all([
+      const [projRes, cliRes, quotRes] = await Promise.all([
         fetch('/api/projects'),
         fetch('/api/clients'),
-        fetch('/api/banks'), // جلب البنوك والخزائن للتحصيل الفوري
         fetch('/api/quotations?status=accepted'),
       ]);
-      const [projJson, cliJson, bankJson, quotJson] = await Promise.all([
+      const [projJson, cliJson, quotJson] = await Promise.all([
         projRes.json(),
         cliRes.json(),
-        bankRes.json(),
         quotRes.json(),
       ]);
       if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || []);
       else setError(projJson.message || 'فشل تحميل المشاريع');
       if (cliJson.success) setClients(cliJson.data?.clients || []);
-      if (bankJson.success) setBanks(bankJson.data?.banks || []);
       if (quotJson.success) setQuotations(quotJson.data?.quotations || []);
     } catch (err) {
       setError('فشل تحميل البيانات - خطأ في الاتصال بالخادم');
@@ -315,98 +295,6 @@ export default function ProjectsPage() {
     }
   };
 
-  // فتح شاشة الفاتورة والتحصيل المباشر
-  const openInvoiceModal = (project: ProjectRow) => {
-    if (!project.client_id) {
-      toast.error('يجب ربط المشروع بعميل أولاً لكي تتمكن من إصدار فاتورة له');
-      return;
-    }
-    setInvoiceProject(project);
-    setInvoiceError('');
-    setInvoiceForm({
-      date: new Date().toISOString().split('T')[0],
-      dueDate: new Date().toISOString().split('T')[0],
-      vatRate: 0.15,
-      collected_amount: project.contract_value || 0, // المبلغ الافتراضي للتحصيل الفوري
-      bank_safe_id: '',
-      notes: `فاتورة مبيعات وتحصيل فوري للمشروع: ${project.name}`,
-    });
-    setShowInvoiceModal(true);
-  };
-
-  // ترحيل وحفظ الفاتورة المدمجة والتحصيل الفوري
-  const handleSaveInvoiceWithPayment = async () => {
-    if (!invoiceProject) return; // modal is only opened for a selected project
-    if (Number(invoiceForm.collected_amount) > 0 && !invoiceForm.bank_safe_id) {
-      setInvoiceError('يجب تحديد "الخزينة/البنك" التي تود إيداع واستلام المبلغ المحصل عليها');
-      return;
-    }
-
-    setInvoiceLoading(true);
-    setInvoiceError('');
-
-    try {
-      // بناء بنود الفاتورة مطابقة تماماً لجدول كميات المشروع (BOQ)
-      const invoiceItems = (invoiceProject.boq_items || []).map((item: BoqItem) => ({
-        description: item.description,
-        quantity: Number(item.quantity) || 1,
-        unitPrice: Number(item.unit_price) || 0,
-        total: Number(item.total) || 0
-      }));
-
-      // في حال عدم وجود بنود كميات سابقة، نضع بند المشروع الافتراضي
-      if (invoiceItems.length === 0) {
-        invoiceItems.push({
-          description: `أعمال مشروع: ${invoiceProject.name}`,
-          quantity: 1,
-          unitPrice: Number(invoiceProject.contract_value),
-          total: Number(invoiceProject.contract_value)
-        });
-      }
-
-      const subtotal = invoiceProject.contract_value;
-      const vatAmount = subtotal * Number(invoiceForm.vatRate);
-      const total = subtotal + vatAmount;
-
-      const payload = {
-        clientId: invoiceProject.client_id,
-        projectId: invoiceProject.id,
-        date: invoiceForm.date,
-        dueDate: invoiceForm.dueDate,
-        items: invoiceItems,
-        subtotal,
-        vatRate: Number(invoiceForm.vatRate),
-        vatAmount,
-        total,
-        notes: invoiceForm.notes,
-        
-        // حقول التحصيل المباشر
-        collected_amount: Number(invoiceForm.collected_amount),
-        bank_safe_id: invoiceForm.bank_safe_id,
-        payment_method: 'instapay'
-      };
-
-      const res = await fetch('/api/invoices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const json = await res.json();
-
-      if (json.success) {
-        toast.success(`🎉 تم إصدار الفاتورة مبيعات رقم #${json.data.number} وإنشاء سند القبض التلقائي وترحيل القيد المتزن بنجاح!`);
-        setShowInvoiceModal(false);
-        fetchData();
-      } else {
-        setInvoiceError(json.message || 'فشل ترحيل الفاتورة');
-      }
-    } catch {
-      setInvoiceError('حدث خطأ في الاتصال بالخادم أثناء معالجة الترحيل المحاسبي');
-    } finally {
-      setInvoiceLoading(false);
-    }
-  };
-
   const openCloseModal = (project: ProjectRow) => {
     setClosingProject(project);
     setCloseForm({ close_date: new Date().toISOString().split('T')[0], notes: '' });
@@ -466,16 +354,6 @@ export default function ProjectsPage() {
         <div className="flex items-center gap-2">
           {row.status === 'active' && (
             <>
-              {/* زر إصدار فاتورة وتحصيل نقدي فوري مدمج كقالب عالمي */}
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => openInvoiceModal(row)} 
-                title="إصدار فاتورة مبيعات وتحصيل فوري للعميل 📥"
-                className="text-emerald-600 hover:bg-emerald-50"
-              >
-                <FileText size={16} />
-              </Button>
               <Button variant="ghost" size="sm" onClick={() => openCloseModal(row)} title="إقفال المشروع 🔒">
                 <Lock size={16} className="text-orange-600" />
               </Button>
@@ -494,7 +372,7 @@ export default function ProjectsPage() {
     <div className="space-y-6">
       <PageHeader
         title="المشاريع الهندسية و الميزانيات"
-        description="تتبع دورة حياة عقود المقاولات من عروض الأسعار والبنود والتحصيل"
+        description="تتبع دورة حياة عقود المقاولات من عروض الأسعار والبنود والفوترة"
         actions={
           <Button onClick={handleOpenAdd} leftIcon={<Plus size={18} />}>
             إضافة مشروع مدمج بجدول الكميات
@@ -682,102 +560,6 @@ export default function ProjectsPage() {
 
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
-      </Modal>
-
-      {/* ===================== شاشة إصدار الفاتورة المدمجة والتحصيل الفوري 📥 ===================== */}
-      <Modal
-        isOpen={showInvoiceModal}
-        onClose={() => { setShowInvoiceModal(false); setInvoiceProject(null); }}
-        title={`📥 إصدار فاتورة مبيعات وتحصيل فوري مدمج للمشروع: ${invoiceProject?.name || ''}`}
-        size="full"
-        footer={
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => { setShowInvoiceModal(false); setInvoiceProject(null); }}>إلغاء</Button>
-            <Button onClick={handleSaveInvoiceWithPayment} disabled={invoiceLoading}>
-              {invoiceLoading ? 'جاري ترحيل الفاتورة والسند...' : 'حفظ الفاتورة وتأكيد ترحيل السند 📥'}
-            </Button>
-          </div>
-        }
-      >
-        {invoiceProject && (
-          <div className="space-y-4">
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs leading-relaxed flex items-start gap-2">
-              <ShieldCheck size={18} className="shrink-0" />
-              <div>
-                <strong>نظام ترحيل مدمج متزن أمنياً ماليًا:</strong>
-                <br />
-                سيقوم النظام تلقائياً بإنشاء فاتورة مبيعات ضريبية متضمنة تفاصيل كامل بنود كميات المشروع المعتمدة (BOQ)، وإنشاء سند قبض تلقائي بقيمة &quot;المبلغ المحصل&quot;، وترحيل قيد مزدوج متزن فوري يتأثر به رصيد حساب العميل المساعد فوراً!
-              </div>
-            </div>
-
-            {invoiceError && (
-              <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg p-3">
-                ⚠️ {invoiceError}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="تاريخ الفاتورة" type="date" value={invoiceForm.date} onChange={(e) => setInvoiceForm({...invoiceForm, date: e.target.value})} />
-              <Input label="تاريخ الاستحقاق" type="date" value={invoiceForm.dueDate} onChange={(e) => setInvoiceForm({...invoiceForm, dueDate: e.target.value})} />
-              <Select
-                label="نسبة الضريبة"
-                value={String(invoiceForm.vatRate)}
-                onChange={(v) => setInvoiceForm({...invoiceForm, vatRate: Number(v)})}
-                options={[
-                  { value: '0.15', label: 'ضريبة القيمة المضافة 15% (الأساسي)' },
-                  { value: '0', label: 'معفى من الضريبة 0%' }
-                ]}
-              />
-              <Input 
-                label="المبلغ المحصل مسبقاً (دفعة مقدمة/جارية)" 
-                type="number" 
-                value={invoiceForm.collected_amount} 
-                onChange={(e) => setInvoiceForm({...invoiceForm, collected_amount: parseFloat(e.target.value) || 0})} 
-              />
-              {Number(invoiceForm.collected_amount) > 0 && (
-                <Select
-                  label="إيداع واستلام المقبوضات على الخزينة/البنك *"
-                  value={invoiceForm.bank_safe_id}
-                  onChange={(v) => setInvoiceForm({...invoiceForm, bank_safe_id: v})}
-                  options={[{ value: '', label: 'اختر البنك أو الخزينة المودع عليها' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]}
-                  className="col-span-2"
-                />
-              )}
-              <Textarea 
-                label="البيان والملاحظات" 
-                value={invoiceForm.notes} 
-                onChange={(e) => setInvoiceForm({...invoiceForm, notes: e.target.value})}
-                className="col-span-2 h-16"
-              />
-            </div>
-
-            {/* الفوائد والبيانات الحسابية المتوقعة */}
-            <div className="p-4 rounded-xl bg-bg-secondary border border-border space-y-2 text-xs text-text-secondary text-right">
-              <div className="flex justify-between">
-                <span>إجمالي قيمة الأعمال للمشروع (قبل الضريبة)</span>
-                <span className="font-bold text-slate-800 font-mono">{formatCurrency(invoiceProject.contract_value)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>قيمة ضريبة القيمة المضافة ({invoiceForm.vatRate * 100}%)</span>
-                <span className="font-bold text-slate-800 font-mono">{formatCurrency(invoiceProject.contract_value * invoiceForm.vatRate)}</span>
-              </div>
-              <div className="flex justify-between border-t pt-1.5 font-bold text-slate-800">
-                <span>الإجمالي شامل الضريبة</span>
-                <span className="font-mono text-sm text-accent">{formatCurrency(invoiceProject.contract_value * (1 + invoiceForm.vatRate))}</span>
-              </div>
-              {Number(invoiceForm.collected_amount) > 0 && (
-                <div className="flex justify-between text-green-600 font-semibold border-t pt-1">
-                  <span>المبلغ المسدد نقداً فوراُ (المحصل حالياً)</span>
-                  <span className="font-mono">-{formatCurrency(Number(invoiceForm.collected_amount))}</span>
-                </div>
-              )}
-              <div className="flex justify-between text-red-500 font-semibold border-t pt-1">
-                <span>المتبقي الآجل على ذمة العميل للتحصيل لاحقاً</span>
-                <span className="font-mono">{formatCurrency(Math.max(0, (invoiceProject.contract_value * (1 + invoiceForm.vatRate)) - Number(invoiceForm.collected_amount)))}</span>
-              </div>
-            </div>
-          </div>
-        )}
       </Modal>
 
       {/* ===================== شاشة إقفال المشروع ===================== */}
