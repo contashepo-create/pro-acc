@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/Textarea';
 import { toast } from '@/components/ui/Toast';
 import { toDateInput } from '@/lib/form-utils';
 
-interface JournalLine { accountCode: string; debit: number; credit: number; description: string; }
+interface JournalLine { accountCode: string; debit: number; credit: number; description: string; projectId: string; }
 
 interface AccountNode { code: string; name: string; is_header?: boolean; children?: AccountNode[]; }
 interface FlatAccount { code: string; name: string; label: string; depth: number; isParent: boolean; }
@@ -41,6 +41,7 @@ export default function NewJournalPage() {
   const router = useRouter();
   const [editId, setEditId] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<FlatAccount[]>([]);
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<JournalForm>({
@@ -48,8 +49,8 @@ export default function NewJournalPage() {
     type: 'general',
     description: '',
     lines: [
-      { accountCode: '', debit: 0, credit: 0, description: '' },
-      { accountCode: '', debit: 0, credit: 0, description: '' },
+      { accountCode: '', debit: 0, credit: 0, description: '', projectId: '' },
+      { accountCode: '', debit: 0, credit: 0, description: '', projectId: '' },
     ],
   });
 
@@ -60,6 +61,10 @@ export default function NewJournalPage() {
     fetch(`/api/accounts?_ts=${Date.now()}`, { cache: 'no-store', credentials: 'same-origin' })
       .then((r) => r.json())
       .then((j) => { if (j.success) setAccounts(flatten(j.data?.accounts || [])); });
+
+    fetch('/api/projects', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((j) => { if (j.success) setProjects(j.data?.rows || j.data || []); });
 
     if (p) {
       fetch(`/api/journal/${p}`, { credentials: 'same-origin' })
@@ -101,7 +106,7 @@ export default function NewJournalPage() {
   const addLine = () =>
     setForm((f) => ({
       ...f,
-      lines: [...f.lines, { accountCode: '', debit: 0, credit: 0, description: '' }],
+      lines: [...f.lines, { accountCode: '', debit: 0, credit: 0, description: '', projectId: '' }],
     }));
 
   const removeLine = (i: number) =>
@@ -143,6 +148,7 @@ export default function NewJournalPage() {
             debit: Number(l.debit) || 0,
             credit: Number(l.credit) || 0,
             description: l.description,
+            projectId: l.projectId || null,
           })),
         }),
       });
@@ -238,6 +244,12 @@ export default function NewJournalPage() {
                   placeholder="بيان السطر"
                   value={line.description}
                   onChange={(e) => updateLine(i, 'description', e.target.value)}
+                />
+                <Select
+                  label="المشروع (اختياري — لتكلفة المشروع)"
+                  value={line.projectId || ''}
+                  onChange={(v) => updateLine(i, 'projectId', v)}
+                  options={[{ value: '', label: 'بدون مشروع' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
                 />
                 <div className="grid grid-cols-2 gap-3">
                   {amountField(i, 'debit', 'مدين')}
