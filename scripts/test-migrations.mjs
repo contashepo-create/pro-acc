@@ -1010,6 +1010,9 @@ async function smokeAtomicWriters(ids) {
   // sends auto_invoice at all). Only invoices move the client balance.
   assert.equal(atomicProject.invoice,null);
   assert.equal(Number(atomicProject.boq_items_count),1);
+  // Items inserted through the project modal get an auto-generated BOQ code.
+  const projectBoq=(await db.query(`SELECT item_code FROM boq_items WHERE company_id=$1 AND project_id=$2`,[c,atomicProject.id])).rows[0];
+  assert.equal(projectBoq.item_code,'BOQ-0001');
   assert.equal(Number((await db.query(`SELECT count(*) count FROM invoices WHERE company_id=$1 AND project_id=$2`,[c,atomicProject.id])).rows[0].count),0);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM journal_entries WHERE company_id=$1 AND reference_type='invoice' AND reference_id IN (SELECT id FROM invoices WHERE company_id=$1 AND project_id=$2)`,[c,atomicProject.id])).rows[0].count),0);
   const progressClaim=(await db.query(`SELECT create_progress_billing_atomic($1,$2,'2026-02-03','','Claim',30,0.1,0.15,FALSE,$3) result`,[c,atomicProject.id,u])).rows[0].result;
