@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { 
   Megaphone, Plus, Loader2, Trash2, EyeOff, Eye, Edit2, BarChart3, Users,
   Gift, Image, Crown, AlertTriangle, Info, Bell, Zap, Star
@@ -51,65 +52,65 @@ const AD_TYPES: Record<string, { label: string; icon: LucideIcon; iconClass: str
   announcement: {
     label: 'إعلان',
     icon: Megaphone,
-    iconClass: 'text-blue-500',
-    bgClass: 'bg-blue-50 border-blue-200',
-    badgeClass: 'bg-blue-100 text-blue-700 border-blue-200',
+    iconClass: 'text-blue-400',
+    bgClass: 'bg-blue-950/40 border-blue-800/30',
+    badgeClass: 'bg-blue-950/40 text-blue-400 border-blue-800/30',
     description: 'إعلان عام للمستخدمين',
   },
   promotion: {
     label: 'ترويج',
     icon: Gift,
-    iconClass: 'text-green-500',
-    bgClass: 'bg-green-50 border-green-200',
-    badgeClass: 'bg-green-100 text-green-700 border-green-200',
+    iconClass: 'text-emerald-400',
+    bgClass: 'bg-emerald-950/40 border-emerald-800/30',
+    badgeClass: 'bg-emerald-950/40 text-emerald-400 border-emerald-800/30',
     description: 'عرض ترويجي أو خصم',
   },
   banner: {
     label: 'بانر',
     icon: Image,
-    iconClass: 'text-purple-500',
-    bgClass: 'bg-purple-50 border-purple-200',
-    badgeClass: 'bg-purple-100 text-purple-700 border-purple-200',
+    iconClass: 'text-purple-400',
+    bgClass: 'bg-purple-950/40 border-purple-800/30',
+    badgeClass: 'bg-purple-950/40 text-purple-400 border-purple-800/30',
     description: 'بانر إعلاني',
   },
   upgrade: {
     label: 'ترقية',
     icon: Crown,
     iconClass: 'text-text-secondary',
-    bgClass: 'bg-amber-50 border-amber-200',
-    badgeClass: 'bg-amber-100 text-amber-700 border-amber-200',
+    bgClass: 'bg-amber-950/40 border-amber-800/30',
+    badgeClass: 'bg-amber-950/40 text-amber-400 border-amber-800/30',
     description: 'رسالة ترقية الباقة',
   },
   alert: {
     label: 'تنبيه',
     icon: AlertTriangle,
-    iconClass: 'text-red-500',
-    bgClass: 'bg-red-50 border-red-200',
-    badgeClass: 'bg-red-100 text-red-700 border-red-200',
+    iconClass: 'text-red-400',
+    bgClass: 'bg-red-950/40 border-red-800/30',
+    badgeClass: 'bg-red-950/40 text-red-400 border-red-800/30',
     description: 'تنبيه مهم أو عاجل',
   },
   info: {
     label: 'معلومة',
     icon: Info,
-    iconClass: 'text-cyan-500',
-    bgClass: 'bg-cyan-50 border-cyan-200',
-    badgeClass: 'bg-cyan-100 text-cyan-700 border-cyan-200',
+    iconClass: 'text-cyan-400',
+    bgClass: 'bg-cyan-950/40 border-cyan-800/30',
+    badgeClass: 'bg-cyan-950/40 text-cyan-400 border-cyan-800/30',
     description: 'معلومة أو نصيحة',
   },
   feature: {
     label: 'ميزة جديدة',
     icon: Zap,
-    iconClass: 'text-orange-500',
-    bgClass: 'bg-orange-50 border-orange-200',
-    badgeClass: 'bg-orange-100 text-orange-700 border-orange-200',
+    iconClass: 'text-orange-400',
+    bgClass: 'bg-orange-950/40 border-orange-800/30',
+    badgeClass: 'bg-orange-950/40 text-orange-400 border-orange-800/30',
     description: 'إعلان عن ميزة جديدة',
   },
   premium: {
     label: 'حصري',
     icon: Star,
-    iconClass: 'text-yellow-500',
-    bgClass: 'bg-yellow-50 border-yellow-200',
-    badgeClass: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+    iconClass: 'text-yellow-400',
+    bgClass: 'bg-yellow-950/40 border-yellow-800/30',
+    badgeClass: 'bg-yellow-950/40 text-yellow-400 border-yellow-800/30',
     description: 'محتوى حصري أو مميز',
   },
 };
@@ -130,6 +131,7 @@ export default function AdminAdvertisementsPage() {
   const [showTracking, setShowTracking] = useState(false);
   const [, setSelectedAdId] = useState<string | null>(null);
   const [trackingData, setTrackingData] = useState<TrackingData | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Ad | null>(null);
   const [, setLoadingTracking] = useState(false);
 
   const loadAds = async () => {
@@ -177,7 +179,6 @@ export default function AdminAdvertisementsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('حذف هذا الإعلان؟')) return;
     await fetch('/api/admin/advertisements', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -334,46 +335,46 @@ export default function AdminAdvertisementsPage() {
 
           {/* بطاقات الإحصائيات */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <div className="flex items-center gap-2 text-blue-600 mb-2">
+            <div className="bg-blue-950/40 border border-blue-800/30 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-blue-400 mb-2">
                 <Eye size={18} />
                 <span className="text-sm font-medium">المشاهدات</span>
               </div>
-              <div className="text-2xl font-bold text-blue-700">{trackingData.statistics.totalViews}</div>
-              <div className="text-xs text-blue-600 mt-1">
+              <div className="text-2xl font-bold text-blue-400">{trackingData.statistics.totalViews}</div>
+              <div className="text-xs text-blue-400 mt-1">
                 {trackingData.statistics.uniqueCompaniesViewed} شركة • {trackingData.statistics.uniqueUsersViewed} مستخدم
               </div>
             </div>
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-              <div className="flex items-center gap-2 text-green-600 mb-2">
+            <div className="bg-emerald-950/40 border border-emerald-800/30 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-emerald-400 mb-2">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
                 </svg>
                 <span className="text-sm font-medium">النقرات</span>
               </div>
-              <div className="text-2xl font-bold text-green-700">{trackingData.statistics.totalClicks}</div>
-              <div className="text-xs text-green-600 mt-1">
+              <div className="text-2xl font-bold text-emerald-400">{trackingData.statistics.totalClicks}</div>
+              <div className="text-xs text-emerald-400 mt-1">
                 {trackingData.statistics.totalViews > 0 
                   ? `${((trackingData.statistics.totalClicks / trackingData.statistics.totalViews) * 100).toFixed(1)}% معدل النقر`
                   : '-'
                 }
               </div>
             </div>
-            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-              <div className="flex items-center gap-2 text-purple-600 mb-2">
+            <div className="bg-purple-950/40 border border-purple-800/30 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-purple-400 mb-2">
                 <Bell size={18} />
                 <span className="text-sm font-medium">الإشعارات</span>
               </div>
-              <div className="text-2xl font-bold text-purple-700">{trackingData.statistics.totalNotifications}</div>
-              <div className="text-xs text-purple-600 mt-1">تم الإرسال للمستخدمين</div>
+              <div className="text-2xl font-bold text-purple-400">{trackingData.statistics.totalNotifications}</div>
+              <div className="text-xs text-purple-400 mt-1">تم الإرسال للمستخدمين</div>
             </div>
-            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-              <div className="flex items-center gap-2 text-orange-600 mb-2">
+            <div className="bg-orange-950/40 border border-orange-800/30 rounded-lg p-4">
+              <div className="flex items-center gap-2 text-orange-400 mb-2">
                 <Users size={18} />
                 <span className="text-sm font-medium">الشركات الفريدة</span>
               </div>
-              <div className="text-2xl font-bold text-orange-700">{trackingData.statistics.uniqueCompaniesViewed}</div>
-              <div className="text-xs text-orange-600 mt-1">شركة شاهدت الإعلان</div>
+              <div className="text-2xl font-bold text-orange-400">{trackingData.statistics.uniqueCompaniesViewed}</div>
+              <div className="text-xs text-orange-400 mt-1">شركة شاهدت الإعلان</div>
             </div>
           </div>
 
@@ -445,10 +446,10 @@ export default function AdminAdvertisementsPage() {
                         <span dir="ltr">{new Date(notif.sent_at).toLocaleString('ar-SA')}</span>
                       </div>
                       <div className="mt-2 flex items-center gap-2 text-xs">
-                        <span className={`px-2 py-0.5 rounded ${notif.delivered ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                        <span className={`px-2 py-0.5 rounded ${notif.delivered ? 'bg-green-100 text-emerald-400' : 'bg-gray-100 text-gray-600'}`}>
                           {notif.delivered ? '✓ تم التوصيل' : 'قيد الانتظار'}
                         </span>
-                        <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-700">
+                        <span className="px-2 py-0.5 rounded bg-blue-950/40 text-blue-400 border border-blue-800/30">
                           {notif.delivery_method}
                         </span>
                       </div>
@@ -534,7 +535,7 @@ export default function AdminAdvertisementsPage() {
                     <button onClick={() => toggleActive(ad.id, ad.is_active)} className="btn btn-ghost btn-icon" title={ad.is_active ? 'إخفاء' : 'إظهار'}>
                       {ad.is_active ? <Eye size={16} /> : <EyeOff size={16} />}
                     </button>
-                    <button onClick={() => handleDelete(ad.id)} className="btn btn-ghost btn-icon text-danger" title="حذف">
+                    <button onClick={() => setDeleteTarget(ad)} className="btn btn-ghost btn-icon text-danger" title="حذف">
                       <Trash2 size={16} />
                     </button>
                   </div>
@@ -554,6 +555,15 @@ export default function AdminAdvertisementsPage() {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        title="حذف الإعلان"
+        message={deleteTarget ? `هل أنت متأكد من حذف إعلان "${deleteTarget.title}"؟ لا يمكن التراجع.` : undefined}
+        confirmLabel="حذف نهائي"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget.id); setDeleteTarget(null); } }}
+      />
     </div>
   );
 }

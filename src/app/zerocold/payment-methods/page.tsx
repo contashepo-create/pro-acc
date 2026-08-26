@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronLeft, Loader2, Plus, RefreshCw, DollarSign, Pencil, Trash2 } from 'lucide-react';
 import Link from 'next/link';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 interface PaymentMethod {
   id: string;
@@ -26,6 +27,7 @@ export default function PaymentMethodsPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PaymentMethod | null>(null);
 
   const fetchMethods = async () => {
     setLoading(true);
@@ -69,7 +71,6 @@ export default function PaymentMethodsPage() {
   };
 
   const deleteMethod = async (m: PaymentMethod) => {
-    if (!confirm(`هل تريد إلغاء تفعيل طريقة الدفع "${m.name_ar}"؟ سيبقى سجل الطلبات السابقة محفوظاً.`)) return;
     setFeedback(null);
     const res = await fetch(`/api/admin/payment-methods?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' });
     const data = await res.json();
@@ -129,7 +130,7 @@ export default function PaymentMethodsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button onClick={() => openEdit(m)} title="تعديل" className="p-2 rounded-lg bg-bg-secondary border border-border text-text-secondary hover:text-accent hover:border-accent transition-colors"><Pencil size={15} /></button>
-                  <button onClick={() => deleteMethod(m)} title="حذف نهائي" className="p-2 rounded-lg bg-bg-secondary border border-border text-text-secondary hover:text-danger hover:border-danger transition-colors"><Trash2 size={15} /></button>
+                  <button onClick={() => setDeleteTarget(m)} title="حذف نهائي" className="p-2 rounded-lg bg-bg-secondary border border-border text-text-secondary hover:text-danger hover:border-danger transition-colors"><Trash2 size={15} /></button>
                   <button onClick={() => toggleActive(m)} title={m.is_active ? 'إلغاء التفعيل' : 'تفعيل'} className={`w-12 h-6 rounded-full transition-colors relative ${m.is_active ? 'bg-green-600' : 'bg-bg-secondary border border-border'}`}>
                     <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full transition-all ${m.is_active ? 'right-0.5' : 'right-6'}`}></div>
                   </button>
@@ -157,6 +158,15 @@ export default function PaymentMethodsPage() {
             </div>
           </div>
         )}
+
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        title="إلغاء تفعيل طريقة الدفع"
+        message={deleteTarget ? `هل تريد إلغاء تفعيل "${deleteTarget.name_ar}"؟ سيبقى سجل الطلبات السابقة محفوظاً.` : undefined}
+        confirmLabel="إلغاء التفعيل"
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => { if (deleteTarget) { deleteMethod(deleteTarget); setDeleteTarget(null); } }}
+      />
       </div>
     </div>
   );
