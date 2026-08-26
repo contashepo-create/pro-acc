@@ -18,6 +18,53 @@ interface Props<T> {
   extraInfo?: Array<{ label: string; value: string }>;
 }
 
+/** Company letterhead block — shared by every printed statement. */
+export function useCompanyHeader() {
+  const [company, setCompany] = useState<{ name?: string; tax_number?: string; phone?: string; logo_url?: string; address?: string } | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/company/logo');
+        const json = await res.json();
+        if (json.success) setCompany(json.data?.company || json.data || null);
+      } catch { /* header degrades gracefully */ }
+    })();
+  }, []);
+  return company;
+}
+
+export function StatementHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+  const company = useCompanyHeader();
+  return (
+    <header className="flex items-start justify-between border-b-2 border-black pb-3 mb-4">
+      <div>
+        <h1 className="text-2xl font-extrabold">{company?.name || 'شركة'}</h1>
+        {company?.address && <p className="text-xs mt-1">{company.address}</p>}
+        <p className="text-xs mt-0.5">
+          {company?.tax_number ? `الرقم الضريبي: ${company.tax_number}` : ''}
+          {company?.phone ? ` — هاتف: ${company.phone}` : ''}
+        </p>
+      </div>
+      <div className="text-left">
+        <div className="border border-black rounded px-3 py-1 font-bold">{title}</div>
+        {subtitle && <p className="text-xs mt-1">{subtitle}</p>}
+        <p className="text-[10px] mt-1">تاريخ الطباعة: {new Date().toLocaleDateString('ar-SA')}</p>
+      </div>
+    </header>
+  );
+}
+
+/** Signature strip for printed financial documents. */
+export function SignatureFooter() {
+  return (
+    <footer className="mt-10 grid grid-cols-3 gap-4 text-center text-xs">
+      <div className="border-t border-black pt-1">المحاسب</div>
+      <div className="border-t border-black pt-1">المدير المالي</div>
+      <div className="border-t border-black pt-1">الختم والتوقيع</div>
+    </footer>
+  );
+}
+
 /** Unified professional print/document shell used by every statement.
  *  NOTE: intentionally NOT used by invoice view, which has its own
  *  dedicated templates and settings. */

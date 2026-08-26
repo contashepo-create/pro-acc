@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { ArrowRight, Printer, FileDown, AlertTriangle, Eye, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { PrintButton } from '@/components/ui/PrintButton';
+import { StatementHeader, SignatureFooter } from '@/components/ui/PrintTemplate';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { printCurrentPage } from '@/lib/print';
 import { getClientBalanceMeaning } from '@/lib/contact-balance';
@@ -138,6 +139,7 @@ interface StatementData {
       {/* Statement Document */}
       <div className="max-w-5xl mx-auto p-6 print-container">
         <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
+        <StatementHeader title="كشف حساب عميل" subtitle={client.name} />
           {/* Header */}
           <div className="p-8 border-b border-gray-100 bg-blue-50">
             <div className="flex items-start justify-between">
@@ -357,6 +359,6 @@ interface StatementData {
           @page { margin: 1.2cm; size: A4; }
         }
       `}</style>
-    <PrintButton /></div>
+    <SignatureFooter /><PrintButton /></div>
   );
 }

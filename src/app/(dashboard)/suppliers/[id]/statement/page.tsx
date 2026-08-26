@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { PrintButton } from '@/components/ui/PrintButton';
+import { StatementHeader, SignatureFooter } from '@/components/ui/PrintTemplate';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { printCurrentPage } from '@/lib/print';
 
@@ -73,6 +74,7 @@ interface SupplierStatementData {
   const s = data;
   return (
     <div className="space-y-6">
+      <StatementHeader title="كشف حساب مورد" subtitle={s.supplier?.name || ''} />
       <PageHeader
         title={`كشف حساب المورد: ${s.supplier?.name || ''}`}
         description="حركات المورد وأرصدته من القيود المثبتة فقط — رصيد دائن يعني أن له عليك."
@@ -153,6 +155,6 @@ interface SupplierStatementData {
           </div>
         </div>
       )}
-    <PrintButton /></div>
+    <SignatureFooter /><PrintButton /></div>
   );
 }
