@@ -815,7 +815,7 @@ interface TelegramSettings {
                 ترقية / تجديد الاشتراك
               </Button>
               <a href="/export-data" className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-bg-secondary border border-border text-text-secondary hover:text-amber-400 text-sm transition-colors">
-                <Download size={16} /> تصدير بياناتي (Excel / PDF / CSV)
+                <Download size={16} /> تصدير جداول بياناتي (Excel / CSV)
               </a>
             </>
           ) : (

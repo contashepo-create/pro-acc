@@ -2,9 +2,18 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Download, FileSpreadsheet, FileText, Printer, Loader2, ShieldCheck, ArrowLeft } from 'lucide-react';
+import { Download, FileSpreadsheet, FileText, Loader2, ShieldCheck, ArrowLeft, Ban } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
 
+/**
+ * صفحة تحميل جداول البيانات — المتاحة دائماً (حتى بعد انتهاء الاشتراك).
+ *
+ * السياسة المعتمدة:
+ *  - العميل يحصل على جداول بياناته هو فقط (Excel / CSV) لمراجعتها أو
+ *    نقلها لمنصة أخرى — وفق المعايير المتعارف عليها في البرامج المحاسبية.
+ *  - لا توجد أي صيغة "نسخة قاعدة بيانات" (JSON) ولا أي سبيل لاستعادة
+ *    الملفات داخل المنصة؛ إعادة الإدخال تكون يدوياً فقط.
+ */
 const EXPORT_TABLES = [
   'accounts', 'journal_entries', 'journal_lines', 'clients', 'contacts',
   'invoices', 'invoice_items', 'quotations', 'quotation_items',
@@ -26,7 +35,7 @@ const ARABIC: Record<string, string> = {
   budgets: 'الميزانيات', cost_centers: 'مراكز التكلفة', notifications: 'الإشعارات', settings: 'الإعدادات', tax_returns: 'الإقرارات الضريبية',
 };
 
-type Format = 'csv' | 'excel' | 'pdf';
+type Format = 'csv' | 'excel';
 
 export default function ExportDataPage() {
   const router = useRouter();
@@ -35,12 +44,21 @@ export default function ExportDataPage() {
   const [format, setFormat] = useState<Format>('csv');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [subscriptionExpired, setSubscriptionExpired] = useState(false);
 
   useEffect(() => { checkSession().catch(() => {}); }, [checkSession]);
 
   useEffect(() => {
     if (!isLoading && !user) router.replace('/login?redirect=/export-data');
   }, [isLoading, user, router]);
+
+  // نعرف حالة الاشتراك لعرض زار العودة المناسب (تجديد مقابل لوحة التحكم).
+  useEffect(() => {
+    fetch('/api/auth/subscription-status')
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setSubscriptionExpired(!!d.data?.is_expired); })
+      .catch(() => {});
+  }, []);
 
   if (isLoading) return <div className="min-h-screen bg-bg-primary flex items-center justify-center"><Loader2 className="animate-spin text-text-secondary" /></div>;
   if (!user) return null;
@@ -52,30 +70,19 @@ export default function ExportDataPage() {
     setBusy(true); setMessage('');
     const tables = selected.length ? selected : EXPORT_TABLES;
     try {
-      if (format === 'pdf') {
-        const res = await fetch('/api/company/export-download', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tables, format: 'json' }),
-        });
-        const blob = await res.blob();
-        const bundle = JSON.parse(await blob.text());
-        openPdfWindow(bundle);
-        setMessage('تم تجهيز نافذة الطباعة — اختر "حفظ كـ PDF".');
-      } else {
-        const res = await fetch('/api/company/export-download', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tables, format }),
-        });
-        if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.message || 'فشل التصدير'); }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `company-export-${new Date().toISOString().slice(0, 10)}.${format === 'excel' ? 'xls' : format}`;
-        a.click();
-        URL.revokeObjectURL(url);
-        setMessage('تم تنزيل الملف بنجاح.');
-      }
+      const res = await fetch('/api/company/export-download', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tables, format }),
+      });
+      if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.message || 'فشل التصدير'); }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `company-export-${new Date().toISOString().slice(0, 10)}.${format === 'excel' ? 'xls' : format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage('تم تنزيل الملف بنجاح.');
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'فشل التصدير');
     } finally {
@@ -91,8 +98,8 @@ export default function ExportDataPage() {
             <Download className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold">تصدير بيانات الشركة</h1>
-            <p className="text-xs text-text-muted">صدّر بيانات شركتك كاملةً أو جدولاً بجدول بصيغة Excel / PDF / CSV — متاح حتى بعد انتهاء الاشتراك.</p>
+            <h1 className="text-xl font-bold">تحميل جداول بياناتك</h1>
+            <p className="text-xs text-text-muted">حمّل جداول بيانات شركتك (الفواتير، القيود، العملاء، المخزون،...) بصيغة Excel أو CSV — متاح حتى بعد انتهاء الاشتراك، ولبيانات شركتك فقط.</p>
           </div>
         </div>
 
@@ -116,18 +123,19 @@ export default function ExportDataPage() {
         <div className="bg-bg-card border border-border rounded-2xl p-5 mt-4">
           <h2 className="text-sm font-bold text-amber-300/80 mb-3">صيغة التصدير</h2>
           <div className="flex gap-2">
-            {([['excel', FileSpreadsheet, 'Excel'], ['pdf', FileText, 'PDF'], ['csv', FileText, 'CSV']] as const).map(([f, Icon, label]) => (
+            {([['excel', FileSpreadsheet, 'Excel'], ['csv', FileText, 'CSV']] as const).map(([f, Icon, label]) => (
               <button key={f} onClick={() => setFormat(f)} className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm transition-colors ${format === f ? 'border-amber-600 bg-amber-950/20 text-amber-300' : 'border-border bg-bg-secondary text-text-secondary'}`}>
                 <Icon size={16} /> {label}
               </button>
             ))}
           </div>
+          <p className="mt-3 text-[0.7rem] text-text-muted">صيغتا Excel وCSV هما المتاحتان فقط — الصيغتان مقبولتان في البرامج المحاسبية الأخرى عند الاستيراد اليدوي.</p>
         </div>
 
         <button onClick={doExport} disabled={busy}
           className="w-full mt-5 flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-l from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 disabled:opacity-50 text-white font-semibold transition-all">
           {busy ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-          {busy ? 'جاري التصدير...' : 'تصدير البيانات'}
+          {busy ? 'جاري التصدير...' : 'تصدير الجداول'}
         </button>
 
         {message && (
@@ -136,35 +144,21 @@ export default function ExportDataPage() {
           </div>
         )}
 
-        <div className="mt-6 flex items-center justify-center gap-2 text-[0.7rem] text-text-muted">
-          <ShieldCheck size={14} className="text-emerald-400" />
-          بياناتك معزولة تماماً عن شركات أخرى — يشمل التصدير بيانات شركتك فقط.
+        <div className="mt-6 space-y-2">
+          <div className="flex items-center justify-center gap-2 text-[0.7rem] text-text-muted">
+            <ShieldCheck size={14} className="text-emerald-400" />
+            بياناتك معزولة تماماً عن شركات أخرى — يشمل التصدير بيانات شركتك فقط.
+          </div>
+          <div className="flex items-center justify-center gap-2 text-[0.7rem] text-text-muted">
+            <Ban size={14} className="text-amber-400" />
+            لا يمكن استعادة هذه الملفات داخل المنصة — أي إدخال للبيانات يتم يدوياً فقط.
+          </div>
         </div>
 
-        <button onClick={() => router.push('/dashboard')} className="mt-4 mx-auto flex items-center gap-1 text-xs text-text-secondary hover:text-amber-400">
-          <ArrowLeft size={14} /> العودة للوحة التحكم
+        <button onClick={() => router.push(subscriptionExpired ? '/subscription?renew=1' : '/dashboard')} className="mt-4 mx-auto flex items-center gap-1 text-xs text-text-secondary hover:text-amber-400">
+          <ArrowLeft size={14} /> {subscriptionExpired ? 'العودة لتجديد الاشتراك' : 'العودة للوحة التحكم'}
         </button>
       </div>
     </div>
   );
-}
-
-function openPdfWindow(bundle: Record<string, Record<string, unknown>[]>) {
-  const w = window.open('', '_blank', 'width=900,height=700');
-  if (!w) return;
-  const rows = (arr: Record<string, unknown>[]) =>
-    arr.length
-      ? `<tr>${Object.keys(arr[0]).map((h) => `<th style="border:1px solid #999;padding:4px;background:#eee">${esc(h)}</th>`).join('')}</tr>` +
-        arr.map((r) => `<tr>${Object.keys(arr[0]).map((h) => `<td style="border:1px solid #ccc;padding:4px">${esc(r[h])}</td>`).join('')}</tr>`).join('')
-      : '<tr><td>—</td></tr>';
-  const html = Object.entries(bundle).map(([t, arr]) =>
-    `<h3 style="margin-top:16px">${ARABIC[t] || t} (${arr.length})</h3><table style="border-collapse:collapse;width:100%;font-size:11px">${rows(arr)}</table>`
-  ).join('<hr/>');
-  w.document.write(`<html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>تصدير البيانات</title></head><body>${html}<script>window.onload=()=>window.print()</script></body></html>`);
-  w.document.close();
-}
-
-function esc(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
 }

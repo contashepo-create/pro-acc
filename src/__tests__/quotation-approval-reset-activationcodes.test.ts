@@ -123,11 +123,11 @@ describe('approvals/[id] PUT voucher branch', () => {
   });
 });
 
-describe('company/reset confirm', () => {
-  test('maps an invalid-code RPC error to 400', async () => {
+describe('company/reset confirm (ميزة ملغاة نهائياً)', () => {
+  test('answers 410 without reaching the database, even for a valid-looking code', async () => {
     mockDb.rpcResults.set('reset_company_business_data', { data: null, error: { message: 'رمز غير صالح' } });
     const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'confirm', code: '123456' }));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(410);
   });
 });
 

@@ -163,10 +163,9 @@ Authorization: Bearer <token>
         post: { tags: ['Reports'], summary: 'المساعد الذكي — اسأل عن أرباح، فواتير، مشاريع', security: [{ bearerAuth: [] }], responses: { '200': { description: 'response + suggestions' } } }
       },
 
-      // Backup
-      '/api/backup/auto': {
-        get: { tags: ['Settings'], summary: 'حالة النسخ الاحتياطي (admin)', security: [{ bearerAuth: [] }], responses: { '200': { description: 'backups + dataSummary' } } },
-        post: { tags: ['Settings'], summary: 'إنشاء نسخة احتياطية (admin)', security: [{ bearerAuth: [] }], responses: { '201': { description: 'backupUrl + sizeBytes' } } }
+      // Table data export (Excel / CSV only — no database copy, no restore)
+      '/api/company/export-download': {
+        post: { tags: ['Settings'], summary: 'تصدير جداول بيانات الشركة (Excel/CSV فقط)', security: [{ bearerAuth: [] }], responses: { '200': { description: 'ملف Excel أو CSV' } } }
       },
     },
     components: {

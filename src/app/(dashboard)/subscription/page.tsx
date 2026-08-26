@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Modal } from '@/components/ui/Modal';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useAuthStore } from '@/store/auth-store';
 
 const ADDONS = [
@@ -41,7 +41,15 @@ interface SubscriptionState {
   days_remaining?: number;
   extra_users?: number;
   extra_branches?: number;
+  extra_storage_gb?: number;
+  is_expired?: boolean;
   is_expiring_soon?: boolean;
+  limits?: {
+    max_users?: number;
+    max_invoices_per_month?: number | null;
+    max_quotations_per_month?: number | null;
+    max_storage_mb?: number;
+  } | null;
 }
 interface FlashMessage { type: 'success' | 'error'; text: string; }
 interface CodePreview { plan_name?: string; duration_months?: number; is_used?: boolean; }
@@ -65,28 +73,16 @@ interface AddonRequest {
   status?: string;
 }
 interface SupportTicket { id: string; subject?: string; status?: string; created_at: string; }
-interface DataExport {
-  id: string;
-  requested_at: string;
-  file_size_bytes?: number;
-  status?: string;
-  has_file?: boolean;
-  error_message?: string;
-}
 
 export default function SubscriptionPageEnhanced() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
 
-  const { user: loggedInUser, isLoading: authLoading } = useAuthStore();
-  const router = useRouter();
   const searchParams = useSearchParams();
 
-  useEffect(() => {
-    if (!authLoading && loggedInUser && loggedInUser.role !== 'admin') {
-      router.push('/dashboard');
-    }
-  }, [loggedInUser, authLoading, router]);
+  // صفحة الباقات/التجديد متاحة لكل مستخدمي الشركة (وليس المدير فقط):
+  // عند انتهاء الاشتراك يوجَّه الجميع сюда لتجديد الاشتراك أو تفعيل كود أو
+  // تحميل جداول بياناتهم — ولا يمكنهم الوصول لأي قسم آخر.
 
   const [subscription, setSubscription] = useState<SubscriptionState | null>(null);
   const [upgradeRequests, setUpgradeRequests] = useState<UpgradeRequest[]>([]);
@@ -151,18 +147,13 @@ export default function SubscriptionPageEnhanced() {
   const [supportSubmitting, setSupportSubmitting] = useState(false);
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
 
-  // Data export
-  const [exports, setExports] = useState<DataExport[]>([]);
-  const [exportRequesting, setExportRequesting] = useState(false);
-
   const refreshAll = async () => {
-    const [subData, payData, reqData, addonData, supData, expData] = await Promise.all([
+    const [subData, payData, reqData, addonData, supData] = await Promise.all([
       fetch('/api/auth/subscription').then(r=>r.json()),
       fetch('/api/payment-methods').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/subscription/upgrade-request').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/subscription/addon-request').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/support').then(r=>r.json()).catch(()=>({success:false})),
-      fetch('/api/company/data-export').then(r=>r.json()).catch(()=>({success:false})),
     ]);
     if (subData.success) { setPlans(subData.data.plans || []); setSubscription(subData.data.subscription); }
     if (payData.success) {
@@ -183,7 +174,6 @@ export default function SubscriptionPageEnhanced() {
     if (reqData.success) setUpgradeRequests(reqData.data.requests || []);
     if (addonData.success) setAddonRequests(addonData.data.requests || []);
     if (supData.success) setSupportTickets(supData.data.tickets || []);
-    if (expData.success) setExports(expData.data.exports || []);
     setLoading(false);
   };
 
@@ -352,35 +342,36 @@ export default function SubscriptionPageEnhanced() {
     } finally { setSupportSubmitting(false); }
   };
 
-  const requestExport = async () => {
-    setExportRequesting(true);
-    try {
-      const res = await fetch('/api/company/data-export', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        setMessage({ type: 'success', text: 'جاري تجهيز ملف التحميل. حدّث الصفحة بعد دقائق.' });
-        setTimeout(refreshAll, 3000);
-      } else setMessage({ type: 'error', text: data.message });
-    } catch {
-      setMessage({ type: 'error', text: 'خطأ' });
-    } finally { setExportRequesting(false); }
-  };
-
   if (loading) return <div className="flex justify-center h-64 items-center"><Loader2 className="animate-spin" /></div>;
 
   const currentPlanCode = subscription?.plan_code;
   const priceForSelected = selectedPlan ? (duration === 'yearly' ? (selectedPlan.price_yearly || selectedPlan.price_monthly * 12 * 0.8) : selectedPlan.price_monthly) : 0;
 
+  // وضع التجديد: عند انتهاء الاشتراك (أو القدوم عبر ?renew=1) تظهر لافتة
+  // بارزة توضح أن الأقسام مغلقة وأن المتاح هنا هو التجديد أو تحميل
+  // جداول البيانات (Excel/CSV) — لجميع مستخدمي الشركة.
+  const renewMode = searchParams?.get('renew') === '1' || !!subscription?.is_expired;
+
   const tabs = [
     { id: 'plans', label: 'الباقات' },
     { id: 'addons', label: 'الإضافات' },
     { id: 'support', label: 'الدعم والتواصل' },
-    { id: 'export', label: 'تحميل بياناتي' },
+    { id: 'export', label: 'تحميل جداول بياناتي' },
   ] as const;
 
   return (
     <div className="space-y-6">
-      <PageHeader title="الباقات والاشتراك" description="اختر الباقة، اطلب إضافات، تواصل مع الدعم، أو حمّل بياناتك" />
+      <PageHeader title="الباقات والاشتراك" description="اختر الباقة، اطلب إضافات، تواصل مع الدعم، أو حمّل جداول بياناتك" />
+
+      {renewMode && (
+        <div className="rounded-xl p-4 border-2 bg-danger-light border-danger text-danger flex flex-col sm:flex-row sm:items-center gap-3">
+          <AlertTriangle size={22} className="shrink-0" />
+          <div className="text-sm font-semibold flex-1">
+            انتهى اشتراك شركتك — أقسام النظام مغلقة مؤقتاً وبياناتك محفوظة سليمة.
+            من هذه الصفحة يمكنك تجديد الاشتراك أو تفعيل كود، أو تحميل جداول بياناتك (Excel/CSV)، أو التواصل مع الدعم. بمجرد التجديد تعود كل الأقسام للعمل فوراً.
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 flex-wrap border-b border-border">
@@ -411,6 +402,41 @@ export default function SubscriptionPageEnhanced() {
                 </div>
               </div>
               {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-warning-light border border-warning rounded-lg text-xs font-semibold text-warning flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
+            </Card>
+          )}
+
+          {/* الإضافات المفعلة فعلياً على الاشتراك (من أعمدة subscriptions بعد
+              اعتماد الإدارة) — عرض صريح لكل إضافة وكميتها وحدودها الفعلية */}
+          {subscription && (
+            <Card title="الإضافات المفعلة على اشتراكك">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="flex items-center gap-3 p-3 bg-bg-secondary rounded-xl border border-border">
+                  <UserPlus size={20} className="text-accent shrink-0" />
+                  <div className="text-sm">
+                    <div className="font-bold">{subscription.extra_users ?? 0} × مستخدم إضافي</div>
+                    <div className="text-xs text-text-muted">إجمالي المقاعد: {subscription.limits?.max_users ?? '—'}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 p-3 bg-bg-secondary rounded-xl border border-border">
+                  <Building2 size={20} className="text-accent shrink-0" />
+                  <div className="text-sm">
+                    <div className="font-bold">{subscription.extra_branches ?? 0} × فرع/مستودع إضافي</div>
+                    <div className="text-xs text-text-muted">تُحتسب ضمن حدود الباقة + الإضافات</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 p-3 bg-bg-secondary rounded-xl border border-border">
+                  <HardDrive size={20} className="text-accent shrink-0" />
+                  <div className="text-sm">
+                    <div className="font-bold">{subscription.extra_storage_gb ?? 0} GB تخزين إضافي</div>
+                    <div className="text-xs text-text-muted">
+                      إجمالي التخزين: {subscription.limits?.max_storage_mb != null ? `${(subscription.limits.max_storage_mb / 1024).toFixed(1)} GB` : '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {(subscription.extra_users ?? 0) === 0 && (subscription.extra_branches ?? 0) === 0 && (subscription.extra_storage_gb ?? 0) === 0 && (
+                <p className="mt-3 text-xs text-text-muted">لا توجد إضافات مفعلة حالياً — يمكنك طلبها من تبويب «الإضافات» بالأسفل.</p>
+              )}
             </Card>
           )}
 
@@ -591,13 +617,23 @@ export default function SubscriptionPageEnhanced() {
             <div className="grid md:grid-cols-3 gap-4">
               {ADDONS.map((a) => {
                 const Icon = a.icon;
-                const active = (a.id === 'extra_user' ? subscription?.extra_users : a.id === 'extra_branch' ? subscription?.extra_branches : 0) || 0;
+                // الكمية المفعلة تُقرأ من أعمدة الاشتراك نفسها (آخر ما اعتمدته
+                // الإدارة) وليس من قيمة افتراضية — يشمل تخزين GB الذي كان
+                // يظهر دوماً صفراً.
+                const active = a.id === 'extra_user'
+                  ? (subscription?.extra_users ?? 0)
+                  : a.id === 'extra_branch'
+                    ? (subscription?.extra_branches ?? 0)
+                    : (subscription?.extra_storage_gb ?? 0);
                 return (
                   <div key={a.id} className="border rounded-xl p-4 bg-bg-secondary flex flex-col gap-3">
                     <div className="flex items-center gap-2"><Icon size={22} className="text-accent" /><h3 className="font-bold">{a.label}</h3></div>
                     <div className="text-sm">
                       <div><strong>${a.monthly}</strong>/شهر · <strong>${a.yearly}</strong>/سنة (خصم {(100 - Math.round(a.yearly/(a.monthly*12)*100))}%)</div>
-                      <div className="text-xs text-text-muted mt-1">مفعّل حالياً: <strong>{active}</strong></div>
+                      <div className="text-xs text-text-muted mt-1">
+                        مفعّل حالياً: <strong>{active}</strong>
+                        {active > 0 && <span className="text-success font-semibold"> ✓ مُعتمد</span>}
+                      </div>
                     </div>
                     <Button onClick={() => openAddon(a.id)} className="mt-auto">شراء الإضافة</Button>
                   </div>
@@ -656,30 +692,18 @@ export default function SubscriptionPageEnhanced() {
       )}
 
       {activeTab === 'export' && (
-        <Card title="تحميل نسخة من بياناتك">
-          <p className="text-sm text-text-secondary mb-4">
-            يمكنك طلب تصدير جميع بيانات شركتك (الحسابات، القيود، الفواتير، العملاء، الموردين، المشاريع، العهد، المخزون،...) في ملف JSON في أي وقت حتى بعد انتهاء الاشتراك. لا يُحذف شيء دون موافقتك.
-          </p>
-          <Button onClick={requestExport} disabled={exportRequesting} leftIcon={exportRequesting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}>{exportRequesting ? 'جاري التجهيز...' : 'طلب تصدير جديد'}</Button>
-          <div className="mt-6 space-y-2">
-            {exports.length === 0 ? <p className="text-xs text-text-muted">لا توجد طلبات تصدير سابقة.</p> :
-              exports.map((ex: DataExport) => (
-                <div key={ex.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
-                  <div>
-                    <div className="font-medium">{new Date(ex.requested_at).toLocaleString()}</div>
-                    <div className="text-xs text-text-muted">{ex.file_size_bytes ? `${Math.round(ex.file_size_bytes/1024)} KB` : ''}</div>
-                  </div>
-                  {ex.status === 'ready' && ex.has_file ? (
-                    <a href={`/api/company/data-export/${ex.id}/download`} download={`pro-acc-export-${ex.id}.json`} className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium">تحميل</a>
-                  ) : ex.status === 'failed' ? (
-                    <span className="text-xs font-semibold text-danger" title={ex.error_message || ''}>فشل التجهيز</span>
-                  ) : ex.status === 'expired' ? (
-                    <span className="text-xs font-semibold text-text-muted">انتهت الصلاحية</span>
-                  ) : (
-                    <span className="text-xs font-semibold text-warning flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> قيد التجهيز...</span>
-                  )}
-                </div>
-              ))}
+        <Card title="تحميل جداول بياناتك">
+          <div className="space-y-4">
+            <p className="text-sm text-text-secondary">
+              يمكنك تحميل جداول بيانات شركتك (الحسابات، القيود، الفواتير، العملاء، الموردون، المشاريع، العهد، المخزون،...) بصيغة <strong>Excel</strong> أو <strong>CSV</strong> في أي وقت — حتى بعد انتهاء الاشتراك — وبيانات شركتك فقط. لا يُحذف شيء دون موافقتك.
+            </p>
+            <div className="p-3 rounded-xl bg-bg-secondary border border-border text-xs text-text-secondary space-y-1">
+              <div>• الصيغتان (Excel / CSV) مقبولتان في البرامج المحاسبية الأخرى عند الاستيراد، لذا يمكنك مراجعة بياناتك أو الانتقال بها لمنصة أخرى بسهولة.</div>
+              <div>• لا تتوفر "نسخة من قاعدة البيانات" ولا يمكن استعادة هذه الملفات داخل المنصة — أي إدخال للبيانات يتم يدوياً فقط.</div>
+            </div>
+            <a href="/export-data" className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-accent text-white text-sm font-semibold hover:opacity-90 transition-opacity">
+              <Download size={16} /> فتح صفحة تحميل الجداول (Excel / CSV)
+            </a>
           </div>
         </Card>
       )}

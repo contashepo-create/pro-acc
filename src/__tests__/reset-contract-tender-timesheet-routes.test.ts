@@ -73,16 +73,19 @@ function baseDb() {
 
 beforeEach(() => { mockDb = makeDb(baseDb()); });
 
-describe('company/reset', () => {
-  test('rejects an invalid reset action payload (400)', async () => {
-    const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'bogus' }));
-    expect(res.status).toBe(400);
+describe('company/reset (ميزة ملغاة نهائياً)', () => {
+  test('POST is a 410 tombstone and never calls any RPC', async () => {
+    const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'request' }));
+    expect(res.status).toBe(410);
+    const json = await res.json();
+    expect(json.success).toBe(false);
+    expect(mockDb.calls.length).toBe(0);
+    expect(mockDb.rpcResults.size).toBe(0);
   });
 
-  test('returns 409 when a reset session already exists', async () => {
-    mockDb.rpcResults.set('start_telegram_reset_session_atomic', { data: null, error: { message: 'طلب تصفير قائم' } });
-    const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'request' }));
-    expect(res.status).toBe(409);
+  test('an invalid payload is also refused with 410 (no validation surface left)', async () => {
+    const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'bogus' }));
+    expect(res.status).toBe(410);
   });
 });
 

@@ -1,11 +1,21 @@
 import { NextRequest } from 'next/server';
-import { success, error, handleApiError } from '@/lib/api-helpers';
+import { error, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { toCsvCell, recordsToCsv } from '@/lib/csv-export';
+import { recordsToCsv } from '@/lib/csv-export';
 
 const sb = () => getSupabase();
 
-/** Company-scoped tables available for self-service export (no admin/system tables). */
+/**
+ * Company-scoped TABLE export (Excel / CSV) — the only self-service data
+ * download the platform offers.
+ *
+ * Policy (قرار مالك المنصة):
+ *  - NO whole-database JSON dump: the client gets readable TABLES of his own
+ *    data (Excel/CSV) for review or migration to another platform.
+ *  - NO restore path exists anywhere: these files can never be uploaded back
+ *    into the platform. Re-entering data is manual entry only.
+ *  - Company isolation: every table is filtered by the session company.
+ */
 export const EXPORT_TABLES = [
   'accounts', 'journal_entries', 'journal_lines', 'clients', 'contacts',
   'invoices', 'invoice_items', 'quotations', 'quotation_items',
@@ -15,6 +25,9 @@ export const EXPORT_TABLES = [
   'branches', 'banks', 'cash_transactions', 'bonds', 'vouchers',
   'budgets', 'cost_centers', 'notifications', 'settings', 'tax_returns',
 ];
+
+/** The ONLY formats this endpoint may produce. */
+const ALLOWED_FORMATS = new Set(['csv', 'excel']);
 
 type Row = Record<string, unknown>;
 
@@ -88,7 +101,12 @@ export async function POST(req: NextRequest) {
     if (auth.role !== 'admin') return error('تصدير بيانات الشركة متاح لمدير الشركة فقط', 403);
 
     const body = await req.json().catch(() => ({}));
-    const format: string = body.format === 'excel' ? 'excel' : body.format === 'json' ? 'json' : 'csv';
+    // Fail closed on anything that is not explicitly csv/excel — json dumps of
+    // the database are permanently off the menu.
+    const format = typeof body.format === 'string' ? body.format : 'csv';
+    if (!ALLOWED_FORMATS.has(format)) {
+      return error('صيغة التصدير المتاحة هي Excel أو CSV فقط (لا تتوفر نسخة من قاعدة البيانات)', 400);
+    }
     const requested: string[] = Array.isArray(body.tables) ? body.tables : [];
     const tables = (requested.length ? requested : EXPORT_TABLES).filter((t) => EXPORT_TABLES.includes(t));
     if (!tables.length) return error('لا توجد جداول صالحة للتصدير', 400);
@@ -97,13 +115,10 @@ export async function POST(req: NextRequest) {
     for (const t of tables) bundle[t] = await fetchCompanyTable(auth.companyId, t);
 
     const stamp = new Date().toISOString().slice(0, 10);
-    if (format === 'csv') {
-      return fileResponse(tablesToCsvBundle(bundle), `company-export-${stamp}.csv`, 'text/csv; charset=utf-8');
-    }
     if (format === 'excel') {
       return fileResponse(tablesToExcelHtml(bundle), `company-export-${stamp}.xls`, 'application/vnd.ms-excel');
     }
-    return fileResponse(JSON.stringify(bundle, null, 2), `company-export-${stamp}.json`, 'application/json; charset=utf-8');
+    return fileResponse(tablesToCsvBundle(bundle), `company-export-${stamp}.csv`, 'text/csv; charset=utf-8');
   } catch (e) {
     return handleApiError(e);
   }

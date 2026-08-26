@@ -66,6 +66,9 @@ const PUBLIC_ROUTES: Record<string, string> = {
   'admin/send-telegram-code': 'platform admin login 2FA delivery',
   'admin/verify-telegram': 'platform admin login step 2',
   'admin/verify-master': 'platform admin login step 3',
+  // Permanently disabled feature: every method answers 410 Gone and the
+  // handler touches neither the database nor any session data.
+  'company/reset': 'tombstone for the removed self-service DB reset (always 410)',
   'portal/auth': 'client portal login',
   'portal/invoices': 'client portal session token, not a company session',
   'portal/invoices/[id]': 'client portal session token, not a company session',
@@ -160,7 +163,7 @@ describe('API surface: statement-level tenant isolation', () => {
     'admin_sessions', 'visitor_logs', 'visitor_stats', 'advertisements',
     'ad_views', 'ad_clicks', 'ad_notifications', 'support_tickets',
     'upgrade_requests', 'addon_requests', 'telegram_test_runs',
-    'backup_logs', 'cron_jobs',
+    'cron_jobs',
   ]);
 
   /**
@@ -285,14 +288,16 @@ describe('API surface: no silent truncation', () => {
     expect(offenders).toEqual([]);
   });
 
-  test('backup and export routes page through their tables', () => {
-    for (const name of ['backup/download', 'backup/auto', 'company/data-export']) {
-      const route = routes.find((entry) => entry.name === name)!;
-      expect(route).toBeDefined();
-      // Paging is what makes completeness possible.
-      expect(route.src).toMatch(/\.range\(/);
-      // And a read error must surface rather than becoming an empty table.
-      expect(route.src).toMatch(/throw new Error\(/);
+  test('the company table export pages through its tables', () => {
+    const route = routes.find((entry) => entry.name === 'company/export-download')!;
+    expect(route).toBeDefined();
+    // Paging is what makes completeness possible.
+    expect(route.src).toMatch(/\.range\(/);
+    // And a read error must surface rather than becoming an empty table.
+    expect(route.src).toMatch(/throw new Error\(/);
+    // The removed JSON/backup export routes must not quietly return.
+    for (const name of ['backup/download', 'backup/auto', 'backup/upload', 'backup/validate', 'company/data-export']) {
+      expect(routes.some((entry) => entry.name === name)).toBe(false);
     }
   });
 });

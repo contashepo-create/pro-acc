@@ -16,6 +16,9 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CreditCard,
+  Download,
+  LifeBuoy,
 } from 'lucide-react';
 import { useSidebarStore } from '@/store/sidebar-store';
 import { useAuthStore } from '@/store/auth-store';
@@ -134,21 +137,46 @@ export function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const { isCollapsed, toggle, setActive } = useSidebarStore();
-  const { user } = useAuthStore();
-  
+  const { user, subscription } = useAuthStore();
+
   const role = user?.role || 'supervisor';
 
-  const filteredNavGroups = navGroups.map(group => {
-    let items = group.items;
-    if (role !== 'admin') {
-      items = items.filter(item => !['permissions', 'settings', 'subscription', 'fiscal', 'users'].includes(item.id));
-    }
-    return { ...group, items };
-  }).filter(group => group.items.length > 0);
+  // انتهى الاشتراك؟ القائمة تصبح "قائمة تجديد" فقط: تجديد الاشتراك، تحميل
+  // جداول البيانات، والدعم. لا يمكن الوصول لأي قسم آخر (مفروض أيضاً على
+  // مستوى الـ API في subscription-guard وعلى مستوى الصفحات في الـ layout).
+  const subscriptionExpired = !!subscription?.is_expired;
+
+  const filteredNavGroups = (subscriptionExpired
+    ? [
+        {
+          label: 'تجديد الاشتراك',
+          icon: CreditCard,
+          items: [{ id: 'subscription?renew=1', label: 'تجديد / تفعيل الاشتراك' }],
+        },
+        {
+          label: 'تحميل البيانات',
+          icon: Download,
+          items: [{ id: 'subscription?tab=export', label: 'جداول بياناتي (Excel/CSV)' }],
+        },
+        {
+          label: 'الدعم',
+          icon: LifeBuoy,
+          items: [{ id: 'subscription?tab=support', label: 'التواصل مع الدعم' }],
+        },
+      ] as NavGroup[]
+    : navGroups.map(group => {
+        let items = group.items;
+        if (role !== 'admin') {
+          items = items.filter(item => !['permissions', 'settings', 'subscription', 'fiscal', 'users'].includes(item.id));
+        }
+        return { ...group, items };
+      }).filter(group => group.items.length > 0));
 
   const isActive = (id: string) => {
     const cleanPath = pathname.startsWith('/') ? pathname.slice(1) : pathname;
-    const cleanId = id.startsWith('/') ? id.slice(1) : id;
+    // ids may carry a query (e.g. 'subscription?tab=export') — strip it so
+    // active highlighting matches the pure path segment.
+    const cleanId = (id.startsWith('/') ? id.slice(1) : id).split('?')[0];
     if (cleanId === '') return cleanPath === 'dashboard';
     return cleanPath === cleanId || cleanPath.startsWith(cleanId + '/');
   };

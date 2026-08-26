@@ -40,9 +40,9 @@ export function SubscriptionBanner() {
         {info.is_expired ? <AlertTriangle size={18} className="shrink-0" /> : <Crown size={18} className="shrink-0" />}
         <span>
           {isTrialExpired
-            ? 'انتهت الفترة التجريبية. يمكنك الاشتراك أو إدخال كود تفعيل أو التواصل مع الدعم. يمكنك أيضاً تحميل نسخة من بياناتك.'
+            ? 'انتهت الفترة التجريبية. يمكنك الاشتراك أو إدخال كود تفعيل أو التواصل مع الدعم، أو تحميل جداول بياناتك (Excel/CSV).'
             : info.is_expired
-              ? 'اشتراكك منتهي. يمكنك التجديد أو إدخال كود تفعيل أو التواصل مع الدعم، كما يمكنك تحميل نسخة من بياناتك.'
+              ? 'اشتراكك منتهي. يمكنك التجديد أو إدخال كود تفعيل أو التواصل مع الدعم، أو تحميل جداول بياناتك (Excel/CSV).'
               : `سيتم انتهاء اشتراكك خلال ${info.days_remaining} أيام (${info.end_date}).`}
         </span>
       </div>
@@ -61,10 +61,10 @@ export function SubscriptionBanner() {
         </Link>
         {info.is_expired && (
           <Link
-            href="/subscription?tab=export"
+            href="/export-data"
             className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors text-xs font-medium inline-flex items-center gap-1"
           >
-            <Download size={14} /> تحميل بياناتي
+            <Download size={14} /> تحميل جداول بياناتي
           </Link>
         )}
         <button onClick={() => setDismissed(true)} className="p-1 hover:bg-black/10 rounded-lg transition-colors">

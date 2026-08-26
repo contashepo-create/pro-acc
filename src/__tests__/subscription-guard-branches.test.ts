@@ -60,21 +60,36 @@ describe('subscription request enforcement branches', () => {
     expect(isSubscriptionReadOnlyMethod('POST')).toBe(false);
   });
 
-  test('allows reads and whitelisted writes despite expiry', async () => {
+  test('expiry locks EVERY module (reads included) except the renewal + data-download whitelist', async () => {
     subscription = sub('cancelled');
-    await expect(assertSubscriptionAccess('c', 'GET', '/api/invoices')).resolves.toMatchObject({ isExpired: true });
-    for (const path of ['/api/support', '/api/support/ticket', '/api/upload/receipt', '/api/auth/logout?x=1', '/api/company/data-export/1']) {
+    // Reads of business modules are blocked — no browsing after expiry.
+    for (const method of ['GET', 'POST', 'PUT', 'DELETE'] as const) {
+      await expect(assertSubscriptionAccess('c', method, '/api/invoices')).rejects.toThrow('انتهت صلاحية الاشتراك');
+      await expect(assertSubscriptionAccess('c', method, '/api/dashboard')).rejects.toThrow();
+      await expect(assertSubscriptionAccess('c', method, '/api/journal')).rejects.toThrow();
+      await expect(assertSubscriptionAccess('c', method, '/api/reports/financial')).rejects.toThrow();
+      await expect(assertSubscriptionAccess('c', method, '/api/notifications')).rejects.toThrow();
+    }
+    // The renewal flow and the table data download keep working.
+    for (const path of [
+      '/api/support', '/api/support/ticket', '/api/upload/receipt', '/api/auth/logout?x=1',
+      '/api/company/export-download', '/api/payment-methods', '/api/subscription/activate-code',
+      '/api/subscription/upgrade-request', '/api/subscription/addon-request', '/api/auth/subscription-status',
+    ]) {
       await expect(assertSubscriptionAccess('c', 'POST', path)).resolves.toBeTruthy();
+      await expect(assertSubscriptionAccess('c', 'GET', path)).resolves.toBeTruthy();
     }
   });
 
   test('uses specific errors for missing/trial-expired/general expired writes', async () => {
     subscription = null;
     await expect(assertSubscriptionAccess('c', 'POST', '/api/invoices')).rejects.toThrow('لا يوجد اشتراك');
+    await expect(assertSubscriptionAccess('c', 'GET', '/api/invoices')).rejects.toThrow('لا يوجد اشتراك');
     subscription = sub('trial', past());
     await expect(assertSubscriptionAccess('c', 'POST', '/api/invoices')).rejects.toThrow('التجريبية');
     subscription = sub('cancelled');
     await expect(assertSubscriptionAccess('c', 'POST', '/api/invoices')).rejects.toThrow('انتهت صلاحية');
+    await expect(assertSubscriptionAccess('c', 'GET', '/api/invoices')).rejects.toThrow('انتهت صلاحية');
   });
 
   test('enforces disabled modules but permits enabled, unknown and always-available modules', async () => {

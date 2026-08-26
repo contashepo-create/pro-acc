@@ -277,21 +277,17 @@ describe('company/users/[id]', () => {
   });
 });
 
-describe('company/reset', () => {
-  test('POST confirms reset with a code', async () => {
+describe('company/reset (ميزة ملغاة نهائياً)', () => {
+  test('POST is a 410 tombstone regardless of payload', async () => {
     mockDb.rpcResults.set('reset_company_business_data', { data: { cleared: true }, error: null });
     const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'confirm', code: '123456' }));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(410);
+    expect(mockDb.calls.length).toBe(0);
   });
 
-  test('POST rejects an invalid body', async () => {
-    const res = await resetPOST(req('admin', 'POST', 'http://localhost/x', { action: 'bogus' }));
-    expect(res.status).toBe(400);
-  });
-
-  test('DELETE cancels a reset session', async () => {
+  test('DELETE is a 410 tombstone too', async () => {
     mockDb.rpcResults.set('cancel_telegram_reset_session_atomic', { data: { cancelled: true }, error: null });
     const res = await resetDELETE(req('admin', 'DELETE', 'http://localhost/x'));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(410);
   });
 });
