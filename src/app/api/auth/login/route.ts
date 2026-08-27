@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { success, error, serverError, parseBody, setAuthCookie } from '@/lib/api-helpers';
-import { verifyPassword, createToken } from '@/lib/auth';
+import { verifyPassword, createToken, TIMING_EQUALIZER_HASH } from '@/lib/auth';
 import { loginSchema } from '@/lib/validation';
 import { getSupabase } from '@/lib/supabase-client';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -37,6 +37,11 @@ export async function POST(request: NextRequest) {
       return serverError(userErr);
     }
     if (!users || users.length === 0) {
+      // Timing-side-channel hardening: run the exact same scrypt workload a
+      // real account would cost, so an attacker cannot distinguish
+      // "unknown email" (this fast path) from "wrong password" (scrypt ~100ms)
+      // by response latency and enumerate registered accounts.
+      await verifyPassword(password, TIMING_EQUALIZER_HASH);
       const { error: attemptErr } = await s.from('login_attempts').insert({
         email: normalizedEmail, ip_address: ip, success: false,
         attempted_at: new Date().toISOString(),
@@ -63,6 +68,9 @@ export async function POST(request: NextRequest) {
 
     if (!u.password_hash || !u.password_hash.includes(':')) {
       console.error('[login] 401: stored password_hash has invalid format for user', u.id, '— (أُنشئ خارج النظام؟ أعد تعيين كلمة المرور)');
+      // Same timing equalizer: a malformed stored hash must not be cheaper to
+      // reject than a wrong password for a well-formed account.
+      await verifyPassword(password, TIMING_EQUALIZER_HASH);
       return error('البريد الإلكتروني أو كلمة المرور غير صحيحة', 401);
     }
     const valid = await verifyPassword(password, u.password_hash);
