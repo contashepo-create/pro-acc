@@ -96,6 +96,7 @@ export const ACCOUNT_RANGES: Record<string, { start: string; end: string; label:
   EXPENSES: { start: '5000', end: '5999', label: 'المصروفات' },
 };
 
+/** نسبة افتراضية للسعودية فقط. الترحيل يستخدم نسبة المنشأة من دولة التشغيل. */
 export const VAT_RATE = 0.15;
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 500;

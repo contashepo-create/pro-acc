@@ -353,8 +353,8 @@ export default function InvoiceViewPage() {
   const total = Number(invoice.total || 0);
   const paidAmount = Number(invoice.paid_amount || 0);
   const remaining = Math.max(0, total - paidAmount);
-  const currencySymbol = company?.currency_symbol || 'ر.س';
-  const locale = company?.locale || 'ar-SA';
+  const currencySymbol = company?.currency_symbol || (company?.country_code === 'EG' ? 'ج.م' : 'ر.س');
+  const locale = company?.locale || (company?.country_code === 'EG' ? 'ar-EG' : 'ar-SA');
   const showPhaseOneQr = usesPhaseOneTaxQr(company?.country_code);
   const qrCaption = taxQrCaption(company?.country_code);
   const qrFootnote = taxQrFootnote(company?.country_code);
@@ -513,10 +513,10 @@ export default function InvoiceViewPage() {
             return (
               <div className="space-y-2">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <div className="bg-bg-secondary rounded-lg p-2"><span className="text-text-secondary block">أصل الفاتورة</span><strong>{formatCurrency(total)}</strong></div>
-                  <div className="bg-success/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات دائنة</span><strong className="text-success">- {formatCurrency(credited)}</strong></div>
-                  <div className="bg-warning/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات مدينة</span><strong className="text-warning">+ {formatCurrency(debited)}</strong></div>
-                  <div className="bg-accent/10 rounded-lg p-2"><span className="text-text-secondary block">الصافي</span><strong className="text-accent">{formatCurrency(netTotal)}</strong></div>
+                  <div className="bg-bg-secondary rounded-lg p-2"><span className="text-text-secondary block">أصل الفاتورة</span><strong>{formatCurrency(total, locale, currencySymbol)}</strong></div>
+                  <div className="bg-success/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات دائنة</span><strong className="text-success">- {formatCurrency(credited, locale, currencySymbol)}</strong></div>
+                  <div className="bg-warning/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات مدينة</span><strong className="text-warning">+ {formatCurrency(debited, locale, currencySymbol)}</strong></div>
+                  <div className="bg-accent/10 rounded-lg p-2"><span className="text-text-secondary block">الصافي</span><strong className="text-accent">{formatCurrency(netTotal, locale, currencySymbol)}</strong></div>
                 </div>
                 <ul className="text-xs divide-y divide-border border border-border rounded-lg overflow-hidden">
                   {linkedNotes.map((n) => (
@@ -529,7 +529,7 @@ export default function InvoiceViewPage() {
                         <span className="text-text-muted truncate max-w-[16rem]" title={n.reason || ''}>{n.reason || ''}</span>
                       </span>
                       <span className={`font-bold ${n.note_type === 'debit' ? 'text-warning' : 'text-success'}`}>
-                        {n.note_type === 'debit' ? '+' : '-'}{formatCurrency(Number(n.total) || 0)}
+                        {n.note_type === 'debit' ? '+' : '-'}{formatCurrency(Number(n.total) || 0, locale, currencySymbol)}
                       </span>
                     </li>
                   ))}

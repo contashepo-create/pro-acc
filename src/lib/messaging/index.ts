@@ -56,7 +56,7 @@ export const TEMPLATES: Record<string, MessageTemplate> = {
 
 This is a reminder for invoice #{{invoice_number}} which is overdue by {{days_overdue}} days.
 
-Amount due: {{amount}} SAR
+Amount due: {{amount}} {{currency}}
 Due date: {{due_date}}
 
 Please arrange payment at your earliest convenience.

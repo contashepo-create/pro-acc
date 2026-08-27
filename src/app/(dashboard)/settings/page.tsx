@@ -17,6 +17,7 @@ import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
 import { getCountryConfig } from '@/lib/countries';
+import { defaultFiscalStart } from '@/lib/fiscal-calendar';
 import { taxQrCaption } from '@/lib/tax-authority';
 import OverheadSettings from '@/components/settings/OverheadSettings';
 import { 
@@ -144,6 +145,7 @@ interface TelegramSettings {
             setInvoiceSettings({ ...DEFAULT_INVOICE_SETTINGS, ...saved });
           }
           if (s.fiscal_start) setFiscalStart(s.fiscal_start);
+          else if (c?.country_code) setFiscalStart(defaultFiscalStart(c.country_code));
           if (s.decimal_places) setDecimalPlaces(s.decimal_places);
           if (s.auto_allocate_receipts_fifo !== undefined) {
             const v = s.auto_allocate_receipts_fifo;
@@ -465,7 +467,10 @@ interface TelegramSettings {
                 تُختار مرة واحدة عند إنشاء الحساب (السعودية أو مصر) ولا يمكن تغييرها. العملة ونسبة الضريبة والتأمينات تتبع هذه الدولة.
               </p>
               <Input label="رمز العملة" value={currencyCode} disabled />
-              <Input label="رمز العملة (العرض)" value={currencySymbol} onChange={(e) => setCurrencySymbol(e.target.value)} />
+              <Input label="رمز العملة (العرض)" value={currencySymbol} disabled />
+              <p className="sm:col-span-2 text-xs text-text-muted -mt-2">
+                رمز العرض يتبع دولة التشغيل ولا يُعدَّل يدوياً حتى لا تختلف التقارير عن الدفاتر.
+              </p>
               <Input label="نسبة الضريبة (%)" type="number" value={vatRate} onChange={(e) => setVatRate(e.target.value)} />
             </div>
           </div>
@@ -649,7 +654,7 @@ interface TelegramSettings {
               </label>
               <label className="flex items-center gap-2.5 cursor-pointer">
                 <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showQR} onChange={e => setInvoiceSettings({ ...invoiceSettings, showQR: e.target.checked })} />
-                <span>إظهار رمز ZATCA للمرحلة الأولى (TLV 1–5)</span>
+                <span>{taxQrCaption(countryCode)}</span>
               </label>
               <label className="flex items-center gap-2.5 cursor-pointer">
                 <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showSignatureArea} onChange={e => setInvoiceSettings({ ...invoiceSettings, showSignatureArea: e.target.checked })} />
@@ -694,6 +699,11 @@ interface TelegramSettings {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="بداية السنة المالية" type="date" value={fiscalStart} onChange={(e)=>setFiscalStart(e.target.value)} />
             <Input label="عدد المنازل العشرية" type="number" value={decimalPlaces} onChange={(e)=>setDecimalPlaces(e.target.value)} />
+            <p className="sm:col-span-2 text-xs text-text-muted -mt-2">
+              {countryCode === 'EG'
+                ? 'الافتراضي لمصر: أول يوليو حتى آخر يونيو. لا يغيّر السنوات المفتوحة القائمة.'
+                : 'الافتراضي للسعودية: أول يناير حتى آخر ديسمبر.'}
+            </p>
           </div>
           <label className="flex items-start gap-3 mt-5 cursor-pointer">
             <input

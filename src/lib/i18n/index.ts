@@ -57,6 +57,7 @@ export const translations = {
 
     // Currency
     'currency.sar': 'ريال سعودي',
+    'currency.egp': 'جنيه مصري',
     'currency.aed': 'درهم إماراتي',
     'currency.kwd': 'دينار كويتي',
     'currency.bhd': 'دينار بحريني',
@@ -216,6 +217,7 @@ export const translations = {
 
     // Currency
     'currency.sar': 'Saudi Riyal',
+    'currency.egp': 'Egyptian Pound',
     'currency.aed': 'UAE Dirham',
     'currency.kwd': 'Kuwaiti Dinar',
     'currency.bhd': 'Bahraini Dinar',

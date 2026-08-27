@@ -14,7 +14,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth-store';
+import { companyDisplayMoney } from '@/lib/company-money';
 import { formatDocumentNumber } from '@/lib/document-number';
 import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
 
@@ -63,6 +65,8 @@ interface InvoiceForm {
 interface CurrencyOption { id: string; code: string; name: string; rate: number; is_base: boolean; }
 
 export default function InvoicesPage() {
+  const { company } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const [invoices, setInvoices] = useState<SalesInvoiceRow[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
@@ -267,8 +271,8 @@ export default function InvoicesPage() {
     { key: 'number', label: 'رقم الفاتورة', sortable: true, render: (row: SalesInvoiceRow) => formatDocumentNumber('sales_invoice', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: SalesInvoiceRow) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true, render: (row: SalesInvoiceRow) => row.contact_name || row.client_name || '—' },
-    { key: 'total', label: 'الإجمالي', sortable: true, render: (row: SalesInvoiceRow) => formatCurrency(row.total) },
-    { key: 'paid_amount', label: 'المدفوع', render: (row: SalesInvoiceRow) => formatCurrency(row.paid_amount) },
+    { key: 'total', label: 'الإجمالي', sortable: true, render: (row: SalesInvoiceRow) => money(row.total) },
+    { key: 'paid_amount', label: 'المدفوع', render: (row: SalesInvoiceRow) => money(row.paid_amount) },
     { key: 'actions', label: '', render: (row: SalesInvoiceRow) => (
       <div className="flex items-center gap-1">
         {/* بديل التعديل: إشعار دائن (تخفيض) / إشعار مدين (زيادة) */}
@@ -492,7 +496,7 @@ export default function InvoicesPage() {
                           />
                         </td>
                         <td className="p-2 text-center font-bold text-text-primary whitespace-nowrap">
-                          {formatCurrency(item.total || 0)}
+                          {money(item.total || 0)}
                         </td>
                         <td className="p-2">
                           {form.items.length > 1 && (
@@ -543,22 +547,22 @@ export default function InvoicesPage() {
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-text-secondary">الإجمالي قبل الخصم</span>
-                    <span className="font-bold text-text-primary">{formatCurrency(subtotal + totalDiscount)}</span>
+                    <span className="font-bold text-text-primary">{money(subtotal + totalDiscount)}</span>
                   </div>
                   {totalDiscount > 0 && (
                     <div className="flex justify-between items-center">
                       <span className="text-text-secondary">إجمالي الخصم</span>
-                      <span className="font-bold text-danger">- {formatCurrency(totalDiscount)}</span>
+                      <span className="font-bold text-danger">- {money(totalDiscount)}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-center pt-2 border-t border-border">
                     <span className="text-text-secondary">المجموع الفرعي</span>
-                    <span className="font-bold text-text-primary text-lg" data-testid="invoice-subtotal">{formatCurrency(subtotal)}</span>
+                    <span className="font-bold text-text-primary text-lg" data-testid="invoice-subtotal">{money(subtotal)}</span>
                   </div>
                   {form.vat_enabled && (
                     <div className="flex justify-between items-center">
                       <span className="text-text-secondary">ضريبة القيمة المضافة ({vatPct}%)</span>
-                      <span className="font-bold text-text-primary" data-testid="invoice-vat">{formatCurrency(vatAmount)}</span>
+                      <span className="font-bold text-text-primary" data-testid="invoice-vat">{money(vatAmount)}</span>
                     </div>
                   )}
                 </div>
@@ -567,7 +571,7 @@ export default function InvoicesPage() {
                 <div className="bg-accent/10 border border-accent/20 rounded-xl p-4">
                   <div className="flex justify-between items-center">
                     <span className="text-text-secondary text-sm">الإجمالي النهائي</span>
-                    <span className="text-2xl font-bold text-accent" data-testid="invoice-total">{formatCurrency(total)}</span>
+                    <span className="text-2xl font-bold text-accent" data-testid="invoice-total">{money(total)}</span>
                   </div>
                 </div>
 

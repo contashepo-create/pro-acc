@@ -15,7 +15,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
-import { formatDate, formatCurrency, escapeHtml } from '@/lib/utils';
+import { formatDate, escapeHtml } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth-store';
+import { companyDisplayMoney } from '@/lib/company-money';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
@@ -85,6 +87,8 @@ const STATUS_LABELS: Record<string, { variant: 'success' | 'warning' | 'info' | 
 };
 
 export default function PurchaseInvoicesPage() {
+  const { company } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const [invoices, setInvoices] = useState<PurchaseInvoiceRow[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [orders, setOrders] = useState<PurchaseOrderOption[]>([]);
@@ -369,8 +373,8 @@ export default function PurchaseInvoicesPage() {
     { key: 'invoice_number', label: 'الرقم', sortable: true, render: (row: PurchaseInvoiceRow) => formatDocumentNumber('purchase_invoice', row.number || row.invoice_number) },
     { key: 'date', label: 'التاريخ', render: (row: PurchaseInvoiceRow) => formatDate(row.date) },
     { key: 'supplier_name', label: 'المورد', sortable: true },
-    { key: 'total', label: 'الإجمالي', render: (row: PurchaseInvoiceRow) => formatCurrency(row.total) },
-    { key: 'paid_amount', label: 'المدفوع', render: (row: PurchaseInvoiceRow) => formatCurrency(row.paid_amount || 0) },
+    { key: 'total', label: 'الإجمالي', render: (row: PurchaseInvoiceRow) => money(row.total) },
+    { key: 'paid_amount', label: 'المدفوع', render: (row: PurchaseInvoiceRow) => money(row.paid_amount || 0) },
     {
       key: 'status', label: 'الحالة', render: (row: PurchaseInvoiceRow) => {
         const m = STATUS_LABELS[row.status ?? ''] || { variant: 'warning' as const, label: row.status || 'غير مدفوعة' };
@@ -473,7 +477,7 @@ export default function PurchaseInvoicesPage() {
                         <td className="p-2">
                           <input className="w-full bg-transparent outline-none" type="number" min={0} step="any" value={item.unit_price} onChange={(e) => updateItem(i, { unit_price: Number(e.target.value) })} />
                         </td>
-                        <td className="p-2">{formatCurrency((Number(item.quantity) || 0) * (Number(item.unit_price) || 0))}</td>
+                        <td className="p-2">{money((Number(item.quantity) || 0) * (Number(item.unit_price) || 0))}</td>
                         <td className="p-2">
                           <button type="button" className="text-danger disabled:opacity-30" onClick={() => removeItem(i)} disabled={form.items.length <= 1} aria-label="حذف البند">
                             <Trash2 size={16} />
@@ -485,10 +489,10 @@ export default function PurchaseInvoicesPage() {
                 </table>
               </div>
               <div className="flex flex-col items-end gap-1 text-sm border-t border-border pt-3">
-                <div>المجموع الفرعي (قيمة المورد): <span className="font-semibold">{formatCurrency(subtotal)}</span></div>
-                <div>الضريبة ({form.tax_percent}%): <span className="font-semibold">{formatCurrency(taxAmount)}</span></div>
-                {otherExpensesTotal > 0 && <div>مصاريف إضافية: <span className="font-semibold">{formatCurrency(otherExpensesTotal)}</span></div>}
-                <div className="text-base">إجمالي تكلفة الفاتورة: <span className="font-bold">{formatCurrency(grandTotal)}</span></div>
+                <div>المجموع الفرعي (قيمة المورد): <span className="font-semibold">{money(subtotal)}</span></div>
+                <div>الضريبة ({form.tax_percent}%): <span className="font-semibold">{money(taxAmount)}</span></div>
+                {otherExpensesTotal > 0 && <div>مصاريف إضافية: <span className="font-semibold">{money(otherExpensesTotal)}</span></div>}
+                <div className="text-base">إجمالي تكلفة الفاتورة: <span className="font-bold">{money(grandTotal)}</span></div>
               </div>
             </div>
           )}
@@ -557,8 +561,8 @@ export default function PurchaseInvoicesPage() {
                   <tr key={idx}>
                     <td className="p-2 font-medium">{it.description}</td>
                     <td className="p-2 text-center font-mono">{it.quantity}</td>
-                    <td className="p-2 text-center font-mono">{formatCurrency(it.unit_price || 0)}</td>
-                    <td className="p-2 text-left font-bold font-mono">{formatCurrency((Number(it.quantity) || 0) * (Number(it.unit_price) || 0))}</td>
+                    <td className="p-2 text-center font-mono">{money(it.unit_price || 0)}</td>
+                    <td className="p-2 text-left font-bold font-mono">{money((Number(it.quantity) || 0) * (Number(it.unit_price) || 0))}</td>
                   </tr>
                 ))}
               </tbody>
