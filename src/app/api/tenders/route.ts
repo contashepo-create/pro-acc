@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const { page, pageSize } = getPaginationParams(url);
     const status = url.searchParams.get('status');
     if (status && !tenderLifecycleStatus.safeParse(status).success) return error('حالة المناقصة غير صالحة');
-    let query = sb().from('tenders').select('*, tenders_contacts(name)', { count: 'exact' })
+    let query = sb().from('tenders').select('*, contacts(name)', { count: 'exact' })
       .eq('company_id', auth.companyId);
     if (status) query = query.eq('status', status);
     const offset = (page - 1) * pageSize;
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     if (queryError) throw queryError;
     const now = Date.now();
     const tenders = (data || []).map((tender: Record<string, unknown>) => {
-      const contact = tender.tenders_contacts as { name?: string } | null;
+      const contact = tender.contacts as { name?: string } | null;
       return {
         ...tender,
         contact_name: contact?.name || null,

@@ -98,6 +98,33 @@ export const bondActionSchema = z.object({
   action: z.enum(['release', 'cancel']), notes: shortText(2000).nullable().optional(),
 }).strict();
 
+// Tender expense recording (accounting-linked)
+export const tenderExpenseSchema = z.object({
+  expense_type: z.enum(['karasa', 'platform_fee', 'bid_bond_margin', 'bid_bond_commission', 'consulting', 'other']),
+  amount: positiveMoney,
+  vat_amount: money.optional().default(0),
+  bank_safe_id: uuid,
+  description: shortText(1000).nullable().optional(),
+  date: nullableDate,
+}).strict();
+
+// Bond create with accounting (commission + VAT)
+export const bondCreateWithAccountingSchema = z.object({
+  title: requiredText(200), type: bondType, amount: positiveMoney,
+  currency: z.string().length(3).optional(),
+  issue_date: date, expiry_date: date,
+  issuing_bank: shortText(200).nullable().optional(),
+  bank_safe_id: uuid,
+  beneficiary_name: shortText(200).nullable().optional(),
+  project_id: nullableUuid, tender_id: nullableUuid, contact_id: nullableUuid,
+  reference_number: shortText(120).nullable().optional(),
+  commission: money.optional().default(0),
+  vat_amount: money.optional().default(0),
+  notes: shortText(2000).nullable().optional(),
+}).strict().refine((value) => value.issue_date <= value.expiry_date, {
+  message: 'تاريخ انتهاء الضمان يسبق تاريخ الإصدار', path: ['expiry_date'],
+});
+
 const taskStatus = z.enum(['not_started', 'in_progress', 'completed', 'blocked', 'on_hold']);
 const taskPriority = z.enum(['low', 'medium', 'high', 'critical']);
 const hours = z.coerce.number().finite().min(0).max(99_999.99)

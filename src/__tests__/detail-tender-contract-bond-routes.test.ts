@@ -89,7 +89,7 @@ beforeEach(() => { resetRateLimits(); mockDb = makeDb(baseDb()); });
 
 describe('tenders/[id] GET', () => {
   test('returns tender with cost items and margin', async () => {
-    mockDb = makeDb({ ...baseDb(), tenders: [{ id: TID, company_id: C1, title: 'مناقصة', estimated_value: 1000, tenders_contacts: { name: 'عميل' } }],
+    mockDb = makeDb({ ...baseDb(), tenders: [{ id: TID, company_id: C1, title: 'مناقصة', estimated_value: 1000, contacts: { name: 'عميل' } }],
       tender_cost_items: [{ id: 'ci1', tender_id: TID, company_id: C1, amount: 200 }] });
     const res = await tenderGET(req('admin', 'GET', `http://localhost/x/${TID}`), { params: Promise.resolve({ id: TID }) });
     expect(res.status).toBe(200);

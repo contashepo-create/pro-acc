@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { handleApiError, success, requireAdmin } from '@/lib/api-helpers';
 import { createDefaultChartOfAccounts } from '@/lib/default-accounts';
+import { logAudit } from '@/lib/audit';
 
 const sb = () => getSupabase();
 
@@ -19,12 +20,14 @@ export async function POST(request: NextRequest) {
     const { count: newTotal } = await s.from('accounts').select('id', { count: 'exact', head: true }).eq('company_id', auth.companyId);
 
     // Audit log
-    await s.from('financial_audit_log').insert({
+    await logAudit({
       company_id: auth.companyId,
       user_id: auth.userId,
-      action: 'seed_default_accounts',
-      table_name: 'accounts',
-      new_values: { created: createdCount, before: existingCount, after: newTotal },
+      entity_type: 'accounts',
+      entity_id: 'batch',
+      action: 'create',
+      after: { created: createdCount, before: existingCount, after: newTotal } as Record<string, unknown>,
+      summary: 'seed_default_accounts',
     });
 
     return success({ 

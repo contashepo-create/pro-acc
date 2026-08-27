@@ -79,7 +79,7 @@ beforeEach(() => { mockDb = makeDb(baseDb()); });
 describe('tenders GET', () => {
   test('rejects an invalid status and lists tenant tenders with stats', async () => {
     expect((await tendersGET(req('admin', 'GET', 'http://localhost/x?status=bogus'))).status).toBe(400);
-    mockDb = makeDb({ ...baseDb(), tenders: [{ id: 't1', company_id: C1, submission_deadline: '2099-01-01', tenders_contacts: { name: 'عميل' } }] });
+    mockDb = makeDb({ ...baseDb(), tenders: [{ id: 't1', company_id: C1, submission_deadline: '2099-01-01', contacts: { name: 'عميل' } }] });
     const res = await tendersGET(req('admin', 'GET', 'http://localhost/api/tenders'));
     expect(res.status).toBe(200);
     const json = await res.json();

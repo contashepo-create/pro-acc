@@ -33,6 +33,8 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '1180', name: 'ضريبة القيمة المضافة - مشتريات', nameEn: 'VAT - Purchases', type: 'asset', parentCode: '1100' },
   { code: '1190', name: 'دفعات مقدمة لموردين', nameEn: 'Advance to Suppliers', type: 'asset', parentCode: '1100' },
   { code: '1191', name: 'دفعات مقدمة لمقاولي باطن', nameEn: 'Subcontractor Advances', type: 'asset', parentCode: '1100' },
+  { code: '1185', name: 'خطابات ضمان ابتدائية', nameEn: 'Bid Bond Margins', type: 'asset', parentCode: '1100' },
+  { code: '1186', name: 'خطابات ضمان نهائية', nameEn: 'Performance Bond Margins', type: 'asset', parentCode: '1100' },
   
   { code: '1200', name: 'الأصول الثابتة', nameEn: 'Fixed Assets', type: 'asset', parentCode: '1000', isHeader: true },
   { code: '1210', name: 'الأراضي', nameEn: 'Lands', type: 'asset', parentCode: '1200' },
@@ -82,6 +84,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '5120', name: 'أجور عمالة مباشرة', nameEn: 'Direct Labor', type: 'expense', parentCode: '5100' },
   { code: '5130', name: 'تكاليف مقاولي باطن', nameEn: 'Subcontractor Costs', type: 'expense', parentCode: '5100' },
   { code: '5140', name: 'إيجار معدات', nameEn: 'Equipment Rental', type: 'expense', parentCode: '5100' },
+  { code: '5410', name: 'مصاريف مناقصات تحت التسوية', nameEn: 'Tender Costs in Suspense', type: 'expense', parentCode: '5100' },
   
   { code: '5200', name: 'مصروفات تشغيلية', nameEn: 'Operating Expenses', type: 'expense', parentCode: '5000', isHeader: true },
   { code: '5210', name: 'رواتب وأجور', nameEn: 'Salaries & Wages', type: 'expense', parentCode: '5200' },
@@ -93,9 +96,11 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '5270', name: 'محروقات', nameEn: 'Fuel', type: 'expense', parentCode: '5200' },
   { code: '5280', name: 'قرطاسية ومطبوعات', nameEn: 'Stationery', type: 'expense', parentCode: '5200' },
   { code: '5290', name: 'مصروفات بنكية', nameEn: 'Bank Charges', type: 'expense', parentCode: '5200' },
+  { code: '5291', name: 'عمولات بنكية لضمانات', nameEn: 'Bank Guarantee Commissions', type: 'expense', parentCode: '5290' },
   
   { code: '5300', name: 'مصروفات تسويقية', nameEn: 'Marketing Expenses', type: 'expense', parentCode: '5000' },
   { code: '5400', name: 'مصروفات إدارية وعمومية', nameEn: 'General & Admin Expenses', type: 'expense', parentCode: '5000' },
+  { code: '5420', name: 'مصاريف مناقصات خاسرة', nameEn: 'Lost Tender Costs', type: 'expense', parentCode: '5400' },
 ];
 
 async function insertAccount(supabase: SupabaseLike, row: Record<string, unknown>) {

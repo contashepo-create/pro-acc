@@ -23,7 +23,7 @@ function listRoutes(dir = 'src/app/api'): string[] {
   for (const entry of fs.readdirSync(full, { withFileTypes: true })) {
     const child = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...listRoutes(child));
-    else if (entry.name === 'route.ts') out.push(child.replace(/^src\/app\/api\//, '').replace(/\/route\.ts$/, ''));
+    else if (entry.name === 'route.ts') out.push(child.replace(/\\/g, '/').replace(/^src\/app\/api\//, '').replace(/\/route\.ts$/, ''));
   }
   return out;
 }

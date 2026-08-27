@@ -19,6 +19,7 @@ import {
   CreditCard,
   Download,
   LifeBuoy,
+  FileText,
 } from 'lucide-react';
 import { useSidebarStore } from '@/store/sidebar-store';
 import { useAuthStore } from '@/store/auth-store';
@@ -60,6 +61,14 @@ const navGroups: NavGroup[] = [
       { id: 'quotations', label: 'عروض الأسعار' },
       { id: 'change-orders', label: 'أوامر التغيير' },
       { id: 'equipment', label: 'تكاليف المعدات' },
+    ],
+  },
+  {
+    label: 'المناقصات والضمانات',
+    icon: FileText,
+    items: [
+      { id: 'tenders', label: 'المناقصات' },
+      { id: 'bonds', label: 'خطابات الضمان' },
     ],
   },
   {

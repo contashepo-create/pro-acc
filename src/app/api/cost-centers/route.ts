@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
 import { success, error, parseBody, handleApiError, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
+import { logAudit } from '@/lib/audit';
 
 const sb = () => getSupabase();
 
@@ -55,13 +56,14 @@ export async function POST(req: NextRequest) {
     if (err) throw err;
 
     // Audit log
-    await s.from('financial_audit_log').insert({
+    await logAudit({
       company_id: auth.companyId,
       user_id: auth.userId,
-      action: 'create_cost_center',
-      table_name: 'cost_centers',
-      record_id: String(data?.id ?? ''),
-      new_values: data,
+      entity_type: 'cost_center',
+      entity_id: String(data?.id ?? ''),
+      action: 'create',
+      after: data as Record<string, unknown>,
+      summary: 'create_cost_center',
     });
 
     return success(data, 201);

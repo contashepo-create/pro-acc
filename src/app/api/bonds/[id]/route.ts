@@ -39,13 +39,25 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     if (!relationshipUuid.safeParse(id).success) return error('معرف الضمان غير صالح');
     const raw = await parseBody(request);
     const action = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>).action : undefined;
-    if (action === 'release' || action === 'cancel') {
+    if (action === 'release') {
+      const parsed = bondActionSchema.safeParse(raw);
+      if (!parsed.success) return error(parsed.error.issues[0].message);
+      const { data, error: releaseError } = await sb().rpc('release_bond_atomic', {
+        p_company_id: auth.companyId,
+        p_bond_id: id,
+        p_user_id: auth.userId,
+      });
+      if (releaseError) return bondMutationError(releaseError);
+      return success(data);
+    }
+
+    if (action === 'cancel') {
       const parsed = bondActionSchema.safeParse(raw);
       if (!parsed.success) return error(parsed.error.issues[0].message);
       const { data, error: transitionError } = await sb().rpc('transition_bond_atomic', {
         p_company_id: auth.companyId,
         p_bond_id: id,
-        p_action: parsed.data.action,
+        p_action: 'cancel',
         p_notes: parsed.data.notes || null,
         p_user_id: auth.userId,
       });

@@ -19,12 +19,8 @@ ALTER TABLE public.company_messages ADD COLUMN IF NOT EXISTS replied_at TIMESTAM
 ALTER TABLE public.company_messages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 ALTER TABLE public.company_messages ADD COLUMN IF NOT EXISTS replied_by UUID;
 
-CREATE TABLE IF NOT EXISTS public.rate_limit_buckets (
-  id TEXT PRIMARY KEY,
-  window_start TIMESTAMPTZ NOT NULL,
-  count INTEGER NOT NULL DEFAULT 0,
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- rate_limit_buckets: already created by 077-rate-limit-store.sql with the
+-- canonical shape (key TEXT PK, hits INTEGER).  Do NOT re-create here.
 
 -- FKs: add only if both sides exist, constraint missing, and no orphans.
 DO $$

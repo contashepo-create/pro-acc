@@ -118,7 +118,7 @@ describe('contracts', () => {
 
 describe('tenders', () => {
   test('GET lists tenders with stats', async () => {
-    mockDb = makeDb({ ...baseDb(), tenders: [{ id: ID1, company_id: C1, submission_deadline: new Date(Date.now() + 3 * 86400000).toISOString(), tenders_contacts: { name: 'عميل' } }] });
+    mockDb = makeDb({ ...baseDb(), tenders: [{ id: ID1, company_id: C1, submission_deadline: new Date(Date.now() + 3 * 86400000).toISOString(), contacts: { name: 'عميل' } }] });
     const res = await tGET(req('admin', 'GET', 'http://localhost/api/tenders'));
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -160,8 +160,8 @@ describe('bonds', () => {
   });
 
   test('POST creates a bond', async () => {
-    mockDb.rpcResults.set('create_bond_atomic', { data: { id: ID1 }, error: null });
-    const res = await bPOST(req('admin', 'POST', 'http://localhost/x', { title: 'ضمان', type: 'bid_bond', amount: 1000, issue_date: '2026-01-01', expiry_date: '2026-12-31' }));
+    mockDb.rpcResults.set('record_bond_issue_atomic', { data: { id: ID1 }, error: null });
+    const res = await bPOST(req('admin', 'POST', 'http://localhost/x', { title: 'ضمان', type: 'bid_bond', amount: 1000, issue_date: '2026-01-01', expiry_date: '2026-12-31', bank_safe_id: ID1 }));
     expect(res.status).toBe(201);
   });
 });

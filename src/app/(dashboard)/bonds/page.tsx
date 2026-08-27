@@ -1,0 +1,226 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Plus, Banknote, ShieldCheck, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { DataTable } from '@/components/ui/DataTable';
+import { Button } from '@/components/ui/Button';
+import { Modal } from '@/components/ui/Modal';
+import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import { Textarea } from '@/components/ui/Textarea';
+import { Badge } from '@/components/ui/Badge';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
+import { toast } from '@/components/ui/Toast';
+import { formatDate, formatCurrency } from '@/lib/utils';
+
+interface BondRow {
+  id: string;
+  title: string;
+  type: string;
+  amount: number;
+  currency: string;
+  issue_date: string;
+  expiry_date: string;
+  issuing_bank?: string;
+  beneficiary_name?: string;
+  status: string;
+  project_name?: string | null;
+  contact_name?: string | null;
+  bank_name?: string | null;
+  daysUntilExpiry?: number | null;
+  isExpiringSoon?: boolean;
+  isExpired?: boolean;
+}
+
+interface BankSafe { id: string; name: string; type: string; }
+
+const TYPE_LABELS: Record<string, string> = {
+  bid_bond: 'ضمان ابتدائي', performance_bond: 'ضمان نهائي', advance_payment: 'دفعات مقدمة',
+  retention: 'محجوزات', warranty: 'ضمان', insurance: 'تأمين', other: 'أخرى',
+};
+const STATUS_LABELS: Record<string, string> = {
+  active: 'ساري', expired: 'منتهي', released: 'مُلك', cancelled: 'ملغى',
+};
+const STATUS_COLORS: Record<string, string> = {
+  active: 'green', expired: 'red', released: 'gray', cancelled: 'gray',
+};
+
+export default function BondsPage() {
+  const [bonds, setBonds] = useState<BondRow[]>([]);
+  const [banksSafes, setBanksSafes] = useState<BankSafe[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [showModal, setShowModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+
+  const [form, setForm] = useState({
+    title: '', type: 'bid_bond', amount: '', currency: 'SAR',
+    issue_date: new Date().toISOString().split('T')[0], expiry_date: '',
+    issuing_bank: '', bank_safe_id: '', beneficiary_name: '',
+    reference_number: '', commission: '', vat_amount: '', notes: '',
+    tender_id: '', project_id: '', contact_id: '',
+  });
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (statusFilter) params.set('status', statusFilter);
+      if (typeFilter) params.set('type', typeFilter);
+      const [bondsRes, banksRes] = await Promise.all([
+        fetch('/api/bonds' + (params.toString() ? `?${params}` : '')),
+        fetch('/api/banks'),
+      ]);
+      const [bondsJson, banksJson] = await Promise.all([bondsRes.json(), banksRes.json()]);
+      if (bondsJson.success) setBonds(bondsJson.data?.bonds || []);
+      else setError(bondsJson.message || 'فشل');
+      if (banksJson.success) {
+        const all = [...(banksJson.data?.banks || []), ...(banksJson.data?.safes || [])];
+        setBanksSafes(all);
+      }
+    } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchData(); }, [statusFilter, typeFilter]);
+
+  const handleSave = async () => {
+    if (!form.title.trim()) { setSaveError('العنوان مطلوب'); return; }
+    if (!form.amount || Number(form.amount) <= 0) { setSaveError('المبلغ مطلوب'); return; }
+    if (!form.bank_safe_id) { setSaveError('البنك مطلوب'); return; }
+    if (!form.expiry_date) { setSaveError('تاريخ الانتهاء مطلوب'); return; }
+    setSaving(true); setSaveError('');
+    try {
+      const res = await fetch('/api/bonds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setShowModal(false);
+        setForm({
+          title: '', type: 'bid_bond', amount: '', currency: 'SAR',
+          issue_date: new Date().toISOString().split('T')[0], expiry_date: '',
+          issuing_bank: '', bank_safe_id: '', beneficiary_name: '',
+          reference_number: '', commission: '', vat_amount: '', notes: '',
+          tender_id: '', project_id: '', contact_id: '',
+        });
+        fetchData();
+        toast.success('تم إنشاء خطاب الضمان');
+      } else setSaveError(json.message || 'فشل الحفظ');
+    } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
+  };
+
+  const columns = [
+    { key: 'title', label: 'العنوان', render: (row: BondRow) => (
+      <a href={`/bonds/${row.id}`} className="text-accent hover:underline font-medium">{row.title}</a>
+    )},
+    { key: 'type', label: 'النوع', render: (row: BondRow) => <Badge color="purple">{TYPE_LABELS[row.type] || row.type}</Badge> },
+    { key: 'amount', label: 'المبلغ', render: (row: BondRow) => formatCurrency(row.amount) },
+    { key: 'beneficiary_name', label: 'المستفيد', render: (row: BondRow) => row.beneficiary_name || '—' },
+    { key: 'expiry_date', label: 'الانتهاء', render: (row: BondRow) => {
+      if (!row.expiry_date) return '—';
+      return (
+        <div>
+          <span className={row.isExpired ? 'text-red-500' : row.isExpiringSoon ? 'text-amber-500' : ''}>
+            {formatDate(row.expiry_date)}
+          </span>
+          {row.isExpiringSoon && !row.isExpired && <span className="text-xs text-amber-500 mr-1">(قريب)</span>}
+          {row.isExpired && <span className="text-xs text-red-500 mr-1">(منتهي)</span>}
+        </div>
+      );
+    }},
+    { key: 'status', label: 'الحالة', render: (row: BondRow) => <Badge color={STATUS_COLORS[row.status] || 'gray'}>{STATUS_LABELS[row.status] || row.status}</Badge> },
+  ];
+
+  return (
+    <div>
+      <PageHeader title="خطابات الضمان" subtitle="إدارة الضمانات البنكية والاعتمادات" />
+
+      <div className="flex items-center justify-between mb-4 gap-3">
+        <div className="flex gap-2">
+          <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40">
+            <option value="">كل الحالات</option>
+            {Object.entries(STATUS_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
+          </Select>
+          <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-40">
+            <option value="">كل الأنواع</option>
+            {Object.entries(TYPE_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
+          </Select>
+        </div>
+        <Button onClick={() => setShowModal(true)}>
+          <Plus size={18} className="ml-1" />
+          خطاب ضمان جديد
+        </Button>
+      </div>
+
+      {loading ? (
+        <LoadingSkeleton />
+      ) : error ? (
+        <div className="text-center text-red-500 py-8">{error}</div>
+      ) : bonds.length === 0 ? (
+        <EmptyState
+          icon={<ShieldCheck size={48} />}
+          title="لا توجد خطابات ضمان"
+          description="أنشئ خطاب ضمان جديد لربطه بمناقصة أو مشروع"
+          action={<Button onClick={() => setShowModal(true)}><Plus size={18} className="ml-1" />خطاب جديد</Button>}
+        />
+      ) : (
+        <DataTable data={bonds} columns={columns} />
+      )}
+
+      {/* Create Modal */}
+      <Modal open={showModal} onClose={() => setShowModal(false)} title="خطاب ضمان جديد" size="lg">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="md:col-span-2">
+            <Input label="العنوان *" value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              placeholder="مثال: ضمان ابتدائي لمناقصة الوزارة" />
+          </div>
+          <Select label="النوع *" value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value })}>
+            {Object.entries(TYPE_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
+          </Select>
+          <Input label="المبلغ *" type="number" value={form.amount}
+            onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0.00" />
+          <Input label="تاريخ الإصدار *" type="date" value={form.issue_date}
+            onChange={(e) => setForm({ ...form, issue_date: e.target.value })} />
+          <Input label="تاريخ الانتهاء *" type="date" value={form.expiry_date}
+            onChange={(e) => setForm({ ...form, expiry_date: e.target.value })} />
+          <Input label="البنك المُصدر" value={form.issuing_bank}
+            onChange={(e) => setForm({ ...form, issuing_bank: e.target.value })}
+            placeholder="مثال: الراجحي" />
+          <Select label="حساب البنك *" value={form.bank_safe_id}
+            onChange={(e) => setForm({ ...form, bank_safe_id: e.target.value })}>
+            <option value="">اختر...</option>
+            {banksSafes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </Select>
+          <Input label="المستفيد" value={form.beneficiary_name}
+            onChange={(e) => setForm({ ...form, beneficiary_name: e.target.value })} />
+          <Input label="رقم المرجع" value={form.reference_number}
+            onChange={(e) => setForm({ ...form, reference_number: e.target.value })} />
+          <Input label="عمولة الإصدار" type="number" value={form.commission}
+            onChange={(e) => setForm({ ...form, commission: e.target.value })} placeholder="0.00" />
+          <Input label="ضريبة العمولة" type="number" value={form.vat_amount}
+            onChange={(e) => setForm({ ...form, vat_amount: e.target.value })} placeholder="0.00" />
+          <Input label="معرف المناقصة (اختياري)" value={form.tender_id}
+            onChange={(e) => setForm({ ...form, tender_id: e.target.value })} placeholder="UUID" />
+          <div className="md:col-span-2">
+            <Textarea label="ملاحظات" value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} />
+          </div>
+        </div>
+        {saveError && <div className="text-red-500 text-sm mt-3">{saveError}</div>}
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="outline" onClick={() => setShowModal(false)}>إلغاء</Button>
+          <Button onClick={handleSave} loading={saving}>حفظ</Button>
+        </div>
+      </Modal>
+    </div>
+  );
+}

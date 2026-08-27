@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { success, error, handleApiError, parseBody, getPaginationParams, requireModulePermission } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { bondCreateSchema, bondLifecycleStatus, bondType } from '@/lib/relationship-validation';
+import { bondCreateWithAccountingSchema, bondLifecycleStatus, bondType } from '@/lib/relationship-validation';
 
 const sb = () => getSupabase();
 
@@ -52,16 +52,16 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireModulePermission(request, 'bonds', 'create');
-    const parsed = bondCreateSchema.safeParse(await parseBody(request));
+    const parsed = bondCreateWithAccountingSchema.safeParse(await parseBody(request));
     if (!parsed.success) return error(parsed.error.issues[0].message);
-    const { data, error: createError } = await sb().rpc('create_bond_atomic', {
+    const { data, error: createError } = await sb().rpc('record_bond_issue_atomic', {
       p_company_id: auth.companyId,
       p_payload: parsed.data,
       p_user_id: auth.userId,
     });
     if (createError) {
       const message = String(createError.message || '');
-      if (message.includes('غير صالحة')) return error(message);
+      if (message.includes('غير صالحة') || message.includes('غير موجود')) return error(message);
       throw createError;
     }
     return success(data, 201);

@@ -4,6 +4,7 @@ import {success, error, parseBody, handleApiError, getPaginationParams, requireM
 
 import type { Row } from '@/lib/types';
 import {errorText} from '@/lib/errors';
+import { logAudit } from '@/lib/audit';
 
 const sb = () => getSupabase();
 
@@ -85,13 +86,14 @@ export async function POST(req: NextRequest) {
 
     if (err) throw err;
 
-    await s.from('financial_audit_log').insert({
+    await logAudit({
       company_id: auth.companyId,
       user_id: auth.userId,
-      action: 'create_branch',
-      table_name: 'branches',
-      record_id: String(data?.id ?? ''),
-      new_values: data,
+      entity_type: 'branch',
+      entity_id: String(data?.id ?? ''),
+      action: 'create',
+      after: data as Record<string, unknown>,
+      summary: 'create_branch',
     });
 
     return success(data, 201);

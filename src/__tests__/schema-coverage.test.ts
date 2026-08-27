@@ -176,7 +176,7 @@ describe('End-to-end API → Database Schema Coverage', () => {
     'companies', 'subscriptions', 'users', 'addon_requests', 'upgrade_requests',
     'activation_codes', 'payment_methods', 'addon_grant_audit', 'complaints',
     'support_tickets', 'company_messages', 'messages', 'notifications',
-    'backup_logs', 'bonds', 'audit_log', 'security_audit_log', 'ad_views',
+    'bonds', 'audit_log', 'security_audit_log', 'ad_views',
     'ad_clicks', 'admin_audit_log', 'financial_audit_log', 'advertisements',
     'app_settings', 'subscription_plans', 'crm_contacts', 'crm_followups',
   ]);
@@ -340,12 +340,11 @@ describe('End-to-end API → Database Schema Coverage', () => {
       'manufacturing_bom_lines','manufacturing_orders','manufacturing_order_materials',
       'pos_terminals','pos_sales','pos_sale_items','properties','property_leases','property_maintenance',
       'company_registration_tokens','refresh_tokens','admin_users','admin_sessions','_migrations',
-      'audit_log','financial_audit_log','security_audit_log','backup_logs',
+      'audit_log','financial_audit_log','security_audit_log',
       'financial_audit_trails','transaction_categories','crm_contacts','crm_followups',
       'bank_reconciliation','bank_reconciliation_items','daily_worker_records',
       'daily_worker_settlements','disbursement_invoice_items','receipt_invoice_items',
       'tender_cost_items','salary_items','contract_documents',
-      'company_data_exports',
     ];
     const missing = required.filter(t => !tables[t]);
     if (missing.length > 0) console.log('Missing tables:', missing);
