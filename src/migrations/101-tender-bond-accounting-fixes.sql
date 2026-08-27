@@ -777,9 +777,3 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 SELECT 'Migration 101 completed — tender/bond accounting fixes' as result;
- FUNCTION public.release_bond_atomic(UUID,UUID,UUID) TO service_role;
-EXCEPTION WHEN OTHERS THEN
-  RAISE NOTICE 'privilege grant: %', SQLERRM;
-END $$;
-
-SELECT 'Migration 101 completed — tender/bond accounting fixes' as result;
