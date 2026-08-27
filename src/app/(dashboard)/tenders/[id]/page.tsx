@@ -224,7 +224,7 @@ export default function TenderDetailPage() {
             </Button>
           )}
           {tender.project_id && (
-            <Button variant="outline" onClick={() => router.push(`/projects/${tender.project_id}`)}>
+            <Button variant="outline" onClick={() => router.push('/projects')}>
               <Building2 size={16} className="ml-1" /> المشروع
             </Button>
           )}
