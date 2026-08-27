@@ -22645,7 +22645,33 @@ BEGIN
   RETURN to_jsonb(v_asset);
 END;
 $$;
-REVOKE ALL ON FUNCTION public.create_fixed_asset_v49_internal(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID,NUMERIC) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.create_fixed_asset_v49_internal(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID,NUMERIC) FROM PUBLIC, anon, authenticated, service_role;
+
+-- إزالة التوقيع القديم (12 وسيطاً) لمنع الالتباس مع النسخة ذات القيمة المتبقية
+DROP FUNCTION IF EXISTS public.create_fixed_asset_v49_internal(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID);
+
+-- الغلاف العام يقبل القيمة المتبقية (اختيارية) ويمررها — نفس سلوك 057 (تدقيق + حدود كتابة)
+CREATE OR REPLACE FUNCTION public.create_fixed_asset(
+  p_company_id UUID,p_name TEXT,p_code TEXT,p_category TEXT,p_purchase_date DATE,
+  p_purchase_cost NUMERIC,p_useful_life_years INTEGER,p_depreciation_method TEXT,
+  p_location TEXT,p_notes TEXT,p_bank_safe_id UUID,p_created_by UUID,p_salvage_value NUMERIC DEFAULT 0
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_result JSONB;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_created_by AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM set_config('app.asset_write_company',p_company_id::TEXT,TRUE);
+  v_result:=create_fixed_asset_v49_internal(p_company_id,p_name,p_code,p_category,p_purchase_date,
+    p_purchase_cost,p_useful_life_years,p_depreciation_method,p_location,p_notes,p_bank_safe_id,p_created_by,
+    COALESCE(p_salvage_value,0));
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_created_by,'create','fixed_asset',(v_result->>'id')::UUID,v_result);
+  RETURN v_result;
+END;
+$$;
+DROP FUNCTION IF EXISTS public.create_fixed_asset(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID);
+REVOKE ALL ON FUNCTION public.create_fixed_asset(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID,NUMERIC) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_fixed_asset(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID,NUMERIC) TO service_role;
 
 -- ------------------------------------------------------------
 -- 3) الاستبعاد (شطب): عكس المجمع وإثبات الخسارة بدل منع الاستبعاد
@@ -22667,7 +22693,14 @@ BEGIN
   END IF;
   SELECT id INTO v_loss FROM accounts WHERE company_id=p_company_id AND code='5330'
     AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
-  IF v_loss IS NULL THEN RAISE EXCEPTION 'حساب خسائر الاستبعاد (5330) غير موجود'; END IF;
+  IF v_loss IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5330','خسائر الاستبعاد وإعدام الأصول','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5330');
+    SELECT id INTO v_loss FROM accounts WHERE company_id=p_company_id AND code='5330'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  END IF;
+  IF v_loss IS NULL THEN RAISE EXCEPTION 'تعذر تهيئة حساب خسائر الاستبعاد (5330)'; END IF;
 
   v_nbv:=ROUND(v_old.purchase_cost-COALESCE(v_old.accumulated_depreciation,0),2);
   -- قيد الشطب: مجمع مدين + خسارة مدين (بقدر الدفترية) مقابل تكلفة الأصل دائنًا
@@ -22690,8 +22723,8 @@ BEGIN
   UPDATE journal_entries SET reference_type='fixed_asset_disposal',reference_id=v_old.id
   WHERE id=v_journal_id AND company_id=p_company_id;
 
-  UPDATE fixed_assets SET status='disposed',net_book_value=0 WHERE id=p_asset_id RETURNING * INTO v_new;
   PERFORM set_config('app.asset_write_company',p_company_id::TEXT,TRUE);
+  UPDATE fixed_assets SET status='disposed' WHERE id=p_asset_id RETURNING * INTO v_new;
   INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
   VALUES(p_company_id,p_user_id,'dispose','fixed_asset',p_asset_id,to_jsonb(v_old),
     to_jsonb(v_new)||jsonb_build_object('disposal_journal_id',v_journal_id,'method','write_off'));
@@ -22729,9 +22762,23 @@ BEGIN
   IF p_sale_price>0 AND v_bank IS NULL THEN RAISE EXCEPTION 'حساب تحصيل البيع غير موجود'; END IF;
   SELECT id INTO v_gain FROM accounts WHERE company_id=p_company_id AND code='4200'
     AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_gain IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'4200','إيرادات أخرى','revenue',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='4200');
+    SELECT id INTO v_gain FROM accounts WHERE company_id=p_company_id AND code='4200'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  END IF;
   SELECT id INTO v_loss FROM accounts WHERE company_id=p_company_id AND code='5330'
     AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
-  IF v_gain IS NULL OR v_loss IS NULL THEN RAISE EXCEPTION 'حسابات أرباح/خسائر الاستبعاد غير موجودة'; END IF;
+  IF v_loss IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5330','خسائر الاستبعاد وإعدام الأصول','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5330');
+    SELECT id INTO v_loss FROM accounts WHERE company_id=p_company_id AND code='5330'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  END IF;
+  IF v_gain IS NULL OR v_loss IS NULL THEN RAISE EXCEPTION 'تعذر تهيئة حسابات أرباح/خسائر الاستبعاد'; END IF;
 
   v_nbv:=ROUND(v_old.purchase_cost-COALESCE(v_old.accumulated_depreciation,0),2);
   v_diff:=ROUND(p_sale_price-v_nbv,2);
@@ -22763,10 +22810,10 @@ BEGIN
   UPDATE journal_entries SET reference_type='fixed_asset_disposal_sale',reference_id=v_old.id
   WHERE id=v_journal_id AND company_id=p_company_id;
 
-  UPDATE fixed_assets SET status='disposed',net_book_value=0,
+  PERFORM set_config('app.asset_write_company',p_company_id::TEXT,TRUE);
+  UPDATE fixed_assets SET status='disposed',
     sale_price=p_sale_price,sale_date=p_date,gain_loss=v_diff
   WHERE id=p_asset_id RETURNING * INTO v_new;
-  PERFORM set_config('app.asset_write_company',p_company_id::TEXT,TRUE);
   INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
   VALUES(p_company_id,p_user_id,'dispose_sale','fixed_asset',p_asset_id,to_jsonb(v_old),
     to_jsonb(v_new)||jsonb_build_object('disposal_journal_id',v_journal_id,'nbv',v_nbv,'gain_loss',v_diff));
@@ -22859,8 +22906,21 @@ BEGIN
   INTO v_gosi_employer_rate, v_gosi_employee_rate;
   IF v_gosi_employer_rate<0 OR v_gosi_employer_rate>1 THEN v_gosi_employer_rate:=0.1175; END IF;
   IF v_gosi_employee_rate<0 OR v_gosi_employee_rate>1 THEN v_gosi_employee_rate:=0.0975; END IF;
+  -- شركات أُنشئت قبل 096: تُنشأ حسابات التأمينات تلقائياً عند أول حاجة
+  IF v_gosi_employer_account IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5230','مصروف التأمينات الاجتماعية','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5230');
+    SELECT id INTO v_gosi_employer_account FROM accounts WHERE company_id=p_company_id AND code='5230' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_gosi_payable_account IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'2155','مستحقات التأمينات الاجتماعية','liability',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2155');
+    SELECT id INTO v_gosi_payable_account FROM accounts WHERE company_id=p_company_id AND code='2155' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
   IF (v_gosi_employer_rate>0 OR v_gosi_employee_rate>0) AND (v_gosi_employer_account IS NULL OR v_gosi_payable_account IS NULL) THEN
-    RAISE EXCEPTION 'حسابات التأمينات الاجتماعية (5230/2155) غير موجودة';
+    RAISE EXCEPTION 'تعذر تهيئة حسابات التأمينات الاجتماعية (5230/2155)';
   END IF;
 
   FOR v_emp IN SELECT id,ROUND(COALESCE(salary,0),2) AS salary FROM employees
@@ -22952,11 +23012,22 @@ CREATE TABLE IF NOT EXISTS eosb_accruals (
   UNIQUE(company_id, employee_id, date)
 );
 
+-- RLS إجباري لكل جدول company_id (063 ركض قبل ولادة الجدولين)
+ALTER TABLE eosb_accruals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE debit_note_sequences ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation_eosb_accruals ON eosb_accruals;
+CREATE POLICY tenant_isolation_eosb_accruals ON eosb_accruals
+  USING (company_id = tenant_company_id());
+DROP POLICY IF EXISTS tenant_isolation_debit_note_sequences ON debit_note_sequences;
+CREATE POLICY tenant_isolation_debit_note_sequences ON debit_note_sequences
+  USING (company_id = tenant_company_id());
+
 CREATE OR REPLACE FUNCTION public.accrue_eosb_batch(
   p_company_id UUID, p_month_date DATE, p_user_id UUID
 ) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
 DECLARE
   v_expense UUID; v_liability UUID; v_month_end DATE;
+  v_journal JSONB; v_journal_id UUID;
   v_emp RECORD; v_years NUMERIC; v_factor NUMERIC; v_amount NUMERIC; v_total NUMERIC:=0; v_count INT:=0;
 BEGIN
   IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN
@@ -22970,8 +23041,20 @@ BEGIN
     AND COALESCE(is_active,TRUE)=TRUE AND NOT COALESCE(is_header,FALSE);
   SELECT id INTO v_liability FROM accounts WHERE company_id=p_company_id AND code='2190'
     AND COALESCE(is_active,TRUE)=TRUE AND NOT COALESCE(is_header,FALSE);
+  IF v_expense IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5240','مصروف مستحقات نهاية الخدمة','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5240');
+    SELECT id INTO v_expense FROM accounts WHERE company_id=p_company_id AND code='5240' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_liability IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'2190','مستحقات نهاية الخدمة (مكافآت الموظفين)','liability',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2190');
+    SELECT id INTO v_liability FROM accounts WHERE company_id=p_company_id AND code='2190' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
   IF v_expense IS NULL OR v_liability IS NULL THEN
-    RAISE EXCEPTION 'حسابات مستحقات نهاية الخدمة (5240/2190) غير موجودة';
+    RAISE EXCEPTION 'تعذر تهيئة حسابات مستحقات نهاية الخدمة (5240/2190)';
   END IF;
   v_month_end:=(date_trunc('month',p_month_date::TIMESTAMP)+INTERVAL '1 month -1 day')::DATE;
 
@@ -23258,7 +23341,7 @@ DECLARE v_bank banks_safes%ROWTYPE; v_receipt voucher_receipts%ROWTYPE; v_number
  v_journal JSONB; v_journal_id UUID; v_item JSONB; v_invoice invoices%ROWTYPE; v_alloc NUMERIC;
  v_alloc_total NUMERIC:=0; v_applied NUMERIC:=0; v_remaining NUMERIC; v_new_paid NUMERIC; v_approval approval_requests%ROWTYPE;
  v_fx NUMERIC; v_fx_total NUMERIC:=0; v_relief_total NUMERIC:=0; v_relief NUMERIC;
- v_currency_id UUID; v_fx_gain UUID; v_fx_loss UUID;
+ v_currency_id UUID; v_fx_gain UUID; v_fx_loss UUID; v_lines JSONB;
 BEGIN
  IF p_date IS NULL OR p_receipt_type NOT IN ('client','supplier_refund','general') OR p_amount<=0 OR p_amount<>ROUND(p_amount,2)
   OR NULLIF(BTRIM(p_reason),'') IS NULL OR LENGTH(p_reason)>500 OR jsonb_typeof(p_allocations)<>'array' OR jsonb_array_length(p_allocations)>100 THEN RAISE EXCEPTION 'بيانات سند القبض غير صالحة'; END IF;
@@ -23358,6 +23441,12 @@ BEGIN
  RETURN to_jsonb(v_receipt)||jsonb_build_object('requires_approval',FALSE,'allocated_amount',ROUND(v_applied,2),'unapplied_amount',ROUND(p_amount-v_applied,2));
 END;
 $$;
+
+-- إزالة التوقيع القديم (12 وسيطاً + المشروع) لمنع الالتباس مع نسخة العملات
+DROP FUNCTION IF EXISTS public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,BOOLEAN,UUID,UUID);
+REVOKE ALL ON FUNCTION public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,BOOLEAN,UUID,UUID,TEXT,NUMERIC) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,BOOLEAN,UUID,UUID,TEXT,NUMERIC) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.respond_voucher_receipt_approval_v49_internal(
  p_company_id UUID,p_approval_id UUID,p_action TEXT,p_approver_user_id UUID,p_approver_chat_id TEXT,p_comments TEXT
 ) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
@@ -23446,6 +23535,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID) TO service_role;
+-- إزالة التوقيع القديم (12 وسيطاً) لمنع الالتباس مع نسخة العملات
+DROP FUNCTION IF EXISTS public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID);
+REVOKE ALL ON FUNCTION public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID,TEXT,NUMERIC) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID,TEXT,NUMERIC) TO service_role;
 

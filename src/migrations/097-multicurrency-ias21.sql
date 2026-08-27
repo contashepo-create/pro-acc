@@ -236,7 +236,7 @@ DECLARE v_bank banks_safes%ROWTYPE; v_receipt voucher_receipts%ROWTYPE; v_number
  v_journal JSONB; v_journal_id UUID; v_item JSONB; v_invoice invoices%ROWTYPE; v_alloc NUMERIC;
  v_alloc_total NUMERIC:=0; v_applied NUMERIC:=0; v_remaining NUMERIC; v_new_paid NUMERIC; v_approval approval_requests%ROWTYPE;
  v_fx NUMERIC; v_fx_total NUMERIC:=0; v_relief_total NUMERIC:=0; v_relief NUMERIC;
- v_currency_id UUID; v_fx_gain UUID; v_fx_loss UUID;
+ v_currency_id UUID; v_fx_gain UUID; v_fx_loss UUID; v_lines JSONB;
 BEGIN
  IF p_date IS NULL OR p_receipt_type NOT IN ('client','supplier_refund','general') OR p_amount<=0 OR p_amount<>ROUND(p_amount,2)
   OR NULLIF(BTRIM(p_reason),'') IS NULL OR LENGTH(p_reason)>500 OR jsonb_typeof(p_allocations)<>'array' OR jsonb_array_length(p_allocations)>100 THEN RAISE EXCEPTION 'بيانات سند القبض غير صالحة'; END IF;
@@ -336,6 +336,12 @@ BEGIN
  RETURN to_jsonb(v_receipt)||jsonb_build_object('requires_approval',FALSE,'allocated_amount',ROUND(v_applied,2),'unapplied_amount',ROUND(p_amount-v_applied,2));
 END;
 $$;
+
+-- إزالة التوقيع القديم (12 وسيطاً + المشروع) لمنع الالتباس مع نسخة العملات
+DROP FUNCTION IF EXISTS public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,BOOLEAN,UUID,UUID);
+REVOKE ALL ON FUNCTION public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,BOOLEAN,UUID,UUID,TEXT,NUMERIC) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_voucher_receipt_atomic(UUID,DATE,TEXT,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,BOOLEAN,UUID,UUID,TEXT,NUMERIC) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.respond_voucher_receipt_approval_v49_internal(
  p_company_id UUID,p_approval_id UUID,p_action TEXT,p_approver_user_id UUID,p_approver_chat_id TEXT,p_comments TEXT
 ) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
@@ -424,5 +430,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID) TO service_role;
+-- إزالة التوقيع القديم (12 وسيطاً) لمنع الالتباس مع نسخة العملات
+DROP FUNCTION IF EXISTS public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID);
+REVOKE ALL ON FUNCTION public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID,TEXT,NUMERIC) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_sales_invoice_atomic(UUID,UUID,UUID,DATE,DATE,JSONB,NUMERIC,BOOLEAN,TEXT,NUMERIC,UUID,UUID,TEXT,NUMERIC) TO service_role;

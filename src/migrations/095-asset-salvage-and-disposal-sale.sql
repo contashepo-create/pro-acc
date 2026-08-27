@@ -133,7 +133,33 @@ BEGIN
   RETURN to_jsonb(v_asset);
 END;
 $$;
-REVOKE ALL ON FUNCTION public.create_fixed_asset_v49_internal(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID,NUMERIC) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.create_fixed_asset_v49_internal(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID,NUMERIC) FROM PUBLIC, anon, authenticated, service_role;
+
+-- إزالة التوقيع القديم (12 وسيطاً) لمنع الالتباس مع النسخة ذات القيمة المتبقية
+DROP FUNCTION IF EXISTS public.create_fixed_asset_v49_internal(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID);
+
+-- الغلاف العام يقبل القيمة المتبقية (اختيارية) ويمررها — نفس سلوك 057 (تدقيق + حدود كتابة)
+CREATE OR REPLACE FUNCTION public.create_fixed_asset(
+  p_company_id UUID,p_name TEXT,p_code TEXT,p_category TEXT,p_purchase_date DATE,
+  p_purchase_cost NUMERIC,p_useful_life_years INTEGER,p_depreciation_method TEXT,
+  p_location TEXT,p_notes TEXT,p_bank_safe_id UUID,p_created_by UUID,p_salvage_value NUMERIC DEFAULT 0
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_result JSONB;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_created_by AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM set_config('app.asset_write_company',p_company_id::TEXT,TRUE);
+  v_result:=create_fixed_asset_v49_internal(p_company_id,p_name,p_code,p_category,p_purchase_date,
+    p_purchase_cost,p_useful_life_years,p_depreciation_method,p_location,p_notes,p_bank_safe_id,p_created_by,
+    COALESCE(p_salvage_value,0));
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_created_by,'create','fixed_asset',(v_result->>'id')::UUID,v_result);
+  RETURN v_result;
+END;
+$$;
+DROP FUNCTION IF EXISTS public.create_fixed_asset(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID);
+REVOKE ALL ON FUNCTION public.create_fixed_asset(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID,NUMERIC) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_fixed_asset(UUID,TEXT,TEXT,TEXT,DATE,NUMERIC,INTEGER,TEXT,TEXT,TEXT,UUID,UUID,NUMERIC) TO service_role;
 
 -- ------------------------------------------------------------
 -- 3) الاستبعاد (شطب): عكس المجمع وإثبات الخسارة بدل منع الاستبعاد
@@ -155,7 +181,14 @@ BEGIN
   END IF;
   SELECT id INTO v_loss FROM accounts WHERE company_id=p_company_id AND code='5330'
     AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
-  IF v_loss IS NULL THEN RAISE EXCEPTION 'حساب خسائر الاستبعاد (5330) غير موجود'; END IF;
+  IF v_loss IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5330','خسائر الاستبعاد وإعدام الأصول','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5330');
+    SELECT id INTO v_loss FROM accounts WHERE company_id=p_company_id AND code='5330'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  END IF;
+  IF v_loss IS NULL THEN RAISE EXCEPTION 'تعذر تهيئة حساب خسائر الاستبعاد (5330)'; END IF;
 
   v_nbv:=ROUND(v_old.purchase_cost-COALESCE(v_old.accumulated_depreciation,0),2);
   -- قيد الشطب: مجمع مدين + خسارة مدين (بقدر الدفترية) مقابل تكلفة الأصل دائنًا
@@ -178,8 +211,8 @@ BEGIN
   UPDATE journal_entries SET reference_type='fixed_asset_disposal',reference_id=v_old.id
   WHERE id=v_journal_id AND company_id=p_company_id;
 
-  UPDATE fixed_assets SET status='disposed',net_book_value=0 WHERE id=p_asset_id RETURNING * INTO v_new;
   PERFORM set_config('app.asset_write_company',p_company_id::TEXT,TRUE);
+  UPDATE fixed_assets SET status='disposed' WHERE id=p_asset_id RETURNING * INTO v_new;
   INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
   VALUES(p_company_id,p_user_id,'dispose','fixed_asset',p_asset_id,to_jsonb(v_old),
     to_jsonb(v_new)||jsonb_build_object('disposal_journal_id',v_journal_id,'method','write_off'));
@@ -217,9 +250,23 @@ BEGIN
   IF p_sale_price>0 AND v_bank IS NULL THEN RAISE EXCEPTION 'حساب تحصيل البيع غير موجود'; END IF;
   SELECT id INTO v_gain FROM accounts WHERE company_id=p_company_id AND code='4200'
     AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_gain IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'4200','إيرادات أخرى','revenue',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='4200');
+    SELECT id INTO v_gain FROM accounts WHERE company_id=p_company_id AND code='4200'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  END IF;
   SELECT id INTO v_loss FROM accounts WHERE company_id=p_company_id AND code='5330'
     AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
-  IF v_gain IS NULL OR v_loss IS NULL THEN RAISE EXCEPTION 'حسابات أرباح/خسائر الاستبعاد غير موجودة'; END IF;
+  IF v_loss IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5330','خسائر الاستبعاد وإعدام الأصول','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5330');
+    SELECT id INTO v_loss FROM accounts WHERE company_id=p_company_id AND code='5330'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  END IF;
+  IF v_gain IS NULL OR v_loss IS NULL THEN RAISE EXCEPTION 'تعذر تهيئة حسابات أرباح/خسائر الاستبعاد'; END IF;
 
   v_nbv:=ROUND(v_old.purchase_cost-COALESCE(v_old.accumulated_depreciation,0),2);
   v_diff:=ROUND(p_sale_price-v_nbv,2);
@@ -251,10 +298,10 @@ BEGIN
   UPDATE journal_entries SET reference_type='fixed_asset_disposal_sale',reference_id=v_old.id
   WHERE id=v_journal_id AND company_id=p_company_id;
 
-  UPDATE fixed_assets SET status='disposed',net_book_value=0,
+  PERFORM set_config('app.asset_write_company',p_company_id::TEXT,TRUE);
+  UPDATE fixed_assets SET status='disposed',
     sale_price=p_sale_price,sale_date=p_date,gain_loss=v_diff
   WHERE id=p_asset_id RETURNING * INTO v_new;
-  PERFORM set_config('app.asset_write_company',p_company_id::TEXT,TRUE);
   INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
   VALUES(p_company_id,p_user_id,'dispose_sale','fixed_asset',p_asset_id,to_jsonb(v_old),
     to_jsonb(v_new)||jsonb_build_object('disposal_journal_id',v_journal_id,'nbv',v_nbv,'gain_loss',v_diff));

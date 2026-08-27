@@ -77,8 +77,21 @@ BEGIN
   INTO v_gosi_employer_rate, v_gosi_employee_rate;
   IF v_gosi_employer_rate<0 OR v_gosi_employer_rate>1 THEN v_gosi_employer_rate:=0.1175; END IF;
   IF v_gosi_employee_rate<0 OR v_gosi_employee_rate>1 THEN v_gosi_employee_rate:=0.0975; END IF;
+  -- شركات أُنشئت قبل 096: تُنشأ حسابات التأمينات تلقائياً عند أول حاجة
+  IF v_gosi_employer_account IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5230','مصروف التأمينات الاجتماعية','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5230');
+    SELECT id INTO v_gosi_employer_account FROM accounts WHERE company_id=p_company_id AND code='5230' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_gosi_payable_account IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'2155','مستحقات التأمينات الاجتماعية','liability',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2155');
+    SELECT id INTO v_gosi_payable_account FROM accounts WHERE company_id=p_company_id AND code='2155' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
   IF (v_gosi_employer_rate>0 OR v_gosi_employee_rate>0) AND (v_gosi_employer_account IS NULL OR v_gosi_payable_account IS NULL) THEN
-    RAISE EXCEPTION 'حسابات التأمينات الاجتماعية (5230/2155) غير موجودة';
+    RAISE EXCEPTION 'تعذر تهيئة حسابات التأمينات الاجتماعية (5230/2155)';
   END IF;
 
   FOR v_emp IN SELECT id,ROUND(COALESCE(salary,0),2) AS salary FROM employees
@@ -170,11 +183,22 @@ CREATE TABLE IF NOT EXISTS eosb_accruals (
   UNIQUE(company_id, employee_id, date)
 );
 
+-- RLS إجباري لكل جدول company_id (063 ركض قبل ولادة الجدولين)
+ALTER TABLE eosb_accruals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE debit_note_sequences ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation_eosb_accruals ON eosb_accruals;
+CREATE POLICY tenant_isolation_eosb_accruals ON eosb_accruals
+  USING (company_id = tenant_company_id());
+DROP POLICY IF EXISTS tenant_isolation_debit_note_sequences ON debit_note_sequences;
+CREATE POLICY tenant_isolation_debit_note_sequences ON debit_note_sequences
+  USING (company_id = tenant_company_id());
+
 CREATE OR REPLACE FUNCTION public.accrue_eosb_batch(
   p_company_id UUID, p_month_date DATE, p_user_id UUID
 ) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
 DECLARE
   v_expense UUID; v_liability UUID; v_month_end DATE;
+  v_journal JSONB; v_journal_id UUID;
   v_emp RECORD; v_years NUMERIC; v_factor NUMERIC; v_amount NUMERIC; v_total NUMERIC:=0; v_count INT:=0;
 BEGIN
   IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN
@@ -188,8 +212,20 @@ BEGIN
     AND COALESCE(is_active,TRUE)=TRUE AND NOT COALESCE(is_header,FALSE);
   SELECT id INTO v_liability FROM accounts WHERE company_id=p_company_id AND code='2190'
     AND COALESCE(is_active,TRUE)=TRUE AND NOT COALESCE(is_header,FALSE);
+  IF v_expense IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5240','مصروف مستحقات نهاية الخدمة','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5240');
+    SELECT id INTO v_expense FROM accounts WHERE company_id=p_company_id AND code='5240' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_liability IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'2190','مستحقات نهاية الخدمة (مكافآت الموظفين)','liability',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2190');
+    SELECT id INTO v_liability FROM accounts WHERE company_id=p_company_id AND code='2190' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
   IF v_expense IS NULL OR v_liability IS NULL THEN
-    RAISE EXCEPTION 'حسابات مستحقات نهاية الخدمة (5240/2190) غير موجودة';
+    RAISE EXCEPTION 'تعذر تهيئة حسابات مستحقات نهاية الخدمة (5240/2190)';
   END IF;
   v_month_end:=(date_trunc('month',p_month_date::TIMESTAMP)+INTERVAL '1 month -1 day')::DATE;
 
