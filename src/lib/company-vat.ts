@@ -8,13 +8,19 @@ export type CompanyTaxInfo = {
   country_code?: string | null;
 };
 
+/** كسر ضريبة من قيمة مخزّنة ككسر (0.14) أو كنسبة (14). بدون افتراض دولة. */
+export function normalizeVatFraction(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n > 1 && n <= 100) return Math.round(n) / 100;
+  if (n <= 1) return n;
+  return 0;
+}
+
 export function parseCompanyVatRate(company?: CompanyTaxInfo | null): number {
   const countryDefault = company?.country_code === 'EG' ? 0.14 : 0.15;
-  const raw = Number(company?.vat_rate);
-  if (!Number.isFinite(raw) || raw <= 0) return countryDefault;
-  if (raw > 1 && raw <= 100) return Math.round(raw) / 100;
-  if (raw > 0 && raw <= 1) return raw;
-  return countryDefault;
+  const fraction = normalizeVatFraction(company?.vat_rate);
+  return fraction > 0 ? fraction : countryDefault;
 }
 
 export function vatPercentLabel(rate: number): string {

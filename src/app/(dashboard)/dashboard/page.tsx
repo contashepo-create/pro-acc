@@ -32,6 +32,7 @@ import {
   Cell,
 } from 'recharts';
 import { useAuthStore } from '@/store/auth-store';
+import { formatCurrency } from '@/lib/utils';
 
 interface DashboardProject {
   id: string;
@@ -71,13 +72,8 @@ const empty: DashboardData = {
   projects: [], projectsTruncated: false, recentActivity: [],
 };
 
-function formatAmount(value: number) {
-  return new Intl.NumberFormat('ar-SA', { maximumFractionDigits: 0 }).format(value || 0);
-}
-
-function formatSAR(value: number) {
-  const sign = value < 0 ? '-' : '';
-  return `${sign}${formatAmount(Math.abs(value))} ر.س`;
+function formatMoney(value: number, symbol: string) {
+  return formatCurrency(value, undefined, symbol);
 }
 
 const ACCENTS: Record<string, { icon: string; name: string; nameEn: string }> = {
@@ -201,8 +197,9 @@ export default function DashboardPage() {
   }
 
   const s = data || empty;
+  const moneySymbol = company?.currency_symbol || 'ر.س';
   const netTone = s.netProfit >= 0 ? 'success' : 'danger';
-  const netLabel = `${s.netProfit >= 0 ? '' : '-'}${formatAmount(Math.abs(s.netProfit))} ر.س`;
+  const netLabel = formatMoney(s.netProfit, moneySymbol);
   const firstName = user?.name?.split(' ')[0] || '';
 
   const chartData = [
@@ -256,18 +253,18 @@ export default function DashboardPage() {
 
       {/* مؤشرات مالية رئيسية */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="إجمالي الإيرادات" value={formatSAR(s.totalRevenue)} icon={TrendingUp} tone="success" sub={`هذا الشهر: ${formatSAR(s.revenueThisMonth)}`} />
-        <StatCard title="إجمالي المصروفات" value={formatSAR(s.totalExpense)} icon={TrendingDown} tone="danger" sub={`هذا الشهر: ${formatSAR(s.expenseThisMonth)}`} />
+        <StatCard title="إجمالي الإيرادات" value={formatMoney(s.totalRevenue, moneySymbol)} icon={TrendingUp} tone="success" sub={`هذا الشهر: ${formatMoney(s.revenueThisMonth, moneySymbol)}`} />
+        <StatCard title="إجمالي المصروفات" value={formatMoney(s.totalExpense, moneySymbol)} icon={TrendingDown} tone="danger" sub={`هذا الشهر: ${formatMoney(s.expenseThisMonth, moneySymbol)}`} />
         <StatCard title="صافي الربح" value={netLabel} icon={DollarSign} tone={netTone === 'success' ? 'success' : 'danger'} />
-        <StatCard title="الرصيد النقدي" value={formatSAR(s.cashBalance)} icon={Wallet} tone="accent" />
+        <StatCard title="الرصيد النقدي" value={formatMoney(s.cashBalance, moneySymbol)} icon={Wallet} tone="accent" />
       </div>
 
       {/* مؤشرات تشغيلية */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="الذمم المدينة (لنا)" value={formatSAR(s.accountsReceivable)} icon={Users} tone="info" />
-        <StatCard title="الذمم الدائنة (علينا)" value={formatSAR(s.accountsPayable)} icon={Receipt} tone="warning" />
+        <StatCard title="الذمم المدينة (لنا)" value={formatMoney(s.accountsReceivable, moneySymbol)} icon={Users} tone="info" />
+        <StatCard title="الذمم الدائنة (علينا)" value={formatMoney(s.accountsPayable, moneySymbol)} icon={Receipt} tone="warning" />
         <StatCard title="المشاريع النشطة" value={String(s.activeProjects)} icon={Building2} tone="success" sub={`إجمالي المشاريع: ${s.totalProjects}`} />
-        <StatCard title="فواتير متأخرة" value={`${s.overdueInvoices}`} icon={CalendarClock} tone="danger" sub={formatSAR(s.overdueAmount)} />
+        <StatCard title="فواتير متأخرة" value={`${s.overdueInvoices}`} icon={CalendarClock} tone="danger" sub={formatMoney(s.overdueAmount, moneySymbol)} />
       </div>
 
       {/* إجراءات سريعة */}
@@ -336,7 +333,7 @@ export default function DashboardPage() {
                   <div className="min-w-0">
                     <div className="font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>{p.name}</div>
                     <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                      {p.status === 'active' ? 'نشط' : p.status === 'completed' ? 'مكتمل' : 'معلّق'} · {formatAmount(p.contract_value)} ر.س
+                      {p.status === 'active' ? 'نشط' : p.status === 'completed' ? 'مكتمل' : 'معلّق'} · {formatMoney(p.contract_value, moneySymbol)}
                     </div>
                   </div>
                   <div className="w-24 shrink-0">

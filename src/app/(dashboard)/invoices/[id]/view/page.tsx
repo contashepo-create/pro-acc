@@ -12,6 +12,7 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { normalizeVatFraction, vatPercentLabel } from '@/lib/company-vat';
 import { printCurrentPage } from '@/lib/print';
 import { 
   INVOICE_TEMPLATES, 
@@ -340,7 +341,8 @@ export default function InvoiceViewPage() {
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
   if (!invoice) return null;
 
-  const vatRate = Number(invoice.tax_rate || invoice.vat_rate || 0);
+  const vatRate = normalizeVatFraction(invoice.tax_rate || invoice.vat_rate || 0);
+  const vatPercent = vatPercentLabel(vatRate);
   const vatAmount = Number(invoice.tax_amount || invoice.vat_amount || 0);
   const subtotal = Number(invoice.subtotal || 0);
   const total = Number(invoice.total || 0);
@@ -710,7 +712,7 @@ export default function InvoiceViewPage() {
                 </div>
                 {vatAmount > 0 && (
                   <div className="flex justify-between text-slate-600">
-                    <span>ضريبة القيمة المضافة ({vatRate * 100}%):</span>
+                    <span>ضريبة القيمة المضافة ({vatPercent}%):</span>
                     <span className="font-bold text-slate-900 font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                   </div>
                 )}
@@ -828,7 +830,7 @@ export default function InvoiceViewPage() {
                   <span className="font-mono">{formatCurrency(subtotal, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-slate-700">
-                  <span>نسبة الضريبة ({vatRate * 100}%):</span>
+                  <span>نسبة الضريبة ({vatPercent}%):</span>
                   <span className="font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between font-black text-sm pt-2 border-t-2 border-slate-800 text-slate-900">
@@ -918,7 +920,7 @@ export default function InvoiceViewPage() {
                   <span className="font-mono">{formatCurrency(subtotal, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-slate-500">
-                  <span>الضريبة ({vatRate * 100}%):</span>
+                  <span>الضريبة ({vatPercent}%):</span>
                   <span className="font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between font-black text-sm text-teal-800 pt-1 border-t border-slate-300">
@@ -992,7 +994,7 @@ export default function InvoiceViewPage() {
                   <span className="font-mono font-bold">{formatCurrency(subtotal, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-purple-200 text-xs">
-                  <span>ضريبة القيمة المضافة ({vatRate * 100}%):</span>
+                  <span>ضريبة القيمة المضافة ({vatPercent}%):</span>
                   <span className="font-mono font-bold">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-base font-black pt-2 border-t border-purple-700">
@@ -1065,7 +1067,7 @@ export default function InvoiceViewPage() {
                   <span className="font-mono font-bold">{formatCurrency(subtotal, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-slate-600">
-                  <span>ضريبة القيمة المضافة ({vatRate * 100}%):</span>
+                  <span>ضريبة القيمة المضافة ({vatPercent}%):</span>
                   <span className="font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-sm font-black text-amber-900 pt-2 border-t border-slate-300">
@@ -1125,7 +1127,7 @@ export default function InvoiceViewPage() {
                 <span>{subtotal.toFixed(2)} {currencySymbol}</span>
               </div>
               <div className="flex justify-between">
-                <span>الضريبة ({Math.round((vatRate || 0) * 100)}%):</span>
+                <span>الضريبة ({vatPercent}%):</span>
                 <span>{vatAmount.toFixed(2)} {currencySymbol}</span>
               </div>
               <div className="flex justify-between font-black text-xs pt-1 border-t border-black">
