@@ -28,6 +28,7 @@ interface InvoiceItem {
   unit?: string;
   save_to_inventory?: boolean;
   item_code?: string;
+  inventory_item_id?: string;
 }
 
 const emptyItem: InvoiceItem = {
@@ -47,6 +48,7 @@ interface SalesInvoiceRow {
 }
 interface ClientOption { id: string; name: string; }
 interface ProjectOption { id: string; name: string; }
+interface InventoryOption { id: string; name: string; code: string; quantity: number; unit: string; }
 interface InvoiceForm {
   client_id: string;
   project_id: string;
@@ -61,6 +63,7 @@ export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<SalesInvoiceRow[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showEditor, setShowEditor] = useState(false);
@@ -82,18 +85,25 @@ export default function InvoicesPage() {
     try {
       setLoading(true);
       setError('');
-      const [invRes, cliRes, projRes] = await Promise.all([
+      const [invRes, cliRes, projRes, stockRes] = await Promise.all([
         fetch('/api/invoices'),
         fetch('/api/clients'),
         fetch('/api/projects'),
+        fetch('/api/inventory?items=1'),
       ]);
-      const [invJson, cliJson, projJson] = await Promise.all([
-        invRes.json(), cliRes.json(), projRes.json(),
+      const [invJson, cliJson, projJson, stockJson] = await Promise.all([
+        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(),
       ]);
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
       if (cliJson.success) setClients(cliJson.data?.clients || []);
       if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || []);
+      if (stockJson.success) {
+        setInventoryItems((stockJson.data?.items || []).map((it: Record<string, unknown>) => ({
+          id: String(it.id), name: String(it.name), code: String(it.code),
+          quantity: Number(it.quantity) || 0, unit: String(it.unit || 'وحدة'),
+        })));
+      }
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -143,6 +153,7 @@ export default function InvoicesPage() {
             discount: Number(i.discount) || 0,
             item_type: i.item_type || 'service', unit: i.unit || 'وحدة',
             save_to_inventory: i.save_to_inventory || false, item_code: i.item_code || undefined,
+            inventory_item_id: i.inventory_item_id || undefined,
           })),
           subtotal, vatRate, vatAmount, vatEnabled: form.vat_enabled, total, notes: form.notes,
         }),
@@ -365,13 +376,44 @@ export default function InvoicesPage() {
                       <tr key={i} className="border-t border-border hover:bg-bg-secondary/50 transition-colors">
                         <td className="p-2 text-center text-text-muted">{i + 1}</td>
                         <td className="p-2">
-                          <input
-                            type="text"
-                            placeholder="وصف الصنف أو الخدمة..."
-                            value={item.description}
-                            onChange={(e) => updateItem(i, 'description', e.target.value)}
-                            className="w-full px-3 py-2 bg-transparent border border-transparent rounded-lg focus:border-accent focus:bg-bg-primary focus:outline-none transition-colors text-text-primary"
-                          />
+                          {item.item_type === 'inventory' ? (
+                            <div>
+                              <select
+                                value={item.inventory_item_id || ''}
+                                onChange={(e) => {
+                                  const sel = inventoryItems.find((s) => s.id === e.target.value);
+                                  const newItems = [...form.items];
+                                  newItems[i] = {
+                                    ...newItems[i],
+                                    inventory_item_id: e.target.value || undefined,
+                                    description: sel ? sel.name : newItems[i].description,
+                                    unit: sel ? sel.unit : newItems[i].unit,
+                                  };
+                                  setForm({ ...form, items: newItems });
+                                }}
+                                className="w-full px-2 py-2 bg-transparent border border-transparent rounded-lg focus:border-accent focus:bg-bg-primary focus:outline-none text-text-primary"
+                              >
+                                <option value="">— اختر الصنف المخزني —</option>
+                                {inventoryItems.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name} (متاح: {s.quantity})</option>
+                                ))}
+                              </select>
+                              {item.inventory_item_id && (() => {
+                                const stock = inventoryItems.find((s) => s.id === item.inventory_item_id);
+                                return stock && item.quantity > stock.quantity ? (
+                                  <span className="text-xs text-danger">الكمية تتجاوز المتاح ({stock.quantity})</span>
+                                ) : null;
+                              })()}
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              placeholder="وصف الصنف أو الخدمة..."
+                              value={item.description}
+                              onChange={(e) => updateItem(i, 'description', e.target.value)}
+                              className="w-full px-3 py-2 bg-transparent border border-transparent rounded-lg focus:border-accent focus:bg-bg-primary focus:outline-none transition-colors text-text-primary"
+                            />
+                          )}
                         </td>
                         <td className="p-2">
                           <select

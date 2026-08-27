@@ -312,4 +312,26 @@ describe('ميجريشن 090 — قفل الفواتير والصافي (فحص 
     expect(m).toContain('OR v_discount < 0 OR v_discount > 100');
     expect(m).not.toContain('v_discount > v_gross');
   });
+
+  test('ميجريشن 094 — تكلفة البضاعة المباعة تلقائيًا من بنود الفاتورة المخزنية', () => {
+    const cogs = fs.readFileSync(path.join(process.cwd(), 'src', 'migrations', '094-inventory-cogs-on-invoice.sql'), 'utf8');
+    // ربط البند بالصنف + مستهلك مخزون ذري
+    expect(cogs).toContain('ADD COLUMN IF NOT EXISTS inventory_item_id UUID REFERENCES inventory_items(id)');
+    expect(cogs).toContain('CREATE OR REPLACE FUNCTION public.consume_invoice_stock_internal(');
+    // نفس قفل حركات المخزون الذري + قفل الصف + منع السالب
+    expect(cogs).toContain("pg_advisory_xact_lock(hashtextextended('inventory-stock:'||p_company_id::TEXT||':'||lower(v_inv_item.code),0))");
+    expect(cogs).toContain('COALESCE(v_inv_item.quantity, 0) + 0.005 < v_qty');
+    // قيد التكلفة 5100/1170 مرجعه invoice_cogs + الحركة مرجعها الفاتورة
+    expect(cogs).toContain("code = '1170'");
+    expect(cogs).toContain("reference_type = 'invoice_cogs'");
+    expect(cogs).toContain("'issue',\n      v_qty, v_cost, v_value");
+    // الإنشاء يخزن الرابط ويستهلك داخل نفس المعاملة
+    expect(cogs).toContain("(NULLIF(COALESCE(v_item->>'inventory_item_id', ''), ''))::UUID");
+    expect(cogs).toContain('PERFORM consume_invoice_stock_internal(');
+    // الإلغاء يعكس قيد التكلفة ويعيد الكميات كحركة return بتكلفة الصرف الأصلية
+    expect(cogs).toContain("reference_type = 'invoice_cogs'");
+    expect(cogs).toContain("'invoice_cogs_reversal', p_invoice_id");
+    expect(cogs).toContain("'invoice_cancellation'");
+    expect(cogs).toContain('v_issue.unit_price');
+  });
 });
