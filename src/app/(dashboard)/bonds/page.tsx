@@ -14,6 +14,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { parseCompanyVatRate, vatOnAmount, vatPercentLabel } from '@/lib/company-vat';
 
 interface BondRow {
   id: string;
@@ -35,6 +36,7 @@ interface BondRow {
 }
 
 interface BankSafe { id: string; name: string; type: string; }
+interface TenderOption { id: string; title?: string; reference_number?: string; }
 
 const TYPE_LABELS: Record<string, string> = {
   bid_bond: 'ضمان ابتدائي', performance_bond: 'ضمان نهائي', advance_payment: 'دفعات مقدمة',
@@ -50,6 +52,8 @@ const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' 
 export default function BondsPage() {
   const [bonds, setBonds] = useState<BondRow[]>([]);
   const [banksSafes, setBanksSafes] = useState<BankSafe[]>([]);
+  const [tenders, setTenders] = useState<TenderOption[]>([]);
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -72,17 +76,23 @@ export default function BondsPage() {
       const params = new URLSearchParams();
       if (statusFilter) params.set('status', statusFilter);
       if (typeFilter) params.set('type', typeFilter);
-      const [bondsRes, banksRes] = await Promise.all([
+      const [bondsRes, banksRes, tendersRes, meRes] = await Promise.all([
         fetch('/api/bonds' + (params.toString() ? `?${params}` : '')),
         fetch('/api/banks'),
+        fetch('/api/tenders'),
+        fetch('/api/auth/me'),
       ]);
-      const [bondsJson, banksJson] = await Promise.all([bondsRes.json(), banksRes.json()]);
+      const [bondsJson, banksJson, tendersJson, meJson] = await Promise.all([
+        bondsRes.json(), banksRes.json(), tendersRes.json(), meRes.json(),
+      ]);
       if (bondsJson.success) setBonds(bondsJson.data?.bonds || []);
       else setError(bondsJson.message || 'فشل');
       if (banksJson.success) {
         const all = [...(banksJson.data?.banks || []), ...(banksJson.data?.safes || [])];
         setBanksSafes(all);
       }
+      if (tendersJson.success) setTenders(tendersJson.data?.tenders || []);
+      if (meJson.success) setCompanyVatRate(parseCompanyVatRate(meJson.data?.company));
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -101,6 +111,9 @@ export default function BondsPage() {
     if (!form.amount || Number(form.amount) <= 0) { setSaveError('المبلغ مطلوب'); return; }
     if (!form.bank_safe_id) { setSaveError('البنك مطلوب'); return; }
     if (!form.expiry_date) { setSaveError('تاريخ الانتهاء مطلوب'); return; }
+    if (form.margin_amount && Number(form.margin_amount) > Number(form.amount)) {
+      setSaveError('الغطاء النقدي لا يجوز أن يتجاوز قيمة الخطاب'); return;
+    }
     setSaving(true); setSaveError('');
     try {
       const res = await fetch('/api/bonds', {
@@ -232,11 +245,25 @@ export default function BondsPage() {
           <Input label="رقم المرجع" value={form.reference_number}
             onChange={(e) => setForm({ ...form, reference_number: e.target.value })} />
           <Input label="عمولة الإصدار" type="number" value={form.commission}
-            onChange={(e) => setForm({ ...form, commission: e.target.value })} placeholder="0.00" />
-          <Input label="ضريبة العمولة" type="number" value={form.vat_amount}
+            onChange={(e) => {
+              const commission = e.target.value;
+              const vat = vatOnAmount(Number(commission) || 0, companyVatRate);
+              setForm({ ...form, commission, vat_amount: vat ? String(vat) : '' });
+            }} placeholder="0.00" />
+          <Input label={`ضريبة العمولة (${vatPercentLabel(companyVatRate)}%)`} type="number" value={form.vat_amount}
             onChange={(e) => setForm({ ...form, vat_amount: e.target.value })} placeholder="0.00" />
-          <Input label="معرف المناقصة (اختياري)" value={form.tender_id}
-            onChange={(e) => setForm({ ...form, tender_id: e.target.value })} placeholder="UUID" />
+          <Select
+            label="المناقصة (اختياري)"
+            value={form.tender_id}
+            onChange={(v) => setForm({ ...form, tender_id: v })}
+            options={[
+              { value: '', label: 'بدون مناقصة' },
+              ...tenders.map((t) => ({
+                value: t.id,
+                label: t.reference_number ? `${t.title || 'مناقصة'} — ${t.reference_number}` : (t.title || t.id),
+              })),
+            ]}
+          />
           <div className="md:col-span-2">
             <Textarea label="ملاحظات" value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} />

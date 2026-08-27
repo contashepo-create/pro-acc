@@ -53,6 +53,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '2130', name: 'القروض قصيرة الأجل', nameEn: 'Short-term Loans', type: 'liability', parentCode: '2100' },
   { code: '2140', name: 'رواتب مستحقة', nameEn: 'Accrued Salaries', type: 'liability', parentCode: '2100' },
   { code: '2145', name: 'مصروفات مستحقة', nameEn: 'Accrued Expenses', type: 'liability', parentCode: '2100' },
+  { code: '2155', name: 'مستحقات التأمينات الاجتماعية', nameEn: 'Social insurance payable', type: 'liability', parentCode: '2100' },
   { code: '2150', name: 'مقاولو باطن - مستحق', nameEn: 'Subcontractors Payable', type: 'liability', parentCode: '2100' },
   { code: '2160', name: 'محجوزات ضمان', nameEn: 'Retentions Payable', type: 'liability', parentCode: '2100' },
   { code: '2170', name: 'عمالة يومية مستحقة', nameEn: 'Daily Workers Payable', type: 'liability', parentCode: '2100' },
@@ -89,6 +90,8 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   
   { code: '5200', name: 'مصروفات تشغيلية', nameEn: 'Operating Expenses', type: 'expense', parentCode: '5000', isHeader: true },
   { code: '5210', name: 'رواتب وأجور', nameEn: 'Salaries & Wages', type: 'expense', parentCode: '5200' },
+  { code: '5215', name: 'مصروف التأمينات الاجتماعية', nameEn: 'Social insurance expense', type: 'expense', parentCode: '5200' },
+  { code: '5216', name: 'مصروف مستحقات نهاية الخدمة', nameEn: 'End of service expense', type: 'expense', parentCode: '5200' },
   { code: '5220', name: 'إيجارات', nameEn: 'Rent', type: 'expense', parentCode: '5200' },
   { code: '5230', name: 'كهرباء ومياه', nameEn: 'Utilities', type: 'expense', parentCode: '5200' },
   { code: '5240', name: 'اتصالات وانترنت', nameEn: 'Communication', type: 'expense', parentCode: '5200' },

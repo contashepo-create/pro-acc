@@ -154,7 +154,7 @@ export default function PayrollPage() {
       >
         <div className="space-y-4">
           <Input label="الشهر" type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-          <p className="text-sm text-text-muted">سيتم معالجة رواتب {employees.length} موظف وإنشاء قيد محاسبي متزن (مدين مصروف رواتب / دائن رواتب مستحقة + سلف).</p>
+          <p className="text-sm text-text-muted">سيتم معالجة رواتب {employees.length} موظف نشط. القيد: مدين مصروف الرواتب ومصروف التأمينات، دائن الرواتب المستحقة ومستحقات التأمينات (حصة الموظف وصاحب العمل) وسلف الموظفين إن وُجدت. راجع الحصص بعد الترحيل في الجدول.</p>
         </div>
       </Modal>
     </div>

@@ -20,6 +20,7 @@ import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-ut
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
 import { openPrintWindow } from '@/lib/print';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
 
 interface PurchaseItem {
   description: string;
@@ -46,6 +47,8 @@ interface PurchaseInvoiceRow {
   subtotal?: number;
   tax_amount?: number;
   other_expenses_total?: number;
+  withholding_amount?: number;
+  withholding_rate?: number;
   journal_entry_id?: string | number;
   contacts?: { name?: string };
   supplier?: { name?: string };
@@ -60,6 +63,7 @@ interface PurchaseInvoiceForm {
   items: PurchaseItem[];
   other_expenses?: OtherExpense[];
   payment_account_id?: string;
+  withholding_percent?: number;
 }
 interface SupplierOption { id: string; name: string; }
 interface PurchaseOrderOption {
@@ -71,7 +75,7 @@ interface PurchaseOrderOption {
   status: string;
   items?: OrderItem[];
 }
-interface CompanyInfo { name?: string; tax_number?: string; }
+interface CompanyInfo { name?: string; tax_number?: string; vat_rate?: number; country_code?: string; }
 
 const STATUS_LABELS: Record<string, { variant: 'success' | 'warning' | 'info' | 'danger'; label: string }> = {
   paid: { variant: 'success', label: 'مدفوعة' },
@@ -90,19 +94,23 @@ export default function PurchaseInvoicesPage() {
   const [editingInvoice, setEditingInvoice] = useState<PurchaseInvoiceRow | null>(null);
   const [viewingInvoice, setViewingInvoice] = useState<PurchaseInvoiceRow | null>(null);
   const [company, setCompany] = useState<CompanyInfo | null>(null);
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
+  const [withholdingEnabled, setWithholdingEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const [form, setForm] = useState<PurchaseInvoiceForm>({
+  const emptyForm = (vatPct = Math.round(companyVatRate * 100)): PurchaseInvoiceForm => ({
     date: new Date().toISOString().split('T')[0],
     supplier_id: '',
     purchase_order_id: '',
     notes: '',
-    tax_percent: 15,
+    tax_percent: vatPct,
     status: 'unpaid',
     items: [{ ...emptyItem }],
     other_expenses: [] as { description: string; amount: number }[],
     payment_account_id: '',
+    withholding_percent: 0,
   });
+  const [form, setForm] = useState<PurchaseInvoiceForm>(emptyForm(15));
 
   const fetchData = async () => {
     try {
@@ -124,7 +132,12 @@ export default function PurchaseInvoicesPage() {
       else setError(invJson.message || 'فشل');
       if (supJson.success) setSuppliers(supJson.data?.contacts || []);
       if (ordJson.success) setOrders(ordJson.data?.orders || []);
-      if (setJson.success && setJson.data?.company) setCompany(setJson.data.company);
+      if (setJson.success) {
+        if (setJson.data?.company) setCompany(setJson.data.company);
+        setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
+        const wh = setJson.data?.withholding_enabled;
+        setWithholdingEnabled(wh === true || wh === 'true' || setJson.data?.company?.country_code === 'EG');
+      }
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -213,6 +226,7 @@ export default function PurchaseInvoicesPage() {
             })),
             other_expenses: (form.other_expenses || []).filter((o: OtherExpense) => String(o.description || '').trim() && Number(o.amount) > 0),
             payment_account_id: form.payment_account_id || null,
+            withholding_rate: withholdingEnabled ? (Number(form.withholding_percent) || 0) / 100 : 0,
           };
 
       const url = editingInvoice ? `/api/purchases/invoices/${editingInvoice.id}` : '/api/purchases/invoices';
@@ -227,15 +241,7 @@ export default function PurchaseInvoicesPage() {
       if (json.success) {
         setShowModal(false);
         setEditingInvoice(null);
-        setForm({
-          date: new Date().toISOString().split('T')[0],
-          supplier_id: '',
-          purchase_order_id: '',
-          notes: '',
-          tax_percent: 15,
-          status: 'unpaid',
-          items: [{ ...emptyItem }],
-        });
+        setForm(emptyForm());
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
     } catch { setSaveError('خطأ في الاتصال'); } finally { setSaving(false); }
@@ -254,6 +260,7 @@ export default function PurchaseInvoicesPage() {
       tax_percent: Math.round((Number(src.tax_rate) || 0) * 100),
       status: String(src.status ?? 'unpaid'),
       items: src.items && (src.items as Row[]).length ? (src.items as PurchaseItem[]) : [{ ...emptyItem }],
+      withholding_percent: Math.round((Number(src.withholding_rate) || 0) * 100),
     }, ['date']));
     setShowModal(true);
   };
@@ -344,8 +351,9 @@ export default function PurchaseInvoicesPage() {
           <div class="totals">
             <div class="row"><span>المجموع الفرعي (قيمة المورد)</span><span>${subtotal.toFixed(2)}</span></div>
             ${taxAmount > 0 ? `<div class="row"><span>ضريبة القيمة المضافة</span><span>${taxAmount.toFixed(2)}</span></div>` : ''}
-            ${otherTotal > 0 ? `<div class="row"><span>مصاريف إضافية</span><span>${otherTotal.toFixed(2)}</span></div>` : ''}
-            <div class="grand"><span>الإجمالي</span><span>${total.toFixed(2)}</span></div>
+            ${otherTotal > 0 ? `<div class="row"><span>مصاريف إضافية (لا تُضاف لذمة المورد)</span><span>${otherTotal.toFixed(2)}</span></div>` : ''}
+            ${Number(record.withholding_amount || 0) > 0 ? `<div class="row"><span>خصم المنبع</span><span>- ${Number(record.withholding_amount).toFixed(2)}</span></div>` : ''}
+            <div class="grand"><span>المستحق للمورد</span><span>${total.toFixed(2)}</span></div>
           </div>
         </div>
         ${record.notes ? `<div class="section"><h3>ملاحظات</h3><p class="muted" style="margin:0;line-height:1.8">${escapeHtml(String(record.notes))}</p></div>` : ''}
@@ -399,7 +407,7 @@ export default function PurchaseInvoicesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="فواتير المشتريات" description="إدارة فواتير الشراء" actions={<Button onClick={() => { setEditingInvoice(null); setForm({ date: new Date().toISOString().split('T')[0], supplier_id: '', purchase_order_id: '', notes: '', tax_percent: 15, status: 'unpaid', items: [{ ...emptyItem }] }); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة فاتورة</Button>} />
+      <PageHeader title="فواتير المشتريات" description="إدارة فواتير الشراء" actions={<Button onClick={() => { setEditingInvoice(null); setForm(emptyForm()); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة فاتورة</Button>} />
       {invoices.length === 0 ? <EmptyState title="لا توجد فواتير" actionLabel="إضافة فاتورة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={invoices} searchable searchKeys={['supplier_name', 'invoice_number']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingInvoice(null); }} title={isEdit ? 'تعديل فاتورة شراء' : 'إضافة فاتورة شراء'} size="xl" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingInvoice(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="space-y-4">
@@ -422,7 +430,10 @@ export default function PurchaseInvoicesPage() {
             {!isEdit && (
               <>
                 <Select label="أمر الشراء (اختياري)" value={form.purchase_order_id} onChange={applyPurchaseOrder} options={[{ value: '', label: 'بدون' }, ...orders.filter((order) => order.status === 'received').map((o) => ({ value: o.id, label: `${formatDocumentNumber('purchase_order', o.number || o.po_number)} — ${o.supplier_name || ''}` }))]} />
-                <Input label="نسبة الضريبة %" type="number" min={0} max={100} value={form.tax_percent} onChange={(e) => setForm({ ...form, tax_percent: Number(e.target.value) })} />
+                <Input label={`نسبة الضريبة % (افتراضي ${vatPercentLabel(companyVatRate)})`} type="number" min={0} max={100} value={form.tax_percent} onChange={(e) => setForm({ ...form, tax_percent: Number(e.target.value) })} />
+                {withholdingEnabled && (
+                  <Input label="نسبة خصم المنبع %" type="number" min={0} max={20} value={form.withholding_percent || 0} onChange={(e) => setForm({ ...form, withholding_percent: Number(e.target.value) })} />
+                )}
               </>
             )}
           </div>

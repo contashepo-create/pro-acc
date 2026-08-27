@@ -5,7 +5,7 @@ import { purchaseInvoiceUpdateSchema } from '@/lib/validation';
 
 const sb = () => getSupabase();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const INVOICE_COLUMNS = 'id, invoice_number, number, date, supplier_id, purchase_order_id, project_id, custody_id, payment_source, subtotal, tax_amount, tax_rate, total, paid_amount, status, notes, journal_entry_id, created_by, created_at, updated_at, contacts!supplier_id(name), purchase_orders!purchase_order_id(po_number)';
+const INVOICE_COLUMNS = 'id, invoice_number, number, date, supplier_id, purchase_order_id, project_id, custody_id, payment_source, subtotal, tax_amount, tax_rate, total, paid_amount, status, notes, journal_entry_id, created_by, created_at, updated_at, other_expenses_total, withholding_rate, withholding_amount, contacts!supplier_id(name), purchase_orders!purchase_order_id(po_number)';
 const ITEM_COLUMNS = 'id, purchase_invoice_id, description, quantity, unit_price, total';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
