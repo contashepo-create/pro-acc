@@ -38,8 +38,8 @@ const TYPE_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   active: 'ساري', expired: 'منتهي', released: 'مُلك', cancelled: 'ملغى',
 };
-const STATUS_COLORS: Record<string, string> = {
-  active: 'green', expired: 'red', released: 'gray', cancelled: 'gray',
+const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'> = {
+  active: 'success', expired: 'danger', released: 'default', cancelled: 'default',
 };
 
 export default function BondDetailPage() {
@@ -93,7 +93,7 @@ export default function BondDetailPage() {
             <h1 className="text-xl font-bold">{bond.title}</h1>
             <p className="text-text-secondary text-sm">{TYPE_LABELS[bond.type] || bond.type}</p>
           </div>
-          <Badge color={STATUS_COLORS[bond.status]}>{STATUS_LABELS[bond.status]}</Badge>
+          <Badge variant={STATUS_VARIANTS[bond.status] || 'default'}>{STATUS_LABELS[bond.status]}</Badge>
         </div>
         {bond.status === 'active' && (
           <Button variant="outline" onClick={handleRelease}>

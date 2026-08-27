@@ -43,8 +43,8 @@ const TYPE_LABELS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   active: 'ساري', expired: 'منتهي', released: 'مُلك', cancelled: 'ملغى',
 };
-const STATUS_COLORS: Record<string, string> = {
-  active: 'green', expired: 'red', released: 'gray', cancelled: 'gray',
+const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'> = {
+  active: 'success', expired: 'danger', released: 'default', cancelled: 'default',
 };
 
 export default function BondsPage() {
@@ -120,7 +120,7 @@ export default function BondsPage() {
     { key: 'title', label: 'العنوان', render: (row: BondRow) => (
       <a href={`/bonds/${row.id}`} className="text-accent hover:underline font-medium">{row.title}</a>
     )},
-    { key: 'type', label: 'النوع', render: (row: BondRow) => <Badge color="purple">{TYPE_LABELS[row.type] || row.type}</Badge> },
+    { key: 'type', label: 'النوع', render: (row: BondRow) => <Badge variant="accent">{TYPE_LABELS[row.type] || row.type}</Badge> },
     { key: 'amount', label: 'المبلغ', render: (row: BondRow) => formatCurrency(row.amount) },
     { key: 'beneficiary_name', label: 'المستفيد', render: (row: BondRow) => row.beneficiary_name || '—' },
     { key: 'expiry_date', label: 'الانتهاء', render: (row: BondRow) => {
@@ -135,23 +135,33 @@ export default function BondsPage() {
         </div>
       );
     }},
-    { key: 'status', label: 'الحالة', render: (row: BondRow) => <Badge color={STATUS_COLORS[row.status] || 'gray'}>{STATUS_LABELS[row.status] || row.status}</Badge> },
+    { key: 'status', label: 'الحالة', render: (row: BondRow) => <Badge variant={STATUS_VARIANTS[row.status] || 'default'}>{STATUS_LABELS[row.status] || row.status}</Badge> },
   ];
 
   return (
     <div>
-      <PageHeader title="خطابات الضمان" subtitle="إدارة الضمانات البنكية والاعتمادات" />
+      <PageHeader title="خطابات الضمان" description="إدارة الضمانات البنكية والاعتمادات" />
 
       <div className="flex items-center justify-between mb-4 gap-3">
         <div className="flex gap-2">
-          <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40">
-            <option value="">كل الحالات</option>
-            {Object.entries(STATUS_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
-          </Select>
-          <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-40">
-            <option value="">كل الأنواع</option>
-            {Object.entries(TYPE_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
-          </Select>
+          <Select
+            value={statusFilter}
+            onChange={setStatusFilter}
+            className="w-40"
+            options={[
+              { value: '', label: 'كل الحالات' },
+              ...Object.entries(STATUS_LABELS).map(([val, label]) => ({ value: val, label })),
+            ]}
+          />
+          <Select
+            value={typeFilter}
+            onChange={setTypeFilter}
+            className="w-40"
+            options={[
+              { value: '', label: 'كل الأنواع' },
+              ...Object.entries(TYPE_LABELS).map(([val, label]) => ({ value: val, label })),
+            ]}
+          />
         </div>
         <Button onClick={() => setShowModal(true)}>
           <Plus size={18} className="ml-1" />
@@ -168,24 +178,27 @@ export default function BondsPage() {
           icon={<ShieldCheck size={48} />}
           title="لا توجد خطابات ضمان"
           description="أنشئ خطاب ضمان جديد لربطه بمناقصة أو مشروع"
-          action={<Button onClick={() => setShowModal(true)}><Plus size={18} className="ml-1" />خطاب جديد</Button>}
+          actionLabel="خطاب جديد"
+          onAction={() => setShowModal(true)}
         />
       ) : (
         <DataTable data={bonds} columns={columns} />
       )}
 
       {/* Create Modal */}
-      <Modal open={showModal} onClose={() => setShowModal(false)} title="خطاب ضمان جديد" size="lg">
+      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="خطاب ضمان جديد" size="lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="md:col-span-2">
             <Input label="العنوان *" value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               placeholder="مثال: ضمان ابتدائي لمناقصة الوزارة" />
           </div>
-          <Select label="النوع *" value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            {Object.entries(TYPE_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
-          </Select>
+          <Select
+            label="النوع *"
+            value={form.type}
+            onChange={(v) => setForm({ ...form, type: v })}
+            options={Object.entries(TYPE_LABELS).map(([val, label]) => ({ value: val, label }))}
+          />
           <Input label="المبلغ *" type="number" value={form.amount}
             onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0.00" />
           <Input label="تاريخ الإصدار *" type="date" value={form.issue_date}
@@ -195,11 +208,15 @@ export default function BondsPage() {
           <Input label="البنك المُصدر" value={form.issuing_bank}
             onChange={(e) => setForm({ ...form, issuing_bank: e.target.value })}
             placeholder="مثال: الراجحي" />
-          <Select label="حساب البنك *" value={form.bank_safe_id}
-            onChange={(e) => setForm({ ...form, bank_safe_id: e.target.value })}>
-            <option value="">اختر...</option>
-            {banksSafes.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </Select>
+          <Select
+            label="حساب البنك *"
+            value={form.bank_safe_id}
+            onChange={(v) => setForm({ ...form, bank_safe_id: v })}
+            options={[
+              { value: '', label: 'اختر...' },
+              ...banksSafes.map((b) => ({ value: b.id, label: b.name })),
+            ]}
+          />
           <Input label="المستفيد" value={form.beneficiary_name}
             onChange={(e) => setForm({ ...form, beneficiary_name: e.target.value })} />
           <Input label="رقم المرجع" value={form.reference_number}

@@ -60,9 +60,9 @@ const STATUS_LABELS: Record<string, string> = {
   draft: 'مسودة', preparing: 'قيد التحضير', submitted: 'مُقدَّمة',
   won: 'رابحة', lost: 'خاسرة', cancelled: 'ملغاة',
 };
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'gray', preparing: 'blue', submitted: 'amber',
-  won: 'green', lost: 'red', cancelled: 'gray',
+const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'> = {
+  draft: 'default', preparing: 'info', submitted: 'warning',
+  won: 'success', lost: 'danger', cancelled: 'default',
 };
 const EXPENSE_LABELS: Record<string, string> = {
   karasa: 'كراسة الشروط', platform_fee: 'رسوم المنصة', bid_bond_margin: 'غطاء ضمان ابتدائي',
@@ -190,7 +190,7 @@ export default function TenderDetailPage() {
             <h1 className="text-xl font-bold">{tender.title}</h1>
             <p className="text-text-secondary text-sm">{tender.client_name}</p>
           </div>
-          <Badge color={STATUS_COLORS[tender.status]}>{STATUS_LABELS[tender.status]}</Badge>
+          <Badge variant={STATUS_VARIANTS[tender.status] || 'default'}>{STATUS_LABELS[tender.status]}</Badge>
         </div>
         <div className="flex gap-2">
           {canTransition('submitted') && (
@@ -301,7 +301,7 @@ export default function TenderDetailPage() {
                 <tbody>
                   {tender.cost_items.map((item) => (
                     <tr key={item.id} className="border-t border-border">
-                      <td className="p-3"><Badge color="blue">{item.category}</Badge></td>
+                      <td className="p-3"><Badge variant="info">{item.category}</Badge></td>
                       <td className="p-3">{item.description || '—'}</td>
                       <td className="p-3 text-left font-medium">{formatCurrency(item.amount)}</td>
                     </tr>
@@ -344,7 +344,7 @@ export default function TenderDetailPage() {
                 <tbody>
                   {tender.expenses.map((exp) => (
                     <tr key={exp.id} className="border-t border-border">
-                      <td className="p-3"><Badge color="amber">{EXPENSE_LABELS[exp.expense_type] || exp.expense_type}</Badge></td>
+                      <td className="p-3"><Badge variant="warning">{EXPENSE_LABELS[exp.expense_type] || exp.expense_type}</Badge></td>
                       <td className="p-3">{exp.description || '—'}</td>
                       <td className="p-3">{formatDate(exp.date)}</td>
                       <td className="p-3 text-left">{formatCurrency(exp.amount)}</td>
@@ -395,9 +395,9 @@ export default function TenderDetailPage() {
                     <tr key={bond.id} className="border-t border-border hover:bg-bg-hover cursor-pointer"
                       onClick={() => router.push(`/bonds/${bond.id}`)}>
                       <td className="p-3 font-medium">{bond.title}</td>
-                      <td className="p-3"><Badge color="purple">{bond.type}</Badge></td>
+                      <td className="p-3"><Badge variant="accent">{bond.type}</Badge></td>
                       <td className="p-3 text-left">{formatCurrency(bond.amount)}</td>
-                      <td className="p-3"><Badge color={bond.status === 'active' ? 'green' : 'gray'}>{bond.status}</Badge></td>
+                      <td className="p-3"><Badge variant={bond.status === 'active' ? 'success' : 'default'}>{bond.status}</Badge></td>
                       <td className="p-3">{formatDate(bond.expiry_date)}</td>
                     </tr>
                   ))}
@@ -414,27 +414,32 @@ export default function TenderDetailPage() {
       )}
 
       {/* Expense Modal */}
-      <Modal open={showExpenseModal} onClose={() => setShowExpenseModal(false)} title="تسجيل مصروف مناقصة" size="md">
+      <Modal isOpen={showExpenseModal} onClose={() => setShowExpenseModal(false)} title="تسجيل مصروف مناقصة" size="md">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Select label="نوع المصروف *" value={expenseForm.expense_type}
-            onChange={(e) => setExpenseForm({ ...expenseForm, expense_type: e.target.value })}>
-            {Object.entries(EXPENSE_LABELS).map(([val, label]) => (
-              <option key={val} value={val}>{label}</option>
-            ))}
-          </Select>
+          <Select
+            label="نوع المصروف *"
+            value={expenseForm.expense_type}
+            onChange={(v) => setExpenseForm({ ...expenseForm, expense_type: v })}
+            options={Object.entries(EXPENSE_LABELS).map(([val, label]) => ({ value: val, label }))}
+          />
           <Input label="التاريخ" type="date" value={expenseForm.date}
             onChange={(e) => setExpenseForm({ ...expenseForm, date: e.target.value })} />
           <Input label="المبلغ *" type="number" value={expenseForm.amount}
             onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} placeholder="0.00" />
           <Input label="الضريبة (15%)" type="number" value={expenseForm.vat_amount}
             onChange={(e) => setExpenseForm({ ...expenseForm, vat_amount: e.target.value })} placeholder="0.00" />
-          <Select label="البنك / الخزينة *" value={expenseForm.bank_safe_id}
-            onChange={(e) => setExpenseForm({ ...expenseForm, bank_safe_id: e.target.value })}>
-            <option value="">اختر...</option>
-            {banksSafes.map((b) => (
-              <option key={b.id} value={b.id}>{b.name} ({b.type === 'bank' ? 'بنك' : 'خزينة'})</option>
-            ))}
-          </Select>
+          <Select
+            label="البنك / الخزينة *"
+            value={expenseForm.bank_safe_id}
+            onChange={(v) => setExpenseForm({ ...expenseForm, bank_safe_id: v })}
+            options={[
+              { value: '', label: 'اختر...' },
+              ...banksSafes.map((b) => ({
+                value: b.id,
+                label: `${b.name} (${b.type === 'bank' ? 'بنك' : 'خزينة'})`,
+              })),
+            ]}
+          />
           <div className="md:col-span-2">
             <Textarea label="الوصف" value={expenseForm.description}
               onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} rows={2} />
