@@ -44,7 +44,6 @@ interface SubscriptionState {
   extra_storage_gb?: number;
   is_expired?: boolean;
   is_expiring_soon?: boolean;
-  subscriber_number?: string | null;
   limits?: {
     max_users?: number;
     max_invoices_per_month?: number | null;
@@ -395,23 +394,12 @@ export default function SubscriptionPageEnhanced() {
         <>
           {subscription && (
             <Card title="اشتراكك الحالي">
-              <div className="flex items-center justify-between flex-wrap gap-4">
-                <div className="flex items-center gap-3">
-                  <Crown size={20} className="text-amber-500" />
-                  <div>
-                    <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
-                    <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
-                  </div>
+              <div className="flex items-center gap-3">
+                <Crown size={20} className="text-amber-500" />
+                <div>
+                  <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
+                  <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
                 </div>
-                {subscription.subscriber_number && (
-                  <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent/10 border border-accent/20">
-                    <KeyIcon size={16} className="text-accent" />
-                    <div>
-                      <div className="text-[10px] text-text-muted">رقم المشترك</div>
-                      <div className="text-lg font-bold text-accent font-mono" dir="ltr">#{subscription.subscriber_number}</div>
-                    </div>
-                  </div>
-                )}
               </div>
               {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-warning-light border border-warning rounded-lg text-xs font-semibold text-warning flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
             </Card>

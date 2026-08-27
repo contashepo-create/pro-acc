@@ -91,14 +91,14 @@ export default function ExportDataPage() {
         <div className="bg-bg-card border border-border rounded-2xl p-5 mt-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-bold text-text-primary">اختر التقارير</h2>
-            <button onClick={() => setSelected(allSelected ? [] : [...EXPORT_TABLES])} className="text-xs font-semibold text-accent hover:underline">
+            <button onClick={() => setSelected(allSelected ? [] : [...EXPORT_TABLES])} className="text-xs font-semibold text-amber-400 hover:text-amber-300 hover:underline">
               {allSelected ? 'إلغاء تحديد الكل' : 'تحديد الكل'}
             </button>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto p-1">
             {REPORTS.map((r) => (
-              <label key={r.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs cursor-pointer transition-colors font-medium ${selected.includes(r.id) ? 'border-accent bg-accent/10 text-text-primary' : 'border-border bg-bg-secondary text-text-secondary hover:text-text-primary'}`}>
-                <input type="checkbox" checked={selected.includes(r.id)} onChange={() => toggle(r.id)} className="accent-accent" />
+              <label key={r.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs cursor-pointer transition-colors font-medium ${selected.includes(r.id) ? 'border-amber-500 bg-amber-500/20 text-amber-200' : 'border-border bg-bg-secondary text-text-secondary hover:text-text-primary'}`}>
+                <input type="checkbox" checked={selected.includes(r.id)} onChange={() => toggle(r.id)} className="accent-amber-500" />
                 {r.title}
               </label>
             ))}
@@ -113,7 +113,7 @@ export default function ExportDataPage() {
           <h2 className="text-sm font-bold text-text-primary mb-3">صيغة التصدير</h2>
           <div className="flex gap-2">
             {([['excel', FileSpreadsheet, 'Excel'], ['csv', FileText, 'CSV']] as const).map(([f, Icon, label]) => (
-              <button key={f} onClick={() => setFormat(f)} className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-colors ${format === f ? 'border-accent bg-accent/10 text-text-primary' : 'border-border bg-bg-secondary text-text-secondary hover:text-text-primary'}`}>
+              <button key={f} onClick={() => setFormat(f)} className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-semibold transition-colors ${format === f ? 'border-amber-500 bg-amber-500/20 text-amber-200' : 'border-border bg-bg-secondary text-text-secondary hover:text-text-primary'}`}>
                 <Icon size={16} /> {label}
               </button>
             ))}

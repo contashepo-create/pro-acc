@@ -141,7 +141,7 @@ describe('reset-password — atomic token consumption', () => {
   test('hashes the URL token and delegates consume/update/session revocation to one RPC', async () => {
     setRpcResult('consume_password_reset_token', { id: 'u1' });
     const raw = 'a'.repeat(64);
-    const res = await resetPOST(req({ token: raw, password: 'NewStr0ng!Pass' }));
+    const res = await resetPOST(req({ token: raw, password: 'UnitTestPass26' }));
     expect(res.status).toBe(200);
     const call = getRpcCalls()[0];
     const params = call.params as { p_token_hash: string; p_password_hash: string };
@@ -158,7 +158,7 @@ describe('reset-password — atomic token consumption', () => {
     ['انتهت صلاحية الرمز', 'انتهت صلاحية'],
   ])('maps one-time token failures without exposing database details', async (dbMessage, responseMessage) => {
     setRpcResult('consume_password_reset_token', { data: null, error: { code: 'P0001', message: dbMessage } });
-    const res = await resetPOST(req({ token: 'b'.repeat(64), password: 'NewStr0ng!Pass' }));
+    const res = await resetPOST(req({ token: 'b'.repeat(64), password: 'UnitTestPass26' }));
     expect(res.status).toBe(400);
     expect((await res.json()).message).toContain(responseMessage);
   });
