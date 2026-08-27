@@ -24,7 +24,7 @@ describe('moduleForPath', () => {
     expect(moduleForPath('/api/custodies')).toBe('custody');
     expect(moduleForPath('/api/employees')).toBe('employees');
     expect(moduleForPath('/api/petty-cash')).toBe('cash');
-    expect(moduleForPath('/api/bonds')).toBe('cash');
+    expect(moduleForPath('/api/bonds')).toBe('bonds');
     expect(moduleForPath('/api/payments')).toBe('cash');
     expect(moduleForPath('/api/workflows')).toBe('workflows');
     expect(moduleForPath('/api/approvals')).toBe('approvals');
