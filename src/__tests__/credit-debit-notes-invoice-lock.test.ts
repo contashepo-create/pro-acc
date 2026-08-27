@@ -334,4 +334,24 @@ describe('ميجريشن 090 — قفل الفواتير والصافي (فحص 
     expect(cogs).toContain("'invoice_cancellation'");
     expect(cogs).toContain('v_issue.unit_price');
   });
+
+  test('ميجريشن 095 — قيمة متبقية واستبعاد ببيع بربح/خسارة', () => {
+    const fa = fs.readFileSync(path.join(process.cwd(), 'src', 'migrations', '095-asset-salvage-and-disposal-sale.sql'), 'utf8');
+    // الأعمدة الأربعة
+    expect(fa).toContain('ADD COLUMN IF NOT EXISTS salvage_value NUMERIC(15,2) NOT NULL DEFAULT 0');
+    expect(fa).toContain('ADD COLUMN IF NOT EXISTS sale_price NUMERIC(15,2)');
+    expect(fa).toContain('ADD COLUMN IF NOT EXISTS gain_loss NUMERIC(15,2)');
+    // الإهلاك يتوقف عند المتبقي: الحد = التكلفة − المُهلك − المتبقي
+    expect(fa).toContain('purchase_cost - COALESCE(v_asset.accumulated_depreciation,0) - COALESCE(v_asset.salvage_value,0)');
+    expect(fa).toContain('p_salvage_value>=p_purchase_cost');
+    // الشطب: قيد (مجمع + خسارة) مقابل التكلفة — بلا منع للاستبعاد
+    expect(fa).toContain("reference_type='fixed_asset_disposal'");
+    expect(fa).not.toContain('لا يمكن استبعاد أصل له إهلاك');
+    // البيع: تحصيل/مجمع/خسارة مقابل الأصل + ربح، مرجع dispose_sale
+    expect(fa).toContain("reference_type='fixed_asset_disposal_sale'");
+    expect(fa).toContain("'accountId',v_loss,'debit',-v_diff");
+    expect(fa).toContain("'accountId',v_gain,'debit',0,'credit',v_diff");
+    // إنشاء بقيمة متبقية (حملة جديدة)
+    expect(fa).toContain('p_salvage_value NUMERIC DEFAULT 0');
+  });
 });

@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
       p_notes: input.notes || '',
       p_bank_safe_id: input.bank_safe_id,
       p_created_by: auth.userId,
+      p_salvage_value: input.salvage_value ?? 0,
     });
     if (rpcError) throw rpcError;
     return success(data, 201);

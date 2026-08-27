@@ -52,6 +52,8 @@ export const fixedAssetCreateSchema = z.object({
   location: z.string().trim().max(500).optional(),
   notes: z.string().trim().max(2000).optional(),
   bank_safe_id: hrUuid,
+  // القيمة المتبقية (Salvage): يوقف الإهلاك عندها (095)
+  salvage_value: money.refine((v) => v >= 0, 'القيمة المتبقية غير صالحة').optional(),
 }).strict();
 export const fixedAssetUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
