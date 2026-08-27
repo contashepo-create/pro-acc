@@ -344,7 +344,7 @@ describe('End-to-end API → Database Schema Coverage', () => {
       'financial_audit_trails','transaction_categories','crm_contacts','crm_followups',
       'bank_reconciliation','bank_reconciliation_items','daily_worker_records',
       'daily_worker_settlements','disbursement_invoice_items','receipt_invoice_items',
-      'tender_cost_items','salary_items','contract_documents',
+      'tender_cost_items','tender_expenses','salary_items','contract_documents',
     ];
     const missing = required.filter(t => !tables[t]);
     if (missing.length > 0) console.log('Missing tables:', missing);

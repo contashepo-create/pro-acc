@@ -36,7 +36,7 @@ const TYPE_LABELS: Record<string, string> = {
   retention: 'محجوزات', warranty: 'ضمان', insurance: 'تأمين', other: 'أخرى',
 };
 const STATUS_LABELS: Record<string, string> = {
-  active: 'ساري', expired: 'منتهي', released: 'مُلك', cancelled: 'ملغى',
+  active: 'ساري', expired: 'منتهي', released: 'مُحرَّر', cancelled: 'ملغى',
 };
 const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'> = {
   active: 'success', expired: 'danger', released: 'default', cancelled: 'default',

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowRight, Plus, Trophy, XCircle, Send, FileText, Banknote,
-  TrendingUp, Building2, Calendar, MapPin, Percent, Hash,
+  Building2, Calendar, MapPin, Percent, Hash,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { toDateInput } from '@/lib/form-utils';
+
 
 interface TenderDetail {
   id: string;
@@ -65,9 +65,16 @@ const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' 
   won: 'success', lost: 'danger', cancelled: 'default',
 };
 const EXPENSE_LABELS: Record<string, string> = {
-  karasa: 'كراسة الشروط', platform_fee: 'رسوم المنصة', bid_bond_margin: 'غطاء ضمان ابتدائي',
-  bid_bond_commission: 'عمولة ضمان', consulting: 'استشارات', other: 'أخرى',
+  karasa: 'كراسة الشروط', platform_fee: 'رسوم المنصة',
+  bid_bond_margin: 'غطاء ضمان ابتدائي', bid_bond_commission: 'عمولة ضمان',
+  consulting: 'استشارات', other: 'أخرى',
 };
+const EXPENSE_FORM_OPTIONS = [
+  { value: 'karasa', label: 'كراسة الشروط' },
+  { value: 'platform_fee', label: 'رسوم المنصة' },
+  { value: 'consulting', label: 'استشارات' },
+  { value: 'other', label: 'أخرى' },
+];
 
 export default function TenderDetailPage() {
   const params = useParams();
@@ -207,6 +214,9 @@ export default function TenderDetailPage() {
             <Button variant="outline" onClick={() => handleStatusChange('lost')}>
               <XCircle size={16} className="ml-1" /> خسارة
             </Button>
+          )}
+          {canTransition('cancelled') && (
+            <Button variant="ghost" onClick={() => handleStatusChange('cancelled')}>إلغاء</Button>
           )}
           {tender.status === 'won' && !tender.project_id && (
             <Button onClick={handleConvertToProject}>
@@ -374,7 +384,7 @@ export default function TenderDetailPage() {
       {activeTab === 'bonds' && (
         <div>
           <div className="flex justify-end mb-3">
-            <Button onClick={() => router.push(`/bonds/new?tender_id=${tender.id}`)}>
+            <Button onClick={() => router.push(`/bonds?tender_id=${tender.id}`)}>
               <Plus size={16} className="ml-1" /> خطاب ضمان
             </Button>
           </div>
@@ -420,7 +430,7 @@ export default function TenderDetailPage() {
             label="نوع المصروف *"
             value={expenseForm.expense_type}
             onChange={(v) => setExpenseForm({ ...expenseForm, expense_type: v })}
-            options={Object.entries(EXPENSE_LABELS).map(([val, label]) => ({ value: val, label }))}
+            options={EXPENSE_FORM_OPTIONS}
           />
           <Input label="التاريخ" type="date" value={expenseForm.date}
             onChange={(e) => setExpenseForm({ ...expenseForm, date: e.target.value })} />
