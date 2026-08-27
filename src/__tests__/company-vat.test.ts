@@ -16,6 +16,11 @@ describe('parseCompanyVatRate', () => {
     expect(parseCompanyVatRate({ country_code: 'SA' })).toBe(0.15);
     expect(parseCompanyVatRate(null)).toBe(0.15);
   });
+
+  test('keeps an explicit zero rate for exempt companies', () => {
+    expect(parseCompanyVatRate({ vat_rate: 0, country_code: 'EG' })).toBe(0);
+    expect(parseCompanyVatRate({ vat_rate: 0, country_code: 'SA' })).toBe(0);
+  });
 });
 
 describe('normalizeVatFraction', () => {

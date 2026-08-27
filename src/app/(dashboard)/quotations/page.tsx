@@ -16,11 +16,14 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency, escapeHtml } from '@/lib/utils';
+import { formatDate, escapeHtml } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
 import { openPrintWindow } from '@/lib/print';
 import { formatDocumentNumber } from '@/lib/document-number';
 import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { companyDisplayMoney } from '@/lib/company-money';
+import { localDateISO } from '@/lib/fiscal-calendar';
+import { useAuthStore } from '@/store/auth-store';
 
 interface QuotationItem { description: string; quantity: number; unit_price: number; total: number; }
 interface QuotationRow {
@@ -50,6 +53,8 @@ interface QuotationForm {
 }
 
 export default function QuotationsPage() {
+  const { company: authCompany } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, authCompany);
   const [quotations, setQuotations] = useState<QuotationRow[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,7 +67,7 @@ export default function QuotationsPage() {
   const [company, setCompany] = useState<CompanyInfo | null>(null);
   const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [form, setForm] = useState<QuotationForm>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateISO(),
     contact_id: '',
     valid_until: '',
     notes: '',
@@ -123,7 +128,7 @@ export default function QuotationsPage() {
         setShowModal(false);
         setEditingQuotation(null);
         setForm({
-          date: new Date().toISOString().split('T')[0],
+          date: localDateISO(),
           contact_id: '',
           valid_until: '',
           notes: '',
@@ -192,8 +197,8 @@ export default function QuotationsPage() {
       .map((it: QuotationItem) => `<tr>
         <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:right">${escapeHtml(String(it.description || ''))}</td>
         <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.quantity || 0)}</td>
-        <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${Number(it.unit_price || 0).toFixed(2)}</td>
-        <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:left;white-space:nowrap;font-weight:700">${Number(it.total || 0).toFixed(2)}</td>
+        <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:center;white-space:nowrap">${escapeHtml(money(Number(it.unit_price || 0)))}</td>
+        <td style="padding:8px 10px;border:1px solid #d8dee9;text-align:left;white-space:nowrap;font-weight:700">${escapeHtml(money(Number(it.total || 0)))}</td>
       </tr>`)
       .join('');
     const subtotal = Number(quotation.subtotal || 0);
@@ -253,9 +258,9 @@ export default function QuotationsPage() {
             <tbody>${itemsHtml || '<tr><td colspan="4" style="text-align:center;color:#94a3b8">لا توجد بنود</td></tr>'}</tbody>
           </table>
           <div class="totals">
-            <div class="row"><span>المجموع الفرعي (قبل الضريبة)</span><span>${subtotal.toFixed(2)}</span></div>
-            ${taxAmount > 0 ? `<div class="row"><span>ضريبة القيمة المضافة</span><span>${taxAmount.toFixed(2)}</span></div>` : ''}
-            <div class="grand"><span>الإجمالي شامل الضريبة</span><span>${total.toFixed(2)}</span></div>
+            <div class="row"><span>المجموع الفرعي (قبل الضريبة)</span><span>${escapeHtml(money(subtotal))}</span></div>
+            ${taxAmount > 0 ? `<div class="row"><span>ضريبة القيمة المضافة</span><span>${escapeHtml(money(taxAmount))}</span></div>` : ''}
+            <div class="grand"><span>الإجمالي شامل الضريبة</span><span>${escapeHtml(money(total))}</span></div>
           </div>
         </div>
         ${quotation.notes ? `<div class="section"><h3>ملاحظات</h3><p class="muted" style="margin:0;line-height:1.8">${escapeHtml(String(quotation.notes))}</p></div>` : ''}
@@ -286,7 +291,7 @@ export default function QuotationsPage() {
     { key: 'number', label: 'الرقم', sortable: true, render: (row: QuotationRow) => formatDocumentNumber('quotation', row.number) },
     { key: 'date', label: 'التاريخ', render: (row: QuotationRow) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true },
-    { key: 'total', label: 'الإجمالي', render: (row: QuotationRow) => formatCurrency(row.total) },
+    { key: 'total', label: 'الإجمالي', render: (row: QuotationRow) => money(row.total) },
     { key: 'status', label: 'الحالة', render: (row: QuotationRow) => statusBadge(row.status ?? '') },
     {
       key: 'actions',
@@ -353,7 +358,7 @@ export default function QuotationsPage() {
                   const p = parseFloat(e.target.value) || 0; const items = [...form.items];
                   items[idx] = { ...items[idx], unit_price: p, total: p * (Number(items[idx].quantity) || 0) }; setForm({ ...form, items });
                 }} />
-                <div className="col-span-2 text-sm font-mono flex items-center">{formatCurrency(item.total || 0)}</div>
+                <div className="col-span-2 text-sm font-mono flex items-center">{money(item.total || 0)}</div>
               </div>
             ))}
           </div>
@@ -391,8 +396,8 @@ export default function QuotationsPage() {
                   <tr key={idx}>
                     <td className="p-2 font-medium">{it.description}</td>
                     <td className="p-2 text-center font-mono">{it.quantity}</td>
-                    <td className="p-2 text-center font-mono">{formatCurrency(it.unit_price || 0)}</td>
-                    <td className="p-2 text-left font-bold font-mono">{formatCurrency(it.total || 0)}</td>
+                    <td className="p-2 text-center font-mono">{money(it.unit_price || 0)}</td>
+                    <td className="p-2 text-left font-bold font-mono">{money(it.total || 0)}</td>
                   </tr>
                 ))}
               </tbody>

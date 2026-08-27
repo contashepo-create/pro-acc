@@ -18,6 +18,7 @@ import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
 import { getCountryConfig } from '@/lib/countries';
 import { defaultFiscalStart } from '@/lib/fiscal-calendar';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
 import { taxQrCaption } from '@/lib/tax-authority';
 import OverheadSettings from '@/components/settings/OverheadSettings';
 import { 
@@ -154,8 +155,7 @@ interface TelegramSettings {
           if (c?.country_code) setCountryCode(c.country_code);
           if (c?.currency_symbol) setCurrencySymbol(c.currency_symbol);
           if (c?.currency_code) setCurrencyCode(c.currency_code);
-          if (c?.vat_rate) setVatRate(String(parseFloat(c.vat_rate) * 100));
-          else if (s.vat_rate) setVatRate(String(parseFloat(s.vat_rate) * 100));
+          if (c) setVatRate(vatPercentLabel(parseCompanyVatRate(c)));
           if (s.notif_invoice !== undefined) setNotifInvoice(s.notif_invoice === 'true' || s.notif_invoice === true);
           if (s.notif_due !== undefined) setNotifDue(s.notif_due === 'true' || s.notif_due === true);
           if (s.notif_stock !== undefined) setNotifStock(s.notif_stock === 'true' || s.notif_stock === true);
@@ -246,6 +246,11 @@ interface TelegramSettings {
   };
 
   const handleSaveCompany = async () => {
+    const pct = parseFloat(vatRate);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      showToast('نسبة الضريبة غير صالحة');
+      return;
+    }
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
@@ -258,7 +263,7 @@ interface TelegramSettings {
             phone: phone,
             email: email,
             address: address,
-            vat_rate: parseFloat(vatRate) / 100,
+            vat_rate: pct / 100,
           },
         }),
       });
@@ -323,13 +328,18 @@ interface TelegramSettings {
   };
 
   const handleSaveTax = async () => {
+    const pct = parseFloat(vatRate);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      showToast('نسبة الضريبة غير صالحة');
+      return;
+    }
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          settings: {
-            vat_rate: vatRate,
+          company: {
+            vat_rate: pct / 100,
           }
         }),
       });

@@ -19,8 +19,10 @@ export function normalizeVatFraction(raw: unknown): number {
 
 export function parseCompanyVatRate(company?: CompanyTaxInfo | null): number {
   const countryDefault = company?.country_code === 'EG' ? 0.14 : 0.15;
-  const fraction = normalizeVatFraction(company?.vat_rate);
-  return fraction > 0 ? fraction : countryDefault;
+  if (company == null || company.vat_rate == null || company.vat_rate === '') return countryDefault;
+  const n = Number(company.vat_rate);
+  if (!Number.isFinite(n) || n < 0) return countryDefault;
+  return normalizeVatFraction(n);
 }
 
 export function vatPercentLabel(rate: number): string {

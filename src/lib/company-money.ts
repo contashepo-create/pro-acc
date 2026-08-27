@@ -17,5 +17,5 @@ export function companyMoneyParts(company?: CompanyMoneyInfo | null) {
 
 export function companyDisplayMoney(amount: number, company?: CompanyMoneyInfo | null): string {
   const { locale, symbol } = companyMoneyParts(company);
-  return formatCurrency(amount, locale, symbol);
+  return formatCurrency(Number.isFinite(amount) ? amount : 0, locale, symbol);
 }
