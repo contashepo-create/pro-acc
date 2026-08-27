@@ -24,6 +24,9 @@ export async function GET(request: NextRequest) {
     const notifications: SmartNotification[] = [];
     const now = new Date();
     const today = now.toISOString().split('T')[0];
+    const { data: companyMoney } = await s.from('companies')
+      .select('currency_symbol').eq('id', auth.companyId).maybeSingle();
+    const money = String((companyMoney as { currency_symbol?: string } | null)?.currency_symbol || '').trim() || 'ر.س';
 
     // 1. Overdue invoices check
     try {
@@ -40,7 +43,7 @@ export async function GET(request: NextRequest) {
           id: 'overdue-invoices',
           type: 'danger',
           title: 'فواتير متأخرة',
-          message: `لديك ${overdue.length} فاتورة متأخرة بإجمالي ${totalOverdue.toFixed(2)} ر.س`,
+          message: `لديك ${overdue.length} فاتورة متأخرة بإجمالي ${totalOverdue.toFixed(2)} ${money}`,
           action: { label: 'عرض الفواتير', href: '/invoices?status=unpaid' },
           createdAt: now.toISOString(),
         });
@@ -80,7 +83,7 @@ export async function GET(request: NextRequest) {
               id: `low-balance-${bank.account_id}`,
               type: 'warning',
               title: `رصيد منخفض: ${bank.name}`,
-              message: `الرصيد الحالي: ${bal.toFixed(2)} ر.س`,
+              message: `الرصيد الحالي: ${bal.toFixed(2)} ${money}`,
               action: { label: 'عرض الحساب', href: '/banks' },
               createdAt: now.toISOString(),
             });

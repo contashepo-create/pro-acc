@@ -174,6 +174,8 @@ describe('Default chart of accounts — structural & accounting integrity', () =
       expect(byCode.has(code)).toBe(true);
     }
     expect(byCode.get('1290')!.parentCode).toBe('1200');
+    expect(byCode.get('2190')!.parentCode).toBe('2200');
+    expect(byCode.get('4100')!.name).toBe('إيرادات النشاط');
     expect(byCode.get('1000')!.isHeader).toBe(true);
     expect(byCode.get('1110')!.isHeader).toBeFalsy();
   });

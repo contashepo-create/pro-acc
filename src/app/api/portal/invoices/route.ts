@@ -37,7 +37,13 @@ export async function GET(request: NextRequest) {
       .order('date', { ascending: false });
     if (invoiceError) throw invoiceError;
 
-    return success({ invoices: invoices || [] });
+    const { data: company, error: companyError } = await s.from('companies')
+      .select('currency_symbol, currency_code, locale, country_code, name')
+      .eq('id', auth.companyId)
+      .maybeSingle();
+    if (companyError) throw companyError;
+
+    return success({ invoices: invoices || [], company: company || null });
   } catch (err) {
     return handleApiError(err);
   }

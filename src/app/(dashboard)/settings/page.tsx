@@ -17,6 +17,7 @@ import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
 import { getCountryConfig } from '@/lib/countries';
+import { taxQrCaption } from '@/lib/tax-authority';
 import OverheadSettings from '@/components/settings/OverheadSettings';
 import { 
   INVOICE_TEMPLATES, 
@@ -1184,7 +1185,7 @@ interface TelegramSettings {
                     {telegramConfig.approvals_enabled && (
                       <div className="pl-4 pr-4 py-3 rounded-lg bg-bg-secondary border border-border max-w-md">
                         <Input 
-                          label="فرض الموافقات فقط للمبالغ التي تتجاوز (ريال):" 
+                          label={`فرض الموافقات فقط للمبالغ التي تتجاوز (${currencySymbol}):`} 
                           type="number" 
                           placeholder="5000" 
                           value={telegramConfig.approval_threshold} 

@@ -26,7 +26,11 @@ export async function assertOpenFiscalPeriod(companyId: string, date: string): P
   if (error) return;
 
   const years = (data || []) as FiscalYear[];
-  if (years.length === 0) return;
+  if (years.length === 0) {
+    throw new BusinessRuleError(
+      'لا توجد سنة مالية مفتوحة. أنشئ سنة مالية تغطي تاريخ العملية ثم أعد المحاولة.'
+    );
+  }
 
   const coveringYear = years.find((year) => date >= year.start_date && date <= year.end_date);
   if (!coveringYear) {

@@ -50,7 +50,7 @@ export async function GET(
     if (itemsError) throw itemsError;
 
     const { data: company, error: companyError } = await s.from('companies')
-      .select('name, tax_number, address, phone, logo_url')
+      .select('name, tax_number, address, phone, logo_url, currency_symbol, currency_code, locale, country_code')
       .eq('id', auth.companyId)
       .eq('is_active', true)
       .maybeSingle();

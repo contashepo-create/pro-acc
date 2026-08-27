@@ -14,6 +14,8 @@ import { StatCard } from '@/components/ui/StatCard';
 import { formatCurrency } from '@/lib/utils';
 import { apiFetch } from '@/lib/api-client';
 import { Download, FileText, RefreshCw } from 'lucide-react';
+import { useAuthStore } from '@/store/auth-store';
+import { taxAuthorityName } from '@/lib/tax-authority';
 
 const TYPE_LABELS: Record<string, string> = {
   asset: 'أصل',
@@ -70,6 +72,9 @@ function downloadCsv(filename: string, headers: string[], rows: (string | number
 }
 
 export default function ReportsPage() {
+  const { company } = useAuthStore();
+  const authority = taxAuthorityName(company?.country_code);
+  const vatPercentDefault = company?.country_code === 'EG' ? 14 : 15;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('trial_balance');
@@ -253,7 +258,7 @@ export default function ReportsPage() {
     <div className="space-y-6">
       <PageHeader 
         title="التقارير المالية والمحاسبية" 
-        description="تقارير مالية مبنية على القيود الفعلية ومطابقة للمعايير الدولية (IFRS/GAAP) وهيئة الزكاة والضريبة والجمارك"
+        description={`تقارير مالية مبنية على القيود الفعلية ومطابقة للمعايير الدولية و${authority}`}
         actions={
           <div className="flex gap-2">
             <Button variant="secondary" leftIcon={<RefreshCw size={16} />} onClick={load}>تحديث البيانات</Button>
@@ -278,7 +283,7 @@ export default function ReportsPage() {
         { id: 'cash_flow', label: 'التدفقات النقدية' },
         { id: 'profitability', label: 'ربحية المشاريع' },
         { id: 'aging', label: 'التقادم الزمني للديون' },
-        { id: 'vat', label: 'ضريبة القيمة المضافة (ZATCA)' },
+        { id: 'vat', label: 'ضريبة القيمة المضافة' },
         { id: 'operational', label: 'تقارير تشغيلية' },
       ]} activeTab={tab} onChange={setTab} />
 
@@ -566,7 +571,7 @@ export default function ReportsPage() {
             <StatCard title="المبيعات بدون ضريبة" value={formatCurrency(vat?.summary?.total_sales_excluding_vat || 0)} />
           </div>
           <p className="text-sm text-text-muted">
-            الحالة: {vat?.summary?.vat_payable_status === 'refundable' ? 'رصيد قابل للاسترداد من هيئة الزكاة' : 'مستحق السداد لهيئة الزكاة والضريبة والجمارك'} — نسبة الضريبة {(vat?.vat_rate || 0.15) * 100}%
+            الحالة: {vat?.summary?.vat_payable_status === 'refundable' ? `رصيد قابل للاسترداد من ${authority}` : `مستحق السداد لـ${authority}`} — نسبة الضريبة {(vat?.vat_rate || vatPercentDefault / 100) * 100}%
           </p>
         </div>
       )}
