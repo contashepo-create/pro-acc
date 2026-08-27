@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
@@ -12,7 +12,7 @@ import { Table } from '@/components/ui/Table';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { StatCard } from '@/components/ui/StatCard';
 import { companyDisplayMoney } from '@/lib/company-money';
-import { defaultFiscalWindow } from '@/lib/fiscal-calendar';
+import { defaultFiscalWindow, localDateISO } from '@/lib/fiscal-calendar';
 import { apiFetch } from '@/lib/api-client';
 import { Download, FileText, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
@@ -25,14 +25,6 @@ const TYPE_LABELS: Record<string, string> = {
   revenue: 'إيراد',
   expense: 'مصروف',
 };
-
-function todayISO() {
-  return new Date().toISOString().split('T')[0];
-}
-
-function yearStartISO() {
-  return `${new Date().getFullYear()}-01-01`;
-}
 
 interface TrialBalanceAccount { code: string; name: string; type: string; total_debit: number; total_credit: number; balance: number; }
 interface TrialBalanceData { accounts: TrialBalanceAccount[]; total_debit: number; total_credit: number; }
@@ -80,8 +72,9 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('trial_balance');
-  const [from, setFrom] = useState(yearStartISO());
-  const [to, setTo] = useState(todayISO());
+  const fromTouched = useRef(false);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState(() => localDateISO());
 
   // Report Data States
   const [trialBalance, setTrialBalance] = useState<TrialBalanceData | null>(null);
@@ -181,11 +174,13 @@ export default function ReportsPage() {
   // synchronously before the network round trip so the UI never shows
   // stale data while refetching.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (from) load(); }, [load]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
-    if (company?.country_code) setFrom(defaultFiscalWindow(company.country_code).start);
-  }, [company?.country_code]);
+    if (fromTouched.current || !company) return;
+    setFrom(defaultFiscalWindow(company.country_code).start);
+  }, [company, company?.country_code]);
 
   useEffect(() => {
     fetch('/api/projects').then((r) => r.json()).then((j) => {

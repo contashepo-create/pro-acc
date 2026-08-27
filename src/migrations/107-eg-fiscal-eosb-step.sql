@@ -45,7 +45,7 @@ CREATE OR REPLACE FUNCTION public.accrue_eosb_batch(
 DECLARE
   v_expense UUID; v_liability UUID; v_month_end DATE;
   v_journal JSONB;
-  v_emp RECORD; v_years NUMERIC; v_factor NUMERIC; v_amount NUMERIC; v_total NUMERIC:=0; v_count INT:=0;
+  v_emp RECORD; v_factor NUMERIC; v_amount NUMERIC; v_total NUMERIC:=0; v_count INT:=0;
   v_code TEXT; v_parent UUID;
 BEGIN
   IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN

@@ -6,6 +6,11 @@ function iso(y: number, m: number, d: number): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
+/** تاريخ محلي بصيغة يوم، بدون إزاحة توقيت عالمي. */
+export function localDateISO(d: Date = new Date()): string {
+  return iso(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
 /**
  * نافذة السنة المالية الافتراضية حسب دولة التشغيل:
  * السعودية: أول يناير–آخر ديسمبر.

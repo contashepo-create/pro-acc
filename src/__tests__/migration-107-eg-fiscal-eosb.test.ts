@@ -18,5 +18,6 @@ describe('ميجريشن 107 — سنة مصر ونهاية الخدمة', () =>
   test('نهاية الخدمة نصف شهر ثم شهر بعد خمس سنوات للدولتين', () => {
     expect(sql).toContain('v_factor:=CASE WHEN v_emp.years>=5 THEN 1.0 ELSE 0.5 END');
     expect(sql).not.toContain("WHEN v_code='EG' THEN 0.5");
+    expect(sql).not.toMatch(/v_years NUMERIC/);
   });
 });
