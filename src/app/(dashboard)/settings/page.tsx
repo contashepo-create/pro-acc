@@ -8,7 +8,7 @@ import {
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
+
 import { Textarea } from '@/components/ui/Textarea';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/Badge';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
-import { getCountriesList, getCountryConfig } from '@/lib/countries';
+import { getCountryConfig } from '@/lib/countries';
 import OverheadSettings from '@/components/settings/OverheadSettings';
 import { 
   INVOICE_TEMPLATES, 
@@ -255,7 +255,6 @@ interface TelegramSettings {
             phone: phone,
             email: email,
             address: address,
-            country_code: countryCode,
             vat_rate: parseFloat(vatRate) / 100,
           },
         }),
@@ -456,21 +455,14 @@ interface TelegramSettings {
           <div className="mt-6 pt-6 border-t border-border">
             <h4 className="text-sm font-bold text-text-primary mb-3">البلد والعملة</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Select
-                label="الدولة"
-                value={countryCode}
-                onChange={(v) => {
-                  setCountryCode(v);
-                  const config = getCountriesList().find(c => c.value === v);
-                  if (config) {
-                    const cc = getCountryConfig(v);
-                    setCurrencySymbol(cc.currencySymbol);
-                    setCurrencyCode(cc.currencyCode);
-                    setVatRate(String(cc.vatRate * 100));
-                  }
-                }}
-                options={getCountriesList()}
+              <Input
+                label="دولة التشغيل"
+                value={getCountryConfig(countryCode).name}
+                disabled
               />
+              <p className="sm:col-span-2 text-xs text-text-muted -mt-2">
+                تُختار مرة واحدة عند إنشاء الحساب (السعودية أو مصر) ولا يمكن تغييرها. العملة ونسبة الضريبة والتأمينات تتبع هذه الدولة.
+              </p>
               <Input label="رمز العملة" value={currencyCode} disabled />
               <Input label="رمز العملة (العرض)" value={currencySymbol} onChange={(e) => setCurrencySymbol(e.target.value)} />
               <Input label="نسبة الضريبة (%)" type="number" value={vatRate} onChange={(e) => setVatRate(e.target.value)} />

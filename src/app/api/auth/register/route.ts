@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
     const parsed = registerSchema.safeParse(body);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { companyName, name, email, password, phone } = parsed.data;
+    const { companyName, name, email, password, phone, country } = parsed.data;
     const { captchaId, captchaAnswer } = body;
 
     // CAPTCHA is MANDATORY when enabled. Previously omitting the captcha
@@ -194,10 +194,11 @@ export async function POST(request: NextRequest) {
     const verificationToken = randomBytes(32).toString('hex');
     const verificationTokenHash = createHash('sha256').update(verificationToken).digest('hex');
 
-    // Get country config
-    const { getCountryConfig } = await import('@/lib/countries');
-    const countryCode = String(body.country || 'SA');
-    const countryConfig = getCountryConfig(countryCode);
+    const { getCountryConfig, isOperatingCountry } = await import('@/lib/countries');
+    if (!isOperatingCountry(country)) {
+      return error('اختر دولة التشغيل: السعودية أو مصر', 400);
+    }
+    const countryConfig = getCountryConfig(country);
 
     const accountTemplate=DEFAULT_CHART_OF_ACCOUNTS.map((account)=>({
       code:account.code,name:account.name,name_en:account.nameEn,type:account.type,

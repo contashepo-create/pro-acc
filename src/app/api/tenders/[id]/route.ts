@@ -63,7 +63,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         p_user_id: auth.userId,
       });
       if (transitionError) return tenderMutationError(transitionError);
-      if (parsed.data.status === 'lost') {
+      if (parsed.data.status === 'lost' || parsed.data.status === 'cancelled') {
         const { error: closeError } = await sb().rpc('close_lost_tender_atomic', {
           p_company_id: auth.companyId,
           p_tender_id: id,
