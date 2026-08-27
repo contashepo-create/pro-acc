@@ -33,6 +33,8 @@ import {
 } from 'recharts';
 import { useAuthStore } from '@/store/auth-store';
 import { formatCurrency } from '@/lib/utils';
+import { companyMoneyParts } from '@/lib/company-money';
+import { operatingLocale } from '@/lib/fiscal-calendar';
 
 interface DashboardProject {
   id: string;
@@ -197,7 +199,7 @@ export default function DashboardPage() {
   }
 
   const s = data || empty;
-  const moneySymbol = company?.currency_symbol || 'ر.س';
+  const moneySymbol = companyMoneyParts(company).symbol;
   const netTone = s.netProfit >= 0 ? 'success' : 'danger';
   const netLabel = formatMoney(s.netProfit, moneySymbol);
   const firstName = user?.name?.split(' ')[0] || '';
@@ -237,7 +239,7 @@ export default function DashboardPage() {
           </div>
           <div className="text-sm px-4 py-2 rounded-xl border" style={{ background: 'var(--color-bg-secondary)', color: 'var(--color-text-muted)', borderColor: 'var(--color-border)' }}>
             {typeof window !== 'undefined'
-              ? new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+              ? new Date().toLocaleDateString(operatingLocale(company?.country_code), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
               : ''}
           </div>
         </div>
@@ -365,7 +367,7 @@ export default function DashboardPage() {
                     </div>
                   </div>
                   <div className="text-xs whitespace-nowrap font-mono" style={{ color: 'var(--color-text-muted)' }}>
-                    {a.created_at ? new Date(a.created_at).toLocaleString('ar-SA', { dateStyle: 'short', timeStyle: 'short' }) : ''}
+                    {a.created_at ? new Date(a.created_at).toLocaleString(operatingLocale(company?.country_code), { dateStyle: 'short', timeStyle: 'short' }) : ''}
                   </div>
                 </li>
               ))}
@@ -379,7 +381,7 @@ export default function DashboardPage() {
 
 function HeaderBlock() {
   const today = typeof window !== 'undefined'
-    ? new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    ? new Date().toLocaleDateString(operatingLocale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
     : '';
   return (
     <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">

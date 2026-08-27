@@ -12,7 +12,9 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth-store';
+import { companyDisplayMoney } from '@/lib/company-money';
 import { apiFetch } from '@/lib/api-client';
 import { formatDocumentNumber } from '@/lib/document-number';
 
@@ -28,6 +30,8 @@ interface JournalEntryRow {
 }
 
 export default function JournalPage() {
+  const { company } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const router = useRouter();
   const [entries, setEntries] = useState<JournalEntryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,8 +73,8 @@ export default function JournalPage() {
     { key: 'number', label: 'الرقم', sortable: true, render: (row: JournalEntryRow) => formatDocumentNumber('journal', row.number) },
     { key: 'date', label: 'التاريخ', render: (r: JournalEntryRow) => formatDate(r.date) },
     { key: 'description', label: 'البيان' },
-    { key: 'total_debit', label: 'المدين', render: (r: JournalEntryRow) => formatCurrency(r.total_debit ?? 0) },
-    { key: 'total_credit', label: 'الدائن', render: (r: JournalEntryRow) => formatCurrency(r.total_credit ?? 0) },
+    { key: 'total_debit', label: 'المدين', render: (r: JournalEntryRow) => money(r.total_debit ?? 0) },
+    { key: 'total_credit', label: 'الدائن', render: (r: JournalEntryRow) => money(r.total_credit ?? 0) },
     {
       key: 'actions',
       label: 'إجراءات',
@@ -127,8 +131,8 @@ export default function JournalPage() {
                 {(viewing.lines || []).map((l: JournalLine) => (
                   <tr key={l.id}>
                     <td className="p-2"><span dir="ltr" className="font-mono" style={{ unicodeBidi: 'isolate' }}>{l.account_code}</span> — {l.account_name || ''}</td>
-                    <td className="p-2 font-mono">{formatCurrency(l.debit || 0)}</td>
-                    <td className="p-2 font-mono">{formatCurrency(l.credit || 0)}</td>
+                    <td className="p-2 font-mono">{money(l.debit || 0)}</td>
+                    <td className="p-2 font-mono">{money(l.credit || 0)}</td>
                   </tr>
                 ))}
               </tbody>

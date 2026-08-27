@@ -11,7 +11,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Table } from '@/components/ui/Table';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { StatCard } from '@/components/ui/StatCard';
-import { formatCurrency } from '@/lib/utils';
+import { companyDisplayMoney } from '@/lib/company-money';
+import { defaultFiscalWindow } from '@/lib/fiscal-calendar';
 import { apiFetch } from '@/lib/api-client';
 import { Download, FileText, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
@@ -73,6 +74,7 @@ function downloadCsv(filename: string, headers: string[], rows: (string | number
 
 export default function ReportsPage() {
   const { company } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const authority = taxAuthorityName(company?.country_code);
   const vatPercentDefault = company?.country_code === 'EG' ? 14 : 15;
   const [loading, setLoading] = useState(true);
@@ -182,6 +184,10 @@ export default function ReportsPage() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
+    if (company?.country_code) setFrom(defaultFiscalWindow(company.country_code).start);
+  }, [company?.country_code]);
+
+  useEffect(() => {
     fetch('/api/projects').then((r) => r.json()).then((j) => {
       if (j.success) setProjects(j.data?.rows || j.data?.projects || []);
     }).catch(() => {});
@@ -237,21 +243,21 @@ export default function ReportsPage() {
     { key: 'code', label: 'الكود', sortable: true },
     { key: 'name', label: 'الحساب', sortable: true },
     { key: 'type', label: 'النوع', render: (row: TrialBalanceAccount) => <Badge variant="info">{TYPE_LABELS[row.type] || row.type}</Badge> },
-    { key: 'total_debit', label: 'مجموع مدين', render: (row: TrialBalanceAccount) => formatCurrency(row.total_debit) },
-    { key: 'total_credit', label: 'مجموع دائن', render: (row: TrialBalanceAccount) => formatCurrency(row.total_credit) },
-    { key: 'balance', label: 'الرصيد', render: (row: TrialBalanceAccount) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(row.balance)}</span> },
+    { key: 'total_debit', label: 'مجموع مدين', render: (row: TrialBalanceAccount) => money(row.total_debit) },
+    { key: 'total_credit', label: 'مجموع دائن', render: (row: TrialBalanceAccount) => money(row.total_credit) },
+    { key: 'balance', label: 'الرصيد', render: (row: TrialBalanceAccount) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{money(row.balance)}</span> },
   ];
 
   const moneyCols = [
     { key: 'code', label: 'الكود' },
     { key: 'name', label: 'الحساب' },
-    { key: 'amount', label: 'المبلغ', render: (row: MoneyRow) => formatCurrency(row.amount ?? row.balance) },
+    { key: 'amount', label: 'المبلغ', render: (row: MoneyRow) => money(row.amount ?? row.balance) },
   ];
 
   const bsCols = [
     { key: 'code', label: 'الكود' },
     { key: 'name', label: 'الحساب' },
-    { key: 'balance', label: 'الرصيد', render: (row: BalanceSheetRow) => formatCurrency(row.balance) },
+    { key: 'balance', label: 'الرصيد', render: (row: BalanceSheetRow) => money(row.balance) },
   ];
 
   return (
@@ -294,8 +300,8 @@ export default function ReportsPage() {
       {!loading && !error && tab === 'trial_balance' && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <StatCard title="إجمالي المدين" value={formatCurrency(trialBalance?.total_debit || 0)} accentColor="var(--color-info)" />
-            <StatCard title="إجمالي الدائن" value={formatCurrency(trialBalance?.total_credit || 0)} accentColor="var(--color-accent)" />
+            <StatCard title="إجمالي المدين" value={money(trialBalance?.total_debit || 0)} accentColor="var(--color-info)" />
+            <StatCard title="إجمالي الدائن" value={money(trialBalance?.total_credit || 0)} accentColor="var(--color-accent)" />
           </div>
           {(trialBalance?.accounts || []).length === 0 ? (
             <p className="text-text-muted text-center py-8">لا توجد قيود في الفترة المحددة</p>
@@ -311,9 +317,9 @@ export default function ReportsPage() {
           {incomeStatement ? (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <StatCard title="إجمالي الإيرادات" value={formatCurrency(incomeStatement.total_revenue || 0)} accentColor="var(--color-success)" />
-                <StatCard title="إجمالي المصروفات" value={formatCurrency(incomeStatement.total_expenses || 0)} accentColor="var(--color-danger)" />
-                <StatCard title="صافي الدخل (الربح / الخسارة)" value={formatCurrency(incomeStatement.net_income || 0)} accentColor="var(--color-accent)" />
+                <StatCard title="إجمالي الإيرادات" value={money(incomeStatement.total_revenue || 0)} accentColor="var(--color-success)" />
+                <StatCard title="إجمالي المصروفات" value={money(incomeStatement.total_expenses || 0)} accentColor="var(--color-danger)" />
+                <StatCard title="صافي الدخل (الربح / الخسارة)" value={money(incomeStatement.net_income || 0)} accentColor="var(--color-accent)" />
               </div>
               <Card title="الإيرادات"><Table columns={moneyCols} data={(incomeStatement.revenue || []).filter((r: MoneyRow) => r.amount)} /></Card>
               <Card title="المصروفات"><Table columns={moneyCols} data={(incomeStatement.expenses || []).filter((r: MoneyRow) => r.amount)} /></Card>
@@ -330,15 +336,15 @@ export default function ReportsPage() {
           {balanceSheet ? (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <StatCard title="إجمالي الأصول" value={formatCurrency(balanceSheet.total_assets || 0)} accentColor="var(--color-info)" />
-                <StatCard title="إجمالي الخصوم" value={formatCurrency(balanceSheet.total_liabilities || 0)} accentColor="var(--color-warning)" />
-                <StatCard title="حقوق الملكية" value={formatCurrency(balanceSheet.total_equity || 0)} accentColor="var(--color-accent)" />
+                <StatCard title="إجمالي الأصول" value={money(balanceSheet.total_assets || 0)} accentColor="var(--color-info)" />
+                <StatCard title="إجمالي الخصوم" value={money(balanceSheet.total_liabilities || 0)} accentColor="var(--color-warning)" />
+                <StatCard title="حقوق الملكية" value={money(balanceSheet.total_equity || 0)} accentColor="var(--color-accent)" />
               </div>
               <p className="text-sm text-text-muted">
                 المعادلة المحاسبية: أصول = خصوم + حقوق ملكية
                 {Math.abs((balanceSheet.total_assets || 0) - ((balanceSheet.total_liabilities || 0) + (balanceSheet.total_equity || 0))) < 0.05
                   ? ' — الميزانية متوازنة تماماً ✅'
-                  : ` — فرق توازن: ${formatCurrency((balanceSheet.total_assets || 0) - ((balanceSheet.total_liabilities || 0) + (balanceSheet.total_equity || 0)))}`}
+                  : ` — فرق توازن: ${money((balanceSheet.total_assets || 0) - ((balanceSheet.total_liabilities || 0) + (balanceSheet.total_equity || 0)))}`}
               </p>
               <Card title="الأصول"><Table columns={bsCols} data={balanceSheet.assets || []} /></Card>
               <Card title="الخصوم"><Table columns={bsCols} data={balanceSheet.liabilities || []} /></Card>
@@ -354,20 +360,20 @@ export default function ReportsPage() {
       {!loading && !error && tab === 'equity_changes' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-            <StatCard title="حقوق الملكية - بداية الفترة" value={formatCurrency(equityChanges?.opening?.total || 0)} />
-            <StatCard title="صافي دخل الفترة" value={formatCurrency(equityChanges?.changes?.net_income || 0)} accentColor="var(--color-success)" />
-            <StatCard title="صافي التغيرات" value={formatCurrency(equityChanges?.changes?.total_change || 0)} accentColor="var(--color-info)" />
-            <StatCard title="حقوق الملكية - نهاية الفترة" value={formatCurrency(equityChanges?.ending?.total || 0)} accentColor="var(--color-accent)" />
+            <StatCard title="حقوق الملكية - بداية الفترة" value={money(equityChanges?.opening?.total || 0)} />
+            <StatCard title="صافي دخل الفترة" value={money(equityChanges?.changes?.net_income || 0)} accentColor="var(--color-success)" />
+            <StatCard title="صافي التغيرات" value={money(equityChanges?.changes?.total_change || 0)} accentColor="var(--color-info)" />
+            <StatCard title="حقوق الملكية - نهاية الفترة" value={money(equityChanges?.ending?.total || 0)} accentColor="var(--color-accent)" />
           </div>
 
           <Card title="جدول قائمة التغيرات في حقوق الملكية (Statement of Changes in Equity)">
             <Table
               columns={[
                 { key: 'label', label: 'البيان' },
-                { key: 'capital', label: 'رأس المال', render: (r: EquityRow) => formatCurrency(r.capital) },
-                { key: 'retained_earnings', label: 'الأرباح المحتجزة', render: (r: EquityRow) => formatCurrency(r.retained_earnings) },
-                { key: 'net_income', label: 'أرباح / (خسائر) الفترة', render: (r: EquityRow) => formatCurrency(r.net_income) },
-                { key: 'total', label: 'إجمالي حقوق الملكية', render: (r: EquityRow) => <strong className="font-mono">{formatCurrency(r.total)}</strong> },
+                { key: 'capital', label: 'رأس المال', render: (r: EquityRow) => money(r.capital) },
+                { key: 'retained_earnings', label: 'الأرباح المحتجزة', render: (r: EquityRow) => money(r.retained_earnings) },
+                { key: 'net_income', label: 'أرباح / (خسائر) الفترة', render: (r: EquityRow) => money(r.net_income) },
+                { key: 'total', label: 'إجمالي حقوق الملكية', render: (r: EquityRow) => <strong className="font-mono">{money(r.total)}</strong> },
               ]}
               data={equityChanges?.rows || []}
             />
@@ -392,10 +398,10 @@ export default function ReportsPage() {
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard title="إجمالي الرصيد الافتتاحي" value={formatCurrency(contactBalances?.totals?.opening || 0)} />
-            <StatCard title="إجمالي الحركات المدينة" value={formatCurrency(contactBalances?.totals?.debit || 0)} accentColor="var(--color-info)" />
-            <StatCard title="إجمالي الحركات الدائنة" value={formatCurrency(contactBalances?.totals?.credit || 0)} accentColor="var(--color-warning)" />
-            <StatCard title="صافي الأرصدة الختامية" value={formatCurrency(contactBalances?.totals?.closing || 0)} accentColor="var(--color-accent)" />
+            <StatCard title="إجمالي الرصيد الافتتاحي" value={money(contactBalances?.totals?.opening || 0)} />
+            <StatCard title="إجمالي الحركات المدينة" value={money(contactBalances?.totals?.debit || 0)} accentColor="var(--color-info)" />
+            <StatCard title="إجمالي الحركات الدائنة" value={money(contactBalances?.totals?.credit || 0)} accentColor="var(--color-warning)" />
+            <StatCard title="صافي الأرصدة الختامية" value={money(contactBalances?.totals?.closing || 0)} accentColor="var(--color-accent)" />
           </div>
 
           <Table
@@ -403,10 +409,10 @@ export default function ReportsPage() {
               { key: 'name', label: 'الاسم' },
               { key: 'type', label: 'النوع', render: (r: ContactRow) => <Badge variant="info">{r.type}</Badge> },
               { key: 'phone', label: 'الهاتف' },
-              { key: 'opening_balance', label: 'رصيد افتتاحي', render: (r: ContactRow) => formatCurrency(r.opening_balance) },
-              { key: 'period_debit', label: 'حركات مدينة (+)', render: (r: ContactRow) => formatCurrency(r.period_debit) },
-              { key: 'period_credit', label: 'حركات دائنة (-)', render: (r: ContactRow) => formatCurrency(r.period_credit) },
-              { key: 'closing_balance', label: 'الرصيد الختامي', render: (r: ContactRow) => <strong className={r.closing_balance >= 0 ? 'text-success font-mono' : 'text-danger font-mono'}>{formatCurrency(r.closing_balance)}</strong> },
+              { key: 'opening_balance', label: 'رصيد افتتاحي', render: (r: ContactRow) => money(r.opening_balance) },
+              { key: 'period_debit', label: 'حركات مدينة (+)', render: (r: ContactRow) => money(r.period_debit) },
+              { key: 'period_credit', label: 'حركات دائنة (-)', render: (r: ContactRow) => money(r.period_credit) },
+              { key: 'closing_balance', label: 'الرصيد الختامي', render: (r: ContactRow) => <strong className={r.closing_balance >= 0 ? 'text-success font-mono' : 'text-danger font-mono'}>{money(r.closing_balance)}</strong> },
               { key: 'balance_type', label: 'طبيعة الرصيد' },
             ]}
             data={contactBalances?.contacts || []}
@@ -418,7 +424,7 @@ export default function ReportsPage() {
       {!loading && !error && tab === 'expense_analysis' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <StatCard title="إجمالي المصروفات للفترة" value={formatCurrency(expenseAnalysis?.total_expense || 0)} accentColor="var(--color-danger)" />
+            <StatCard title="إجمالي المصروفات للفترة" value={money(expenseAnalysis?.total_expense || 0)} accentColor="var(--color-danger)" />
             <StatCard title="عدد بنود ومراكز المصروفات النشطة" value={String(expenseAnalysis?.count || 0)} />
           </div>
 
@@ -427,7 +433,7 @@ export default function ReportsPage() {
               columns={[
                 { key: 'code', label: 'كود الحساب' },
                 { key: 'name', label: 'بند المصروف' },
-                { key: 'amount', label: 'المبلغ', render: (r: ExpenseCategory) => <span className="font-mono font-bold">{formatCurrency(r.amount)}</span> },
+                { key: 'amount', label: 'المبلغ', render: (r: ExpenseCategory) => <span className="font-mono font-bold">{money(r.amount)}</span> },
                 { 
                   key: 'percentage', 
                   label: 'النسبة من إجمالي المصروفات %', 
@@ -457,10 +463,10 @@ export default function ReportsPage() {
             options={[{ value: '', label: 'كل الحسابات' }, ...ledgerAccounts.map((a) => ({ value: a.id, label: `${a.code} — ${a.name}` }))]}
           />
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard title="رصيد افتتاحي" value={formatCurrency(ledger?.opening_balance || 0)} />
-            <StatCard title="مدين" value={formatCurrency(ledger?.total_debit || 0)} />
-            <StatCard title="دائن" value={formatCurrency(ledger?.total_credit || 0)} />
-            <StatCard title="رصيد ختامي" value={formatCurrency(ledger?.closing_balance || 0)} />
+            <StatCard title="رصيد افتتاحي" value={money(ledger?.opening_balance || 0)} />
+            <StatCard title="مدين" value={money(ledger?.total_debit || 0)} />
+            <StatCard title="دائن" value={money(ledger?.total_credit || 0)} />
+            <StatCard title="رصيد ختامي" value={money(ledger?.closing_balance || 0)} />
           </div>
           <Table
             columns={[
@@ -468,9 +474,9 @@ export default function ReportsPage() {
               { key: 'number', label: 'رقم القيد' },
               { key: 'account_code', label: 'الحساب' },
               { key: 'description', label: 'البيان' },
-              { key: 'debit', label: 'مدين', render: (r: LedgerTransaction) => formatCurrency(r.debit) },
-              { key: 'credit', label: 'دائن', render: (r: LedgerTransaction) => formatCurrency(r.credit) },
-              { key: 'balance', label: 'الرصيد', render: (r: LedgerTransaction) => formatCurrency(r.balance) },
+              { key: 'debit', label: 'مدين', render: (r: LedgerTransaction) => money(r.debit) },
+              { key: 'credit', label: 'دائن', render: (r: LedgerTransaction) => money(r.credit) },
+              { key: 'balance', label: 'الرصيد', render: (r: LedgerTransaction) => money(r.balance) },
             ]}
             data={ledger?.transactions || []}
           />
@@ -481,23 +487,23 @@ export default function ReportsPage() {
       {!loading && !error && tab === 'cash_flow' && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard title="رصيد أول المدة" value={formatCurrency(cashFlow?.opening_balance || 0)} />
-            <StatCard title="تشغيلي" value={formatCurrency(cashFlow?.operating?.net || 0)} accentColor="var(--color-info)" />
-            <StatCard title="استثماري" value={formatCurrency(cashFlow?.investing?.net || 0)} />
-            <StatCard title="رصيد آخر المدة" value={formatCurrency(cashFlow?.closing_balance || 0)} accentColor="var(--color-success)" />
+            <StatCard title="رصيد أول المدة" value={money(cashFlow?.opening_balance || 0)} />
+            <StatCard title="تشغيلي" value={money(cashFlow?.operating?.net || 0)} accentColor="var(--color-info)" />
+            <StatCard title="استثماري" value={money(cashFlow?.investing?.net || 0)} />
+            <StatCard title="رصيد آخر المدة" value={money(cashFlow?.closing_balance || 0)} accentColor="var(--color-success)" />
           </div>
           <Card title="الأنشطة التشغيلية — مقبوضات">
             <Table columns={[
               { key: 'account_name', label: 'الحساب' },
               { key: 'description', label: 'البيان' },
-              { key: 'amount', label: 'المبلغ', render: (r: CashFlowLine) => formatCurrency(r.amount) },
+              { key: 'amount', label: 'المبلغ', render: (r: CashFlowLine) => money(r.amount) },
             ]} data={cashFlow?.operating?.inflows || []} />
           </Card>
           <Card title="الأنشطة التشغيلية — مدفوعات">
             <Table columns={[
               { key: 'account_name', label: 'الحساب' },
               { key: 'description', label: 'البيان' },
-              { key: 'amount', label: 'المبلغ', render: (r: CashFlowLine) => formatCurrency(r.amount) },
+              { key: 'amount', label: 'المبلغ', render: (r: CashFlowLine) => money(r.amount) },
             ]} data={cashFlow?.operating?.outflows || []} />
           </Card>
         </div>
@@ -507,19 +513,19 @@ export default function ReportsPage() {
       {!loading && !error && tab === 'profitability' && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard title="قيمة التعاقدات" value={formatCurrency(profitability?.totals?.contract_value || 0)} />
-            <StatCard title="الإيراد المحقق" value={formatCurrency(profitability?.totals?.revenue || 0)} accentColor="var(--color-success)" />
-            <StatCard title="التكاليف" value={formatCurrency(profitability?.totals?.total_costs || 0)} accentColor="var(--color-danger)" />
-            <StatCard title="صافي الربح" value={formatCurrency(profitability?.totals?.profit || 0)} accentColor="var(--color-accent)" />
+            <StatCard title="قيمة التعاقدات" value={money(profitability?.totals?.contract_value || 0)} />
+            <StatCard title="الإيراد المحقق" value={money(profitability?.totals?.revenue || 0)} accentColor="var(--color-success)" />
+            <StatCard title="التكاليف" value={money(profitability?.totals?.total_costs || 0)} accentColor="var(--color-danger)" />
+            <StatCard title="صافي الربح" value={money(profitability?.totals?.profit || 0)} accentColor="var(--color-accent)" />
           </div>
           <Table
             columns={[
               { key: 'name', label: 'المشروع' },
               { key: 'client_name', label: 'العميل' },
-              { key: 'contract_value', label: 'التعاقد', render: (r: ProfitabilityProject) => formatCurrency(r.contract_value) },
-              { key: 'revenue', label: 'الإيراد', render: (r: ProfitabilityProject) => formatCurrency(r.revenue) },
-              { key: 'total_costs', label: 'التكلفة', render: (r: ProfitabilityProject) => formatCurrency(r.total_costs) },
-              { key: 'profit', label: 'الربح', render: (r: ProfitabilityProject) => <span className={r.profit < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(r.profit)}</span> },
+              { key: 'contract_value', label: 'التعاقد', render: (r: ProfitabilityProject) => money(r.contract_value) },
+              { key: 'revenue', label: 'الإيراد', render: (r: ProfitabilityProject) => money(r.revenue) },
+              { key: 'total_costs', label: 'التكلفة', render: (r: ProfitabilityProject) => money(r.total_costs) },
+              { key: 'profit', label: 'الربح', render: (r: ProfitabilityProject) => <span className={r.profit < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{money(r.profit)}</span> },
               { key: 'profit_margin', label: 'الهامش', render: (r: ProfitabilityProject) => `${(r.profit_margin || 0).toFixed(1)}%` },
             ]}
             data={profitability?.projects || []}
@@ -540,20 +546,20 @@ export default function ReportsPage() {
             ]}
           />
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-            <StatCard title="الإجمالي" value={formatCurrency(aging?.totals?.balance || 0)} />
-            <StatCard title="0-30 يوم" value={formatCurrency(aging?.totals?.['0-30'] || 0)} />
-            <StatCard title="31-60" value={formatCurrency(aging?.totals?.['31-60'] || 0)} />
-            <StatCard title="61-90" value={formatCurrency(aging?.totals?.['61-90'] || 0)} />
-            <StatCard title="أكثر من 90" value={formatCurrency(aging?.totals?.['90+'] || 0)} accentColor="var(--color-danger)" />
+            <StatCard title="الإجمالي" value={money(aging?.totals?.balance || 0)} />
+            <StatCard title="0-30 يوم" value={money(aging?.totals?.['0-30'] || 0)} />
+            <StatCard title="31-60" value={money(aging?.totals?.['31-60'] || 0)} />
+            <StatCard title="61-90" value={money(aging?.totals?.['61-90'] || 0)} />
+            <StatCard title="أكثر من 90" value={money(aging?.totals?.['90+'] || 0)} accentColor="var(--color-danger)" />
           </div>
           <Table
             columns={[
               { key: 'name', label: 'الاسم' },
-              { key: 'balance', label: 'الرصيد', render: (r: AgingRow) => formatCurrency(r.balance) },
-              { key: 'b0', label: '0-30', render: (r: AgingRow) => formatCurrency(r.buckets?.['0-30'] || 0) },
-              { key: 'b1', label: '31-60', render: (r: AgingRow) => formatCurrency(r.buckets?.['31-60'] || 0) },
-              { key: 'b2', label: '61-90', render: (r: AgingRow) => formatCurrency(r.buckets?.['61-90'] || 0) },
-              { key: 'b3', label: '90+', render: (r: AgingRow) => formatCurrency(r.buckets?.['90+'] || 0) },
+              { key: 'balance', label: 'الرصيد', render: (r: AgingRow) => money(r.balance) },
+              { key: 'b0', label: '0-30', render: (r: AgingRow) => money(r.buckets?.['0-30'] || 0) },
+              { key: 'b1', label: '31-60', render: (r: AgingRow) => money(r.buckets?.['31-60'] || 0) },
+              { key: 'b2', label: '61-90', render: (r: AgingRow) => money(r.buckets?.['61-90'] || 0) },
+              { key: 'b3', label: '90+', render: (r: AgingRow) => money(r.buckets?.['90+'] || 0) },
               { key: 'days_overdue', label: 'أيام التأخير' },
             ]}
             data={aging?.aging || []}
@@ -565,10 +571,10 @@ export default function ReportsPage() {
       {!loading && !error && tab === 'vat' && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard title="ضريبة مخرجات" value={formatCurrency(vat?.summary?.total_vat_collected || 0)} />
-            <StatCard title="ضريبة مدخلات" value={formatCurrency(vat?.summary?.total_vat_paid || 0)} />
-            <StatCard title="الضريبة المستحقة" value={formatCurrency(vat?.summary?.vat_payable || 0)} accentColor="var(--color-accent)" />
-            <StatCard title="المبيعات بدون ضريبة" value={formatCurrency(vat?.summary?.total_sales_excluding_vat || 0)} />
+            <StatCard title="ضريبة مخرجات" value={money(vat?.summary?.total_vat_collected || 0)} />
+            <StatCard title="ضريبة مدخلات" value={money(vat?.summary?.total_vat_paid || 0)} />
+            <StatCard title="الضريبة المستحقة" value={money(vat?.summary?.vat_payable || 0)} accentColor="var(--color-accent)" />
+            <StatCard title="المبيعات بدون ضريبة" value={money(vat?.summary?.total_sales_excluding_vat || 0)} />
           </div>
           <p className="text-sm text-text-muted">
             الحالة: {vat?.summary?.vat_payable_status === 'refundable' ? `رصيد قابل للاسترداد من ${authority}` : `مستحق السداد لـ${authority}`} — نسبة الضريبة {(vat?.vat_rate || vatPercentDefault / 100) * 100}%
@@ -593,11 +599,11 @@ export default function ReportsPage() {
           </div>
           {opType === 'project-costs' && operational && (
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-              <StatCard title="تكاليف المواد" value={formatCurrency(operational.materials || 0)} accentColor="var(--color-info)" />
-              <StatCard title="تكاليف العمالة" value={formatCurrency(operational.workers || 0)} accentColor="var(--color-warning)" />
-              <StatCard title="المشتريات" value={formatCurrency(operational.purchases || 0)} accentColor="var(--color-accent)" />
-              <StatCard title="مقاولو الباطن" value={formatCurrency(operational.subcontractors || 0)} accentColor="var(--color-success)" />
-              <StatCard title="الإجمالي" value={formatCurrency(operational.total || 0)} />
+              <StatCard title="تكاليف المواد" value={money(operational.materials || 0)} accentColor="var(--color-info)" />
+              <StatCard title="تكاليف العمالة" value={money(operational.workers || 0)} accentColor="var(--color-warning)" />
+              <StatCard title="المشتريات" value={money(operational.purchases || 0)} accentColor="var(--color-accent)" />
+              <StatCard title="مقاولو الباطن" value={money(operational.subcontractors || 0)} accentColor="var(--color-success)" />
+              <StatCard title="الإجمالي" value={money(operational.total || 0)} />
             </div>
           )}
           {Array.isArray(operational?.rows) && (
@@ -608,7 +614,7 @@ export default function ReportsPage() {
                 { key: 'project_name', label: 'المشروع' },
                 { key: 'type', label: 'النوع' },
                 { key: 'quantity', label: 'الكمية' },
-                { key: 'total_value', label: 'القيمة', render: (r: OperationalRow) => formatCurrency(r.total_value || 0) },
+                { key: 'total_value', label: 'القيمة', render: (r: OperationalRow) => money(r.total_value || 0) },
               ]}
               data={operational.rows}
             />
