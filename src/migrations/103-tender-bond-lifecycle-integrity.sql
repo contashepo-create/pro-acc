@@ -530,7 +530,7 @@ BEGIN
   VALUES(p_company_id, p_user_id, 'release', 'bond', p_bond_id,
     jsonb_build_object('journal_entry_id', v_je->>'id', 'margin_returned', v_margin));
 
-  RETURN jsonb_build_object('bond_id', p_bond_id, 'journal_entry', v_je);
+  RETURN jsonb_build_object('bond_id', p_bond_id, 'journal_entry', v_je, 'already_processed', FALSE, 'status', 'released');
 END;
 $$;
 
@@ -590,7 +590,7 @@ BEGIN
   VALUES(p_company_id, p_user_id, 'cancel', 'bond', p_bond_id,
     jsonb_build_object('journal_entry_id', v_je->>'id', 'margin_returned', v_margin));
 
-  RETURN jsonb_build_object('bond_id', p_bond_id, 'journal_entry', v_je);
+  RETURN jsonb_build_object('bond_id', p_bond_id, 'journal_entry', v_je, 'already_processed', FALSE, 'status', 'cancelled');
 END;
 $$;
 

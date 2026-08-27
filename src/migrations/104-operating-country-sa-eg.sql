@@ -5,8 +5,8 @@
 
 CREATE OR REPLACE FUNCTION public.operating_country_si_rates(p_code TEXT)
 RETURNS TABLE(employer_rate NUMERIC, employee_rate NUMERIC, label TEXT, tax_authority TEXT)
-LANGUAGE sql IMMUTABLE AS $$
-  SELECT *
+LANGUAGE sql IMMUTABLE SET search_path=public AS $$
+  SELECT r.employer_rate, r.employee_rate, r.label, r.tax_authority
   FROM (
     VALUES
       ('EG', 0.1875::NUMERIC, 0.1100::NUMERIC, 'التأمينات الاجتماعية المصرية', 'eta'),
@@ -276,5 +276,64 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.post_payroll_batch_v49_internal(UUID,DATE,UUID[],UUID) FROM PUBLIC, anon, authenticated;
+
+-- Re-enrol tenant tables added after 063 (e.g. tender_expenses, ad_notifications)
+-- so they cannot keep a USING (true) policy next to company_id.
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN
+    SELECT c.relname AS tbl, pol.polname AS pol
+    FROM pg_policy pol
+    JOIN pg_class c ON c.oid = pol.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND pol.polpermissive
+      AND coalesce(pg_get_expr(pol.polqual, pol.polrelid), 'true') = 'true'
+      AND EXISTS (
+        SELECT 1 FROM pg_attribute a
+        WHERE a.attrelid = c.oid AND a.attname = 'company_id' AND NOT a.attisdropped
+      )
+      AND pol.polname <> 'tenant_isolation_' || c.relname
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', r.pol, r.tbl);
+  END LOOP;
+
+  FOR r IN
+    SELECT c.relname AS tbl, c.oid AS reloid, c.relrowsecurity AS rls_on
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'r'
+      AND EXISTS (
+        SELECT 1 FROM pg_attribute a
+        WHERE a.attrelid = c.oid AND a.attname = 'company_id' AND NOT a.attisdropped
+      )
+  LOOP
+    IF NOT r.rls_on THEN
+      EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', r.tbl);
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM pg_policy p
+      WHERE p.polrelid = r.reloid
+        AND p.polname = 'tenant_isolation_' || r.tbl
+        AND pg_get_expr(p.polqual, p.polrelid) IS DISTINCT FROM '(company_id = tenant_company_id())'
+    ) THEN
+      EXECUTE format('DROP POLICY IF EXISTS %I ON %I', 'tenant_isolation_' || r.tbl, r.tbl);
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policy p
+      WHERE p.polrelid = r.reloid AND p.polname = 'tenant_isolation_' || r.tbl
+    ) THEN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I
+           FOR ALL
+           USING (company_id = public.tenant_company_id())
+           WITH CHECK (company_id = public.tenant_company_id())',
+        'tenant_isolation_' || r.tbl, r.tbl
+      );
+    END IF;
+  END LOOP;
+END $$;
 
 SELECT 'Migration 104 completed — SA/EG operating country freeze' as result;
