@@ -60,6 +60,7 @@ const validBody = {
   name: 'أحمد محمد',
   email: 'ahmed@example.com',
   password: 'UnitTestPass26',
+  country: 'SA',
 };
 
 describe('register — password policy & validation', () => {

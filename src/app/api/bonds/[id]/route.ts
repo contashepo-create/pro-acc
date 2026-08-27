@@ -54,11 +54,9 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     if (action === 'cancel') {
       const parsed = bondActionSchema.safeParse(raw);
       if (!parsed.success) return error(parsed.error.issues[0].message);
-      const { data, error: transitionError } = await sb().rpc('transition_bond_atomic', {
+      const { data, error: transitionError } = await sb().rpc('cancel_bond_atomic', {
         p_company_id: auth.companyId,
         p_bond_id: id,
-        p_action: 'cancel',
-        p_notes: parsed.data.notes || null,
         p_user_id: auth.userId,
       });
       if (transitionError) return bondMutationError(transitionError);
@@ -86,11 +84,9 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     const auth = await requireModulePermission(request, 'bonds', 'delete');
     const { id } = await params;
     if (!relationshipUuid.safeParse(id).success) return error('معرف الضمان غير صالح');
-    const { data, error: transitionError } = await sb().rpc('transition_bond_atomic', {
+    const { data, error: transitionError } = await sb().rpc('cancel_bond_atomic', {
       p_company_id: auth.companyId,
       p_bond_id: id,
-      p_action: 'cancel',
-      p_notes: null,
       p_user_id: auth.userId,
     });
     if (transitionError) return bondMutationError(transitionError);

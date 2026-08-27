@@ -120,6 +120,13 @@ describe('tenders/[id] PUT', () => {
     expect(res.status).toBe(201);
   });
 
+  test('closes period costs after marking a tender cancelled', async () => {
+    mockDb.rpcResults.set('transition_tender_atomic', { data: { id: TID, status: 'cancelled' }, error: null });
+    mockDb.rpcResults.set('close_lost_tender_atomic', { data: { suspense_closed: 0 }, error: null });
+    const res = await tenderPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'update_status', status: 'cancelled' }), { params: Promise.resolve({ id: TID }) });
+    expect(res.status).toBe(200);
+  });
+
   test('surfaces close_lost errors after marking a tender lost', async () => {
     mockDb.rpcResults.set('transition_tender_atomic', { data: { id: TID, status: 'lost' }, error: null });
     mockDb.rpcResults.set('close_lost_tender_atomic', { data: null, error: { message: 'حساب مصاريف المناقصات الخاسرة غير موجود' } });
@@ -242,7 +249,7 @@ describe('bonds/[id]', () => {
   });
 
   test('DELETE cancels a bond', async () => {
-    mockDb.rpcResults.set('transition_bond_atomic', { data: { id: BID }, error: null });
+    mockDb.rpcResults.set('cancel_bond_atomic', { data: { id: BID }, error: null });
     const res = await bondDELETE(req('admin', 'DELETE', `http://localhost/x/${BID}`), { params: Promise.resolve({ id: BID }) });
     expect(res.status).toBe(200);
     const json = await res.json();

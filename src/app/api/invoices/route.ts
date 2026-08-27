@@ -131,10 +131,11 @@ export async function POST(request: NextRequest) {
     if (auth.role !== 'admin' && vatEnabled !== false) {
       try {
         const { data: companyRow } = await s.from('companies')
-          .select('vat_rate').eq('id', auth.companyId).maybeSingle();
+          .select('vat_rate, country_code').eq('id', auth.companyId).maybeSingle();
         const companyVatRate = Number((companyRow as Row | null)?.vat_rate);
         const configured = Number.isFinite(companyVatRate) && companyVatRate > 0 && companyVatRate <= 1
-          ? companyVatRate : 0.15;
+          ? companyVatRate
+          : ((companyRow as Row | null)?.country_code === 'EG' ? 0.14 : 0.15);
         const allowedRates = [0, configured];
         if (!allowedRates.includes(vatRate)) {
           return error(
@@ -181,12 +182,15 @@ export async function POST(request: NextRequest) {
     // creation remains committed even when seller tax metadata is incomplete.
     let zatcaQRData: string | null = null;
     try {
+      const { data: companyForQr } = await s.from('companies')
+        .select('country_code').eq('id', auth.companyId).maybeSingle();
+      const operatingCountry = String((companyForQr as Row | null)?.country_code || 'SA');
       const taxSnapshot = invoice.tax_snapshot as Row | undefined;
       const seller = taxSnapshot?.seller as Row | undefined;
       const sellerName = typeof seller?.name === 'string' ? seller.name.trim() : '';
       const vatNumber = typeof seller?.vat_number === 'string' ? seller.vat_number.trim() : '';
       const createdAt = new Date(String(invoice.created_at));
-      if (sellerName && /^\d{15}$/.test(vatNumber) && Number.isFinite(createdAt.getTime())) {
+      if (operatingCountry === 'SA' && sellerName && /^\d{15}$/.test(vatNumber) && Number.isFinite(createdAt.getTime())) {
         const qrPayload = {
           sellerName,
           vatNumber,

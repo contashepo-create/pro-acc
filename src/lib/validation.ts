@@ -80,6 +80,7 @@ export const registerSchema = z.object({
   email: z.string().email('البريد الإلكتروني غير صالح').max(254),
   password: passwordPolicy,
   phone: z.string().optional(),
+  country: z.enum(['SA', 'EG'], { message: 'اختر دولة التشغيل: السعودية أو مصر' }),
 });
 
 export const forgotPasswordSchema = z.object({

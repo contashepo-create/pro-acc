@@ -42,10 +42,25 @@ export const COUNTRIES: CountryConfig[] = [
 
 const DEFAULT_COUNTRY: CountryConfig = COUNTRIES[0];
 
+/** Countries a new company may choose at first registration. Immutable afterwards. */
+export const OPERATING_COUNTRY_CODES = ['SA', 'EG'] as const;
+export type OperatingCountryCode = (typeof OPERATING_COUNTRY_CODES)[number];
+
+export function isOperatingCountry(code: string | null | undefined): code is OperatingCountryCode {
+  return code === 'SA' || code === 'EG';
+}
+
 export function getCountryConfig(code: string): CountryConfig {
   return COUNTRIES.find(c => c.code === code) || DEFAULT_COUNTRY;
 }
 
 export function getCountriesList(): { value: string; label: string }[] {
   return COUNTRIES.map(c => ({ value: c.code, label: c.name }));
+}
+
+export function getOperatingCountriesList(): { value: OperatingCountryCode; label: string }[] {
+  return OPERATING_COUNTRY_CODES.map((code) => {
+    const c = getCountryConfig(code);
+    return { value: code, label: c.name };
+  });
 }

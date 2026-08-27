@@ -89,7 +89,6 @@ export async function PUT(request: NextRequest) {
         return error('تعديل البيانات الأساسية للشركة (الاسم، الرقم الضريبي، نسبة الضريبة، العنوان...) يتطلب صلاحيات مدير نظام', 403);
       }
 
-      const { getCountryConfig } = await import('@/lib/countries');
       const company = body.company as Row;
       const companyUpdate: Row = {};
 
@@ -110,15 +109,14 @@ export async function PUT(request: NextRequest) {
       }
       if (company.address !== undefined) companyUpdate.address = company.address;
 
-      // Country change updates currency/vat automatically
+      // Operating country is frozen at registration (SA | EG). Ignore/reject switches.
       if (company.country_code !== undefined) {
-        const cc = getCountryConfig(String(company.country_code));
-        companyUpdate.country = cc.name;
-        companyUpdate.country_code = cc.code;
-        companyUpdate.currency_code = cc.currencyCode;
-        companyUpdate.currency_symbol = cc.currencySymbol;
-        companyUpdate.locale = cc.locale;
-        companyUpdate.vat_rate = cc.vatRate;
+        const { data: current } = await s.from('companies')
+          .select('country_code').eq('id', auth.companyId).maybeSingle();
+        const existing = String((current as Row | null)?.country_code || '');
+        if (existing && String(company.country_code) !== existing) {
+          return error('لا يمكن تغيير دولة التشغيل بعد إنشاء الحساب. الضريبة والعملة والتأمينات تتبع الدولة المختارة عند التسجيل.', 409);
+        }
       }
 
       // Allow manual override of vat_rate — must be a valid fraction [0, 1]
