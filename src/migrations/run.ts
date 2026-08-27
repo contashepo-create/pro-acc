@@ -61,6 +61,8 @@ const LEGACY_DUPLICATE_PREFIXES: Record<string, string[]> = {
   '012': ['012-atomic-journal-entry-insert.sql', '012-enhanced-custody-system.sql'],
   '015': ['015-branding-and-features.sql', '015-fix-schema-mismatches.sql'],
   '016': ['016-approval-system.sql', '016-payment-portal-contracts.sql'],
+  '076': ['076-lock-down-audit-tables-and-helper.sql', '076-posted-journal-immutability-and-balance.sql'],
+  '077': ['077-lock-down-internal-trigger-functions.sql', '077-rate-limit-store.sql'],
 };
 
 export function assertNoNewDuplicateNumbers(files: string[]): void {

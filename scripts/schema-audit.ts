@@ -6,6 +6,14 @@
  *
  * Reports: missing tables/columns, missing FKs, missing/extra function
  * overloads. Read-only against the live DB.
+ *
+ * Function comparison rules:
+ *  - The REFERENCE (PGlite) enumerates `public`-schema functions only — the
+ *    migrations never create anything outside `public`, so the PostgreSQL
+ *    catalogue must NOT leak into the expected set.
+ *  - The LIVE database is allowed to hold the exact signature in any schema:
+ *    hosted Supabase installs pgcrypto's `digest` into `extensions`, and
+ *    system/extension objects must not be reported as project regressions.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,10 +22,13 @@ import { query as liveQuery, endPool } from '../src/lib/db';
 type Meta = {
   tables: Map<string, Set<string>>;
   fks: Map<string, string>; // "table.col" -> "ref_table"
-  funcs: Map<string, string>; // "name(args)" -> identity args text
+  funcs: Map<string, Set<string>>; // signature -> schemas holding it
 };
 
-async function dumpMeta(exec: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>): Promise<Meta> {
+async function dumpMeta(
+  exec: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>,
+  funcsScope: 'public' | 'any'
+): Promise<Meta> {
   const cols = await exec(`
     SELECT table_name, column_name FROM information_schema.columns
     WHERE table_schema='public'
@@ -39,15 +50,23 @@ async function dumpMeta(exec: (sql: string, params?: unknown[]) => Promise<{ row
     fkMap.set(`${r.tbl.replace('public.', '')}.${r.col}`, String(r.ref).replace('public.', ''));
   }
 
+  // `funcsScope`:
+  //  - 'public' → المرجع: الهجرات لا تنشئ شيئًا خارج public
+  //  - 'any'    → الحية: امتدادات مثل pgcrypto/digest تعيش في `extensions` على Supabase
   const fns = await exec(`
     SELECT p.proname,
-           pg_get_function_identity_arguments(p.oid) AS args
+           pg_get_function_identity_arguments(p.oid) AS args,
+           n.nspname AS schema
     FROM pg_proc p
-    WHERE p.pronamespace='public'::regnamespace AND p.prokind='f'
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prokind='f'
+    ${funcsScope === 'public' ? "AND n.nspname='public'" : ''}
   `);
-  const funcs = new Map<string, string>();
+  const funcs = new Map<string, Set<string>>();
   for (const r of fns.rows) {
-    funcs.set(`${r.proname}(${r.args})`, r.args);
+    const sig = `${r.proname}(${r.args})`;
+    if (!funcs.has(sig)) funcs.set(sig, new Set());
+    funcs.get(sig)!.add(String(r.schema));
   }
   return { tables, fks: fkMap, funcs };
 }
@@ -76,7 +95,7 @@ async function buildExpected(): Promise<Meta> {
     }
   }
   const wrap = async (sqlText: string, params?: unknown[]) => db.query(sqlText, params);
-  return dumpMeta(wrap);
+  return dumpMeta(wrap, 'public');
 }
 
 async function main() {
@@ -84,7 +103,7 @@ async function main() {
   const expected = await buildExpected();
 
   console.log('⏳ قراءة السكيما الحية...');
-  const actual = await dumpMeta(async (sqlText, params) => liveQuery(sqlText, params));
+  const actual = await dumpMeta(async (sqlText, params) => liveQuery(sqlText, params), 'any');
 
   // ── tables & columns ──
   let missingTables = 0, missingCols = 0;
@@ -105,13 +124,20 @@ async function main() {
   console.log(missingFks === 0 ? '✓ المفاتيح الخارجية: مطابقة' : `⚠️ مفاتيح ناقصة: ${missingFks}`);
 
   // ── functions (by name+identity args) ──
+  // المرجع = public فقط؛ الحية تقبل التوقيع بأي مخطط (extensions للامتدادات).
   let missingFns = 0;
   for (const [sig] of expected.funcs) {
     const name = sig.slice(0, sig.indexOf('('));
-    const hasSameOverload = actual.funcs.has(sig);
+    const schemas = actual.funcs.get(sig);
+    if (schemas && schemas.size > 0) {
+      if (!schemas.has('public')) {
+        console.log(`ℹ️ الدالة ${sig} موجودة في مخطط غير public (${[...schemas].join(', ')}) — امتداد؛ مقبول`);
+      }
+      continue;
+    }
     const hasAnyOverload = [...actual.funcs.keys()].some((s) => s.startsWith(name + '('));
     if (!hasAnyOverload) { console.log(`❌ دالة مفقودة كلياً: ${name}`); missingFns++; }
-    else if (!hasSameOverload) {
+    else {
       // different overload signature exists — usually fine (evolution), note quietly
       console.log(`ℹ️ توقيع مختلف للدالة: ${sig}`);
     }
