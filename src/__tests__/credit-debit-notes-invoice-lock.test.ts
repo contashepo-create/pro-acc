@@ -301,4 +301,15 @@ describe('ميجريشن 090 — قفل الفواتير والصافي (فحص 
     expect((aging.match(/i\.total-COALESCE\(i\.paid_amount,0\)\+COALESCE\(nn\.net,0\)/g) || []).length).toBe(2);
     expect(aging).toContain('LEFT JOIN notes_net nn ON nn.invoice_id=i.id');
   });
+
+  test('ميجريشن 093 — خصم بند الفاتورة نسبة مئوية متسقة بين الواجهة والخلفية', () => {
+    const m = fs.readFileSync(path.join(process.cwd(), 'src', 'migrations', '093-invoice-line-discount-percent.sql'), 'utf8');
+    expect(m).toContain('CREATE OR REPLACE FUNCTION public.create_sales_invoice_atomic(');
+    // صافي البند = gross − round(gross × %، 2) في الإجمالي وفي بنود الفاتورة
+    expect((m.match(/round\(v_gross \* v_discount \/ 100, 2\)/g) || []).length).toBe(1);
+    expect((m.match(/round\(v_qty \* v_price \* v_discount \/ 100, 2\)/g) || []).length).toBe(1);
+    // الحد صار 0..100 بدل 0..gross
+    expect(m).toContain('OR v_discount < 0 OR v_discount > 100');
+    expect(m).not.toContain('v_discount > v_gross');
+  });
 });

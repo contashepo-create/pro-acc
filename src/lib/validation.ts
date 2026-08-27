@@ -220,7 +220,8 @@ export const invoiceItemSchema = z.object({
   description: z.string().min(1, 'البيان مطلوب'),
   quantity: quantityAmount('كمية البند'),
   unitPrice: moneyAmount({ label: 'سعر الوحدة' }),
-  discount: moneyAmount({ label: 'الخصم' }).optional().default(0),
+  // خصم البند نسبة مئوية (0-100) — مطابق لحساب الواجهة ولدالة الإنشاء (093)
+  discount: z.number().min(0, 'الخصم لا يمكن أن يكون سالباً').max(100, 'الخصم نسبة 0-100%').optional().default(0),
   total: moneyAmount({ label: 'إجمالي البند' }).optional(),
   item_type: z.enum(['service', 'product', 'inventory']).optional().default('service'),
   inventory_item_id: z.string().uuid().optional().nullable(),
