@@ -5,6 +5,7 @@ import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
 import { isValidDate } from '@/lib/utils';
 import { assertOpenFiscalPeriod } from '@/lib/fiscal-guard';
+import { parseCompanyVatRate } from '@/lib/company-vat';
 
 import type { Row } from '@/lib/types';
 
@@ -132,10 +133,7 @@ export async function POST(request: NextRequest) {
       try {
         const { data: companyRow } = await s.from('companies')
           .select('vat_rate, country_code').eq('id', auth.companyId).maybeSingle();
-        const companyVatRate = Number((companyRow as Row | null)?.vat_rate);
-        const configured = Number.isFinite(companyVatRate) && companyVatRate > 0 && companyVatRate <= 1
-          ? companyVatRate
-          : ((companyRow as Row | null)?.country_code === 'EG' ? 0.14 : 0.15);
+        const configured = parseCompanyVatRate(companyRow as Row | null);
         const allowedRates = [0, configured];
         if (!allowedRates.includes(vatRate)) {
           return error(
