@@ -81,4 +81,16 @@ describe('purchaseInvoiceSchema — other expenses', () => {
     expect(parsed.success).toBe(true);
     expect((parsed.data as { other_expenses?: unknown }).other_expenses).toBeUndefined();
   });
+
+  test('accepts a withholding rate as a fraction', () => {
+    const parsed = purchaseInvoiceSchema.safeParse({ ...base, withholding_rate: 0.05 });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.withholding_rate).toBe(0.05);
+  });
+
+  test('rejects a withholding rate above 20 percent', () => {
+    const parsed = purchaseInvoiceSchema.safeParse({ ...base, withholding_rate: 0.25 });
+    expect(parsed.success).toBe(false);
+  });
 });
+

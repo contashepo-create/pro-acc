@@ -16,6 +16,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
 
 interface InvoiceItem {
   id?: string;
@@ -26,14 +27,13 @@ interface InvoiceItem {
   total: number;
   item_type?: 'service' | 'product' | 'inventory';
   unit?: string;
-  save_to_inventory?: boolean;
   item_code?: string;
   inventory_item_id?: string;
 }
 
 const emptyItem: InvoiceItem = {
   description: '', quantity: 1, unitPrice: 0, discount: 0, total: 0,
-  item_type: 'service', unit: 'وحدة', save_to_inventory: false,
+  item_type: 'service', unit: 'وحدة',
 };
 
 interface SalesInvoiceRow {
@@ -68,6 +68,7 @@ export default function InvoicesPage() {
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryOption[]>([]);
   const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showEditor, setShowEditor] = useState(false);
@@ -91,15 +92,16 @@ export default function InvoicesPage() {
     try {
       setLoading(true);
       setError('');
-      const [invRes, cliRes, projRes, stockRes, curRes] = await Promise.all([
+      const [invRes, cliRes, projRes, stockRes, curRes, setRes] = await Promise.all([
         fetch('/api/invoices'),
         fetch('/api/clients'),
         fetch('/api/projects'),
         fetch('/api/inventory?items=1'),
         fetch('/api/currencies'),
+        fetch('/api/auth/me'),
       ]);
-      const [invJson, cliJson, projJson, stockJson, curJson] = await Promise.all([
-        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(), curRes.json(),
+      const [invJson, cliJson, projJson, stockJson, curJson, setJson] = await Promise.all([
+        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(), curRes.json(), setRes.json(),
       ]);
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
@@ -112,6 +114,7 @@ export default function InvoicesPage() {
         })));
       }
       if (curJson.success) setCurrencies(curJson.data || []);
+      if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -146,7 +149,7 @@ export default function InvoicesPage() {
     setSaving(true); setSaveError('');
     try {
       const subtotal = validItems.reduce((sum: number, item: InvoiceItem) => sum + item.total, 0);
-      const vatRate = form.vat_enabled ? 0.15 : 0;
+      const vatRate = form.vat_enabled ? companyVatRate : 0;
       const vatAmount = subtotal * vatRate;
       const total = subtotal + vatAmount;
 
@@ -162,7 +165,7 @@ export default function InvoicesPage() {
             description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, total: i.total,
             discount: Number(i.discount) || 0,
             item_type: i.item_type || 'service', unit: i.unit || 'وحدة',
-            save_to_inventory: i.save_to_inventory || false, item_code: i.item_code || undefined,
+            item_code: i.item_code || undefined,
             inventory_item_id: i.inventory_item_id || undefined,
           })),
           currency_code: form.currency_code || undefined,
@@ -217,7 +220,6 @@ export default function InvoicesPage() {
         total: (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
         item_type: 'service',
         unit: String(it.unit || 'وحدة').trim(),
-        save_to_inventory: false,
       }));
       setForm((prev) => ({
         ...prev,
@@ -255,7 +257,8 @@ export default function InvoicesPage() {
   const totalDiscount = form.items.reduce((sum: number, item: InvoiceItem) => {
     return sum + (item.quantity * item.unitPrice * (item.discount || 0) / 100);
   }, 0);
-  const vatAmount = form.vat_enabled ? subtotal * 0.15 : 0;
+  const vatAmount = form.vat_enabled ? subtotal * companyVatRate : 0;
+  const vatPct = vatPercentLabel(companyVatRate);
   const total = subtotal + vatAmount;
 
   const filtered = statusTab === 'all' ? invoices : invoices.filter(i => i.status === statusTab);
@@ -367,7 +370,7 @@ export default function InvoicesPage() {
                   </div>
                   <div className="flex items-center gap-4 pt-2">
                     <Checkbox
-                      label="ضريبة القيمة المضافة (15%)"
+                      label={`ضريبة القيمة المضافة (${vatPct}%)`}
                       checked={form.vat_enabled}
                       onChange={(checked: boolean) => setForm({ ...form, vat_enabled: checked })}
                     />
@@ -397,7 +400,6 @@ export default function InvoicesPage() {
                       <th className="p-3 text-center font-medium w-28">سعر الوحدة</th>
                       <th className="p-3 text-center font-medium w-20">خصم %</th>
                       <th className="p-3 text-center font-medium w-28">الإجمالي</th>
-                      <th className="p-3 text-center font-medium w-20">للمستودع</th>
                       <th className="p-3 w-10"></th>
                     </tr>
                   </thead>
@@ -492,14 +494,6 @@ export default function InvoicesPage() {
                         <td className="p-2 text-center font-bold text-text-primary whitespace-nowrap">
                           {formatCurrency(item.total || 0)}
                         </td>
-                        <td className="p-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={item.save_to_inventory || false}
-                            onChange={(e) => updateItem(i, 'save_to_inventory', e.target.checked)}
-                            className="w-4 h-4 accent-accent cursor-pointer"
-                          />
-                        </td>
                         <td className="p-2">
                           {form.items.length > 1 && (
                             <button
@@ -563,7 +557,7 @@ export default function InvoicesPage() {
                   </div>
                   {form.vat_enabled && (
                     <div className="flex justify-between items-center">
-                      <span className="text-text-secondary">ضريبة القيمة المضافة (15%)</span>
+                      <span className="text-text-secondary">ضريبة القيمة المضافة ({vatPct}%)</span>
                       <span className="font-bold text-text-primary" data-testid="invoice-vat">{formatCurrency(vatAmount)}</span>
                     </div>
                   )}
@@ -581,7 +575,7 @@ export default function InvoicesPage() {
                 <div className="flex items-center justify-between bg-bg-secondary rounded-lg p-3">
                   <span className="text-xs text-text-secondary">حالة الضريبة</span>
                   <Badge variant={form.vat_enabled ? 'success' : 'warning'}>
-                    {form.vat_enabled ? 'مفعّلة (15%)' : 'معفاة'}
+                    {form.vat_enabled ? `مفعّلة (${vatPct}%)` : 'معفاة'}
                   </Badge>
                 </div>
               </div>

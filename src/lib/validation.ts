@@ -279,6 +279,8 @@ export const purchaseInvoiceSchema = z.object({
     account_code: z.string().max(20).optional(),
     account_id: z.string().uuid().optional().nullable(),
   }).strict()).max(100).optional(),
+  withholding_rate: z.number().min(0, 'نسبة خصم المنبع لا يمكن أن تكون سالبة').max(0.2, 'نسبة خصم المنبع غير صالحة')
+    .refine((value) => Math.abs(value * 10000 - Math.round(value * 10000)) < 1e-8, 'نسبة خصم المنبع غير صالحة').optional().default(0),
 }).strict();
 
 export const purchaseInvoiceUpdateSchema = z.object({

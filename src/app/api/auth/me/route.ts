@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     const u = user as Row;
 
     const { data: company } = await s.from('companies')
-      .select('id, name, commercial_registration, tax_number, address, phone, email, is_active')
+      .select('id, name, commercial_registration, tax_number, address, phone, email, is_active, vat_rate, country_code, currency_code, currency_symbol')
       .eq('id', auth.companyId).maybeSingle();
     const c = company as Row | null;
 

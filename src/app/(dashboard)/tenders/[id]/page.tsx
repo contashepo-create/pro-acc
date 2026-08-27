@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { parseCompanyVatRate, vatOnAmount, vatPercentLabel } from '@/lib/company-vat';
 
 
 interface TenderDetail {
@@ -87,6 +88,7 @@ export default function TenderDetailPage() {
   const [activeTab, setActiveTab] = useState<'overview' | 'costs' | 'expenses' | 'bonds'>('overview');
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [banksSafes, setBanksSafes] = useState<BankSafe[]>([]);
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [saving, setSaving] = useState(false);
   const [expenseForm, setExpenseForm] = useState({
     expense_type: 'karasa',
@@ -109,12 +111,13 @@ export default function TenderDetailPage() {
 
   const fetchBanks = async () => {
     try {
-      const res = await fetch('/api/banks');
-      const json = await res.json();
+      const [banksRes, setRes] = await Promise.all([fetch('/api/banks'), fetch('/api/auth/me')]);
+      const [json, setJson] = await Promise.all([banksRes.json(), setRes.json()]);
       if (json.success) {
         const all = [...(json.data?.banks || []), ...(json.data?.safes || [])];
         setBanksSafes(all);
       }
+      if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
     } catch { /* ignore */ }
   };
 
@@ -435,8 +438,12 @@ export default function TenderDetailPage() {
           <Input label="التاريخ" type="date" value={expenseForm.date}
             onChange={(e) => setExpenseForm({ ...expenseForm, date: e.target.value })} />
           <Input label="المبلغ *" type="number" value={expenseForm.amount}
-            onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} placeholder="0.00" />
-          <Input label="الضريبة (15%)" type="number" value={expenseForm.vat_amount}
+            onChange={(e) => {
+              const amount = e.target.value;
+              const vat = vatOnAmount(Number(amount) || 0, companyVatRate);
+              setExpenseForm({ ...expenseForm, amount, vat_amount: vat ? String(vat) : '' });
+            }} placeholder="0.00" />
+          <Input label={`الضريبة (${vatPercentLabel(companyVatRate)}%)`} type="number" value={expenseForm.vat_amount}
             onChange={(e) => setExpenseForm({ ...expenseForm, vat_amount: e.target.value })} placeholder="0.00" />
           <Select
             label="البنك / الخزينة *"

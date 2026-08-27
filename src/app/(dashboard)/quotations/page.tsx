@@ -20,6 +20,7 @@ import { formatDate, formatCurrency, escapeHtml } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
 import { openPrintWindow } from '@/lib/print';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
 
 interface QuotationItem { description: string; quantity: number; unit_price: number; total: number; }
 interface QuotationRow {
@@ -59,6 +60,7 @@ export default function QuotationsPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [company, setCompany] = useState<CompanyInfo | null>(null);
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [form, setForm] = useState<QuotationForm>({
     date: new Date().toISOString().split('T')[0],
     contact_id: '',
@@ -86,7 +88,13 @@ export default function QuotationsPage() {
       if (quotJson.success) setQuotations(quotJson.data?.quotations || []);
       else setError(quotJson.message || 'فشل');
       if (cliJson.success) setClients(cliJson.data?.clients || []);
-      if (setJson.success && setJson.data?.company) setCompany(setJson.data.company);
+      if (setJson.success && setJson.data?.company) {
+        setCompany(setJson.data.company);
+        const rate = parseCompanyVatRate(setJson.data.company);
+        setCompanyVatRate(rate);
+        setForm((prev) => prev.tax_enabled && (prev.tax_rate === 0.15 || prev.tax_rate === 0.14)
+          ? { ...prev, tax_rate: rate } : prev);
+      }
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -102,7 +110,7 @@ export default function QuotationsPage() {
     try {
       const url = editingQuotation ? `/api/quotations/${editingQuotation.id}` : '/api/quotations';
       const method = editingQuotation ? 'PUT' : 'POST';
-      const payload = { ...form, items: validItems, tax_rate: form.tax_enabled ? Number(form.tax_rate || 0.15) : 0 };
+      const payload = { ...form, items: validItems, tax_rate: form.tax_enabled ? Number(form.tax_rate || companyVatRate) : 0 };
       delete payload.tax_enabled;
 
       const res = await fetch(url, {
@@ -119,7 +127,7 @@ export default function QuotationsPage() {
           contact_id: '',
           valid_until: '',
           notes: '',
-          tax_rate: 0.15,
+          tax_rate: companyVatRate,
           tax_enabled: true,
           items: [{ description: '', quantity: 1, unit_price: 0, total: 0 }],
         });
@@ -140,7 +148,7 @@ export default function QuotationsPage() {
           contact_id: d.contact_id || '',
           valid_until: toDateInput(d.valid_until),
           notes: d.notes || '',
-          tax_rate: d.tax_rate ?? 0.15,
+          tax_rate: d.tax_rate ?? companyVatRate,
           tax_enabled: Number(d.tax_rate || 0) > 0,
           items: (d.items || []).length
             ? d.items
@@ -326,7 +334,7 @@ export default function QuotationsPage() {
             <Select label="العميل" value={form.contact_id} onChange={(v) => setForm({...form, contact_id: v})} options={[{ value: '', label: 'اختر عميلاً' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]} className="col-span-2" />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات عرض السعر" />
-          <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={!!form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
+          <Checkbox label={`تطبيق ضريبة القيمة المضافة (${vatPercentLabel(companyVatRate)}%)`} checked={!!form.tax_enabled} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? companyVatRate : 0})} />
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-bold">بنود العرض</h4>

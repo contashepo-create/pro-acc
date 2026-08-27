@@ -1125,7 +1125,7 @@ export default function InvoiceViewPage() {
                 <span>{subtotal.toFixed(2)} {currencySymbol}</span>
               </div>
               <div className="flex justify-between">
-                <span>الضريبة (15%):</span>
+                <span>الضريبة ({Math.round((vatRate || 0) * 100)}%):</span>
                 <span>{vatAmount.toFixed(2)} {currencySymbol}</span>
               </div>
               <div className="flex justify-between font-black text-xs pt-1 border-t border-black">
