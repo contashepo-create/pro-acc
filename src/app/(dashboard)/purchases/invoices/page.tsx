@@ -97,7 +97,7 @@ export default function PurchaseInvoicesPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<PurchaseInvoiceRow | null>(null);
   const [viewingInvoice, setViewingInvoice] = useState<PurchaseInvoiceRow | null>(null);
-  const [company, setCompany] = useState<CompanyInfo | null>(null);
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfo | null>(null);
   const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [withholdingEnabled, setWithholdingEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -137,7 +137,7 @@ export default function PurchaseInvoicesPage() {
       if (supJson.success) setSuppliers(supJson.data?.contacts || []);
       if (ordJson.success) setOrders(ordJson.data?.orders || []);
       if (setJson.success) {
-        if (setJson.data?.company) setCompany(setJson.data.company);
+        if (setJson.data?.company) setCompanyInfo(setJson.data.company);
         setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
         const wh = setJson.data?.withholding_enabled;
         setWithholdingEnabled(wh === true || wh === 'true' || setJson.data?.company?.country_code === 'EG');
@@ -302,8 +302,8 @@ export default function PurchaseInvoicesPage() {
     const taxAmount = Number(record.tax_amount || 0);
     const otherTotal = Number(record.other_expenses_total || 0);
     const total = Number(record.total || 0);
-    const companyName = escapeHtml(String(company?.name || ''));
-    const companyTax = escapeHtml(String(company?.tax_number || ''));
+    const companyName = escapeHtml(String(companyInfo?.name || company?.name || ''));
+    const companyTax = escapeHtml(String(companyInfo?.tax_number || ''));
     const supplierName = escapeHtml(String(record.supplier_name || record.contacts?.name || record.supplier?.name || ''));
     const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة شراء ${record.number || record.invoice_number}</title>
       <style>

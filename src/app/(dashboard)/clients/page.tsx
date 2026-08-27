@@ -15,7 +15,9 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { Pagination } from '@/components/ui/Pagination';
 import { toast } from '@/components/ui/Toast';
-import { formatCurrency } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth-store';
+import { getCountryConfig } from '@/lib/countries';
+import { companyDisplayMoney } from '@/lib/company-money';
 
 interface ClientRow {
   id: string;
@@ -60,6 +62,7 @@ interface ClientForm {
 export default function ClientsPage() {
   const { company } = useAuthStore();
   const defaultCountryName = getCountryConfig(company?.country_code || 'SA').name;
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -174,12 +177,12 @@ export default function ClientsPage() {
       const bal = Number(row.balance) || 0;
       return (
         <div className="flex items-center gap-2">
-          <span className={`font-bold ${bal > 0 ? 'text-green-600' : bal < 0 ? 'text-red-600' : 'text-text-muted'}`}>{formatCurrency(Math.abs(bal))}</span>
+          <span className={`font-bold ${bal > 0 ? 'text-green-600' : bal < 0 ? 'text-red-600' : 'text-text-muted'}`}>{money(Math.abs(bal))}</span>
           {bal !== 0 && <Badge variant={bal > 0 ? 'success' : 'danger'}>{bal > 0 ? 'مدين' : 'دائن'}</Badge>}
         </div>
       );
     }, sortable: true },
-    { key: 'credit_limit', label: 'الحد الائتماني', render: (row: ClientRow) => formatCurrency(row.credit_limit) },
+    { key: 'credit_limit', label: 'الحد الائتماني', render: (row: ClientRow) => money(row.credit_limit) },
     { key: 'actions', label: 'إجراءات', render: (row: ClientRow) => (
       <div className="flex items-center gap-2">
         <a href={`/clients/${row.id}/statement`} target="_blank" rel="noopener noreferrer">
