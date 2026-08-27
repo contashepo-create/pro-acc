@@ -36,7 +36,10 @@ export async function GET(request: NextRequest) {
       if (countError) throw countError;
       return [tenderStatus, statusCount || 0] as const;
     }));
-    const stats = { total: count || 0, ...Object.fromEntries(statusCounts) };
+    const { count: allCount, error: allCountError } = await sb().from('tenders').select('id', { count: 'exact', head: true })
+      .eq('company_id', auth.companyId);
+    if (allCountError) throw allCountError;
+    const stats = { total: allCount || 0, ...Object.fromEntries(statusCounts) };
     return success({ tenders, total: count || 0, page, pageSize, stats });
   } catch (err) {
     return handleApiError(err);

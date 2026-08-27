@@ -63,13 +63,13 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         p_user_id: auth.userId,
       });
       if (transitionError) return tenderMutationError(transitionError);
-      // If lost: close suspense + release bonds automatically
       if (parsed.data.status === 'lost') {
-        await sb().rpc('close_lost_tender_atomic', {
+        const { error: closeError } = await sb().rpc('close_lost_tender_atomic', {
           p_company_id: auth.companyId,
           p_tender_id: id,
           p_user_id: auth.userId,
         });
+        if (closeError) return tenderMutationError(closeError);
       }
       return success(data);
     }
@@ -124,12 +124,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const auth = await requireModulePermission(request, 'tenders', 'create');
     const { id } = await params;
     if (!relationshipUuid.safeParse(id).success) return error('معرف المناقصة غير صالح');
-    const parsed = tenderCostItemSchema.safeParse(await parseBody(request));
-    if (!parsed.success) return error(parsed.error.issues[0].message);
-
-    // Check if this is a tender expense (accounting) vs a cost item (estimation)
-    if ('expense_type' in parsed.data && 'bank_safe_id' in parsed.data) {
-      const expenseParsed = tenderExpenseSchema.safeParse(await parseBody(request));
+    const raw = await parseBody(request);
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'expense_type' in raw) {
+      const expenseParsed = tenderExpenseSchema.safeParse(raw);
       if (!expenseParsed.success) return error(expenseParsed.error.issues[0].message);
       const { data, error: expenseError } = await sb().rpc('record_tender_expense_atomic', {
         p_company_id: auth.companyId,
@@ -145,6 +142,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       if (expenseError) return tenderMutationError(expenseError);
       return success(data, 201);
     }
+
+    const parsed = tenderCostItemSchema.safeParse(raw);
+    if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const { data, error: createError } = await sb().rpc('create_tender_cost_item_atomic', {
       p_company_id: auth.companyId,
@@ -163,6 +163,6 @@ function tenderMutationError(mutationError: { message?: string | null }) {
   const message = String(mutationError.message || 'تعذر تنفيذ عملية المناقصة');
   if (message.includes('غير موجودة')) return notFound();
   if (message.includes('لا يمكن') || message.includes('انتقال حالة') || message.includes('مسبقاً')) return error(message, 409);
-  if (message.includes('غير صالحة') || message.includes('طويلة')) return error(message);
+  if (message.includes('غير صالحة') || message.includes('طويلة') || message.includes('غير موجود')) return error(message);
   throw mutationError;
 }

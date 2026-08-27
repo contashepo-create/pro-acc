@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Banknote, ShieldCheck, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Plus, ShieldCheck } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -41,7 +41,7 @@ const TYPE_LABELS: Record<string, string> = {
   retention: 'محجوزات', warranty: 'ضمان', insurance: 'تأمين', other: 'أخرى',
 };
 const STATUS_LABELS: Record<string, string> = {
-  active: 'ساري', expired: 'منتهي', released: 'مُلك', cancelled: 'ملغى',
+  active: 'ساري', expired: 'منتهي', released: 'مُحرَّر', cancelled: 'ملغى',
 };
 const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'> = {
   active: 'success', expired: 'danger', released: 'default', cancelled: 'default',
@@ -62,7 +62,7 @@ export default function BondsPage() {
     title: '', type: 'bid_bond', amount: '', currency: 'SAR',
     issue_date: new Date().toISOString().split('T')[0], expiry_date: '',
     issuing_bank: '', bank_safe_id: '', beneficiary_name: '',
-    reference_number: '', commission: '', vat_amount: '', notes: '',
+    reference_number: '', commission: '', vat_amount: '', margin_amount: '', notes: '',
     tender_id: '', project_id: '', contact_id: '',
   });
 
@@ -88,6 +88,14 @@ export default function BondsPage() {
 
   useEffect(() => { fetchData(); }, [statusFilter, typeFilter]);
 
+  useEffect(() => {
+    const tenderId = new URLSearchParams(window.location.search).get('tender_id');
+    if (tenderId) {
+      setForm((prev) => ({ ...prev, tender_id: tenderId }));
+      setShowModal(true);
+    }
+  }, []);
+
   const handleSave = async () => {
     if (!form.title.trim()) { setSaveError('العنوان مطلوب'); return; }
     if (!form.amount || Number(form.amount) <= 0) { setSaveError('المبلغ مطلوب'); return; }
@@ -107,7 +115,7 @@ export default function BondsPage() {
           title: '', type: 'bid_bond', amount: '', currency: 'SAR',
           issue_date: new Date().toISOString().split('T')[0], expiry_date: '',
           issuing_bank: '', bank_safe_id: '', beneficiary_name: '',
-          reference_number: '', commission: '', vat_amount: '', notes: '',
+          reference_number: '', commission: '', vat_amount: '', margin_amount: '', notes: '',
           tender_id: '', project_id: '', contact_id: '',
         });
         fetchData();
@@ -199,8 +207,10 @@ export default function BondsPage() {
             onChange={(v) => setForm({ ...form, type: v })}
             options={Object.entries(TYPE_LABELS).map(([val, label]) => ({ value: val, label }))}
           />
-          <Input label="المبلغ *" type="number" value={form.amount}
+          <Input label="قيمة الخطاب (اسمية) *" type="number" value={form.amount}
             onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0.00" />
+          <Input label="الغطاء النقدي (إن وُجد)" type="number" value={form.margin_amount}
+            onChange={(e) => setForm({ ...form, margin_amount: e.target.value })} placeholder="0.00" />
           <Input label="تاريخ الإصدار *" type="date" value={form.issue_date}
             onChange={(e) => setForm({ ...form, issue_date: e.target.value })} />
           <Input label="تاريخ الانتهاء *" type="date" value={form.expiry_date}

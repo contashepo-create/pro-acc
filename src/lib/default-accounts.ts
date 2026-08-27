@@ -85,6 +85,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '5130', name: 'تكاليف مقاولي باطن', nameEn: 'Subcontractor Costs', type: 'expense', parentCode: '5100' },
   { code: '5140', name: 'إيجار معدات', nameEn: 'Equipment Rental', type: 'expense', parentCode: '5100' },
   { code: '5410', name: 'مصاريف مناقصات تحت التسوية', nameEn: 'Tender Costs in Suspense', type: 'expense', parentCode: '5100' },
+  { code: '5195', name: 'تكاليف ما قبل التعاقد', nameEn: 'Pre-contract Tender Costs', type: 'expense', parentCode: '5100' },
   
   { code: '5200', name: 'مصروفات تشغيلية', nameEn: 'Operating Expenses', type: 'expense', parentCode: '5000', isHeader: true },
   { code: '5210', name: 'رواتب وأجور', nameEn: 'Salaries & Wages', type: 'expense', parentCode: '5200' },
@@ -96,7 +97,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '5270', name: 'محروقات', nameEn: 'Fuel', type: 'expense', parentCode: '5200' },
   { code: '5280', name: 'قرطاسية ومطبوعات', nameEn: 'Stationery', type: 'expense', parentCode: '5200' },
   { code: '5290', name: 'مصروفات بنكية', nameEn: 'Bank Charges', type: 'expense', parentCode: '5200' },
-  { code: '5291', name: 'عمولات بنكية لضمانات', nameEn: 'Bank Guarantee Commissions', type: 'expense', parentCode: '5290' },
+  { code: '5291', name: 'عمولات بنكية لضمانات', nameEn: 'Bank Guarantee Commissions', type: 'expense', parentCode: '5200' },
   
   { code: '5300', name: 'مصروفات تسويقية', nameEn: 'Marketing Expenses', type: 'expense', parentCode: '5000' },
   { code: '5400', name: 'مصروفات إدارية وعمومية', nameEn: 'General & Admin Expenses', type: 'expense', parentCode: '5000' },
