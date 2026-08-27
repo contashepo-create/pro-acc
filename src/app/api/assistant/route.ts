@@ -30,11 +30,15 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const { data, error: snapshotError } = await getSupabase().rpc('get_assistant_company_snapshot', {
+    const s = getSupabase();
+    const { data, error: snapshotError } = await s.rpc('get_assistant_company_snapshot', {
       p_company_id: auth.companyId,
     });
     if (snapshotError) throw snapshotError;
     const snapshot = (data || {}) as Record<string, unknown>;
+    const { data: companyMoney } = await s.from('companies')
+      .select('currency_symbol').eq('id', auth.companyId).maybeSingle();
+    const money = String((companyMoney as { currency_symbol?: string } | null)?.currency_symbol || '').trim() || 'ر.س';
 
     if (financialIntent) {
       const revenue = amount(snapshot.revenue);
@@ -42,14 +46,14 @@ export async function POST(request: NextRequest) {
       const profit = amount(snapshot.netProfit);
       const margin = revenue === 0 ? null : (profit / revenue) * 100;
       return success({
-        response: `📊 **تحليل الدفتر المنشور:**\n\n• صافي الإيرادات: ${revenue.toFixed(2)} ر.س\n• صافي المصروفات: ${expenses.toFixed(2)} ر.س\n• ${profit >= 0 ? '✅ صافي الربح' : '❌ صافي الخسارة'}: ${Math.abs(profit).toFixed(2)} ر.س${margin === null ? '' : `\n• هامش الربح: ${margin.toFixed(1)}%`}`,
+        response: `📊 **تحليل الدفتر المنشور:**\n\n• صافي الإيرادات: ${revenue.toFixed(2)} ${money}\n• صافي المصروفات: ${expenses.toFixed(2)} ${money}\n• ${profit >= 0 ? '✅ صافي الربح' : '❌ صافي الخسارة'}: ${Math.abs(profit).toFixed(2)} ${money}${margin === null ? '' : `\n• هامش الربح: ${margin.toFixed(1)}%`}`,
         suggestions: [{ text: 'عرض قائمة الدخل', action: '/reports' }, { text: 'تحليل المصروفات', action: '/reports' }],
       });
     }
 
     if (invoiceIntent) {
       return success({
-        response: `📄 **ملخص الفواتير المرحلة:**\n\n• فواتير غير مسددة: ${amount(snapshot.unpaidInvoices)}\n• الرصيد المستحق: ${amount(snapshot.outstandingInvoices).toFixed(2)} ر.س\n• الرصيد المتأخر: ${amount(snapshot.overdueInvoices).toFixed(2)} ر.س`,
+        response: `📄 **ملخص الفواتير المرحلة:**\n\n• فواتير غير مسددة: ${amount(snapshot.unpaidInvoices)}\n• الرصيد المستحق: ${amount(snapshot.outstandingInvoices).toFixed(2)} ${money}\n• الرصيد المتأخر: ${amount(snapshot.overdueInvoices).toFixed(2)} ${money}`,
         suggestions: [{ text: 'إنشاء فاتورة جديدة', action: '/invoices' }, { text: 'الفواتير المتأخرة', action: '/invoices?status=unpaid' }],
       });
     }

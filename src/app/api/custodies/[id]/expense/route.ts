@@ -33,7 +33,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       projectId = String(project.id);
     }
 
-    const expenseCode = input.expense_account_code || ACCOUNT_CODES.DIRECT_COSTS;
+    const expenseCode = input.expense_account_code || '5400';
     const { data: expenseAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId)
       .eq('code', expenseCode).eq('type', 'expense').eq('is_active', true).eq('is_header', false).maybeSingle();
     if (!expenseAccount?.id) return error('حساب المصروف غير موجود أو غير صالح');

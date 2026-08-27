@@ -9,6 +9,7 @@ const db = {
   from: jest.fn(() => {
     const api = {
       select: () => api, eq: () => api, lt: async () => overdueResult,
+      maybeSingle: async () => ({ data: { currency_symbol: 'ر.س', locale: 'ar-SA' }, error: null }),
     };
     return api;
   }),

@@ -8,6 +8,10 @@ export interface Company {
   address?: string;
   logo_url?: string;
   currency_symbol: string;
+  currency_code?: string;
+  country_code?: string;
+  locale?: string;
+  vat_rate?: number;
   created_at: string;
   is_active: boolean;
 }

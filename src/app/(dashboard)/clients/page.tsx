@@ -58,6 +58,8 @@ interface ClientForm {
 }
 
 export default function ClientsPage() {
+  const { company } = useAuthStore();
+  const defaultCountryName = getCountryConfig(company?.country_code || 'SA').name;
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -72,7 +74,7 @@ export default function ClientsPage() {
     name: '', type: 'client', phone: '', email: '', address: '',
     tax_number: '', commercial_registration: '', credit_limit: 0,
     contact_person: '', contact_person_phone: '', contact_person_email: '',
-    city: '', region: '', country: 'السعودية', postal_code: '',
+    city: '', region: '', country: defaultCountryName, postal_code: '',
     website: '', iban: '', bank_name: '', swift_code: '',
     opening_balance: 0, opening_balance_type: 'debit',
     payment_terms: 'immediate', notes: '',
@@ -114,7 +116,7 @@ export default function ClientsPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false); setEditingClient(null);
-        setForm({ name: '', type: 'client', phone: '', email: '', address: '', tax_number: '', commercial_registration: '', credit_limit: 0, contact_person: '', contact_person_phone: '', contact_person_email: '', city: '', region: '', country: 'السعودية', postal_code: '', website: '', iban: '', bank_name: '', swift_code: '', opening_balance: 0, opening_balance_type: 'debit', payment_terms: 'immediate', notes: '', date_of_birth: '', gender: '', national_id: '', category: '' });
+        setForm({ name: '', type: 'client', phone: '', email: '', address: '', tax_number: '', commercial_registration: '', credit_limit: 0, contact_person: '', contact_person_phone: '', contact_person_email: '', city: '', region: '', country: defaultCountryName, postal_code: '', website: '', iban: '', bank_name: '', swift_code: '', opening_balance: 0, opening_balance_type: 'debit', payment_terms: 'immediate', notes: '', date_of_birth: '', gender: '', national_id: '', category: '' });
         toast.success(editingClient ? 'تم تحديث العميل' : 'تم إضافة العميل');
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -134,7 +136,7 @@ export default function ClientsPage() {
           address: d.address || '', tax_number: d.tax_number || '', commercial_registration: d.commercial_registration || '',
           credit_limit: d.credit_limit || 0, contact_person: d.contact_person || '', contact_person_phone: d.contact_person_phone || '',
           contact_person_email: d.contact_person_email || '', city: d.city || '', region: d.region || '',
-          country: d.country || 'السعودية', postal_code: d.postal_code || '', website: d.website || '',
+          country: d.country || defaultCountryName, postal_code: d.postal_code || '', website: d.website || '',
           iban: d.iban || '', bank_name: d.bank_name || '', swift_code: d.swift_code || '',
           opening_balance: d.opening_balance || 0, opening_balance_type: d.opening_balance_type || 'debit',
           payment_terms: d.payment_terms || 'immediate', notes: d.notes || '',

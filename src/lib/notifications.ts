@@ -63,11 +63,17 @@ export async function checkBankBalance(
   const currentBalance = bankAcc.account_id
     ? await getAccountBalance(String(bankAcc.account_id), companyId)
     : 0;
+  const { data: companyMoney } = await sb()
+    .from("companies")
+    .select("currency_symbol")
+    .eq("id", companyId)
+    .maybeSingle();
+  const money = String((companyMoney as { currency_symbol?: string } | null)?.currency_symbol || "").trim() || "ر.س";
   return currentBalance < amount
     ? {
         allowed: false,
         balance: currentBalance,
-        message: `الرصيد غير كافٍ. الرصيد الحالي: ${currentBalance.toFixed(2)} ر.س، المبلغ المطلوب: ${amount.toFixed(2)} ر.س`,
+        message: `الرصيد غير كافٍ. الرصيد الحالي: ${currentBalance.toFixed(2)} ${money}، المبلغ المطلوب: ${amount.toFixed(2)} ${money}`,
       }
     : { allowed: true, balance: currentBalance };
 }
@@ -293,7 +299,7 @@ export async function sendTransactionNotification(
   const message = `
 ${typeLabel}
 
-💰 <b>المبلغ:</b> ${details.amount.toFixed(2)} ر.س
+💰 <b>المبلغ:</b> ${details.amount.toFixed(2)}
 📋 <b>البيان:</b> ${escapeTelegramHtml(details.reason)}
 🏦 <b>البنك/الخزينة:</b> ${escapeTelegramHtml(details.bankName || "غير محدد")}
 📅 <b>التاريخ:</b> ${escapeTelegramHtml(details.date)}

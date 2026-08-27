@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import { QRCode } from '@/components/ui/QRCode';
 import { toast } from '@/components/ui/Toast';
 import { openPrintWindow } from '@/lib/print';
-import { escapeHtml } from '@/lib/utils';
+import { escapeHtml, formatCurrency } from '@/lib/utils';
+import { taxQrCaption, usesPhaseOneTaxQr } from '@/lib/tax-authority';
 
 interface PortalInvoice {
   id: string;
@@ -15,8 +16,19 @@ interface PortalInvoice {
   status: string;
   zatca_qr: string | null;
   items: Array<{ description: string; quantity: number; unit_price: number; total: number }>;
-  company?: { name?: string; tax_number?: string; address?: string; phone?: string; logo_url?: string | null };
+  company?: {
+    name?: string;
+    tax_number?: string;
+    address?: string;
+    phone?: string;
+    logo_url?: string | null;
+    currency_symbol?: string;
+    locale?: string;
+    country_code?: string;
+  };
 }
+
+type PortalCompany = NonNullable<PortalInvoice['company']>;
 
 export default function CustomerPortalPage() {
   const [invoices, setInvoices] = useState<PortalInvoice[]>([]);
@@ -27,6 +39,7 @@ export default function CustomerPortalPage() {
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [portalMessage, setPortalMessage] = useState('');
+  const [portalCompany, setPortalCompany] = useState<PortalCompany>({});
 
   // Get portal token from URL or ask for email
   useEffect(() => {
@@ -72,6 +85,7 @@ export default function CustomerPortalPage() {
       const data = await res.json();
       if (data.success) {
         setInvoices(data.data.invoices);
+        if (data.data.company) setPortalCompany(data.data.company);
       }
     } catch {
       setError('خطأ في تحميل الفواتير');
@@ -97,6 +111,11 @@ export default function CustomerPortalPage() {
   const statusLabel = (status: string) =>
     status === 'paid' ? 'مدفوعة' : status === 'partial' ? 'جزئية' : 'غير مدفوعة';
 
+  const portalLocale = portalCompany.locale || 'ar-SA';
+  const portalMoney = portalCompany.currency_symbol || 'ر.س';
+  const moneyOf = (value: number, locale?: string, symbol?: string) =>
+    formatCurrency(value, locale || portalLocale, symbol || portalMoney);
+
   /**
    * "تحميل PDF": opens a printable invoice view in a new window and triggers
    * the print dialog, where the customer can choose "Save as PDF". All data is
@@ -114,7 +133,9 @@ export default function CustomerPortalPage() {
         <td style="padding:8px 12px;border:1px solid #ddd;text-align:left;font-weight:600">${Number(item.total).toFixed(2)}</td>
       </tr>`)
       .join('');
-    const company = inv.company || {};
+    const company = inv.company || portalCompany || {};
+    const moneySymbol = company.currency_symbol || portalCompany.currency_symbol || 'ر.س';
+    const locale = company.locale || portalCompany.locale || 'ar-SA';
     const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة رقم ${inv.number}</title>
       <style>
         body{font-family:Tahoma,Arial,sans-serif;padding:28px;color:#111;max-width:760px;margin:0 auto}
@@ -126,12 +147,12 @@ export default function CustomerPortalPage() {
         @media print{button{display:none}}
       </style></head><body>
       <h1>فاتورة رقم #${inv.number}</h1>
-      <h2>التاريخ: ${new Date(inv.date).toLocaleDateString('ar-SA')} — الحالة: ${statusLabel(inv.status)}</h2>
+      <h2>التاريخ: ${new Date(inv.date).toLocaleDateString(locale)} — الحالة: ${statusLabel(inv.status)}</h2>
       ${company.name ? `<p style="font-weight:700;margin:0">${escapeHtml(company.name)}</p>` : ''}
       ${company.tax_number ? `<p class="muted" style="margin:0">الرقم الضريبي: ${escapeHtml(company.tax_number)}</p>` : ''}
       ${company.address ? `<p class="muted" style="margin:0">${escapeHtml(company.address)}</p>` : ''}
       <table><thead><tr><th>الوصف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>${items}</tbody></table>
-      <div class="totals"><span>الإجمالي</span><span>${Number(inv.total).toFixed(2)} ر.س</span></div>
+      <div class="totals"><span>الإجمالي</span><span>${escapeHtml(formatCurrency(Number(inv.total), locale, moneySymbol))}</span></div>
       <p style="text-align:center"><button onclick="window.print()" style="padding:10px 28px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:15px;cursor:pointer">طباعة / حفظ PDF</button></p>
       </body></html>`;
     const result = openPrintWindow(html);
@@ -220,7 +241,7 @@ export default function CustomerPortalPage() {
           </div>
           <div className="bg-white rounded-xl p-5 shadow-sm">
             <p className="text-sm text-gray-500">المستحق</p>
-            <p className="text-2xl font-bold text-orange-600 mt-1">{totalUnpaid.toFixed(2)} <span className="text-sm">ر.س</span></p>
+            <p className="text-2xl font-bold text-orange-600 mt-1">{moneyOf(totalUnpaid)}</p>
           </div>
           <div className="bg-white rounded-xl p-5 shadow-sm">
             <p className="text-sm text-gray-500">المدفوعة</p>
@@ -235,7 +256,7 @@ export default function CustomerPortalPage() {
               <div className="flex justify-between items-start mb-6">
                 <div>
                   <h2 className="text-xl font-bold">فاتورة رقم #{selectedInvoice.number}</h2>
-                  <p className="text-gray-500 text-sm mt-1">التاريخ: {new Date(selectedInvoice.date).toLocaleDateString('ar-SA')}</p>
+                  <p className="text-gray-500 text-sm mt-1">التاريخ: {new Date(selectedInvoice.date).toLocaleDateString(portalCompany.locale || 'ar-SA')}</p>
                 </div>
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${
                   selectedInvoice.status === 'paid' ? 'bg-green-100 text-green-700' :
@@ -271,13 +292,13 @@ export default function CustomerPortalPage() {
               {/* Total */}
               <div className="bg-blue-50 rounded-xl p-4 flex justify-between items-center">
                 <span className="font-bold text-lg">الإجمالي</span>
-                <span className="font-bold text-2xl text-blue-700">{parseFloat(String(selectedInvoice.total)).toFixed(2)} ر.س</span>
+                <span className="font-bold text-2xl text-blue-700">{moneyOf(Number(selectedInvoice.total), selectedInvoice.company?.locale, selectedInvoice.company?.currency_symbol)}</span>
               </div>
 
               {/* ZATCA QR */}
-              {selectedInvoice.zatca_qr && (
+              {selectedInvoice.zatca_qr && usesPhaseOneTaxQr(selectedInvoice.company?.country_code || portalCompany.country_code) && (
                 <div className="mt-6 text-center">
-                  <p className="text-sm text-gray-500 mb-2">رمز ZATCA للفوترة الإلكترونية</p>
+                  <p className="text-sm text-gray-500 mb-2">{taxQrCaption(selectedInvoice.company?.country_code || portalCompany.country_code)}</p>
                   <div className="inline-block bg-white p-3 rounded-lg border">
                     <QRCode value={selectedInvoice.zatca_qr} size={128} />
                   </div>
@@ -320,12 +341,12 @@ export default function CustomerPortalPage() {
                   <div>
                     <p className="font-bold text-gray-900">فاتورة #{inv.number}</p>
                     <p className="text-sm text-gray-500 mt-1">
-                      {new Date(inv.date).toLocaleDateString('ar-SA')} • 
-                      استحقاق: {new Date(inv.due_date).toLocaleDateString('ar-SA')}
+                      {new Date(inv.date).toLocaleDateString(portalLocale)} • 
+                      استحقاق: {new Date(inv.due_date).toLocaleDateString(portalLocale)}
                     </p>
                   </div>
                   <div className="text-left">
-                    <p className="font-bold text-lg">{parseFloat(String(inv.total)).toFixed(2)} <span className="text-sm text-gray-500">ر.س</span></p>
+                    <p className="font-bold text-lg">{moneyOf(Number(inv.total))}</p>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${
                       inv.status === 'paid' ? 'bg-green-100 text-green-700' :
                       inv.status === 'partial' ? 'bg-yellow-100 text-yellow-700' :

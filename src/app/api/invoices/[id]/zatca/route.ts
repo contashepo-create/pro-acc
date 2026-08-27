@@ -50,6 +50,19 @@ export async function GET(
     if (invoiceError) throw invoiceError;
     if (!invoice || (invoice as Record<string, unknown>).status === 'cancelled') return notFound();
 
+    const { data: operating, error: operatingError } = await s.from('companies')
+      .select('country_code')
+      .eq('id', auth.companyId)
+      .maybeSingle();
+    if (operatingError) throw operatingError;
+    if (String((operating as { country_code?: string } | null)?.country_code || 'SA') === 'EG') {
+      return success({
+        invoiceId: id,
+        qrData: null,
+        artifact: { format: 'eta', phase2Compliant: false },
+      });
+    }
+
     const { data: itemRows, error: itemsError } = await s.from('invoice_items')
       .select('id, description, quantity, unit_price, total')
       .eq('invoice_id', id)

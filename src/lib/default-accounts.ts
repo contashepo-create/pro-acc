@@ -58,7 +58,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '2160', name: 'محجوزات ضمان', nameEn: 'Retentions Payable', type: 'liability', parentCode: '2100' },
   { code: '2170', name: 'عمالة يومية مستحقة', nameEn: 'Daily Workers Payable', type: 'liability', parentCode: '2100' },
   { code: '2180', name: 'دفعات مقدمة من عملاء', nameEn: 'Advances from Clients', type: 'liability', parentCode: '2100' },
-  { code: '2190', name: 'مكافأة نهاية الخدمة', nameEn: 'End of Service Benefits', type: 'liability', parentCode: '2100' },
+  { code: '2190', name: 'مكافأة نهاية الخدمة', nameEn: 'End of Service Benefits', type: 'liability', parentCode: '2200' },
   
   { code: '2200', name: 'الخصوم غير المتداولة', nameEn: 'Non-current Liabilities', type: 'liability', parentCode: '2000', isHeader: true },
   { code: '2210', name: 'القروض طويلة الأجل', nameEn: 'Long-term Loans', type: 'liability', parentCode: '2200' },
@@ -71,7 +71,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
 
   // الإيرادات - Revenue 4000-4999
   { code: '4000', name: 'الإيرادات', nameEn: 'Revenue', type: 'revenue', isHeader: true },
-  { code: '4100', name: 'إيرادات مقاولات', nameEn: 'Contracting Revenue', type: 'revenue', parentCode: '4000' },
+  { code: '4100', name: 'إيرادات النشاط', nameEn: 'Operating Revenue', type: 'revenue', parentCode: '4000' },
   { code: '4110', name: 'إيرادات صيانة', nameEn: 'Maintenance Revenue', type: 'revenue', parentCode: '4000' },
   { code: '4120', name: 'إيرادات استشارات', nameEn: 'Consulting Revenue', type: 'revenue', parentCode: '4000' },
   { code: '4200', name: 'إيرادات أخرى', nameEn: 'Other Revenue', type: 'revenue', parentCode: '4000' },
