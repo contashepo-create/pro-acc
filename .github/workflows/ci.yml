@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Runs before (and independently of) the main job: a leaked credential is
+  # worth failing fast on, and this needs no database or npm install.
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, not just the tip, so a secret that was
+          # committed and later deleted is still caught.
+          fetch-depth: 0
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: proacc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/proacc_test
+      NODE_ENV: test
+      TOKEN_SECRET: ci-test-secret-please-change-32charslong
+      PRO_ACCOUNTANT_LICENSE_SALT: ci-license-salt-change-me
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Dependency audit
+        run: npm audit
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+      - name: Integration suite
+        run: npm run test:integration
+      - name: Regression suite
+        run: npm run test:regression
+      # Applies all migrations from scratch on in-process PGlite.
+      - name: Migrations (PGlite)
+        run: npm run test:migrations
+      # Applies the same migrations from scratch on a REAL PostgreSQL server
+      # (genuine pgcrypto, real locking) and runs the multi-connection
+      # concurrency races that PGlite cannot exercise.
+      - name: Migrations + concurrency (real PostgreSQL)
+        run: npm run test:migrations:pg

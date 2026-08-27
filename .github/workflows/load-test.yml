@@ -1,0 +1,31 @@
+name: Load Test (K6)
+
+# Runs against a STAGING environment only. Triggered manually or nightly.
+on:
+  workflow_dispatch:
+    inputs:
+      vus:
+        description: 'Number of virtual users'
+        required: false
+        default: '50'
+      duration:
+        description: 'Test duration (e.g., 2m, 5m)'
+        required: false
+        default: '2m'
+ # schedule:
+#    - cron: '0 2 * * *' # nightly at 02:00 UTC
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run K6 load test
+        uses: grafana/k6-action@v0.3.1
+        env:
+          BASE_URL: ${{ secrets.LOAD_TEST_URL }}
+          AUTH_TOKEN: ${{ secrets.LOAD_TEST_TOKEN }}
+          VUS: ${{ github.event.inputs.vus || '50' }}
+          DURATION: ${{ github.event.inputs.duration || '2m' }}
+        with:
+          filename: tests/load/invoices.k6.js

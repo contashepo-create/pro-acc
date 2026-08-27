@@ -1,0 +1,134 @@
+'use client';
+
+import { usePathname, useRouter } from 'next/navigation';
+import { useEffect } from 'react';
+import { Sidebar } from '@/components/layout/Sidebar';
+import Header from '@/components/layout/Header';
+import { PageContainer } from '@/components/layout/PageContainer';
+import { AnnouncementBar } from '@/components/AnnouncementBar';
+import { AdBanner } from '@/components/AdBanner';
+import { AdPopup } from '@/components/AdPopup';
+import { SubscriptionBanner } from '@/components/SubscriptionBanner';
+import { useAuthStore } from '@/store/auth-store';
+import { useSidebarStore } from '@/store/sidebar-store';
+import { useThemeStore } from '@/store/theme-store';
+import { sectionAccents } from '@/lib/themes';
+import { Loader2 } from 'lucide-react';
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { isAuthenticated, isLoading, checkSession, subscription } = useAuthStore();
+  const { isCollapsed, mobileOpen, setMobileOpen } = useSidebarStore(); // FIXED: Read isCollapsed
+  const { setSectionAccent } = useThemeStore();
+
+  // Check authentication status (also refreshes subscription state)
+  useEffect(() => {
+    checkSession();
+  }, [checkSession]);
+
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      router.push(`/login?redirect=${encodeURIComponent(pathname)}`);
+    }
+  }, [isLoading, isAuthenticated, pathname, router]);
+
+  // انتهاء الاشتراك يغلق كل الأقسام: لا يتصفح العميل أي صفحة بعده، بل
+  // يوجَّه إلى قسم التجديد أو تحميل جداول بياناته فقط (Excel/CSV) —
+  // وفق سياسة المنتج ومعايير البرامج المحاسبية.
+  // (تظل /subscription و /export-data متاحتين؛ والأخيرة خارج هذا الـ layout.)
+  const subscriptionExpired = !!subscription?.is_expired;
+  useEffect(() => {
+    if (!isLoading && isAuthenticated && subscriptionExpired && pathname !== '/subscription') {
+      router.replace('/subscription?renew=1');
+    }
+  }, [isLoading, isAuthenticated, subscriptionExpired, pathname, router]);
+
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname, setMobileOpen]);
+
+  // Set the section accent colour for the active section so the sidebar
+  // active indicator + section bars use the section's own accent (projects =
+  // green, purchases = teal, reports = yellow, ...).
+  useEffect(() => {
+    const clean = pathname.replace(/^\//, '');
+    const section = clean.split('/')[0];
+    const accent = sectionAccents[section] || sectionAccents[''];
+    setSectionAccent(accent);
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.setProperty('--section-accent', accent);
+    }
+  }, [pathname, setSectionAccent]);
+
+  // Show loading state while checking auth
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 animate-spin text-accent mx-auto mb-4" />
+          <p className="text-text-muted">جاري التحميل...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Don't render dashboard content until authenticated
+  if (!isAuthenticated) {
+    return null;
+  }
+
+  // انتهى الاشتراك: لا تُعرض أي صفحة قسم — فقط شاشة توجيه للتجديد.
+  // (الإعادة الفعلية في الـ effect أعلاه؛ هذا يمنع وميض محتوى محمي.)
+  if (subscriptionExpired && pathname !== '/subscription') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg-primary">
+        <div className="text-center max-w-md px-6">
+          <Loader2 className="w-10 h-10 animate-spin text-accent mx-auto mb-4" />
+          <p className="text-text-secondary text-sm">انتهى الاشتراك — جاري تحويلك لصفحة التجديد...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-dvh bg-bg-primary flex overflow-hidden">
+      {/* Sidebar — FIXED: Width is determined dynamically by isCollapsed */}
+      <aside className="hidden lg:flex flex-col h-screen bg-sidebar-bg border-l border-border transition-all duration-300 shrink-0"
+        style={{ width: isCollapsed ? '70px' : '260px' }}
+      >
+        <Sidebar />
+      </aside>
+      <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-x-hidden">
+        <Header />
+        <main className="flex-1 overflow-y-auto overflow-x-hidden pt-14 bg-bg-primary overscroll-y-contain">
+          <div className="p-3 sm:p-4 md:p-6 min-w-0">
+            <AnnouncementBar />
+            <AdBanner />
+            <SubscriptionBanner />
+            <PageContainer>{children}</PageContainer>
+          </div>
+        </main>
+      </div>
+      <AdPopup />
+      
+      {/* Mobile drawer */}
+      {mobileOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex">
+          {/* Backdrop overlay */}
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+          {/* Drawer Panel */}
+          <div className="absolute right-0 top-0 bottom-0 w-64 bg-sidebar-bg border-l border-border z-10 animate-[slide-in-right_0.25s_ease-out]">
+            <Sidebar />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

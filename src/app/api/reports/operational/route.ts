@@ -1,0 +1,71 @@
+import { NextRequest } from 'next/server';
+import { success, error, handleApiError, requireModulePermission } from '@/lib/api-helpers';
+import { getSupabase } from '@/lib/supabase-client';
+import { isValidDate } from '@/lib/utils';
+import { parseReportPagination } from '@/lib/report-validation';
+import { classifyProjectCost } from '@/lib/project-cost-classifier';
+
+import type { Row } from '@/lib/types';
+
+const number = (value: unknown) => Number(value) || 0;
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function GET(req: NextRequest) {
+  try {
+    const auth = await requireModulePermission(req, 'reports', 'read');
+    const s = getSupabase();
+    const projectId = req.nextUrl.searchParams.get('projectId');
+    const type = req.nextUrl.searchParams.get('type') || 'project-costs';
+    const from = req.nextUrl.searchParams.get('from');
+    const to = req.nextUrl.searchParams.get('to');
+    const pagination = parseReportPagination(req.nextUrl.searchParams);
+    if (!pagination) return error('بيانات التصفح غير صالحة');
+    const { page, pageSize } = pagination;
+    if (!['project-costs', 'material-issuances', 'inventory-transfers'].includes(type)) return error('نوع التقرير غير صالح');
+    if (projectId && !uuid.test(projectId)) return error('معرّف المشروع غير صالح');
+    if ((from && !isValidDate(from)) || (to && !isValidDate(to)) || (from && to && from > to)) return error('فترة التقرير غير صالحة');
+    if (projectId) {
+      const { data: project, error: projectError } = await s.from('projects').select('id')
+        .eq('id', projectId).eq('company_id', auth.companyId).maybeSingle();
+      if (projectError) throw projectError;
+      if (!project) return error('المشروع غير موجود', 404);
+    }
+
+    if (type === 'project-costs') {
+      const { data, error: queryError } = await s.rpc('get_project_account_totals', {
+        p_company_id: auth.companyId, p_project_ids: projectId ? [projectId] : null, p_from: from, p_to: to,
+      });
+      if (queryError) throw queryError;
+      const costs = { materials: 0, workers: 0, purchases: 0, subcontractors: 0, total: 0 };
+      for (const row of (data ?? []) as Row[]) {
+        if (row.account_type !== 'expense') continue;
+        const amount = number(row.debit) - number(row.credit);
+        costs.total += amount;
+        const category = classifyProjectCost(String(row.code || ''));
+        if (category === 'materials') costs.materials += amount;
+        else if (category === 'labor') costs.workers += amount;
+        else if (category === 'subcontractor') costs.subcontractors += amount;
+        else costs.purchases += amount; // equipment + other operating
+      }
+      return success({ ...costs, source: 'general_ledger', period: { from, to } });
+    }
+
+    let query = s.from('inventory_transactions')
+      .select(type === 'material-issuances' ? '*, inventory_items(name, code), projects(name)' : '*, inventory_items(name, code)', { count: 'exact' })
+      .eq('company_id', auth.companyId).eq('status', 'posted');
+    query = type === 'material-issuances' ? query.in('type', ['issue', 'return']) : query.eq('type', 'transfer');
+    if (projectId) query = query.eq('project_id', projectId);
+    if (from) query = query.gte('date', from);
+    if (to) query = query.lte('date', to);
+    const { data, error: queryError, count } = await query.order('date', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+    if (queryError) throw queryError;
+    const rows = (data || []).map((item: Row) => ({
+      ...item, item_name: item.inventory_items ? String((item.inventory_items as Row).name) || null : null,
+      item_code: item.inventory_items ? String((item.inventory_items as Row).code) || null : null, project_name: item.projects ? String((item.projects as Row).name) || null : null,
+    }));
+    return success({ rows, page, pageSize, total: count || 0, totalPages: Math.ceil((count || 0) / pageSize) });
+  } catch (err) {
+    return handleApiError(err);
+  }
+}

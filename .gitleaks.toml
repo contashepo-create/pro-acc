@@ -1,0 +1,92 @@
+# gitleaks configuration for pro-acc.
+#
+# Extends the upstream default ruleset (AWS keys, private keys, generic
+# high-entropy assignments, and ~150 provider-specific patterns) and adds the
+# credential shapes this project actually handles.
+
+title = "pro-acc secret scanning"
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Project-specific rules
+# ---------------------------------------------------------------------------
+
+# Telegram bot tokens: <numeric bot id>:<35-char base64url secret>.
+# A real token of this shape was committed to this repository once; the CI
+# gate exists so it cannot happen silently again.
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram bot token"
+regex = '''[0-9]{8,10}:A[A-Za-z0-9_-]{34}'''
+keywords = ["telegram", "bot"]
+
+# Supabase service_role / anon JWTs. The service_role key bypasses RLS
+# entirely, so it must never reach the repository.
+[[rules]]
+id = "supabase-service-key"
+description = "Supabase service_role or anon JWT"
+regex = '''eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}'''
+keywords = ["eyj"]
+
+# Postgres/Supabase connection strings carrying an inline password.
+[[rules]]
+id = "postgres-connection-uri"
+description = "PostgreSQL connection string with inline password"
+regex = '''postgres(?:ql)?://[^:\s/]+:[^@\s]+@[^\s/'"]+'''
+keywords = ["postgres://", "postgresql://"]
+
+# The secrets .env.example tells operators to generate with `openssl rand`.
+[[rules]]
+id = "app-shared-secret"
+description = "Application shared secret assigned a literal value"
+regex = '''(?i)\b(TOKEN_SECRET|ADMIN_TOKEN_SECRET|BACKUP_SECRET|PORTAL_SECRET|CRON_SECRET|PRO_ACCOUNTANT_LICENSE_SALT)\s*[:=]\s*['"]?([A-Za-z0-9+/_-]{24,})['"]?'''
+keywords = ["token_secret", "backup_secret", "portal_secret", "cron_secret", "license_salt"]
+
+[[rules.allowlists]]
+description = "Deterministic non-production values used by unit tests"
+regexTarget = "match"
+regexes = [
+  '''(?i)test-only''',
+  '''(?i)(test-secret-key-for-unit-tests-32chars|test-admin-secret-key-for-unit-tests-32chars|user-test-secret-that-is-at-least-32-characters|admin-test-secret-that-is-at-least-32-characters|tenant-entitlement-test-secret-32-characters|test-admin-separate-secret-32chars|test-portal-secret-that-is-at-least-32-characters-long|portal-test-secret-at-least-32-characters-long|expected-secret-value-32chars)''',
+  '''(?i)(dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)''',
+]
+
+[allowlist]
+description = "Placeholders, fixtures, and documentation examples"
+
+paths = [
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.next/''',
+  '''(^|/)\.gitleaks\.toml$''',
+]
+
+# Values that are deliberately fake: the committed template, CI's throwaway
+# secrets, and test fixtures. Each pattern is narrow so a real secret sitting
+# next to them is still reported.
+regexes = [
+  '''your-(anon|service-role|project|strong-random)[A-Za-z0-9-]*''',
+  '''(?i)(change|replace)-me''',
+  '''(?i)(example|placeholder|dummy|sample|fake|test-only)''',
+  '''ci-(test-secret|license-salt)[A-Za-z0-9-]*''',
+  # Exact historical unit-test fixtures introduced by PR #22. These are
+  # deterministic non-production strings, not issued credentials. Keep this
+  # narrow so a real app secret in a test file is still reported.
+  '''(?i)(dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)''',
+  # Deterministic JWT-signing/portal/backup fixtures used across the unit-test
+  # suite. Throwaway non-production values; a real secret beside them is still
+  # reported because these markers never appear in issued credentials.
+  '''(?i)(test-secret-key-for-unit-tests-32chars|test-admin-secret-key-for-unit-tests-32chars|user-test-secret-that-is-at-least-32-characters|admin-test-secret-that-is-at-least-32-characters|tenant-entitlement-test-secret-32-characters|test-admin-separate-secret-32chars|test-portal-secret-that-is-at-least-32-characters-long|portal-test-secret-at-least-32-characters-long|expected-secret-value-32chars)''',
+  '''postgres(?:ql)?://(postgres:postgres|user:password)@''',
+  # Pinned known-answer test vectors for the Telegram token at-rest
+  # encryption (migration 081). Non-issued deterministic fixtures shared by
+  # src/__tests__/telegram-token-crypto.test.ts,
+  # src/__tests__/admin-telegram-token-route.test.ts,
+  # scripts/lib/telegram-token-crypto.mjs, and scripts/test-migrations.mjs.
+  '''1234567890:AAKd8sTz4xQ9mPwRvUy2cE3fG5hJ6lN0bXy''',
+  '''00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff''',
+  '''a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90''',
+  '''enc:v1:ABEiM0RVZneImaq7:0ZtcELkpsME3Ckshc86Z7A==:FN2oOYfI8nRm9ei0\+Q\+w3ubNA9qsJjO9WNnGNJ1G/inZNvR996U0dMhEhKWRYA==''',
+]

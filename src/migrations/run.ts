@@ -1,0 +1,173 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { query, transaction } from '@/lib/db';
+
+const MIGRATIONS_DIR = path.resolve(__dirname);
+
+interface Migration {
+  filename: string;
+  sql: string;
+}
+
+/**
+ * Ensure the _migrations tracking table exists.
+ */
+async function ensureMigrationTable(): Promise<void> {
+  await query(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      id SERIAL PRIMARY KEY,
+      filename TEXT NOT NULL UNIQUE,
+      applied_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+}
+
+/**
+ * Return already-applied migration filenames.
+ */
+async function getAppliedMigrations(): Promise<Set<string>> {
+  const result = await query<{ filename: string }>(
+    'SELECT filename FROM _migrations ORDER BY id'
+  );
+  return new Set(result.rows.map((r) => r.filename));
+}
+
+/**
+ * Discover migration SQL files in the migrations directory.
+ * Files are sorted alphabetically by filename to ensure order.
+ */
+function discoverMigrations(): Migration[] {
+  const files = fs
+    .readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+
+  assertNoNewDuplicateNumbers(files);
+
+  return files.map((filename) => {
+    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, filename), 'utf-8');
+    return { filename, sql };
+  });
+}
+
+/**
+ * Historical files that share a numeric prefix. They are already applied in
+ * production under these exact filenames, and `_migrations` tracks by
+ * filename, so renaming them would re-run their SQL. They are frozen as
+ * documented exceptions; ANY new duplicate prefix aborts the runner.
+ */
+const LEGACY_DUPLICATE_PREFIXES: Record<string, string[]> = {
+  '011': ['011-final-security-accounting.sql', '011-fix-all-sequences-race-condition.sql'],
+  '012': ['012-atomic-journal-entry-insert.sql', '012-enhanced-custody-system.sql'],
+  '015': ['015-branding-and-features.sql', '015-fix-schema-mismatches.sql'],
+  '016': ['016-approval-system.sql', '016-payment-portal-contracts.sql'],
+  '076': ['076-lock-down-audit-tables-and-helper.sql', '076-posted-journal-immutability-and-balance.sql'],
+  '077': ['077-lock-down-internal-trigger-functions.sql', '077-rate-limit-store.sql'],
+};
+
+export function assertNoNewDuplicateNumbers(files: string[]): void {
+  const byPrefix = new Map<string, string[]>();
+  for (const f of files) {
+    const prefix = f.split('-')[0];
+    if (!/^\d+$/.test(prefix)) continue;
+    const list = byPrefix.get(prefix) || [];
+    list.push(f);
+    byPrefix.set(prefix, list);
+  }
+
+  for (const [prefix, list] of byPrefix) {
+    if (list.length < 2) continue;
+    const allowed = LEGACY_DUPLICATE_PREFIXES[prefix];
+    const isLegacy =
+      allowed &&
+      list.length === allowed.length &&
+      list.every((f) => allowed.includes(f));
+    if (!isLegacy) {
+      throw new Error(
+        `Duplicate migration number "${prefix}": ${list.join(', ')}. ` +
+          'Use the next free sequential number for new migrations.'
+      );
+    }
+  }
+}
+
+/**
+ * Apply pending migrations.
+ *
+ * If `targetFilename` is provided, only that specific migration is applied
+ * (useful for roll-forward fixes). Otherwise all pending migrations run.
+ */
+export async function runMigrations(targetFilename?: string): Promise<void> {
+  await ensureMigrationTable();
+
+  const applied = await getAppliedMigrations();
+  const all = discoverMigrations();
+
+  const pending = targetFilename
+    ? all.filter((m) => m.filename === targetFilename)
+    : all.filter((m) => !applied.has(m.filename));
+
+  if (pending.length === 0) {
+    console.log('No pending migrations.');
+    return;
+  }
+
+  for (const migration of pending) {
+    // Bootstrap migration 000 records the historical 001–006 files itself.
+    // Re-check inside the loop so the pending snapshot taken before 000 does
+    // not immediately re-run those non-idempotent schemas on a clean database.
+    if ((await getAppliedMigrations()).has(migration.filename)) {
+      console.log(`Skipping already applied: ${migration.filename}`);
+      continue;
+    }
+    console.log(`Applying: ${migration.filename}...`);
+
+    try {
+      await transaction(async (client) => {
+        // PostgreSQL function/trigger bodies contain semicolons inside $$...$$.
+        // Splitting SQL on `;` corrupts those bodies and made a clean install
+        // fail as soon as it reached a PL/pgSQL migration. `pg` supports a
+        // complete multi-statement script, so execute the file as one unit.
+        // Historical files sometimes contain their own top-level BEGIN/COMMIT;
+        // strip only standalone transaction-control lines because the runner
+        // already owns the transaction (function-body lines are untouched).
+        const sql = migration.sql
+          .replace(/^\s*BEGIN\s*;\s*$/gim, '')
+          .replace(/^\s*COMMIT\s*;\s*$/gim, '')
+          .trim();
+
+        if (sql) await client.query(sql);
+
+        await client.query(
+          'INSERT INTO _migrations (filename) VALUES ($1)',
+          [migration.filename]
+        );
+      });
+
+      console.log(`  ✓ ${migration.filename}`);
+    } catch (err) {
+      console.error(`  ✗ ${migration.filename} failed:`, err);
+      throw err;
+    }
+  }
+}
+
+/**
+ * CLI entry point.
+ *
+ * Usage:
+ *   npx tsx src/migrations/run.ts              # run all pending
+ *   npx tsx src/migrations/run.ts 002-fix.sql  # run one
+ */
+if (require.main === module) {
+  const target = process.argv[2];
+  runMigrations(target)
+    .then(() => {
+      console.log('Done.');
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error('Migration failed:', err);
+      process.exit(1);
+    });
+}
