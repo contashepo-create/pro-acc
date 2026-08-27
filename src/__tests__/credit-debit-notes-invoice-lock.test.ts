@@ -377,4 +377,26 @@ describe('ميجريشن 090 — قفل الفواتير والصافي (فحص 
     expect(pr).toContain('e.hire_date<=v_month_end');
     expect(pr).toContain("p_month_date<>date_trunc('month',p_month_date)::DATE");
   });
+
+  test('ميجريشن 097 — العملات المتعددة وفروق العملة المحققة (IAS 21)', () => {
+    const fx = fs.readFileSync(path.join(process.cwd(), 'src', 'migrations', '097-multicurrency-ias21.sql'), 'utf8');
+    // أعمدة المستندات + حسابا الفروق
+    expect(fx).toContain('ALTER TABLE invoices ADD COLUMN IF NOT EXISTS currency_code TEXT');
+    expect(fx).toContain('ALTER TABLE voucher_receipts ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(15,6) DEFAULT 1');
+    expect(fx).toContain("('4210', 'أرباح فروق العملة', 'revenue')");
+    expect(fx).toContain("('5450', 'خسائر فروق العملة', 'expense')");
+    // الفاتورة: عملة + سعر تاريخي + وسم سطور القيد
+    expect(fx).toContain('p_currency_code TEXT DEFAULT NULL');
+    expect(fx).toContain('currency_id = v_currency_id, exchange_rate = v_rate');
+    // معادلة الفرق المحقق في السند (الإنشاء والاعتماد)
+    expect((fx.match(/v_alloc\*\(p_exchange_rate-COALESCE\(v_invoice\.exchange_rate,1\)\)\/p_exchange_rate/g) || []).length).toBe(1);
+    expect((fx.match(/v_link\.amount\*\(v_receipt\.exchange_rate-COALESCE\(v_invoice\.exchange_rate,1\)\)\/v_receipt\.exchange_rate/g) || []).length).toBe(1);
+    // الذمم تُخصم بسعر الفاتورة والفرق يذهب لـ4210/5450
+    expect(fx).toContain("ROUND((p_amount-v_alloc_total)+v_relief_total,2)");
+    expect(fx).toContain("ROUND((v_receipt.amount-v_link_total)+v_relief_total,2)");
+    expect(fx).toContain("'accountId',v_fx_gain,'debit',0,'credit',v_fx_total");
+    expect(fx).toContain("'accountId',v_fx_loss,'debit',-v_fx_total,'credit',0");
+    // رفض سعر صرف غير موجب
+    expect((fx.match(/سعر الصرف غير صالح/g) || []).length).toBeGreaterThanOrEqual(3);
+  });
 });

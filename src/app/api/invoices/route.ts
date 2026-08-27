@@ -112,6 +112,8 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
     const { clientId, projectId, date, dueDate, items, vatRate, notes, vatEnabled } = parsed.data;
+    const currencyCode = parsed.data.currency_code || null;
+    const exchangeRate = parsed.data.exchange_rate ?? null;
     if (!Number.isFinite(collectedAmount) || collectedAmount < 0
       || Math.abs(collectedAmount * 100 - Math.round(collectedAmount * 100)) > 1e-8) {
       return error('مبلغ التحصيل غير صالح');
@@ -164,6 +166,7 @@ export async function POST(request: NextRequest) {
       p_collected_amount: collectedAmount,
       p_bank_safe_id: bankSafeId,
       p_user_id: auth.userId,
+      ...(currencyCode ? { p_currency_code: currencyCode, p_exchange_rate: exchangeRate } : {}),
     });
     if (createError) throw createError;
     const invoice = created as Row;

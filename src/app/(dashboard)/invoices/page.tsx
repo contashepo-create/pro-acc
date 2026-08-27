@@ -57,13 +57,17 @@ interface InvoiceForm {
   notes: string;
   vat_enabled: boolean;
   items: InvoiceItem[];
+  currency_code: string;
+  exchange_rate: string;
 }
+interface CurrencyOption { id: string; code: string; name: string; rate: number; is_base: boolean; }
 
 export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<SalesInvoiceRow[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryOption[]>([]);
+  const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showEditor, setShowEditor] = useState(false);
@@ -79,20 +83,23 @@ export default function InvoicesPage() {
     notes: '',
     vat_enabled: true,
     items: [{ ...emptyItem }],
+    currency_code: '',
+    exchange_rate: '',
   });
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
-      const [invRes, cliRes, projRes, stockRes] = await Promise.all([
+      const [invRes, cliRes, projRes, stockRes, curRes] = await Promise.all([
         fetch('/api/invoices'),
         fetch('/api/clients'),
         fetch('/api/projects'),
         fetch('/api/inventory?items=1'),
+        fetch('/api/currencies'),
       ]);
-      const [invJson, cliJson, projJson, stockJson] = await Promise.all([
-        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(),
+      const [invJson, cliJson, projJson, stockJson, curJson] = await Promise.all([
+        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(), curRes.json(),
       ]);
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
@@ -104,6 +111,7 @@ export default function InvoicesPage() {
           quantity: Number(it.quantity) || 0, unit: String(it.unit || 'وحدة'),
         })));
       }
+      if (curJson.success) setCurrencies(curJson.data || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -118,6 +126,8 @@ export default function InvoicesPage() {
       date: new Date().toISOString().split('T')[0],
       due_date: '',
       notes: '',
+      currency_code: '',
+      exchange_rate: '',
       vat_enabled: true,
       items: [{ ...emptyItem }],
     });
@@ -155,6 +165,8 @@ export default function InvoicesPage() {
             save_to_inventory: i.save_to_inventory || false, item_code: i.item_code || undefined,
             inventory_item_id: i.inventory_item_id || undefined,
           })),
+          currency_code: form.currency_code || undefined,
+          exchange_rate: form.currency_code && form.exchange_rate ? Number(form.exchange_rate) : undefined,
           subtotal, vatRate, vatAmount, vatEnabled: form.vat_enabled, total, notes: form.notes,
         }),
       });
@@ -334,6 +346,24 @@ export default function InvoicesPage() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Input label="تاريخ الفاتورة" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
                     <Input label="تاريخ الاستحقاق" type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Select
+                      label="العملة"
+                      value={form.currency_code}
+                      onChange={(v) => {
+                        const cur = currencies.find((c) => c.code === v);
+                        setForm({ ...form, currency_code: v, exchange_rate: cur ? String(cur.rate) : '' });
+                      }}
+                      options={[{ value: '', label: 'عملة الشركة' }, ...currencies.map((c) => ({ value: c.code, label: `${c.code}${c.is_base ? ' (أساسية)' : ''}` }))]}
+                    />
+                    <Input
+                      label="سعر الصرف"
+                      type="number"
+                      value={form.exchange_rate}
+                      onChange={(e) => setForm({ ...form, exchange_rate: e.target.value })}
+                      placeholder="1"
+                    />
                   </div>
                   <div className="flex items-center gap-4 pt-2">
                     <Checkbox

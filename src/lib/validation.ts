@@ -235,6 +235,9 @@ export const invoiceSchema = z.object({
   projectId: z.string().uuid().optional().nullable(),
   date: z.string().refine(isValidDateString, { message: 'تاريخ الفاتورة غير صالح' }),
   dueDate: z.string().refine(isValidDateString, { message: 'تاريخ الاستحقاق غير صالح' }),
+  // عملة الفاتورة (اختيارية — افتراضي عملة الشركة) وسعر الصرف التاريخي (097)
+  currency_code: z.string().regex(/^[A-Za-z]{3}$/, 'رمز العملة يجب أن يكون 3 أحرف').optional().nullable(),
+  exchange_rate: z.number().positive('سعر الصرف يجب أن يكون موجباً').optional().nullable(),
   items: z.array(invoiceItemSchema).min(1, 'يجب إضافة بند واحد على الأقل'),
   subtotal: moneyAmount({ label: 'المجموع الفرعي' }),
   vatRate: z.number('نسبة الضريبة غير صالحة').finite('نسبة الضريبة غير صالحة').min(0).max(1).default(0.15),
@@ -324,6 +327,9 @@ export const voucherReceiptSchema = z.object({
   })).optional(),
   revenueAccountCode: z.string().optional(),
   isAdvance: z.boolean().optional().default(false),
+  // عملة السند (اختيارية) وسعر الصرف لحساب فروق العملة المحققة (097)
+  currency_code: z.string().regex(/^[A-Za-z]{3}$/, 'رمز العملة يجب أن يكون 3 أحرف').optional().nullable(),
+  exchange_rate: z.number().positive('سعر الصرف يجب أن يكون موجباً').optional().nullable(),
 }).strict();
 
 // --------------- Voucher Disbursement ---------------
@@ -381,6 +387,9 @@ export const receiptVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
+  // عملة السند (اختيارية) وسعر الصرف لفروق العملة المحققة (097)
+  currency_code: z.string().regex(/^[A-Za-z]{3}$/, 'رمز العملة يجب أن يكون 3 أحرف').optional().nullable(),
+  exchange_rate: z.number().positive('سعر الصرف يجب أن يكون موجباً').optional().nullable(),
 }).strict().superRefine((voucher, ctx) => {
   if ((voucher.receipt_type === 'client' || voucher.receipt_type === 'supplier_refund') && !voucher.contact_id) {
     ctx.addIssue({ code: 'custom', path: ['contact_id'], message: 'الطرف مطلوب لهذا النوع من سند القبض' });
