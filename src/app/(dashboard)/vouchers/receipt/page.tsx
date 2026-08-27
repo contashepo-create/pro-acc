@@ -39,13 +39,17 @@ interface ReceiptForm {
   project_id?: string;
   amount: number;
   reason: string;
+  currency_code?: string;
+  exchange_rate?: string;
 }
+interface CurrencyOption { id: string; code: string; rate: number; is_base: boolean; }
 
 export default function ReceiptPage() {
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [banks, setBanks] = useState<BankOption[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -59,29 +63,34 @@ export default function ReceiptPage() {
     contact_id: '',
     amount: 0,
     reason: '',
+    currency_code: '',
+    exchange_rate: '',
   });
 
   const fetchData = useCallback(async (showSkeleton = true) => {
     try {
       if (showSkeleton) setLoading(true);
       setError('');
-      const [recRes, bankRes, cliRes, projRes] = await Promise.all([
+      const [recRes, bankRes, cliRes, projRes, curRes] = await Promise.all([
         fetch('/api/vouchers/receipt'),
         fetch('/api/banks'),
         fetch('/api/clients'),
         fetch('/api/projects'),
+        fetch('/api/currencies'),
       ]);
-      const [recJson, bankJson, cliJson, projJson] = await Promise.all([
+      const [recJson, bankJson, cliJson, projJson, curJson] = await Promise.all([
         recRes.json(),
         bankRes.json(),
         cliRes.json(),
         projRes.json(),
+        curRes.json(),
       ]);
       if (recJson.success) setReceipts(recJson.data?.receipts || []);
       else setError(recJson.message || 'فشل');
       if (bankJson.success) setBanks(bankJson.data?.banks || []);
       if (cliJson.success) setClients(cliJson.data?.clients || []);
       if (projJson.success) setProjects(projJson.data?.rows || projJson.data || []);
+      if (curJson.success) setCurrencies(curJson.data || []);
     } catch {
       setError('فشل تحميل البيانات');
     } finally {
@@ -108,7 +117,11 @@ export default function ReceiptPage() {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          currency_code: form.currency_code || undefined,
+          exchange_rate: form.currency_code && form.exchange_rate ? Number(form.exchange_rate) : undefined,
+        }),
       });
       const json = await res.json();
       if (json.success) {
@@ -254,6 +267,22 @@ export default function ReceiptPage() {
                 { value: 'supplier_refund', label: 'استرداد من مورد' },
                 { value: 'general', label: 'قبض عام' },
               ]}
+            />
+            <Select
+              label="العملة (اختياري)"
+              value={form.currency_code || ''}
+              onChange={(v) => {
+                const cur = currencies.find((c) => c.code === v);
+                setForm({...form, currency_code: v, exchange_rate: cur ? String(cur.rate) : ''});
+              }}
+              options={[{ value: '', label: 'عملة الشركة' }, ...currencies.map((c) => ({ value: c.code, label: `${c.code}${c.is_base ? ' (أساسية)' : ''}` }))]}
+            />
+            <Input
+              label="سعر الصرف"
+              type="number"
+              value={form.exchange_rate || ''}
+              onChange={(e) => setForm({...form, exchange_rate: e.target.value})}
+              placeholder="1"
             />
             <Select
               label="الخزينة/البنك"

@@ -40,6 +40,16 @@ function getAdminTokenSecret(): string {
 
 const KEY_LENGTH = 64;
 
+/**
+ * Deterministic scrypt-format hash used ONLY as a timing equalizer: the login
+ * route runs verifyPassword() against it on every response that must be
+ * indistinguishable from "wrong password" (unknown email, malformed stored
+ * hash) so an attacker cannot enumerate accounts from response latency.
+ * Format matches verifyPassword(): '<hex-salt>:<hex-64-byte-key>'.
+ */
+export const TIMING_EQUALIZER_HASH =
+  '54696d696e67457175616c697a657253616c7432303236' + ':' + '00'.repeat(64);
+
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(32).toString('hex');
   const derivedKey = scryptSync(password, salt, KEY_LENGTH) as Buffer;

@@ -1335,9 +1335,12 @@ async function smokeAtomicWriters(ids) {
 
   await db.query(`SELECT create_employee_advance($1,$2,'2026-02-01',100,'advance',$3,$4)`, [c, e, b, u]);
   await db.query(`SELECT post_payroll_batch($1,'2026-02-01',$2::uuid[],$3)`, [c, [e], u]);
-  const payroll = await db.query('SELECT advance_deduction,net_pay FROM payroll WHERE company_id=$1', [c]);
+  const payroll = await db.query('SELECT advance_deduction,net_pay,gosi_employer,gosi_employee FROM payroll WHERE company_id=$1', [c]);
   assert.equal(Number(payroll.rows[0].advance_deduction), 100);
-  assert.equal(Number(payroll.rows[0].net_pay), 900);
+  // GOSI (096): حصة صاحب العمل 11.75%، حصة الموظف 9.75% تدفع من الصافي
+  assert.equal(Number(payroll.rows[0].gosi_employer), 117.5);
+  assert.equal(Number(payroll.rows[0].gosi_employee), 97.5);
+  assert.equal(Number(payroll.rows[0].net_pay), 802.5);
 
   await db.query(`SELECT create_salary_sheet($1,'February',2,2026,'2026-02-01',$2::jsonb)`, [
     c, JSON.stringify([{ employee_id: e, basic_salary: 1000, allowances: 10, deductions: 5 }]),
@@ -1707,7 +1710,7 @@ async function smokeAtomicWriters(ids) {
   assert.equal((await db.query(`SELECT status FROM fixed_assets WHERE id=$1`,[disposable.id])).rows[0].status,'active');
   const disposed=(await db.query(`SELECT dispose_fixed_asset_atomic($1,$2,$3) result`,[c,disposable.id,u])).rows[0].result;
   assert.equal(disposed.status,'disposed');
-  assert.ok(disposed.reversal_journal_id);
+  assert.ok(disposed.disposal_journal_id); // 095: الشطب يرحل قيد استبعاد صريحاً بدل عكس الشراء
   assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE company_id=$1 AND entity_type IN('employee','employee_advance','payroll','fixed_asset','fixed_assets')`,[c])).rows[0].count)>=8,true);
 
   await assert.rejects(()=>db.query(`SELECT update_contact_atomic($1,$2,$3::jsonb,$4)`,[
@@ -1942,21 +1945,10 @@ async function smokeAtomicWriters(ids) {
   await db.query(`SELECT delete_draft_tender_atomic($1,$2,$3)`,[c,draftTender,u]);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM tender_cost_items WHERE tender_id=$1`,[draftTender])).rows[0].count),0);
 
-  const backupHmac='a'.repeat(64);
-  await db.query(`INSERT INTO backup_logs(company_id,user_id,backup_type,file_hash,hmac_signature) VALUES($1,$2,'json','hash',$3)`,[c,u,backupHmac]);
-  const accountBackup=(await db.query(`SELECT to_jsonb(a) row FROM accounts a WHERE id=$1`,[a['1000']])).rows[0].row;
-  const originalAccountName=accountBackup.name;
-  const tamperedRestore={
-    accounts:[{...accountBackup,name:'Must roll back'}],
-    contacts:[{id:contact2,company_id:c,name:'Cross tenant overwrite',type:'client'}],
-  };
-  await assert.rejects(()=>db.query(`SELECT restore_company_backup_atomic($1,$2,$3,$4::jsonb)`,[c,u,backupHmac,JSON.stringify(tamperedRestore)]));
-  assert.equal((await db.query(`SELECT name FROM accounts WHERE id=$1`,[a['1000']])).rows[0].name,originalAccountName);
-  const restored=await db.query(`SELECT restore_company_backup_atomic($1,$2,$3,$4::jsonb) result`,[
-    c,u,backupHmac,JSON.stringify({accounts:[{...accountBackup,name:'Restored account'}]}),
-  ]);
-  assert.equal(Number(restored.rows[0].result.restored_records),1);
-  assert.equal((await db.query(`SELECT name FROM accounts WHERE id=$1`,[a['1000']])).rows[0].name,'Restored account');
+  // 089: ميزة «نسخة قاعدة البيانات + الاستعادة» أزيلت نهائياً بقرار المالك.
+  // جداولا backup_logs وcompany_data_exports أُسقطا — والاختبار يمنع عودتهما.
+  assert.equal((await db.query(`SELECT to_regclass('public.backup_logs') t`)).rows[0].t, null);
+  assert.equal((await db.query(`SELECT to_regclass('public.company_data_exports') t`)).rows[0].t, null);
 
   const vatSummary=(await db.query(`SELECT get_vat_return_summary($1,'2026-01-01','2026-02-28') result`,[c])).rows[0].result;
   const vatFiling=(await db.query(`SELECT create_vat_return_filing_atomic($1,'2026-01-01','2026-02-28','filed','runtime',$2) result`,[c,u])).rows[0].result;
@@ -1984,23 +1976,21 @@ async function smokeAtomicWriters(ids) {
   assert.equal((await db.query(`SELECT is_active FROM companies WHERE id=$1`,[expiredCompany])).rows[0].is_active,false);
   assert.equal((await db.query(`SELECT count(*)::int count FROM companies WHERE id=$1`,[expiredCompany])).rows[0].count,1);
 
-  const codeHash=createHash('sha256').update('123456').digest('hex');
   await db.query(`SELECT save_telegram_config_atomic($1,$2,$3::jsonb)`,[
     c,u,JSON.stringify({chat_id:'1',is_enabled:true,notify_invoices:true,notify_cash_transactions:true,
       notify_user_logins:true,approvals_enabled:true,approval_threshold:100}),
   ]);
-  await db.query(`SELECT start_telegram_reset_session_atomic($1,$2)`,[c,u]);
-  await assert.rejects(()=>db.query(`SELECT start_telegram_reset_session_atomic($1,$2)`,[c,u]));
-  await assert.rejects(()=>db.query(`SELECT approve_telegram_reset_session_atomic('2',$1,NOW()+INTERVAL '5 minutes')`,[codeHash]));
-  await db.query(`SELECT approve_telegram_reset_session_atomic('1',$1,NOW()+INTERVAL '5 minutes')`,[codeHash]);
-  const retainedUsers=Number((await db.query('SELECT count(*) count FROM users WHERE company_id=$1',[c])).rows[0].count);
-  const invalid=await db.query(`SELECT reset_company_business_data($1,$2,$3) result`,[c,u,'0'.repeat(64)]);
-  assert.equal(invalid.rows[0].result.status,'invalid_code');
-  const reset=await db.query(`SELECT reset_company_business_data($1,$2,$3) result`,[c,u,codeHash]);
-  assert.equal(reset.rows[0].result.status,'reset_success');
-  assert.equal(Number((await db.query('SELECT count(*) count FROM journal_entries WHERE company_id=$1',[c])).rows[0].count),0);
-  assert.ok(Number((await db.query('SELECT count(*) count FROM journal_entries WHERE company_id<>$1',[c])).rows[0].count)>0);
-  assert.equal(Number((await db.query('SELECT count(*) count FROM users WHERE company_id=$1',[c])).rows[0].count),retainedUsers);
+  // 088: تصفير قاعدة بيانات الشركة أُزيل نهائياً (قرار تشغيلي) — دواله محذوفة
+  // من القاعدة نفسها؛ الاختبار يمنع عودة أي منها.
+  const removedFns = [
+    'start_telegram_reset_session_atomic(UUID,UUID)',
+    'approve_telegram_reset_session_atomic(TEXT,TEXT,TIMESTAMPTZ)',
+    'reset_company_business_data(UUID,UUID,TEXT)',
+  ];
+  for (const fnSig of removedFns) {
+    const reg = (await db.query('SELECT to_regprocedure($1) t', [`public.${fnSig}`])).rows[0].t;
+    assert.equal(reg, null, `${fnSig} must stay removed (migration 088)`);
+  }
 }
 
 /**

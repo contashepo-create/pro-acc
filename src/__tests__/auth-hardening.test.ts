@@ -25,6 +25,8 @@ import {
 } from '@/lib/validation';
 import { sanitizeEmailForFilter } from '@/lib/rate-limit';
 import { checkCsrf } from '@/lib/api-helpers';
+import fs from 'fs';
+import path from 'path';
 
 // email lib is imported by the register route; stub it so the route module
 // can be imported in a node test environment.
@@ -94,6 +96,30 @@ describe('Schema wiring', () => {
     expect(
       loginSchema.safeParse({ email: 'a@b.com', password: '123456' }).success
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('Login timing-side-channel equalizer', () => {
+  test('TIMING_EQUALIZER_HASH is a valid verifyPassword()-format hash', async () => {
+    const mod = await import('@/lib/auth');
+    const parts = mod.TIMING_EQUALIZER_HASH.split(':');
+    expect(parts).toHaveLength(2);
+    expect(Buffer.from(parts[1], 'hex')).toHaveLength(64);
+    // Must verify as FALSE, after paying the full scrypt cost.
+    const start = process.hrtime.bigint();
+    const result = await mod.verifyPassword('any-guess', mod.TIMING_EQUALIZER_HASH);
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+    expect(result).toBe(false);
+    expect(elapsedMs).toBeGreaterThan(5); // scrypt actually ran
+  });
+
+  test('login route pays the scrypt cost on unknown-email and malformed-hash 401s', () => {
+    const route = fs.readFileSync(path.join(process.cwd(), 'src', 'app', 'api', 'auth', 'login', 'route.ts'), 'utf8');
+    expect(route).toContain('TIMING_EQUALIZER_HASH');
+    // Both pre-verify 401 branches run the equalizer before responding.
+    expect((route.match(/await verifyPassword\(password, TIMING_EQUALIZER_HASH\)/g) || []).length).toBe(2);
   });
 });
 

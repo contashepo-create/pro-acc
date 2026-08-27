@@ -236,8 +236,8 @@ export default function ZerocoldCompaniesPage() {
                           <button onClick={() => openDetail(c)} title="تفاصيل" className="p-1.5 rounded-lg bg-bg-secondary text-text-secondary border border-border hover:bg-bg-hover"><Eye size={13} /></button>
                           <button onClick={() => openEdit(c)} title="تعديل" className="p-1.5 rounded-lg bg-bg-secondary text-text-secondary border border-border hover:bg-bg-hover"><Edit3 size={13} /></button>
                           <button onClick={() => doExtend(c)} disabled={actionLoading === 'extend'} title="تمديد التجربة 7 أيام" className="p-1.5 rounded-lg bg-accent/10 text-accent border border-accent/20 hover:bg-accent/20"><Calendar size={13} /></button>
-                          <button onClick={() => doCancel(c)} disabled={actionLoading === 'cancel'} title="إلغاء الاشتراك" className="p-1.5 rounded-lg bg-red-950/20 text-red-400 border border-red-800/20 hover:bg-red-950/40"><Ban size={13} /></button>
-                          <button onClick={() => doToggleStatus(c)} disabled={actionLoading === c.id} title={c.is_active ? 'تعليق' : 'تفعيل'} className={`p-1.5 rounded-lg border ${c.is_active ? 'bg-red-950/20 text-red-400/70 border-red-800/20' : 'bg-emerald-950/20 text-emerald-400/70 border-emerald-800/20'}`}>
+                          <button onClick={() => doCancel(c)} disabled={actionLoading === 'cancel'} title="إلغاء الاشتراك" className="p-1.5 rounded-lg bg-red-600 text-white border border-red-400/60 hover:bg-red-500"><Ban size={13} /></button>
+                          <button onClick={() => doToggleStatus(c)} disabled={actionLoading === c.id} title={c.is_active ? 'تعليق' : 'تفعيل'} className={`p-1.5 rounded-lg border ${c.is_active ? 'bg-red-600 text-white border border-red-400/60 hover:bg-red-500' : 'bg-emerald-600 text-white border border-emerald-400/60 hover:bg-emerald-500'}`}>
                             {actionLoading === c.id ? <Loader2 size={13} className="animate-spin" /> : c.is_active ? <XCircle size={13} /> : <CheckCircle size={13} />}
                           </button>
                         </div>

@@ -37,6 +37,7 @@ interface AssetForm {
   location: string;
   notes: string;
   bank_safe_id: string;
+  salvage_value: number;
 }
 
 export default function FixedAssetsPage() {
@@ -51,8 +52,12 @@ export default function FixedAssetsPage() {
   const [form, setForm] = useState<AssetForm>({
     name: '', code: '', category: '', purchase_date: new Date().toISOString().split('T')[0],
     purchase_cost: 0, useful_life_years: 5, depreciation_method: 'straight_line',
-    location: '', notes: '', bank_safe_id: '',
+    location: '', notes: '', bank_safe_id: '', salvage_value: 0,
   });
+  // نافذة الاستبعاد بالبيع (095)
+  const [disposeTarget, setDisposeTarget] = useState<AssetRow | null>(null);
+  const [disposeForm, setDisposeForm] = useState({ sale_price: '', bank_safe_id: '', date: new Date().toISOString().split('T')[0] });
+  const [disposing, setDisposing] = useState(false);
 
   const fetchData = async () => {
     try {
@@ -98,6 +103,7 @@ export default function FixedAssetsPage() {
           location: form.location,
           notes: form.notes,
           bank_safe_id: form.bank_safe_id,
+          salvage_value: Number(form.salvage_value) || 0,
         }),
       });
       const json = await res.json();
@@ -107,7 +113,7 @@ export default function FixedAssetsPage() {
         setForm({
           name: '', code: '', category: '', purchase_date: new Date().toISOString().split('T')[0],
           purchase_cost: 0, useful_life_years: 5, depreciation_method: 'straight_line',
-          location: '', notes: '', bank_safe_id: '',
+          location: '', notes: '', bank_safe_id: '', salvage_value: 0,
         });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -129,24 +135,51 @@ export default function FixedAssetsPage() {
       depreciation_method: String(src.depreciation_method ?? 'straight_line'),
       location: String(src.location ?? ''),
       notes: String(src.notes ?? ''),
-      bank_safe_id: '',
+      bank_safe_id: '', salvage_value: Number(src.salvage_value) || 0,
     }, ['purchase_date']));
     setShowModal(true);
   };
 
   const handleDelete = async (asset: AssetRow) => {
+    // فتح نافذة الاستبعاد: شطب مباشر أو بيع بقيمة وحساب تحصيل
+    setDisposeTarget(asset);
+    setDisposeForm({ sale_price: '', bank_safe_id: '', date: new Date().toISOString().split('T')[0] });
+  };
+
+  const confirmDispose = async () => {
+    if (!disposeTarget) return;
+    const salePrice = Number(disposeForm.sale_price) || 0;
+    if (salePrice > 0 && !disposeForm.bank_safe_id) {
+      alert('اختر حساب تحصيل قيمة البيع');
+      return;
+    }
+    setDisposing(true);
     try {
-      const res = await fetch(`/api/fixed-assets/${asset.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/fixed-assets/${disposeTarget.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(salePrice > 0 ? {
+          sale_price: salePrice,
+          bank_safe_id: disposeForm.bank_safe_id,
+          date: disposeForm.date,
+        } : { date: disposeForm.date }),
+      });
       const json = await res.json();
       if (json.success) {
-        toast.success('تم استبعاد الأصل وعكس قيد الشراء');
+        const diff = Number(json.data?.gain_loss);
+        toast.success(diff > 0
+          ? `تم استبعاد الأصل ببيع — ربح ${diff.toFixed(2)}`
+          : diff < 0
+            ? `تم استبعاد الأصل ببيع — خسارة ${Math.abs(diff).toFixed(2)}`
+            : 'تم استبعاد الأصل');
+        setDisposeTarget(null);
         fetchData();
       } else {
-        alert(json.message || 'فشل الحذف');
+        alert(json.message || 'فشل الاستبعاد');
       }
     } catch {
       alert('خطأ في الاتصال بالخادم');
-    }
+    } finally { setDisposing(false); }
   };
 
   const columns = [
@@ -187,6 +220,7 @@ export default function FixedAssetsPage() {
               <Input label="التكلفة" type="number" value={form.purchase_cost} onChange={(e) => setForm({...form, purchase_cost: parseFloat(e.target.value) || 0})} />
               <Input label="عمر الإنتاج (سنوات)" type="number" value={form.useful_life_years} onChange={(e) => setForm({...form, useful_life_years: parseInt(e.target.value) || 5})} />
               <Select label="طريقة الإهلاك" value={form.depreciation_method} onChange={(v) => setForm({...form, depreciation_method: v})} options={[{ value: 'straight_line', label: 'خط مستقيم' }, { value: 'declining_balance', label: 'رصيد متناقص' }]} />
+              <Input label="القيمة المتبقية (إن وجدت)" type="number" value={form.salvage_value} onChange={(e) => setForm({...form, salvage_value: parseFloat(e.target.value) || 0})} />
               <Select label="حساب الدفع" value={form.bank_safe_id} onChange={(value) => setForm({ ...form, bank_safe_id: value })}
                 options={[{ value: '', label: 'اختر الخزينة/البنك' }, ...banks.map((bank) => ({ value: bank.id, label: bank.name }))]} />
             </>}
@@ -196,6 +230,38 @@ export default function FixedAssetsPage() {
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
       </Modal>
+
+      {/* نافذة الاستبعاد: شطب أو بيع */}
+      {disposeTarget && (
+        <Modal isOpen onClose={() => setDisposeTarget(null)} title={`استبعاد الأصل: ${disposeTarget.name}`}>
+          <div className="space-y-4">
+            <div className="bg-bg-secondary rounded-lg p-3 text-sm text-text-secondary">
+              التكلفة: <b className="text-text-primary">{formatCurrency(disposeTarget.purchase_cost)}</b>
+              {' '}— القيمة الدفترية: <b className="text-text-primary">{formatCurrency(disposeTarget.net_book_value ?? 0)}</b>
+            </div>
+            <p className="text-sm text-text-secondary">
+              اترك قيمة البيع صفراً للشطب المباشر (تُثبت الخسارة الدفترية)، أو أدخل قيمة البيع لحساب الربح/الخسارة تلقائياً.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="قيمة البيع (0 للشطب)" type="number" value={disposeForm.sale_price}
+                onChange={(e) => setDisposeForm({ ...disposeForm, sale_price: e.target.value })} />
+              <Input label="تاريخ الاستبعاد/البيع" type="date" value={disposeForm.date}
+                onChange={(e) => setDisposeForm({ ...disposeForm, date: e.target.value })} />
+              <div className="sm:col-span-2">
+                <Select label="حساب التحصيل (إذا بيع)" value={disposeForm.bank_safe_id}
+                  onChange={(v) => setDisposeForm({ ...disposeForm, bank_safe_id: v })}
+                  options={[{ value: '', label: '— بدون —' }, ...banks.map((bank) => ({ value: bank.id, label: bank.name }))]} />
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" onClick={() => setDisposeTarget(null)}>إلغاء</Button>
+              <Button variant="danger" onClick={confirmDispose} disabled={disposing}>
+                {disposing ? 'جارٍ التنفيذ...' : 'تأكيد الاستبعاد'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

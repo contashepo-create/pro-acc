@@ -289,7 +289,7 @@ interface PlanForm {
                 </div>
                 <div className="flex items-center gap-2">
                   <div className={`w-3 h-3 rounded-full ${plan.is_active ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                  <button onClick={(e) => { e.stopPropagation(); openDelete(plan); }} className="p-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40" title="حذف الباقة">
+                  <button onClick={(e) => { e.stopPropagation(); openDelete(plan); }} className="p-1.5 rounded-lg bg-red-600 text-white border border-red-400/60 hover:bg-red-500" title="حذف الباقة">
                     <Trash2 size={14} />
                   </button>
                 </div>

@@ -56,6 +56,35 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
     const { id } = await params;
     if (!hrUuid.safeParse(id).success) return error('معرف الأصل غير صالح');
     if (!await findAsset(auth.companyId, id)) return notFound();
+    // الاستبعاد ببيع اختياري: {sale_price, bank_safe_id, date} → قيد بيع بربح/خسارة؛
+    // بلا جسم → شطب صحيح (مجمع مقابل الأصل + خسارة الدفترية).
+    let salePrice: number | null = null;
+    let bankSafeId: string | null = null;
+    let saleDate: string | null = null;
+    try {
+      const body = await request.json();
+      if (body && typeof body === 'object' && !Array.isArray(body)) {
+        const b = body as Record<string, unknown>;
+        salePrice = typeof b.sale_price === 'number' && b.sale_price >= 0 ? b.sale_price : null;
+        bankSafeId = typeof b.bank_safe_id === 'string' && hrUuid.safeParse(b.bank_safe_id).success ? b.bank_safe_id : null;
+        saleDate = typeof b.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.date) ? b.date : null;
+      }
+    } catch { /* بلا جسم — شطب مباشر */ }
+    if (salePrice !== null && (salePrice > 0 ? !bankSafeId || !saleDate : !saleDate)) {
+      return error('للبيع: أدخل قيمة البيع وتاريخاً صحيحين وحساب تحصيل');
+    }
+    if (salePrice !== null) {
+      const { data, error: rpcError } = await getSupabase().rpc('dispose_fixed_asset_sale_atomic', {
+        p_company_id: auth.companyId,
+        p_asset_id: id,
+        p_sale_price: salePrice,
+        p_bank_safe_id: salePrice > 0 ? bankSafeId : null,
+        p_date: saleDate,
+        p_user_id: auth.userId,
+      });
+      if (rpcError) throw rpcError;
+      return success(data);
+    }
     const { data, error: rpcError } = await getSupabase().rpc('dispose_fixed_asset_atomic', {
       p_company_id: auth.companyId,
       p_asset_id: id,

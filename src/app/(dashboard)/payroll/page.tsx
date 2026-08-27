@@ -18,6 +18,8 @@ interface PayrollRecord {
   employee_name?: string;
   basic_salary: number;
   advance_deduction: number;
+  gosi_employer?: number;
+  gosi_employee?: number;
   net_pay: number;
 }
 interface EmployeeOption { id: string; }
@@ -79,11 +81,39 @@ export default function PayrollPage() {
     }
   };
 
+  const handleEosb = async () => {
+    if (!month) { toast.error('اختر الشهر'); return; }
+    if (!confirm(`سيتم ترحيل استحقاق نهاية الخدمة لشهر ${month} لجميع الموظفين النشطين. متابعة؟`)) return;
+    setProcessing(true);
+    try {
+      const res = await fetch('/api/payroll/eosb', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: `${month}-01` }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        if (json.data?.status === 'nothing_to_accrue') toast.info('لا توجد استحقاقات جديدة لهذا الشهر');
+        else toast.success(`تم ترحيل استحقاق نهاية الخدمة لـ ${json.data?.count ?? 0} موظف بإجمالي ${json.data?.total ?? 0}`);
+        fetchData();
+      } else {
+        toast.error(json.message || 'فشل ترحيل الاستحقاق');
+      }
+    } catch {
+      toast.error('خطأ في الاتصال');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const columns = [
     { key: 'date', label: 'الشهر', sortable: true, render: (row: PayrollRecord) => row.date?.substring(0, 7) },
     { key: 'employee_name', label: 'الموظف', sortable: true },
     { key: 'basic_salary', label: 'الراتب الأساسي', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.basic_salary) },
     { key: 'advance_deduction', label: 'خصم السلف', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.advance_deduction) },
+    { key: 'gosi_employer', label: 'التأمينات (صاحب عمل)', render: (row: PayrollRecord) => formatCurrency(row.gosi_employer ?? 0) },
+    { key: 'gosi_employee', label: 'التأمينات (الموظف)', render: (row: PayrollRecord) => formatCurrency(row.gosi_employee ?? 0) },
     { key: 'net_pay', label: 'صافي الراتب', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.net_pay) },
     {
       key: 'actions',
@@ -97,7 +127,12 @@ export default function PayrollPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="الرواتب" description="إدارة ومعالجة الرواتب"
-        actions={<Button onClick={() => setShowProcess(true)} leftIcon={<Play size={18} />}>معالجة الرواتب</Button>}
+        actions={
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={handleEosb} disabled={processing}>استحقاق نهاية الخدمة</Button>
+            <Button onClick={() => setShowProcess(true)} leftIcon={<Play size={18} />}>معالجة الرواتب</Button>
+          </div>
+        }
       />
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>}
       {records.length === 0 ? (

@@ -132,13 +132,13 @@ export default function SubscriptionsPage() {
                 </div>
                 {/* Action buttons */}
                 <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border">
-                  <button onClick={() => openPlanModal(sub)} disabled={actionLoading === 'change_plan' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-950/20 text-purple-400/70 border border-purple-800/20 hover:bg-purple-950/40 text-xs transition-colors">
+                  <button onClick={() => openPlanModal(sub)} disabled={actionLoading === 'change_plan' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-600 text-white border border-purple-400/60 hover:bg-purple-500 text-xs transition-colors">
                     {actionLoading === 'change_plan' + sub.id ? <Loader2 size={12} className="animate-spin" /> : <CreditCard size={12} />} تغيير الباقة
                   </button>
-                  <button onClick={() => openExtendModal(sub)} disabled={actionLoading === 'extend_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-950/20 text-emerald-400/70 border border-emerald-800/20 hover:bg-emerald-950/40 text-xs transition-colors">
+                  <button onClick={() => openExtendModal(sub)} disabled={actionLoading === 'extend_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white border border-emerald-400/60 hover:bg-emerald-500 text-xs transition-colors">
                     {actionLoading === 'extend_subscription' + sub.id ? <Loader2 size={12} className="animate-spin" /> : <Calendar size={12} />} تمديد
                   </button>
-                  <button onClick={() => { if (confirm('إلغاء الاشتراك؟')) openCancelModal(sub); }} disabled={actionLoading === 'cancel_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-950/20 text-red-400/70 border border-red-800/20 hover:bg-red-950/40 text-xs transition-colors">
+                  <button onClick={() => { if (confirm('إلغاء الاشتراك؟')) openCancelModal(sub); }} disabled={actionLoading === 'cancel_subscription' + sub.id} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-600 text-white border border-red-400/60 hover:bg-red-500 text-xs transition-colors">
                     {actionLoading === 'cancel_subscription' + sub.id ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} إلغاء
                   </button>
                 </div>
@@ -153,7 +153,7 @@ export default function SubscriptionsPage() {
             <div className="bg-bg-card border border-border rounded-2xl max-w-md w-full" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-4 border-b border-border">
                 <h3 className="font-bold text-text-primary">تغيير باقة: {selectedSub.company_name}</h3>
-                <button onClick={() => setShowPlanModal(false)} className="text-text-secondary/50"><X size={18} /></button>
+                <button onClick={() => setShowPlanModal(false)} className="text-text-secondary hover:text-text-primary transition-colors"><X size={18} /></button>
               </div>
               <div className="p-4 space-y-3">
                 <select className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent" value={planForm.plan_id} onChange={e => setPlanForm({ ...planForm, plan_id: e.target.value })}>
@@ -181,7 +181,7 @@ export default function SubscriptionsPage() {
             <div className="bg-bg-card border border-border rounded-2xl max-w-md w-full" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between p-4 border-b border-border">
                 <h3 className="font-bold text-text-primary">تمديد اشتراك: {selectedSub.company_name}</h3>
-                <button onClick={() => setShowExtendModal(false)} className="text-text-secondary/50"><X size={18} /></button>
+                <button onClick={() => setShowExtendModal(false)} className="text-text-secondary hover:text-text-primary transition-colors"><X size={18} /></button>
               </div>
               <div className="p-4 space-y-3">
                 <input type="number" className="w-full bg-bg-primary border border-border rounded-lg px-3 py-2 text-sm text-text-primary" placeholder="عدد الأيام" value={extendDays} onChange={e => setExtendDays(parseInt(e.target.value) || 30)} />

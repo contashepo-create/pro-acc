@@ -148,46 +148,75 @@ beforeEach(() => {
   global.fetch = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })) as unknown as typeof fetch;
 });
 
-describe('company table export completeness (Excel/CSV only)', () => {
-  test('a table larger than one page is exported in full, not truncated', async () => {
+describe('company report export — تقارير احترافية (Excel/CSV فقط)', () => {
+  test('a report larger than one page is exported in full, not truncated', async () => {
     const db = baseDb();
-    // 2,500 rows spans three 1,000-row pages.
+    // 2,500 journal lines spans three 1,000-row pages.
     db.journal_lines = Array.from({ length: 2500 }, (_, index) => ({
-      id: `jl-${String(index).padStart(5, '0')}`, company_id: C1, debit: 1, credit: 0,
+      id: `jl-${String(index).padStart(5, '0')}`, company_id: C1,
+      account_code: '4100', account_name: 'الإيرادات', description: `بند-${index}`,
+      debit: 1, credit: 0,
     }));
     mockDb = makeDb(db);
 
-    const response = await exportDownloadPOST(adminRequest({ tables: ['journal_lines'], format: 'csv' }));
+    const response = await exportDownloadPOST(adminRequest({ tables: ['journal_entries'], format: 'csv' }));
     expect(response.status).toBe(200);
     const text = await response.text();
-    // The CSV bundle prints a per-table row count header; a table that quietly
+    // The report header prints the real record count; a report that quietly
     // drops rows would show fewer than were exported.
-    expect(text).toContain('# journal_lines (2500)');
-    expect(text).toContain('jl-02499');
+    expect(text).toContain('عدد السجلات: 2500');
+    expect(text).toContain('بند-0');
+    expect(text).toContain('بند-2499');
   });
 
   test('every exported page stays scoped to the caller company', async () => {
     const db = baseDb();
     db.invoices = [
-      { id: 'i-1', company_id: C1, total: 100 },
-      { id: 'i-2', company_id: 'company-2', total: 999 },
+      { id: 'i-1', company_id: C1, number: 7, total: 100, paid_amount: 0, status: 'unpaid' },
+      { id: 'i-2', company_id: 'company-2', number: 8, total: 999, paid_amount: 0, status: 'unpaid' },
     ];
     mockDb = makeDb(db);
 
     const response = await exportDownloadPOST(adminRequest({ tables: ['invoices'], format: 'csv' }));
     expect(response.status).toBe(200);
     const text = await response.text();
-    expect(text).toContain('i-1');
-    expect(text).not.toContain('i-2');
+    // Exactly one invoice row in the report, and nothing from the other tenant.
+    expect(text).toContain('عدد السجلات: 1');
+    expect(text).toContain('فواتير المبيعات');
     expect(text).not.toContain('999');
     for (const call of mockDb.calls.filter((entry) => entry.table === 'invoices')) {
       expect(call.ops).toEqual(expect.arrayContaining([{ op: 'eq', col: 'company_id', val: C1 }]));
     }
   });
 
+  test('the report shows Arabic business headers and no raw ids/hashes', async () => {
+    const db = baseDb();
+    db.invoices = [
+      { id: 'inv-raw-uuid-1', company_id: C1, number: 7, date: '2026-01-01', due_date: '2026-02-01',
+        subtotal: 100, tax_amount: 15, total: 115, paid_amount: 40, status: 'partial' },
+    ];
+    db.contacts = [{ id: 'c-1', company_id: C1, name: 'شركة العميل' }];
+    db.invoices[0].contact_id = 'c-1';
+    mockDb = makeDb(db);
+
+    const response = await exportDownloadPOST(adminRequest({ tables: ['invoices'], format: 'csv' }));
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain('رقم الفاتورة');
+    expect(text).toContain('العميل');
+    expect(text).toContain('شركة العميل');       // real name, not the UUID
+    expect(text).not.toContain('inv-raw-uuid-1'); // internal id never exported
+    expect(text).toContain('مدفوعة جزئياً');       // status translated
+  });
+
+  test('sensitive tables (settings/notifications/users) are never exportable', async () => {
+    const response = await exportDownloadPOST(adminRequest({ tables: ['settings', 'notifications', 'users'], format: 'csv' }));
+    expect(response.status).toBe(400);
+  });
+
   test('a read failure fails the export instead of yielding a silently empty table', async () => {
     mockDb = makeDb(baseDb());
-    mockDb.tableErrors.set('journal_entries', { message: 'connection reset' });
+    mockDb.tableErrors.set('journal_lines', { message: 'connection reset' });
 
     const response = await exportDownloadPOST(adminRequest({ tables: ['journal_entries'], format: 'csv' }));
     // Previously this could produce a 200 with an empty table — a file the
@@ -210,6 +239,18 @@ describe('company table export completeness (Excel/CSV only)', () => {
   test('unknown table names are filtered out and an empty selection is rejected', async () => {
     const response = await exportDownloadPOST(adminRequest({ tables: ['users', 'admin_users', 'companies'], format: 'csv' }));
     expect(response.status).toBe(400);
+  });
+
+  test('legacy raw table names still resolve to their professional reports', async () => {
+    const db = baseDb();
+    db.contacts = [{ id: 'c-9', company_id: C1, name: 'عميل قديم', type: 'client' }];
+    mockDb = makeDb(db);
+    // 'clients' was the old raw name — it maps to the contacts report.
+    const response = await exportDownloadPOST(adminRequest({ tables: ['clients'], format: 'csv' }));
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain('العملاء والموردون');
+    expect(text).toContain('عميل قديم');
   });
 
   test('excel format produces an .xls attachment', async () => {

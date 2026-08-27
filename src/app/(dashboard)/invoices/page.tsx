@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, ArrowRight, FileText, Save, X } from 'lucide-react';
+import { Plus, Trash2, ArrowRight, FileText, Save, X, FileMinus, FilePlus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -15,7 +15,6 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { toDateInput } from '@/lib/form-utils';
 import { formatDocumentNumber } from '@/lib/document-number';
 
 interface InvoiceItem {
@@ -29,6 +28,7 @@ interface InvoiceItem {
   unit?: string;
   save_to_inventory?: boolean;
   item_code?: string;
+  inventory_item_id?: string;
 }
 
 const emptyItem: InvoiceItem = {
@@ -36,7 +36,6 @@ const emptyItem: InvoiceItem = {
   item_type: 'service', unit: 'وحدة', save_to_inventory: false,
 };
 
-interface RawApiItem { id?: string; description?: string; quantity?: number; unit_price?: number; total?: number; item_type?: string; unit?: string; }
 interface SalesInvoiceRow {
   id: string;
   number?: string;
@@ -49,6 +48,7 @@ interface SalesInvoiceRow {
 }
 interface ClientOption { id: string; name: string; }
 interface ProjectOption { id: string; name: string; }
+interface InventoryOption { id: string; name: string; code: string; quantity: number; unit: string; }
 interface InvoiceForm {
   client_id: string;
   project_id: string;
@@ -57,16 +57,20 @@ interface InvoiceForm {
   notes: string;
   vat_enabled: boolean;
   items: InvoiceItem[];
+  currency_code: string;
+  exchange_rate: string;
 }
+interface CurrencyOption { id: string; code: string; name: string; rate: number; is_base: boolean; }
 
 export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<SalesInvoiceRow[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryOption[]>([]);
+  const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showEditor, setShowEditor] = useState(false);
-  const [editingInvoice, setEditingInvoice] = useState<SalesInvoiceRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [statusTab, setStatusTab] = useState('all');
@@ -79,24 +83,35 @@ export default function InvoicesPage() {
     notes: '',
     vat_enabled: true,
     items: [{ ...emptyItem }],
+    currency_code: '',
+    exchange_rate: '',
   });
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
-      const [invRes, cliRes, projRes] = await Promise.all([
+      const [invRes, cliRes, projRes, stockRes, curRes] = await Promise.all([
         fetch('/api/invoices'),
         fetch('/api/clients'),
         fetch('/api/projects'),
+        fetch('/api/inventory?items=1'),
+        fetch('/api/currencies'),
       ]);
-      const [invJson, cliJson, projJson] = await Promise.all([
-        invRes.json(), cliRes.json(), projRes.json(),
+      const [invJson, cliJson, projJson, stockJson, curJson] = await Promise.all([
+        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(), curRes.json(),
       ]);
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
       if (cliJson.success) setClients(cliJson.data?.clients || []);
       if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || []);
+      if (stockJson.success) {
+        setInventoryItems((stockJson.data?.items || []).map((it: Record<string, unknown>) => ({
+          id: String(it.id), name: String(it.name), code: String(it.code),
+          quantity: Number(it.quantity) || 0, unit: String(it.unit || 'وحدة'),
+        })));
+      }
+      if (curJson.success) setCurrencies(curJson.data || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -105,13 +120,14 @@ export default function InvoicesPage() {
   useEffect(() => { fetchData(); }, []);
 
   const openNewInvoice = () => {
-    setEditingInvoice(null);
     setForm({
       client_id: '',
       project_id: '',
       date: new Date().toISOString().split('T')[0],
       due_date: '',
       notes: '',
+      currency_code: '',
+      exchange_rate: '',
       vat_enabled: true,
       items: [{ ...emptyItem }],
     });
@@ -119,36 +135,8 @@ export default function InvoicesPage() {
     setShowEditor(true);
   };
 
-  const handleEdit = async (invoice: SalesInvoiceRow) => {
-    try {
-      const res = await fetch(`/api/invoices/${invoice.id}`);
-      const json = await res.json();
-      if (json.success) {
-        setEditingInvoice(invoice);
-        setForm({
-          client_id: json.data.contact_id || json.data.client_id || '',
-          project_id: json.data.project_id || '',
-          date: toDateInput(json.data.date),
-          due_date: toDateInput(json.data.due_date),
-          notes: json.data.notes || '',
-          vat_enabled: Number(json.data.vat_rate || json.data.tax_rate || 0) > 0,
-          items: (json.data.items || []).map((i: RawApiItem) => ({
-            id: i.id,
-            description: String(i.description ?? ''),
-            quantity: Number(i.quantity) || 0,
-            unitPrice: Number(i.unit_price) || 0,
-            discount: 0,
-            total: Number(i.total) || 0,
-            item_type: (i.item_type as InvoiceItem['item_type']) || 'service',
-            unit: i.unit || 'وحدة',
-            save_to_inventory: false,
-          })) || [{ ...emptyItem }],
-        });
-        setSaveError('');
-        setShowEditor(true);
-      } else { toast.error(json.message || 'فشل تحميل الفاتورة'); }
-    } catch { toast.error('خطأ في الاتصال بالخادم'); }
-  };
+  // ⛔ لا يوجد تعديل للفاتورة: المستند غير قابل للتعديل نهائياً بعد الإنشاء
+  // (مفروض بمُشغِّل قاعدة البيانات). التصحيح عبر إشعار دائن/مدين فقط.
 
   const handleSave = async () => {
     if (!form.client_id) { setSaveError('يجب اختيار عميل'); return; }
@@ -162,11 +150,8 @@ export default function InvoicesPage() {
       const vatAmount = subtotal * vatRate;
       const total = subtotal + vatAmount;
 
-      const url = editingInvoice ? `/api/invoices/${editingInvoice.id}` : '/api/invoices';
-      const method = editingInvoice ? 'PUT' : 'POST';
-
-      const res = await fetch(url, {
-        method,
+      const res = await fetch('/api/invoices', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clientId: form.client_id,
@@ -178,15 +163,17 @@ export default function InvoicesPage() {
             discount: Number(i.discount) || 0,
             item_type: i.item_type || 'service', unit: i.unit || 'وحدة',
             save_to_inventory: i.save_to_inventory || false, item_code: i.item_code || undefined,
+            inventory_item_id: i.inventory_item_id || undefined,
           })),
+          currency_code: form.currency_code || undefined,
+          exchange_rate: form.currency_code && form.exchange_rate ? Number(form.exchange_rate) : undefined,
           subtotal, vatRate, vatAmount, vatEnabled: form.vat_enabled, total, notes: form.notes,
         }),
       });
       const json = await res.json();
       if (json.success) {
         setShowEditor(false);
-        setEditingInvoice(null);
-        toast.success(editingInvoice ? 'تم تحديث الفاتورة بنجاح' : 'تم إضافة الفاتورة بنجاح');
+        toast.success('تم إضافة الفاتورة بنجاح');
         fetchData();
       } else { setSaveError(json.message || 'فشل الحفظ'); }
     } catch { setSaveError('خطأ في الاتصال بالخادم'); } finally { setSaving(false); }
@@ -281,11 +268,27 @@ export default function InvoicesPage() {
     { key: 'paid_amount', label: 'المدفوع', render: (row: SalesInvoiceRow) => formatCurrency(row.paid_amount) },
     { key: 'actions', label: '', render: (row: SalesInvoiceRow) => (
       <div className="flex items-center gap-1">
+        {/* بديل التعديل: إشعار دائن (تخفيض) / إشعار مدين (زيادة) */}
+        <button
+          type="button"
+          title="إشعار دائن (تخفيض) — بديل التعديل"
+          className="p-2 rounded-md text-success hover:bg-success/10 transition-colors"
+          onClick={() => { window.location.href = `/credit-notes?invoice=${row.id}&type=credit`; }}
+        >
+          <FileMinus size={16} />
+        </button>
+        <button
+          type="button"
+          title="إشعار مدين (زيادة) — بديل التعديل"
+          className="p-2 rounded-md text-warning hover:bg-warning/10 transition-colors"
+          onClick={() => { window.location.href = `/credit-notes?invoice=${row.id}&type=debit`; }}
+        >
+          <FilePlus size={16} />
+        </button>
         <ActionButtons
           item={row}
           onView={() => { window.location.href = `/invoices/${row.id}/view`; }}
           onPrint={() => { window.open(`/invoices/${row.id}/view?print=1`, '_blank', 'noopener,noreferrer'); }}
-          onEdit={handleEdit}
           onDelete={handleDelete}
         />
       </div>
@@ -299,18 +302,18 @@ export default function InvoicesPage() {
         {/* Editor Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-border bg-bg-secondary">
           <div className="flex items-center gap-3 min-w-0">
-            <Button variant="ghost" size="sm" onClick={() => { setShowEditor(false); setEditingInvoice(null); }}>
+            <Button variant="ghost" size="sm" onClick={() => { setShowEditor(false); }}>
               <ArrowRight size={20} />
             </Button>
             <div className="flex items-center gap-2 min-w-0">
               <FileText size={24} className="text-accent shrink-0" />
               <h1 className="text-lg sm:text-xl font-bold text-text-primary truncate">
-                {editingInvoice ? `تعديل فاتورة #${editingInvoice.number}` : 'فاتورة جديدة'}
+                فاتورة جديدة — غير قابلة للتعديل بعد الحفظ
               </h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" onClick={() => { setShowEditor(false); setEditingInvoice(null); }}>
+            <Button variant="ghost" onClick={() => { setShowEditor(false); }}>
               <X size={18} /> إلغاء
             </Button>
             <Button onClick={handleSave} disabled={saving} leftIcon={<Save size={18} />}>
@@ -343,6 +346,24 @@ export default function InvoicesPage() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Input label="تاريخ الفاتورة" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
                     <Input label="تاريخ الاستحقاق" type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Select
+                      label="العملة"
+                      value={form.currency_code}
+                      onChange={(v) => {
+                        const cur = currencies.find((c) => c.code === v);
+                        setForm({ ...form, currency_code: v, exchange_rate: cur ? String(cur.rate) : '' });
+                      }}
+                      options={[{ value: '', label: 'عملة الشركة' }, ...currencies.map((c) => ({ value: c.code, label: `${c.code}${c.is_base ? ' (أساسية)' : ''}` }))]}
+                    />
+                    <Input
+                      label="سعر الصرف"
+                      type="number"
+                      value={form.exchange_rate}
+                      onChange={(e) => setForm({ ...form, exchange_rate: e.target.value })}
+                      placeholder="1"
+                    />
                   </div>
                   <div className="flex items-center gap-4 pt-2">
                     <Checkbox
@@ -385,13 +406,44 @@ export default function InvoicesPage() {
                       <tr key={i} className="border-t border-border hover:bg-bg-secondary/50 transition-colors">
                         <td className="p-2 text-center text-text-muted">{i + 1}</td>
                         <td className="p-2">
-                          <input
-                            type="text"
-                            placeholder="وصف الصنف أو الخدمة..."
-                            value={item.description}
-                            onChange={(e) => updateItem(i, 'description', e.target.value)}
-                            className="w-full px-3 py-2 bg-transparent border border-transparent rounded-lg focus:border-accent focus:bg-bg-primary focus:outline-none transition-colors text-text-primary"
-                          />
+                          {item.item_type === 'inventory' ? (
+                            <div>
+                              <select
+                                value={item.inventory_item_id || ''}
+                                onChange={(e) => {
+                                  const sel = inventoryItems.find((s) => s.id === e.target.value);
+                                  const newItems = [...form.items];
+                                  newItems[i] = {
+                                    ...newItems[i],
+                                    inventory_item_id: e.target.value || undefined,
+                                    description: sel ? sel.name : newItems[i].description,
+                                    unit: sel ? sel.unit : newItems[i].unit,
+                                  };
+                                  setForm({ ...form, items: newItems });
+                                }}
+                                className="w-full px-2 py-2 bg-transparent border border-transparent rounded-lg focus:border-accent focus:bg-bg-primary focus:outline-none text-text-primary"
+                              >
+                                <option value="">— اختر الصنف المخزني —</option>
+                                {inventoryItems.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name} (متاح: {s.quantity})</option>
+                                ))}
+                              </select>
+                              {item.inventory_item_id && (() => {
+                                const stock = inventoryItems.find((s) => s.id === item.inventory_item_id);
+                                return stock && item.quantity > stock.quantity ? (
+                                  <span className="text-xs text-danger">الكمية تتجاوز المتاح ({stock.quantity})</span>
+                                ) : null;
+                              })()}
+                            </div>
+                          ) : (
+                            <input
+                              type="text"
+                              placeholder="وصف الصنف أو الخدمة..."
+                              value={item.description}
+                              onChange={(e) => updateItem(i, 'description', e.target.value)}
+                              className="w-full px-3 py-2 bg-transparent border border-transparent rounded-lg focus:border-accent focus:bg-bg-primary focus:outline-none transition-colors text-text-primary"
+                            />
+                          )}
                         </td>
                         <td className="p-2">
                           <select
@@ -537,9 +589,9 @@ export default function InvoicesPage() {
               {/* Action buttons */}
               <div className="px-6 py-4 border-t border-border space-y-2">
                 <Button onClick={handleSave} disabled={saving} className="w-full" leftIcon={<Save size={18} />}>
-                  {saving ? 'جاري الحفظ...' : editingInvoice ? 'تحديث الفاتورة' : 'حفظ الفاتورة'}
+                  {saving ? 'جاري الحفظ...' : 'حفظ الفاتورة'}
                 </Button>
-                <Button variant="ghost" className="w-full" onClick={() => { setShowEditor(false); setEditingInvoice(null); }}>
+                <Button variant="ghost" className="w-full" onClick={() => { setShowEditor(false); }}>
                   إلغاء
                 </Button>
               </div>

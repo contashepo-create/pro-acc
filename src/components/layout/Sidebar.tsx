@@ -156,7 +156,7 @@ export function Sidebar() {
         {
           label: 'تحميل البيانات',
           icon: Download,
-          items: [{ id: 'subscription?tab=export', label: 'جداول بياناتي (Excel/CSV)' }],
+          items: [{ id: 'subscription?tab=export', label: 'تقارير بياناتي (Excel/CSV)' }],
         },
         {
           label: 'الدعم',

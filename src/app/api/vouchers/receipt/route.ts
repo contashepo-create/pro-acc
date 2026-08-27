@@ -144,6 +144,9 @@ export async function POST(request: NextRequest) {
       p_request_approval: threshold.requiresApproval,
       p_user_id: auth.userId,
       p_project_id: (parsed.data as { project_id?: string | null }).project_id || null,
+      ...(parsed.data.currency_code
+        ? { p_currency_code: parsed.data.currency_code, p_exchange_rate: parsed.data.exchange_rate ?? null }
+        : {}),
     });
     if (createErr) throw createErr;
     const voucher = data as Row;

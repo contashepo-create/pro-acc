@@ -356,19 +356,19 @@ export default function SubscriptionPageEnhanced() {
     { id: 'plans', label: 'الباقات' },
     { id: 'addons', label: 'الإضافات' },
     { id: 'support', label: 'الدعم والتواصل' },
-    { id: 'export', label: 'تحميل جداول بياناتي' },
+    { id: 'export', label: 'تحميل تقارير بياناتي' },
   ] as const;
 
   return (
     <div className="space-y-6">
-      <PageHeader title="الباقات والاشتراك" description="اختر الباقة، اطلب إضافات، تواصل مع الدعم، أو حمّل جداول بياناتك" />
+      <PageHeader title="الباقات والاشتراك" description="اختر الباقة، اطلب إضافات، تواصل مع الدعم، أو حمّل تقارير بياناتك" />
 
       {renewMode && (
         <div className="rounded-xl p-4 border-2 bg-danger-light border-danger text-danger flex flex-col sm:flex-row sm:items-center gap-3">
           <AlertTriangle size={22} className="shrink-0" />
           <div className="text-sm font-semibold flex-1">
             انتهى اشتراك شركتك — أقسام النظام مغلقة مؤقتاً وبياناتك محفوظة سليمة.
-            من هذه الصفحة يمكنك تجديد الاشتراك أو تفعيل كود، أو تحميل جداول بياناتك (Excel/CSV)، أو التواصل مع الدعم. بمجرد التجديد تعود كل الأقسام للعمل فوراً.
+            من هذه الصفحة يمكنك تجديد الاشتراك أو تفعيل كود، أو تحميل تقارير بياناتك (Excel/CSV)، أو التواصل مع الدعم. بمجرد التجديد تعود كل الأقسام للعمل فوراً.
           </div>
         </div>
       )}
@@ -692,17 +692,17 @@ export default function SubscriptionPageEnhanced() {
       )}
 
       {activeTab === 'export' && (
-        <Card title="تحميل جداول بياناتك">
+        <Card title="تحميل تقارير بياناتك">
           <div className="space-y-4">
             <p className="text-sm text-text-secondary">
-              يمكنك تحميل جداول بيانات شركتك (الحسابات، القيود، الفواتير، العملاء، الموردون، المشاريع، العهد، المخزون،...) بصيغة <strong>Excel</strong> أو <strong>CSV</strong> في أي وقت — حتى بعد انتهاء الاشتراك — وبيانات شركتك فقط. لا يُحذف شيء دون موافقتك.
+              يمكنك تحميل تقارير محاسبية لبيانات شركتك (الحسابات، دفتر اليومية، الفواتير، العملاء، الموردون، المشاريع، العهد، المخزون،...) منسّقة بأسماء عربية واضحة بصيغة <strong>Excel</strong> أو <strong>CSV</strong> في أي وقت — حتى بعد انتهاء الاشتراك — وبيانات شركتك فقط. لا يُحذف شيء دون موافقتك.
             </p>
             <div className="p-3 rounded-xl bg-bg-secondary border border-border text-xs text-text-secondary space-y-1">
               <div>• الصيغتان (Excel / CSV) مقبولتان في البرامج المحاسبية الأخرى عند الاستيراد، لذا يمكنك مراجعة بياناتك أو الانتقال بها لمنصة أخرى بسهولة.</div>
               <div>• لا تتوفر "نسخة من قاعدة البيانات" ولا يمكن استعادة هذه الملفات داخل المنصة — أي إدخال للبيانات يتم يدوياً فقط.</div>
             </div>
             <a href="/export-data" className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-accent text-white text-sm font-semibold hover:opacity-90 transition-opacity">
-              <Download size={16} /> فتح صفحة تحميل الجداول (Excel / CSV)
+              <Download size={16} /> فتح صفحة تحميل التقارير (Excel / CSV)
             </a>
           </div>
         </Card>

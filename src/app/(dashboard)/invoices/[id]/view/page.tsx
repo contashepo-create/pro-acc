@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { 
   ArrowRight, Printer, Settings, ShieldCheck, Eye, EyeOff, 
-  MapPin, Phone, Mail, Layers, Save 
+  MapPin, Phone, Mail, Layers, Save, FileMinus, FilePlus 
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { QRCode } from '@/components/ui/QRCode';
@@ -225,6 +225,25 @@ export default function InvoiceViewPage() {
   const [companyDefaultTemplate, setCompanyDefaultTemplate] = useState('modern');
   const [savingSettings, setSavingSettings] = useState(false);
   const [showInternalJournal, setShowInternalJournal] = useState(false);
+  // الإشعارات الدائنة/المدينة المرتبطة بالفاتورة (البديل النظامي عن التعديل)
+  const [linkedNotes, setLinkedNotes] = useState<Array<{ id: string; note_type?: string; number?: number; date?: string; reason?: string; total: number; vat_amount?: number; status?: string }>>([]);
+
+  useEffect(() => {
+    const fetchNotes = async () => {
+      try {
+        const [cnRes, dnRes] = await Promise.all([
+          fetch(`/api/credit-notes?invoiceId=${params.id}`),
+          fetch(`/api/debit-notes?invoiceId=${params.id}`),
+        ]);
+        const [cnJson, dnJson] = await Promise.all([cnRes.json(), dnRes.json()]);
+        const credit = cnJson.success ? (cnJson.data?.credit_notes || []) : [];
+        const debit = dnJson.success ? (dnJson.data?.debit_notes || []) : [];
+        setLinkedNotes([...credit, ...debit]);
+      } catch { /* لوحة إعلامية فقط — لا تعطل عرض الفاتورة */ }
+    };
+    if (params.id) void fetchNotes();
+  }, [params.id]);
+
 
   useEffect(() => {
     const fetchData = async () => {
@@ -448,6 +467,67 @@ export default function InvoiceViewPage() {
         </button>
         . أزرار القوالب أعلاه للمعاينة فقط.
       </p>
+
+      {/* لوحة الإشعارات الدائنة/المدينة — البديل النظامي عن تعديل الفاتورة (شاشة فقط) */}
+      <div className="max-w-4xl mx-auto mt-4 px-4 no-print">
+        <div className="bg-bg-primary border border-border rounded-2xl shadow-sm p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={18} className="text-success" />
+              <div>
+                <h3 className="font-bold text-text-primary text-sm">الفاتورة غير قابلة للتعديل</h3>
+                <p className="text-xs text-text-secondary">التصحيح يتم عبر إشعار دائن (تخفيض) أو إشعار مدين (زيادة) بمرجع هذه الفاتورة</p>
+              </div>
+            </div>
+            {invoice.status !== 'cancelled' && (
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" leftIcon={<FileMinus size={14} />}
+                  onClick={() => router.push(`/credit-notes?invoice=${invoice.id}&type=credit`)}>
+                  إشعار دائن
+                </Button>
+                <Button size="sm" variant="outline" leftIcon={<FilePlus size={14} />}
+                  onClick={() => router.push(`/credit-notes?invoice=${invoice.id}&type=debit`)}>
+                  إشعار مدين
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {(() => {
+            const active = linkedNotes.filter((n) => n.status !== 'cancelled');
+            const credited = active.filter((n) => n.note_type === 'credit').reduce((s, n) => s + (Number(n.total) || 0), 0);
+            const debited = active.filter((n) => n.note_type === 'debit').reduce((s, n) => s + (Number(n.total) || 0), 0);
+            const netTotal = total + debited - credited;
+            if (linkedNotes.length === 0) return null;
+            return (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="bg-bg-secondary rounded-lg p-2"><span className="text-text-secondary block">أصل الفاتورة</span><strong>{formatCurrency(total)}</strong></div>
+                  <div className="bg-success/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات دائنة</span><strong className="text-success">- {formatCurrency(credited)}</strong></div>
+                  <div className="bg-warning/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات مدينة</span><strong className="text-warning">+ {formatCurrency(debited)}</strong></div>
+                  <div className="bg-accent/10 rounded-lg p-2"><span className="text-text-secondary block">الصافي</span><strong className="text-accent">{formatCurrency(netTotal)}</strong></div>
+                </div>
+                <ul className="text-xs divide-y divide-border border border-border rounded-lg overflow-hidden">
+                  {linkedNotes.map((n) => (
+                    <li key={n.id} className="flex items-center justify-between gap-2 px-3 py-1.5 bg-bg-primary">
+                      <span className="flex items-center gap-2">
+                        <Badge variant={n.note_type === 'debit' ? 'warning' : 'success'}>
+                          {n.note_type === 'debit' ? 'مدين' : 'دائن'} {n.number != null ? `#${n.number}` : ''}
+                        </Badge>
+                        <span className="text-text-secondary">{n.date ? formatDate(n.date) : ''}</span>
+                        <span className="text-text-muted truncate max-w-[16rem]" title={n.reason || ''}>{n.reason || ''}</span>
+                      </span>
+                      <span className={`font-bold ${n.note_type === 'debit' ? 'text-warning' : 'text-success'}`}>
+                        {n.note_type === 'debit' ? '+' : '-'}{formatCurrency(Number(n.total) || 0)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })()}
+        </div>
+      </div>
       {false && (
         <div className="max-w-4xl mx-auto mt-4 p-5 bg-bg-primary border border-border rounded-2xl shadow-sm no-print space-y-4">
           <div className="flex items-center justify-between border-b border-border pb-3">
