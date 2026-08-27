@@ -354,4 +354,27 @@ describe('ميجريشن 090 — قفل الفواتير والصافي (فحص 
     // إنشاء بقيمة متبقية (حملة جديدة)
     expect(fa).toContain('p_salvage_value NUMERIC DEFAULT 0');
   });
+
+  test('ميجريشن 096 — التأمينات الاجتماعية ومستحقات نهاية الخدمة', () => {
+    const pr = fs.readFileSync(path.join(process.cwd(), 'src', 'migrations', '096-gosi-and-eosb.sql'), 'utf8');
+    // أعمدة GOSI + الحسابات
+    expect(pr).toContain('ADD COLUMN IF NOT EXISTS gosi_employer NUMERIC(15,2) NOT NULL DEFAULT 0');
+    expect(pr).toContain("('2155', 'مستحقات التأمينات الاجتماعية', 'liability')");
+    // معادلة القيد: مدين 5210+5230 مقابل دائن 2140+2155+1160
+    expect(pr).toContain("code='5230'");
+    expect(pr).toContain("code='2155'");
+    expect(pr).toContain("ROUND(v_total_salary-v_total_advance-v_total_gosi_employee,2)");
+    expect(pr).toContain("'حصص التأمينات الاجتماعية (موظف + صاحب عمل)'");
+    // النسب من الإعدادات مع سقف منطقي
+    expect(pr).toContain("key='gosi_employer_rate'");
+    expect(pr).toContain('v_gosi_employer_rate>1 THEN v_gosi_employer_rate:=0.1175');
+    // EOSB: جدول فريد (شركة، موظف، شهر) + معادلة النصف/الشهر الكامل
+    expect(pr).toContain('UNIQUE(company_id, employee_id, date)');
+    expect(pr).toContain("v_factor:=CASE WHEN v_emp.years>=5 THEN 1.0 ELSE 0.5 END");
+    expect(pr).toContain("v_amount:=ROUND(v_emp.salary*v_factor/12,2)");
+    expect(pr).toContain("reference_type='eosb_accrual'");
+    // منع الاستحقاق قبل التعيين وبعد نهاية الشهر
+    expect(pr).toContain('e.hire_date<=v_month_end');
+    expect(pr).toContain("p_month_date<>date_trunc('month',p_month_date)::DATE");
+  });
 });
