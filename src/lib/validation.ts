@@ -253,7 +253,13 @@ export const invoiceSchema = z.object({
   total: moneyAmount({ label: 'المجموع الكلي' }),
   vatEnabled: z.boolean().optional().default(true),
   notes: z.string().optional(),
-}).strict();
+  collected_amount: moneyAmount({ label: 'مبلغ التحصيل' }).optional().default(0),
+  bank_safe_id: z.string().uuid('رقم الخزينة غير صالح').optional().nullable(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.collected_amount || 0) > 0 && !value.bank_safe_id) {
+    ctx.addIssue({ code: 'custom', path: ['bank_safe_id'], message: 'حدد الخزينة أو البنك للتحصيل النقدي' });
+  }
+});
 
 // --------------- Purchases ---------------
 // NOTE: purchase APIs use snake_case fields (supplier_id, unit_price, ...)
@@ -288,7 +294,16 @@ export const purchaseInvoiceSchema = z.object({
   }).strict()).max(100).optional(),
   withholding_rate: z.number().min(0, 'نسبة خصم المنبع لا يمكن أن تكون سالبة').max(0.2, 'نسبة خصم المنبع غير صالحة')
     .refine((value) => Math.abs(value * 10000 - Math.round(value * 10000)) < 1e-8, 'نسبة خصم المنبع غير صالحة').optional().default(0),
-}).strict();
+  paid_amount: moneyAmount({ label: 'مبلغ السداد' }).optional().default(0),
+  bank_safe_id: z.string().uuid('رقم الخزينة غير صالح').optional().nullable(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.paid_amount || 0) > 0 && !value.bank_safe_id) {
+    ctx.addIssue({ code: 'custom', path: ['bank_safe_id'], message: 'حدد الخزينة أو البنك للسداد النقدي' });
+  }
+  if (value.paid_amount && value.custody_id) {
+    ctx.addIssue({ code: 'custom', path: ['paid_amount'], message: 'لا يجتمع السداد النقدي مع سداد العهدة' });
+  }
+});
 
 export const purchaseInvoiceUpdateSchema = z.object({
   status: z.enum(['unpaid', 'partial', 'paid', 'cancelled'] as const, {

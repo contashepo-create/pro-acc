@@ -263,6 +263,13 @@ describe('POST /api/invoices — atomic financial boundary', () => {
     });
   });
 
+  test('rejects cash collection without a treasury or bank', async () => {
+    const res = await invoicesPOST(authedRequest(invoiceBody({ collected_amount: 100 })));
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toContain('الخزينة');
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
+
   test.each([
     [{ collected_amount: -1 }, 'مبلغ التحصيل'],
     [{ collected_amount: 1.001 }, 'مبلغ التحصيل'],

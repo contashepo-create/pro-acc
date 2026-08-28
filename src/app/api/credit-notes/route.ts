@@ -76,6 +76,8 @@ export async function POST(request: NextRequest) {
     const s = sb();
     const body = await parseBody(request);
     const { invoice_id, project_id, contact_id, reason, items, date } = body;
+    const refundAmount = Number(body.refund_amount ?? body.refundAmount ?? 0);
+    const bankSafeId = body.bank_safe_id || body.bankSafeId || null;
 
     if (typeof reason !== 'string' || !reason.trim() || reason.length > 1000) return error('السبب مطلوب');
     for (const [value, label] of [[invoice_id, 'الفاتورة'], [project_id, 'المشروع'], [contact_id, 'الطرف']] as const) {
@@ -97,6 +99,13 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) {
       return error('نسبة الضريبة غير صالحة');
     }
+    if (!Number.isFinite(refundAmount) || refundAmount < 0
+      || Math.abs(refundAmount * 100 - Math.round(refundAmount * 100)) > 1e-8) {
+      return error('مبلغ الرد النقدي غير صالح');
+    }
+    if (refundAmount > 0 && (typeof bankSafeId !== 'string' || !UUID_RE.test(bankSafeId))) {
+      return error('حدد الخزينة أو البنك للرد النقدي');
+    }
 
     // The linked invoice is row-locked before the remaining credit is checked.
     // Number, note, lines, journal and audit then commit in one transaction.
@@ -110,6 +119,8 @@ export async function POST(request: NextRequest) {
       p_items: normalizedItems,
       p_tax_rate: taxRate,
       p_user_id: auth.userId,
+      p_refund_amount: refundAmount,
+      p_bank_safe_id: refundAmount > 0 ? bankSafeId : null,
     });
     if (createError) throw createError;
     return success(creditNote, 201);
