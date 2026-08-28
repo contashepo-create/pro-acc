@@ -4,7 +4,9 @@ import type { ReactNode } from 'react';
 import { Modal } from './Modal';
 import { Button } from './Button';
 import { Badge } from './Badge';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { companyDisplayMoney } from '@/lib/company-money';
+import { useAuthStore } from '@/store/auth-store';
 import { Eye } from 'lucide-react';
 
 const HIDDEN = new Set([
@@ -223,7 +225,7 @@ function labelOf(key: string) {
   return LABELS[key] || key.replace(/_/g, ' ');
 }
 
-function formatValue(key: string, value: any): ReactNode {
+function formatValue(key: string, value: any, money: (n: number) => string): ReactNode {
   if (value == null || value === '') return '—';
   if (typeof value === 'boolean') {
     return (
@@ -249,7 +251,7 @@ function formatValue(key: string, value: any): ReactNode {
   // Currency & financial formatting
   if (/amount|total|debit|credit|balance|price|value|subtotal|cost|salary|pay|gross|net|limit/i.test(key) && !Number.isNaN(Number(value))) {
     const num = Number(value);
-    return <span className="font-mono font-bold text-text-primary">{formatCurrency(num)}</span>;
+    return <span className="font-mono font-bold text-text-primary">{money(num)}</span>;
   }
 
   // Phone / Numbers
@@ -275,6 +277,8 @@ export function RecordViewModal({
   extra?: ReactNode;
   footer?: ReactNode;
 }) {
+  const company = useAuthStore((s) => s.company);
+  const money = (n: number) => companyDisplayMoney(n, company);
   if (!record) return null;
   const entries = buildRecordEntries(record);
 
@@ -300,7 +304,7 @@ export function RecordViewModal({
           {entries.map(([k, v]) => (
             <div key={k} className="rounded-lg bg-bg-secondary/50 border border-border px-3.5 py-2.5 text-right">
               <dt className="text-[11px] font-semibold text-text-muted mb-1">{labelOf(k)}</dt>
-              <dd className="text-xs font-medium text-text-primary break-words">{formatValue(k, v)}</dd>
+              <dd className="text-xs font-medium text-text-primary break-words">{formatValue(k, v, money)}</dd>
             </div>
           ))}
         </dl>

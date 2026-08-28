@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { success, error, handleApiError, requireModulePermission, parseBody } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
+import { companyMoneyParts } from '@/lib/company-money';
 
 const sb = () => getSupabase();
 const money = z.number().finite().nonnegative()
@@ -10,7 +11,7 @@ const createSchema = z.object({
   name: z.string().trim().min(1, 'اسم الصندوق مطلوب').max(200),
   initial_balance: money.optional().default(0),
   daily_limit: money.optional().default(5000),
-  currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'رمز العملة غير صالح').optional().default('SAR'),
+  currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'رمز العملة غير صالح').optional(),
   custodian_id: z.string().uuid('أمين الصندوق غير صالح').nullable().optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
   account_id: z.string().uuid('حساب الصندوق غير صالح').nullable().optional(),
@@ -29,12 +30,23 @@ export async function POST(request: NextRequest) {
     const parsed = createSchema.safeParse(await parseBody(request));
     if (!parsed.success) return error(parsed.error.issues[0].message);
     const value = parsed.data;
+    let currency = value.currency;
+    if (!currency) {
+      const { data: companyMoney } = await sb()
+        .from('companies')
+        .select('currency_code, currency_symbol, country_code, locale')
+        .eq('id', auth.companyId)
+        .maybeSingle();
+      currency = companyMoneyParts(companyMoney as {
+        currency_code?: string; currency_symbol?: string; country_code?: string; locale?: string;
+      } | null).code;
+    }
     const { data, error: createError } = await sb().rpc('create_petty_cash_box', {
       p_company_id: auth.companyId,
       p_name: value.name,
       p_initial_balance: value.initial_balance,
       p_daily_limit: value.daily_limit,
-      p_currency: value.currency,
+      p_currency: currency,
       p_custodian_id: value.custodian_id || null,
       p_notes: value.notes || '',
       p_account_id: value.account_id || null,

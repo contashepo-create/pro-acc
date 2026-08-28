@@ -14,9 +14,10 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface DisbursementRow {
   id: string;
@@ -43,6 +44,7 @@ interface DisbursementForm {
 }
 
 export default function DisbursementPage() {
+  const { money } = useCompanyMoney();
   const [disbursements, setDisbursements] = useState<DisbursementRow[]>([]);
   const [banks, setBanks] = useState<BankSafeOption[]>([]);
   const [suppliers, setSuppliers] = useState<ContactOption[]>([]);
@@ -204,7 +206,7 @@ export default function DisbursementPage() {
     { key: 'disbursement_type', label: 'النوع', sortable: true, render: (row: DisbursementRow) => typeBadge(row.disbursement_type) },
     { key: 'contact_name', label: 'المورد', sortable: true },
     { key: 'employee_name', label: 'الموظف', sortable: true },
-    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: DisbursementRow) => formatCurrency(row.amount) },
+    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: DisbursementRow) => money(row.amount) },
     { key: 'bank_name', label: 'الخزينة/البنك' },
     { key: 'status', label: 'الحالة', render: (row: DisbursementRow) => (
       <Badge variant={row.status === 'approved' ? 'success' : row.status === 'rejected' ? 'danger' : 'warning'}>

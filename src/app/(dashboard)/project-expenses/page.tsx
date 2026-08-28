@@ -15,8 +15,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 const EXPENSE_TYPES: Record<string, { label: string; variant: 'info' | 'success' | 'warning' | 'danger' }> = {
   materials: { label: 'مواد', variant: 'info' },
@@ -53,6 +54,7 @@ interface ExpenseForm {
 }
 
 export default function ProjectExpensesPage() {
+  const { money } = useCompanyMoney();
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
@@ -176,7 +178,7 @@ export default function ProjectExpensesPage() {
     { key: 'project_name', label: 'المشروع', sortable: true },
     { key: 'expense_type', label: 'النوع', render: (row: ExpenseRow) => expenseBadge(row.expense_type) },
     { key: 'description', label: 'الوصف', sortable: true },
-    { key: 'amount', label: 'المبلغ', render: (row: ExpenseRow) => formatCurrency(row.amount), sortable: true },
+    { key: 'amount', label: 'المبلغ', render: (row: ExpenseRow) => money(row.amount), sortable: true },
     { key: 'contact_name', label: 'الطرف' },
     {
       key: 'actions',
@@ -213,7 +215,7 @@ export default function ProjectExpensesPage() {
           className="w-64"
         />
         <div className="text-sm text-text-secondary">
-          إجمالي المصروفات: <span className="font-bold text-text-primary">{formatCurrency(totalAmount)}</span>
+          إجمالي المصروفات: <span className="font-bold text-text-primary">{money(totalAmount)}</span>
         </div>
       </div>
 

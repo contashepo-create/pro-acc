@@ -6,7 +6,7 @@ import { DataTable } from '@/components/ui/DataTable';
 import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatCurrency } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface WipRow {
   project_name?: string;
@@ -22,6 +22,7 @@ interface WipRow {
 interface WipTotals { contract: number; costs: number; billed: number; overUnderBilled: number; }
 
 export default function WipReportPage() {
+  const { money } = useCompanyMoney();
   const [rows, setRows] = useState<WipRow[]>([]);
   const [totals, setTotals] = useState<WipTotals | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,14 +38,14 @@ export default function WipReportPage() {
   const columns = [
     { key: 'project_name', label: 'المشروع' },
     { key: 'client_name', label: 'العميل' },
-    { key: 'contract_amount', label: 'قيمة العقد', render: (r: WipRow) => formatCurrency(r.contract_amount) },
-    { key: 'costs_incurred', label: 'التكاليف', render: (r: WipRow) => formatCurrency(r.costs_incurred) },
-    { key: 'billed_to_date', label: 'المفوتر', render: (r: WipRow) => formatCurrency(r.billed_to_date) },
+    { key: 'contract_amount', label: 'قيمة العقد', render: (r: WipRow) => money(r.contract_amount) },
+    { key: 'costs_incurred', label: 'التكاليف', render: (r: WipRow) => money(r.costs_incurred) },
+    { key: 'billed_to_date', label: 'المفوتر', render: (r: WipRow) => money(r.billed_to_date) },
     { key: 'percentComplete', label: 'الإنجاز %', render: (r: WipRow) => `${(r.percentComplete * 100).toFixed(1)}%` },
-    { key: 'earnedRevenue', label: 'الإيراد المستحق', render: (r: WipRow) => formatCurrency(r.earnedRevenue) },
+    { key: 'earnedRevenue', label: 'الإيراد المستحق', render: (r: WipRow) => money(r.earnedRevenue) },
     { key: 'overUnderBilled', label: 'زيادة/نقص الفوترة', render: (r: WipRow) => {
       const v = r.overUnderBilled;
-      return <span className={v >= 0 ? 'text-success font-bold' : 'text-danger font-bold'}>{formatCurrency(v)}</span>;
+      return <span className={v >= 0 ? 'text-success font-bold' : 'text-danger font-bold'}>{money(v)}</span>;
     } },
     { key: 'status', label: 'الحالة', render: (r: WipRow) => {
       const map: Record<string, { v: 'default' | 'info' | 'danger' | 'success' | 'warning' | 'accent'; l: string }> = {
@@ -66,10 +67,10 @@ export default function WipReportPage() {
         <>
           {totals && (
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div className="card p-4"><p className="text-sm text-text-muted">إجمالي العقود</p><p className="text-xl font-bold">{formatCurrency(totals.contract)}</p></div>
-              <div className="card p-4"><p className="text-sm text-text-muted">إجمالي التكاليف</p><p className="text-xl font-bold">{formatCurrency(totals.costs)}</p></div>
-              <div className="card p-4"><p className="text-sm text-text-muted">إجمالي المفوتر</p><p className="text-xl font-bold">{formatCurrency(totals.billed)}</p></div>
-              <div className="card p-4"><p className="text-sm text-text-muted">صافي الزيادة/النقص</p><p className="text-xl font-bold text-accent">{formatCurrency(totals.overUnderBilled)}</p></div>
+              <div className="card p-4"><p className="text-sm text-text-muted">إجمالي العقود</p><p className="text-xl font-bold">{money(totals.contract)}</p></div>
+              <div className="card p-4"><p className="text-sm text-text-muted">إجمالي التكاليف</p><p className="text-xl font-bold">{money(totals.costs)}</p></div>
+              <div className="card p-4"><p className="text-sm text-text-muted">إجمالي المفوتر</p><p className="text-xl font-bold">{money(totals.billed)}</p></div>
+              <div className="card p-4"><p className="text-sm text-text-muted">صافي الزيادة/النقص</p><p className="text-xl font-bold text-accent">{money(totals.overUnderBilled)}</p></div>
             </div>
           )}
           <DataTable columns={columns} data={rows} pageSize={20} />

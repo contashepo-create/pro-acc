@@ -13,8 +13,9 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface CustodyRow {
   id: string;
@@ -41,6 +42,7 @@ interface CustodyForm {
 }
 
 export default function CustodiesPage() {
+  const { money } = useCompanyMoney();
   const router = useRouter();
   const [custodies, setCustodies] = useState<CustodyRow[]>([]);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
@@ -123,9 +125,9 @@ export default function CustodiesPage() {
     { key: 'file_number', label: 'رقم الملف', render: (r: CustodyRow) => r.file_number || r.id?.slice(0, 8) },
     { key: 'employee_name', label: 'الموظف', sortable: true },
     { key: 'project_name', label: 'المشروع', render: (r: CustodyRow) => r.project_name || '—' },
-    { key: 'amount', label: 'المستلم', render: (r: CustodyRow) => formatCurrency(r.total_received ?? r.amount ?? 0) },
-    { key: 'total_expenses', label: 'المصروف', render: (r: CustodyRow) => formatCurrency(r.total_expenses ?? 0) },
-    { key: 'remaining_amount', label: 'المتبقي', render: (r: CustodyRow) => formatCurrency(r.remaining_amount) },
+    { key: 'amount', label: 'المستلم', render: (r: CustodyRow) => money(r.total_received ?? r.amount ?? 0) },
+    { key: 'total_expenses', label: 'المصروف', render: (r: CustodyRow) => money(r.total_expenses ?? 0) },
+    { key: 'remaining_amount', label: 'المتبقي', render: (r: CustodyRow) => money(r.remaining_amount) },
     { key: 'date', label: 'التاريخ', render: (r: CustodyRow) => formatDate(r.date) },
     { key: 'status', label: 'الحالة', render: (r: CustodyRow) => statusBadge(r.status ?? '') },
     {

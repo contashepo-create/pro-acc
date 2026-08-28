@@ -12,8 +12,9 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 type ReconciliationItem = { transactionType: string; amount: string; date: string; isCleared: boolean };
 const emptyItem = (): ReconciliationItem => ({ transactionType: '', amount: '', date: '', isCleared: false });
@@ -31,6 +32,7 @@ interface BankReconciliationRow {
 interface BankOption { id: string; name?: string; is_active?: boolean; }
 
 export default function BankReconciliationPage() {
+  const { money } = useCompanyMoney();
   const [reconciliations, setReconciliations] = useState<BankReconciliationRow[]>([]);
   const [banks, setBanks] = useState<BankOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -136,11 +138,11 @@ export default function BankReconciliationPage() {
     { key: 'number', label: 'الرقم', sortable: true, render: (row: BankReconciliationRow) => formatDocumentNumber('bank_reconciliation', row.number) },
     { key: 'bank_safe_name', label: 'البنك/الخزينة', sortable: true },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: BankReconciliationRow) => formatDate(row.date) },
-    { key: 'closing_balance', label: 'الرصيد الختامي', sortable: true, render: (row: BankReconciliationRow) => formatCurrency(Number(row.closing_balance) || 0) },
+    { key: 'closing_balance', label: 'الرصيد الختامي', sortable: true, render: (row: BankReconciliationRow) => money(Number(row.closing_balance) || 0) },
     { key: 'difference', label: 'الفروقات', render: (row: BankReconciliationRow) => {
       const difference = Number(row.difference) || 0;
       return <span className={Math.abs(difference) < 0.005 ? 'text-green-600' : 'text-red-600'}>
-        {Math.abs(difference) < 0.005 ? '✓ مطابق' : `${formatCurrency(difference)} غير مطابق`}
+        {Math.abs(difference) < 0.005 ? '✓ مطابق' : `${money(difference)} غير مطابق`}
       </span>;
     } },
     { key: 'status', label: 'الحالة', render: (row: BankReconciliationRow) => row.status === 'completed'

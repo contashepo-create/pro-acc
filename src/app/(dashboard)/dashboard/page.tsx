@@ -32,8 +32,7 @@ import {
   Cell,
 } from 'recharts';
 import { useAuthStore } from '@/store/auth-store';
-import { formatCurrency } from '@/lib/utils';
-import { companyMoneyParts } from '@/lib/company-money';
+import { companyDisplayMoney } from '@/lib/company-money';
 import { operatingLocale } from '@/lib/fiscal-calendar';
 
 interface DashboardProject {
@@ -74,8 +73,8 @@ const empty: DashboardData = {
   projects: [], projectsTruncated: false, recentActivity: [],
 };
 
-function formatMoney(value: number, symbol: string) {
-  return formatCurrency(value, undefined, symbol);
+function formatMoney(value: number, company: { country_code?: string | null; currency_symbol?: string | null; locale?: string | null } | null) {
+  return companyDisplayMoney(value, company);
 }
 
 const ACCENTS: Record<string, { icon: string; name: string; nameEn: string }> = {
@@ -199,9 +198,8 @@ export default function DashboardPage() {
   }
 
   const s = data || empty;
-  const moneySymbol = companyMoneyParts(company).symbol;
   const netTone = s.netProfit >= 0 ? 'success' : 'danger';
-  const netLabel = formatMoney(s.netProfit, moneySymbol);
+  const netLabel = formatMoney(s.netProfit, company);
   const firstName = user?.name?.split(' ')[0] || '';
 
   const chartData = [
@@ -255,18 +253,18 @@ export default function DashboardPage() {
 
       {/* مؤشرات مالية رئيسية */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="إجمالي الإيرادات" value={formatMoney(s.totalRevenue, moneySymbol)} icon={TrendingUp} tone="success" sub={`هذا الشهر: ${formatMoney(s.revenueThisMonth, moneySymbol)}`} />
-        <StatCard title="إجمالي المصروفات" value={formatMoney(s.totalExpense, moneySymbol)} icon={TrendingDown} tone="danger" sub={`هذا الشهر: ${formatMoney(s.expenseThisMonth, moneySymbol)}`} />
+        <StatCard title="إجمالي الإيرادات" value={formatMoney(s.totalRevenue, company)} icon={TrendingUp} tone="success" sub={`هذا الشهر: ${formatMoney(s.revenueThisMonth, company)}`} />
+        <StatCard title="إجمالي المصروفات" value={formatMoney(s.totalExpense, company)} icon={TrendingDown} tone="danger" sub={`هذا الشهر: ${formatMoney(s.expenseThisMonth, company)}`} />
         <StatCard title="صافي الربح" value={netLabel} icon={DollarSign} tone={netTone === 'success' ? 'success' : 'danger'} />
-        <StatCard title="الرصيد النقدي" value={formatMoney(s.cashBalance, moneySymbol)} icon={Wallet} tone="accent" />
+        <StatCard title="الرصيد النقدي" value={formatMoney(s.cashBalance, company)} icon={Wallet} tone="accent" />
       </div>
 
       {/* مؤشرات تشغيلية */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="الذمم المدينة (لنا)" value={formatMoney(s.accountsReceivable, moneySymbol)} icon={Users} tone="info" />
-        <StatCard title="الذمم الدائنة (علينا)" value={formatMoney(s.accountsPayable, moneySymbol)} icon={Receipt} tone="warning" />
+        <StatCard title="الذمم المدينة (لنا)" value={formatMoney(s.accountsReceivable, company)} icon={Users} tone="info" />
+        <StatCard title="الذمم الدائنة (علينا)" value={formatMoney(s.accountsPayable, company)} icon={Receipt} tone="warning" />
         <StatCard title="المشاريع النشطة" value={String(s.activeProjects)} icon={Building2} tone="success" sub={`إجمالي المشاريع: ${s.totalProjects}`} />
-        <StatCard title="فواتير متأخرة" value={`${s.overdueInvoices}`} icon={CalendarClock} tone="danger" sub={formatMoney(s.overdueAmount, moneySymbol)} />
+        <StatCard title="فواتير متأخرة" value={`${s.overdueInvoices}`} icon={CalendarClock} tone="danger" sub={formatMoney(s.overdueAmount, company)} />
       </div>
 
       {/* إجراءات سريعة */}
@@ -335,7 +333,7 @@ export default function DashboardPage() {
                   <div className="min-w-0">
                     <div className="font-semibold truncate" style={{ color: 'var(--color-text-primary)' }}>{p.name}</div>
                     <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                      {p.status === 'active' ? 'نشط' : p.status === 'completed' ? 'مكتمل' : 'معلّق'} · {formatMoney(p.contract_value, moneySymbol)}
+                      {p.status === 'active' ? 'نشط' : p.status === 'completed' ? 'مكتمل' : 'معلّق'} · {formatMoney(p.contract_value, company)}
                     </div>
                   </div>
                   <div className="w-24 shrink-0">

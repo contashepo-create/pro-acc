@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatCurrency } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface BankRow {
   id: string;
@@ -26,6 +26,7 @@ interface BankRow {
 interface BankForm { name: string; type: string; account_number: string; opening_balance: number; }
 
 export default function BanksPage() {
+  const { money } = useCompanyMoney();
   const [banks, setBanks] = useState<BankRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -117,8 +118,8 @@ export default function BanksPage() {
     { key: 'name', label: 'الاسم', sortable: true },
     { key: 'type', label: 'النوع', render: (row: BankRow) => <Badge variant={row.type === 'bank' ? 'info' : 'accent'}>{row.type === 'bank' ? 'بنك' : 'صندوق'}</Badge> },
     { key: 'account_number', label: 'رقم الحساب' },
-    { key: 'opening_balance', label: 'الرصيد الافتتاحي', render: (row: BankRow) => formatCurrency(row.opening_balance ?? 0) },
-    { key: 'balance', label: 'الرصيد الحالي', render: (row: BankRow) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{formatCurrency(row.balance)}</span> },
+    { key: 'opening_balance', label: 'الرصيد الافتتاحي', render: (row: BankRow) => money(row.opening_balance ?? 0) },
+    { key: 'balance', label: 'الرصيد الحالي', render: (row: BankRow) => <span className={row.balance < 0 ? 'text-danger font-bold' : 'text-success font-bold'}>{money(row.balance)}</span> },
     { key: 'is_active', label: 'الحالة', render: (row: BankRow) => <Badge variant={row.is_active ? 'success' : 'danger'}>{row.is_active ? 'نشط' : 'غير نشط'}</Badge> },
     {
       key: 'statement',

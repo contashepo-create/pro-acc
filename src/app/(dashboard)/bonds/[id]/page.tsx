@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface BondDetail {
   id: string;
@@ -43,6 +44,7 @@ const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' 
 };
 
 export default function BondDetailPage() {
+  const { money } = useCompanyMoney();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
@@ -103,7 +105,7 @@ export default function BondDetailPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <InfoCard icon={<Banknote size={16} />} label="المبلغ" value={formatCurrency(bond.amount)} />
+        <InfoCard icon={<Banknote size={16} />} label="المبلغ" value={money(bond.amount)} />
         <InfoCard icon={<Calendar size={16} />} label="تاريخ الإصدار" value={formatDate(bond.issue_date)} />
         <InfoCard icon={<Calendar size={16} />} label="تاريخ الانتهاء" value={formatDate(bond.expiry_date)} />
         <InfoCard icon={<Building2 size={16} />} label="البنك المُصدر" value={bond.issuing_bank || '—'} />

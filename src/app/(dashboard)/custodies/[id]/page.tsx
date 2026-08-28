@@ -11,9 +11,10 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Checkbox } from '@/components/ui/Checkbox';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 // حسابات مصروف شائعة من شجرة الحسابات الافتراضية:
 // 5100–5140 تكلفة مشروع، 5200/5300/5400 مصروفات تشغيلية/عمومية للشركة.
@@ -86,6 +87,7 @@ interface ExpenseForm {
 }
 
 export default function CustodyFilePage() {
+  const { money } = useCompanyMoney();
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [file, setFile] = useState<CustodyFile | null>(null);
@@ -164,7 +166,7 @@ export default function CustodyFilePage() {
         ].map(([label, val]) => (
           <Card key={String(label)} className="p-4">
             <p className="text-xs text-text-muted">{label}</p>
-            <p className="text-lg font-bold mt-1">{val === null ? (file.project_name || 'عام') : formatCurrency(Number(val) || 0)}</p>
+            <p className="text-lg font-bold mt-1">{val === null ? (file.project_name || 'عام') : money(Number(val) || 0)}</p>
           </Card>
         ))}
       </div>
@@ -198,7 +200,7 @@ export default function CustodyFilePage() {
                   <td className="py-2 whitespace-nowrap">{t.created_at ? new Date(t.created_at).toISOString().slice(0, 10) : '—'}</td>
                   <td className="py-2">{t.type === 'addition' ? (Number(t.amount) === Number(file.total_received) && String(t.description || '').startsWith('افتتاح') ? 'افتتاح' : 'تعزيز') : t.type === 'expense' ? 'مصروف' : t.type === 'shortage' ? 'عجز' : t.type === 'surplus' ? 'زيادة' : t.type === 'return' ? 'مرتجع' : t.type}</td>
                   <td className="py-2">{t.description}</td>
-                  <td className="py-2 font-mono">{formatCurrency(Number(t.amount) || 0)}</td>
+                  <td className="py-2 font-mono">{money(Number(t.amount) || 0)}</td>
                 </tr>
               ))}
             </tbody>
@@ -299,7 +301,7 @@ export default function CustodyFilePage() {
 
       <Modal isOpen={modal === 'close'} onClose={() => setModal(null)} title="تأكيد إغلاق الملف" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>تراجع</Button><Button disabled={saving} onClick={() => post(`/api/custodies/${id}/settle`, { confirm: true, returned_cash: form.returned_cash, bank_safe_id: form.bank_safe_id, date: form.date, description: form.description })}>أؤكد الإغلاق</Button></div>}>
         <div className="space-y-3">
-          <p className="text-sm">المتبقي الحالي: <b>{formatCurrency(file.remaining_amount ?? 0)}</b></p>
+          <p className="text-sm">المتبقي الحالي: <b>{money(file.remaining_amount ?? 0)}</b></p>
           <p className="text-xs text-text-muted">المرتجع يدخل الخزينة. ما يزيد عن المرتجع يُسجَّل سلفة (1160) على راتب الموظف. لا يُغلق الملف مرتين.</p>
           <Input label="مرتجع نقدي" type="number" value={form.returned_cash} onChange={(e) => setForm({ ...form, returned_cash: parseFloat(e.target.value) || 0 })} />
           <Select label="خزينة المرتجع" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}

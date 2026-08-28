@@ -4,6 +4,7 @@ import { getCountryConfig } from '@/lib/countries';
 export type CompanyMoneyInfo = {
   locale?: string | null;
   currency_symbol?: string | null;
+  currency_code?: string | null;
   country_code?: string | null;
 };
 
@@ -12,6 +13,7 @@ export function companyMoneyParts(company?: CompanyMoneyInfo | null) {
   return {
     locale: String(company?.locale || '').trim() || cfg.locale,
     symbol: String(company?.currency_symbol || '').trim() || cfg.currencySymbol,
+    code: String(company?.currency_code || '').trim() || cfg.currencyCode,
   };
 }
 

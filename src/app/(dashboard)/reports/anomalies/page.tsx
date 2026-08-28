@@ -6,7 +6,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { Badge } from '@/components/ui/Badge';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatCurrency } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 const sevMeta: Record<string, { variant: 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'; label: string }> = {
   low: { variant: 'info', label: 'منخفضة' },
@@ -30,6 +30,7 @@ interface AnomalyData {
 }
 
 export default function AnomaliesPage() {
+  const { money } = useCompanyMoney();
   const [data, setData] = useState<AnomalyData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -87,7 +88,7 @@ export default function AnomaliesPage() {
           })}
         </div>
       )}
-      <div className="text-xs text-text-muted">المبلغ المعروض كمرجع: {formatCurrency(findings.reduce((s: number, f) => s + (f.score || 0), 0))}</div>
+      <div className="text-xs text-text-muted">المبلغ المعروض كمرجع: {money(findings.reduce((s: number, f) => s + (f.score || 0), 0))}</div>
     <PrintButton /></div>
   );
 }

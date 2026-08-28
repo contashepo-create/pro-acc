@@ -11,7 +11,7 @@ import { Select } from '@/components/ui/Select';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatCurrency } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface BoqRow {
   id: string;
@@ -26,6 +26,7 @@ interface ProjectOption { id: string; name: string; }
 interface BoqForm { project_id: string; code: string; description: string; unit: string; quantity: number; unit_price: number; }
 
 export default function BoqPage() {
+  const { money } = useCompanyMoney();
   const [items, setItems] = useState<BoqRow[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -128,8 +129,8 @@ export default function BoqPage() {
     { key: 'description', label: 'الوصف', sortable: true },
     { key: 'unit', label: 'الوحدة' },
     { key: 'quantity', label: 'الكمية', sortable: true },
-    { key: 'unit_price', label: 'سعر الوحدة', render: (row: BoqRow) => formatCurrency(row.unit_price) },
-    { key: 'total', label: 'الإجمالي', render: (row: BoqRow) => formatCurrency(row.quantity * row.unit_price) },
+    { key: 'unit_price', label: 'سعر الوحدة', render: (row: BoqRow) => money(row.unit_price) },
+    { key: 'total', label: 'الإجمالي', render: (row: BoqRow) => money(row.quantity * row.unit_price) },
     { key: 'project_name', label: 'المشروع', sortable: true },
     {
       key: 'actions',
