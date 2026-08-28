@@ -96,22 +96,29 @@ export async function POST(request: NextRequest) {
     const s = sb();
     const body = await parseBody<Row>(request);
 
+    const blankToNull = (value: unknown) => {
+      if (value == null) return null;
+      const text = String(value).trim();
+      return text === '' ? null : text;
+    };
     // توافقية مزدوجة: camelCase → snake_case قبل التحقق
     const normalized = {
       date: body.date,
       disbursement_type: body.disbursement_type || body.disbursementType,
-      contact_id: body.contact_id || body.contactId || null,
-      employee_id: body.employee_id || body.employeeId || null,
+      contact_id: blankToNull(body.contact_id || body.contactId),
+      employee_id: blankToNull(body.employee_id || body.employeeId),
+      project_id: blankToNull(body.project_id || body.projectId),
       amount: typeof body.amount === 'string' ? parseFloat(body.amount) : body.amount,
       bank_safe_id: body.bank_safe_id || body.bankSafeId,
       reason: body.reason,
       invoice_items: body.invoice_items || body.invoiceItems || undefined,
+      auto_fifo: body.auto_fifo ?? body.autoFifo,
     };
 
     const parsed = disbursementVoucherCreateSchema.safeParse(normalized);
     if (!parsed.success) return error(parsed.error.issues[0].message);
 
-    const { date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
+    const { date, disbursement_type, contact_id, employee_id, amount, bank_safe_id, reason, invoice_items, auto_fifo } = parsed.data;
 
     const bypassApproval = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
     const threshold: ApprovalThresholdResult = bypassApproval
@@ -120,9 +127,9 @@ export async function POST(request: NextRequest) {
 
     // An undirected payment to a supplier/subcontractor is applied to the
     // oldest open purchase invoices by default (FIFO). Disable via the
-    // auto_allocate_disbursements_fifo setting = 'false'.
-    let autoFifo = true;
-    if ((!invoice_items || invoice_items.length === 0)
+    // auto_allocate_disbursements_fifo setting = 'false' or auto_fifo: false.
+    let autoFifo = auto_fifo !== false;
+    if (typeof auto_fifo !== 'boolean' && (!invoice_items || invoice_items.length === 0)
         && (disbursement_type === 'supplier' || disbursement_type === 'subcontractor') && contact_id) {
       const { data: setting, error: settingErr } = await s.from('settings')
         .select('value').eq('company_id', auth.companyId).eq('key', 'auto_allocate_disbursements_fifo').maybeSingle();
@@ -145,7 +152,7 @@ export async function POST(request: NextRequest) {
       p_request_approval: threshold.requiresApproval,
       p_user_id: auth.userId,
       p_auto_fifo: autoFifo,
-      p_project_id: (parsed.data as { project_id?: string | null }).project_id || null,
+      p_project_id: parsed.data.project_id || null,
     });
     if (createErr) throw createErr;
     const voucher = data as Row;

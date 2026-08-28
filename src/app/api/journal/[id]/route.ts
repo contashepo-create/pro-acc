@@ -35,7 +35,7 @@ export async function GET(
     if (entryErr || !entryRes) return notFound();
 
     const { data: linesRes } = await s.from('journal_lines')
-      .select('id, account_code, accounts(name, type), debit, credit, description')
+      .select('id, account_code, accounts(name, type), debit, credit, description, project_id, contact_id')
       .eq('journal_entry_id', id)
       .eq('company_id', auth.companyId)
       .order('id');
@@ -44,6 +44,7 @@ export async function GET(
       id: l.id, account_code: l.account_code, account_name: (l.accounts as Row)?.name || null,
       account_type: (l.accounts as Row)?.type || null, debit: parseFloat(String(l.debit)) || 0,
       credit: parseFloat(String(l.credit)) || 0, description: l.description,
+      project_id: l.project_id || null, contact_id: l.contact_id || null,
     }));
 
     const totalDebit = lines.reduce((s: number, l) => s + l.debit, 0);

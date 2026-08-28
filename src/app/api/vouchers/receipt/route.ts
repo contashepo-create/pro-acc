@@ -96,21 +96,30 @@ export async function POST(request: NextRequest) {
     const s = sb();
     const body = await parseBody<Record<string, unknown>>(request);
 
+    const blankToNull = (value: unknown) => {
+      if (value == null) return null;
+      const text = String(value).trim();
+      return text === '' ? null : text;
+    };
     // توافقية مزدوجة: camelCase → snake_case قبل التحقق
     const normalized = {
       date: body.date,
       receipt_type: body.receipt_type || body.receiptType,
-      contact_id: body.contact_id || body.contactId || null,
+      contact_id: blankToNull(body.contact_id || body.contactId),
+      project_id: blankToNull(body.project_id || body.projectId),
       amount: typeof body.amount === 'string' ? parseFloat(body.amount) : body.amount,
       bank_safe_id: body.bank_safe_id || body.bankSafeId,
       reason: body.reason,
       invoice_items: body.invoice_items || body.invoiceItems || undefined,
+      auto_fifo: body.auto_fifo ?? body.autoFifo,
+      currency_code: blankToNull(body.currency_code || body.currencyCode),
+      exchange_rate: body.exchange_rate ?? body.exchangeRate ?? undefined,
     };
 
     const parsed = receiptVoucherCreateSchema.safeParse(normalized);
     if (!parsed.success) return error(parsed.error.issues[0].message, 400);
 
-    const { date, receipt_type, contact_id, amount, bank_safe_id, reason, invoice_items } = parsed.data;
+    const { date, receipt_type, contact_id, amount, bank_safe_id, reason, invoice_items, auto_fifo } = parsed.data;
 
     const canBypass = await canBypassTelegramConfirmation(auth.userId, auth.companyId);
     const threshold: ApprovalThresholdResult = canBypass
@@ -120,9 +129,9 @@ export async function POST(request: NextRequest) {
     // A client receipt with no explicit invoice allocation is applied to the
     // oldest open invoices by default (FIFO), so an undirected payment settles
     // the client's outstanding invoices. Explicitly disable via the
-    // auto_allocate_receipts_fifo setting = 'false'.
-    let autoFifo = true;
-    if ((!invoice_items || invoice_items.length === 0) && receipt_type === 'client' && contact_id) {
+    // auto_allocate_receipts_fifo setting = 'false' or auto_fifo: false.
+    let autoFifo = auto_fifo !== false;
+    if (typeof auto_fifo !== 'boolean' && (!invoice_items || invoice_items.length === 0) && receipt_type === 'client' && contact_id) {
       const { data: setting, error: settingErr } = await s.from('settings')
         .select('value').eq('company_id', auth.companyId).eq('key', 'auto_allocate_receipts_fifo').maybeSingle();
       if (settingErr) throw settingErr;
@@ -143,7 +152,7 @@ export async function POST(request: NextRequest) {
       p_auto_fifo: autoFifo,
       p_request_approval: threshold.requiresApproval,
       p_user_id: auth.userId,
-      p_project_id: (parsed.data as { project_id?: string | null }).project_id || null,
+      p_project_id: parsed.data.project_id || null,
       ...(parsed.data.currency_code
         ? { p_currency_code: parsed.data.currency_code, p_exchange_rate: parsed.data.exchange_rate ?? null }
         : {}),
