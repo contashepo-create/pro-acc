@@ -12,6 +12,7 @@ import {
   custodyExpenseSchema,
   settleCustodySchema,
   updateCustodySchema,
+  payCustodyInvoiceSchema,
 } from '@/lib/custody-validation';
 
 const VALID_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
@@ -162,6 +163,28 @@ describe('settleCustodySchema', () => {
     expect(settleCustodySchema.safeParse({
       confirm: true,
       returned_cash: -50,
+    }).success).toBe(false);
+  });
+});
+
+describe('payCustodyInvoiceSchema', () => {
+  test('requires a purchase invoice id', () => {
+    expect(payCustodyInvoiceSchema.safeParse({}).success).toBe(false);
+    expect(payCustodyInvoiceSchema.safeParse({ purchase_invoice_id: VALID_UUID }).success).toBe(true);
+  });
+
+  test('accepts optional amount and date', () => {
+    expect(payCustodyInvoiceSchema.safeParse({
+      purchase_invoice_id: VALID_UUID,
+      amount: 250.5,
+      date: VALID_DATE,
+    }).success).toBe(true);
+  });
+
+  test('rejects extra fields', () => {
+    expect(payCustodyInvoiceSchema.safeParse({
+      purchase_invoice_id: VALID_UUID,
+      company_id: VALID_UUID,
     }).success).toBe(false);
   });
 });

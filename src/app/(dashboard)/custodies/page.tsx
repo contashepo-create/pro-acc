@@ -139,7 +139,7 @@ export default function CustodiesPage() {
           item={row}
           onView={() => router.push(`/custodies/${row.id}`)}
           onDelete={row.status === 'settled' || row.status === 'closed' ? undefined : async () => {
-            if (!confirm('إلغاء الملف يعكس قيد الافتتاح. متابعة؟')) return;
+            if (!confirm('إلغاء الملف يعكس قيود الافتتاح والتعزيز إن لم يُثبت مصروف. متابعة؟')) return;
             const res = await fetch(`/api/custodies/${row.id}`, { method: 'DELETE' });
             const json = await res.json();
             if (json.success) { toast.success('أُلغي الملف'); fetchData(); }
@@ -157,7 +157,7 @@ export default function CustodiesPage() {
     <div className="space-y-6">
       <PageHeader
         title="ملفات عهد الموظفين"
-        description="أكثر من ملف لنفس الموظف — التعزيز والمصروف لكل ملف على حدة دون تكرار الصرف"
+        description="أكثر من ملف لنفس الموظف، بمشروع أو بدونه. المصروف وفاتورة المورد يُخصمان من حساب العهد دون تكرار الصرف."
         actions={<Button onClick={() => setShowModal(true)} leftIcon={<Plus size={18} />}>فتح ملف عهدة</Button>}
       />
       {custodies.length === 0

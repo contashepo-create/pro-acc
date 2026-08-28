@@ -51,6 +51,14 @@ describe('custody file balances', () => {
     expect(f.status).toBe('partially_settled');
   });
 
+  test('two files for one employee stay independent', () => {
+    const site = computeFile([{ type: 'addition', amount: 3000 }, { type: 'expense', amount: 800 }]);
+    const office = computeFile([{ type: 'addition', amount: 1500 }]);
+    expect(site.remaining).toBe(2200);
+    expect(office.remaining).toBe(1500);
+    expect(site.remaining + office.remaining).toBe(3700);
+  });
+
   test('return and shortage do not inflate received', () => {
     const f = computeFile([
       { type: 'addition', amount: 1000 },
