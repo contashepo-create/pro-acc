@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     const s = sb();
     const data = await parseBody(req);
     const { name, type, account_id } = data;
-    if (!name || !type || !account_id) return error('name, type, account_id are required');
+    if (!name || !type || !account_id) return error('الاسم والنوع والحساب مطلوبة');
     const { data: result, error: insertError } = await s.from('transaction_categories')
       .insert({ company_id: auth.companyId, name, type, account_id, is_active: true })
       .select('*').single();

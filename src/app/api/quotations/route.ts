@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     const { date, contact_id, items, notes, tax_rate, valid_until } = data;
 
     if (!date || !contact_id || !Array.isArray(items) || items.length === 0)
-      return error('date, contact_id, items are required');
+      return error('التاريخ والعميل وبنود العرض مطلوبة');
 
     // عزل مستأجرين: العميل يجب أن ينتمي لهذه الشركة
     const { data: contact } = await s.from('contacts')
