@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     const data = await parseBody(req);
     const { subcontractor_id, contract_number, description, contract_value, start_date, end_date, retention_rate } = data;
     if (!subcontractor_id || !contract_number || !contract_value || !start_date)
-      return error('subcontractor_id, contract_number, contract_value, start_date are required');
+      return error('المقاول ورقم العقد وقيمته وتاريخ البداية مطلوبة');
 
     // عزل مستأجرين: المقاول (جهة اتصال نوعها subcontractor) يجب أن ينتمي للشركة
     const { data: sub } = await s.from('contacts')

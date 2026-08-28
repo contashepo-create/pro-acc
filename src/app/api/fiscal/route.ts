@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     const auth = await requireModulePermission(request, 'fiscal', 'create');
     const data = await parseBody<Record<string, unknown>>(request);
     const { name, start_date, end_date } = data;
-    if (!name || !start_date || !end_date) return error('name, start_date, end_date are required');
+    if (!name || !start_date || !end_date) return error('اسم السنة وتاريخ البداية وتاريخ النهاية مطلوبة');
     const { data: result, error: rpcError } = await sb().rpc('create_fiscal_year_atomic', {
       p_company_id: auth.companyId,
       p_name: String(name),

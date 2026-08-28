@@ -18,7 +18,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
-    if (sheetError || !sheet) return error('Not found', 404);
+    if (sheetError || !sheet) return error('كشف الرواتب غير موجود', 404);
 
     const { data: items, error: itemsErr } = await s.from('salary_items')
       .select('*, employees(name)')
@@ -46,7 +46,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const { data: existing } = await s.from('salary_sheets').select('id, status')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!existing) return error('Not found', 404);
+    if (!existing) return error('كشف الرواتب غير موجود', 404);
     if ((existing as Row).status !== 'draft') return error('لا يمكن تعديل كشف رواتب بعد دخوله دورة الموافقة', 409);
     if (body.status !== undefined) return error('تغيير حالة الكشف يتم عبر مسار الموافقات فقط', 409);
     const updateData: Row = {};
@@ -64,7 +64,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       .select('*')
       .maybeSingle();
 
-    if (updateError || !result) return error('Not found', 404);
+    if (updateError || !result) return error('كشف الرواتب غير موجود', 404);
     return success(result);
   } catch (e) {
     return handleApiError(e);

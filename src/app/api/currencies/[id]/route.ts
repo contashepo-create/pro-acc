@@ -18,7 +18,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       .eq('company_id', auth.companyId)
       .maybeSingle();
 
-    if (queryError || !data) return error('Currency not found', 404);
+    if (queryError || !data) return error('العملة غير موجودة', 404);
     return success(data);
   } catch (e) {
     return handleApiError(e);
@@ -34,7 +34,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const { data: existing } = await s.from('currencies').select('*')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!existing) return error('Currency not found', 404);
+    if (!existing) return error('العملة غير موجودة', 404);
     const code = body.code === undefined ? (existing as Row).code : String(body.code).trim().toUpperCase();
     const name = body.name === undefined ? (existing as Row).name : String(body.name).trim();
     const rate = body.rate === undefined ? Number((existing as Row).rate) : Number(body.rate);
@@ -47,7 +47,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (saveError) return error(saveError.message || 'تعذر تحديث العملة', 409);
     const { data: result, error: readError } = await s.from('currencies').select('*')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (readError || !result) return error('Currency not found', 404);
+    if (readError || !result) return error('العملة غير موجودة', 404);
     return success(result);
   } catch (e) {
     return handleApiError(e);
@@ -62,13 +62,13 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
     const { data: existing } = await s.from('currencies').select('id, is_base')
       .eq('id', id).eq('company_id', auth.companyId).maybeSingle();
-    if (!existing) return error('Currency not found', 404);
+    if (!existing) return error('العملة غير موجودة', 404);
     if ((existing as Row).is_base) return error('لا يمكن حذف العملة الأساسية', 409);
     const { data: result, error: deleteError } = await s.from('currencies')
       .delete().eq('id', id).eq('company_id', auth.companyId)
       .select('id').maybeSingle();
 
-    if (deleteError || !result) return error('Currency not found', 404);
+    if (deleteError || !result) return error('العملة غير موجودة', 404);
     return success({ deleted: true });
   } catch (e) {
     return handleApiError(e);
