@@ -1,6 +1,8 @@
 import { defaultFiscalWindow, localDateISO } from '@/lib/fiscal-calendar';
 import { eosbMonthlyAmount, eosbMonthlyFactor } from '@/lib/eosb';
-import { companyDisplayMoney } from '@/lib/company-money';
+import { companyDisplayMoney, companyMoneyParts } from '@/lib/company-money';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 describe('السنة المالية الافتراضية', () => {
   test('السعودية تقويم ميلادي كامل', () => {
@@ -42,5 +44,23 @@ describe('عرض عملة المنشأة', () => {
     expect(companyDisplayMoney(10, { country_code: 'EG' })).toContain('ج.م');
     expect(companyDisplayMoney(10, { country_code: 'SA' })).toContain('ر.س');
     expect(companyDisplayMoney(Number.NaN, { country_code: 'EG' })).toContain('ج.م');
+  });
+
+  test('رمز العملة الدولي يتبع الدولة أو الحقل المخزّن', () => {
+    expect(companyMoneyParts({ country_code: 'EG' }).code).toBe('EGP');
+    expect(companyMoneyParts({ country_code: 'SA' }).code).toBe('SAR');
+    expect(companyMoneyParts({ country_code: 'EG', currency_code: 'USD' }).code).toBe('USD');
+    expect(companyMoneyParts(null).locale).toBe('ar-SA');
+  });
+
+  test('المساعد والتنبيهات لا يثبتان ريالا عند غياب الرمز', () => {
+    const assistant = readFileSync(join(process.cwd(), 'src/app/api/assistant/route.ts'), 'utf8');
+    const smart = readFileSync(join(process.cwd(), 'src/app/api/notifications/smart/route.ts'), 'utf8');
+    expect(assistant).toContain('companyMoneyParts');
+    expect(assistant).not.toMatch(/ر\.س/);
+    expect(smart).toContain('companyMoneyParts');
+    expect(smart).toContain('defaultFiscalWindow');
+    expect(smart).not.toMatch(/ر\.س/);
+    expect(smart).not.toContain('12-31');
   });
 });

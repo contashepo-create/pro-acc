@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import { QRCode } from '@/components/ui/QRCode';
 import { toast } from '@/components/ui/Toast';
 import { openPrintWindow } from '@/lib/print';
-import { escapeHtml, formatCurrency } from '@/lib/utils';
+import { escapeHtml } from '@/lib/utils';
+import { companyDisplayMoney, companyMoneyParts } from '@/lib/company-money';
 import { taxQrCaption, usesPhaseOneTaxQr } from '@/lib/tax-authority';
 
 interface PortalInvoice {
@@ -111,10 +112,14 @@ export default function CustomerPortalPage() {
   const statusLabel = (status: string) =>
     status === 'paid' ? 'مدفوعة' : status === 'partial' ? 'جزئية' : 'غير مدفوعة';
 
-  const portalLocale = portalCompany.locale || 'ar-SA';
-  const portalMoney = portalCompany.currency_symbol || 'ر.س';
+  const portalParts = companyMoneyParts(portalCompany);
+  const portalLocale = portalParts.locale;
   const moneyOf = (value: number, locale?: string, symbol?: string) =>
-    formatCurrency(value, locale || portalLocale, symbol || portalMoney);
+    companyDisplayMoney(value, {
+      locale: locale || portalParts.locale,
+      currency_symbol: symbol || portalParts.symbol,
+      country_code: portalCompany.country_code,
+    });
 
   /**
    * "تحميل PDF": opens a printable invoice view in a new window and triggers
@@ -134,8 +139,7 @@ export default function CustomerPortalPage() {
       </tr>`)
       .join('');
     const company = inv.company || portalCompany || {};
-    const moneySymbol = company.currency_symbol || portalCompany.currency_symbol || 'ر.س';
-    const locale = company.locale || portalCompany.locale || 'ar-SA';
+    const locale = companyMoneyParts(company).locale;
     const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة رقم ${inv.number}</title>
       <style>
         body{font-family:Tahoma,Arial,sans-serif;padding:28px;color:#111;max-width:760px;margin:0 auto}
@@ -152,7 +156,7 @@ export default function CustomerPortalPage() {
       ${company.tax_number ? `<p class="muted" style="margin:0">الرقم الضريبي: ${escapeHtml(company.tax_number)}</p>` : ''}
       ${company.address ? `<p class="muted" style="margin:0">${escapeHtml(company.address)}</p>` : ''}
       <table><thead><tr><th>الوصف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>${items}</tbody></table>
-      <div class="totals"><span>الإجمالي</span><span>${escapeHtml(formatCurrency(Number(inv.total), locale, moneySymbol))}</span></div>
+      <div class="totals"><span>الإجمالي</span><span>${escapeHtml(companyDisplayMoney(Number(inv.total), company))}</span></div>
       <p style="text-align:center"><button onclick="window.print()" style="padding:10px 28px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:15px;cursor:pointer">طباعة / حفظ PDF</button></p>
       </body></html>`;
     const result = openPrintWindow(html);

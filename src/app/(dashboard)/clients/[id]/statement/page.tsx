@@ -6,11 +6,13 @@ import { ArrowRight, Printer, FileDown, AlertTriangle, Eye, ChevronDown, Chevron
 import { Button } from '@/components/ui/Button';
 import { PrintButton } from '@/components/ui/PrintButton';
 import { StatementHeader, SignatureFooter } from '@/components/ui/PrintTemplate';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { printCurrentPage } from '@/lib/print';
 import { getClientBalanceMeaning } from '@/lib/contact-balance';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 export default function ClientStatementPage() {
+  const { money } = useCompanyMoney();
 interface StatementEntry {
   id: string;
   date: string;
@@ -161,15 +163,15 @@ interface StatementData {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-6">
             <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
               <p className="text-xs text-gray-500 mb-1">إجمالي مدين</p>
-              <p className="text-xl font-bold text-green-700">{formatCurrency(total_debit)}</p>
+              <p className="text-xl font-bold text-green-700">{money(total_debit)}</p>
             </div>
             <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-center">
               <p className="text-xs text-gray-500 mb-1">إجمالي دائن</p>
-              <p className="text-xl font-bold text-red-700">{formatCurrency(total_credit)}</p>
+              <p className="text-xl font-bold text-red-700">{money(total_credit)}</p>
             </div>
             <div className={`border rounded-xl p-4 text-center ${balance >= 0 ? 'bg-blue-50 border-blue-200' : 'bg-orange-50 border-orange-200'}`}>
               <p className="text-xs text-gray-500 mb-1">الرصيد الحالي</p>
-              <p className={`text-xl font-bold ${balance >= 0 ? 'text-blue-700' : 'text-orange-700'}`}>{formatCurrency(Math.abs(balance))}</p>
+              <p className={`text-xl font-bold ${balance >= 0 ? 'text-blue-700' : 'text-orange-700'}`}>{money(Math.abs(balance))}</p>
               <p className="text-xs text-gray-500 font-semibold">
                 {closingBalanceMeaning.label}
               </p>
@@ -227,10 +229,10 @@ interface StatementData {
                             </div>
                           )}
                         </td>
-                        <td className="py-2 px-3 text-sm text-center font-medium text-green-700">{entry.debit > 0 ? formatCurrency(entry.debit) : '—'}</td>
-                        <td className="py-2 px-3 text-sm text-center font-medium text-red-700">{entry.credit > 0 ? formatCurrency(entry.credit) : '—'}</td>
+                        <td className="py-2 px-3 text-sm text-center font-medium text-green-700">{entry.debit > 0 ? money(entry.debit) : '—'}</td>
+                        <td className="py-2 px-3 text-sm text-center font-medium text-red-700">{entry.credit > 0 ? money(entry.credit) : '—'}</td>
                         <td className="py-2 px-3 text-sm text-center font-bold text-gray-900">
-                          <div>{formatCurrency(Math.abs(entry.balance))}</div>
+                          <div>{money(Math.abs(entry.balance))}</div>
                           <div className="text-[10px] font-medium text-gray-500">
                             {getClientBalanceMeaning(entry.balance).shortLabel}
                           </div>
@@ -260,10 +262,10 @@ interface StatementData {
                 <tfoot>
                   <tr className="bg-gray-100 font-bold">
                     <td colSpan={3} className="py-3 px-3 text-right text-gray-800">الإجمالي</td>
-                    <td className="py-3 px-3 text-center text-green-700">{formatCurrency(total_debit)}</td>
-                    <td className="py-3 px-3 text-center text-red-700">{formatCurrency(total_credit)}</td>
+                    <td className="py-3 px-3 text-center text-green-700">{money(total_debit)}</td>
+                    <td className="py-3 px-3 text-center text-red-700">{money(total_credit)}</td>
                     <td className="py-3 px-3 text-center text-gray-900">
-                      <div>{formatCurrency(Math.abs(balance))}</div>
+                      <div>{money(Math.abs(balance))}</div>
                       <div className="text-[10px] font-medium text-gray-600">
                         {closingBalanceMeaning.shortLabel}
                       </div>
@@ -306,8 +308,8 @@ interface StatementData {
                 <p><span className="text-gray-500">التاريخ:</span> {formatDate(reportEntry.date)}</p>
                 <p><span className="text-gray-500">رقم القيد:</span> {reportEntry.entry_number}</p>
                 <p><span className="text-gray-500">البيان:</span> {reportEntry.description}</p>
-                <p><span className="text-gray-500">مدين:</span> {reportEntry.debit > 0 ? formatCurrency(reportEntry.debit) : '—'}</p>
-                <p><span className="text-gray-500">دائن:</span> {reportEntry.credit > 0 ? formatCurrency(reportEntry.credit) : '—'}</p>
+                <p><span className="text-gray-500">مدين:</span> {reportEntry.debit > 0 ? money(reportEntry.debit) : '—'}</p>
+                <p><span className="text-gray-500">دائن:</span> {reportEntry.credit > 0 ? money(reportEntry.credit) : '—'}</p>
               </div>
               <textarea
                 className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:outline-none focus:border-orange-500"

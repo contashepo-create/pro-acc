@@ -13,8 +13,8 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
-
+import { formatDate } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface TenderRow {
   id: string;
@@ -62,6 +62,7 @@ const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' 
 };
 
 export default function TendersPage() {
+  const { money } = useCompanyMoney();
   const [tenders, setTenders] = useState<TenderRow[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -133,7 +134,7 @@ export default function TendersPage() {
     )},
     { key: 'client_name', label: 'العميل' },
     { key: 'estimated_value', label: 'القيمة التقديرية', render: (row: TenderRow) =>
-      row.estimated_value ? formatCurrency(row.estimated_value) : '—' },
+      row.estimated_value ? money(row.estimated_value) : '—' },
     { key: 'submission_deadline', label: 'موعد التقديم', render: (row: TenderRow) => {
       if (!row.submission_deadline) return '—';
       const overdue = row.isOverdue;

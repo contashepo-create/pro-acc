@@ -12,8 +12,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { Badge } from '@/components/ui/Badge';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface PosSaleRow {
   id: string;
@@ -27,6 +28,7 @@ interface TerminalOption { id: string; name: string; }
 interface PosForm { terminal_id: string; total: string; payment_method: string; }
 
 export default function POSPage() {
+  const { money } = useCompanyMoney();
   const [sales, setSales] = useState<PosSaleRow[]>([]);
   const [terminals, setTerminals] = useState<TerminalOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,7 +82,7 @@ export default function POSPage() {
   const columns = [
     { key: 'number', label: 'الرقم', sortable: true, render: (row: PosSaleRow) => formatDocumentNumber('pos_sale', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (r: PosSaleRow) => formatDate(r.date) },
-    { key: 'total', label: 'الإجمالي', render: (r: PosSaleRow) => formatCurrency(r.total) },
+    { key: 'total', label: 'الإجمالي', render: (r: PosSaleRow) => money(r.total) },
     { key: 'payment_method', label: 'طريقة الدفع', render: (r: PosSaleRow) => <Badge>{r.payment_method}</Badge> },
     { key: 'status', label: 'الحالة', render: (r: PosSaleRow) => <Badge variant={r.status === 'completed' ? 'success' : 'danger'}>{r.status}</Badge> },
     {

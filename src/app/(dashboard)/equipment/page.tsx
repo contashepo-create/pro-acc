@@ -11,7 +11,7 @@ import { Select } from '@/components/ui/Select';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatCurrency } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 const costTypes = [
   { value: 'rental', label: 'إيجار' },
@@ -44,6 +44,7 @@ interface EquipmentForm {
 }
 
 export default function EquipmentCostsPage() {
+  const { money } = useCompanyMoney();
   const [rows, setRows] = useState<EquipmentRow[]>([]);
   const [projects, setProjects] = useState<NameOption[]>([]);
   const [assets, setAssets] = useState<NameOption[]>([]);
@@ -90,7 +91,7 @@ export default function EquipmentCostsPage() {
     { key: 'projects', label: 'المشروع', render: (r: EquipmentRow) => r.projects?.name || '—' },
     { key: 'cost_type', label: 'النوع', render: (r: EquipmentRow) => costTypes.find((c) => c.value === r.cost_type)?.label || r.cost_type },
     { key: 'usage_hours', label: 'ساعات الاستخدام' },
-    { key: 'amount', label: 'المبلغ', render: (r: EquipmentRow) => <span className="font-bold">{formatCurrency(r.amount)}</span> },
+    { key: 'amount', label: 'المبلغ', render: (r: EquipmentRow) => <span className="font-bold">{money(r.amount)}</span> },
   ];
 
   return (

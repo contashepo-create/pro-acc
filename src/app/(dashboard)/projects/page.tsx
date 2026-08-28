@@ -15,8 +15,9 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { toDateInput } from '@/lib/form-utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface BoqItem { description: string; unit: string; quantity: number; unit_price: number; total: number; }
 interface ProjectForm { name: string; client_id: string; start_date: string; end_date: string; contract_value: number; description: string; location: string; }
@@ -35,6 +36,7 @@ interface QuotationOption { id: string; number: string; contact_name?: string; }
 interface CloseForm { close_date: string; notes: string; }
 
 export default function ProjectsPage() {
+  const { money } = useCompanyMoney();
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [quotations, setQuotations] = useState<QuotationOption[]>([]); // عروض الأسعار المقبولة للاستيراد
@@ -341,7 +343,7 @@ export default function ProjectsPage() {
     },
     { key: 'client_name', label: 'العميل', sortable: true },
     { key: 'start_date', label: 'تاريخ البدء', render: (row: ProjectRow) => formatDate(row.start_date) },
-    { key: 'contract_value', label: 'قيمة العقد / الميزانية', render: (row: ProjectRow) => formatCurrency(row.contract_value) },
+    { key: 'contract_value', label: 'قيمة العقد / الميزانية', render: (row: ProjectRow) => money(row.contract_value) },
     { key: 'status', label: 'الحالة', render: (row: ProjectRow) => (
       <Badge variant={row.status === 'active' ? 'success' : row.status === 'completed' ? 'info' : 'warning'}>
         {row.status === 'active' ? 'نشط' : row.status === 'completed' ? 'مكتمل' : 'معلّق'}
@@ -403,7 +405,7 @@ export default function ProjectsPage() {
           <div className="flex gap-2 w-full justify-between items-center">
             <div className="text-sm text-text-muted">
               إجمالي قيمة العقد (بدون ضريبة):
-              <span className="font-mono font-bold text-accent text-base mr-2">{formatCurrency(form.contract_value)}</span>
+              <span className="font-mono font-bold text-accent text-base mr-2">{money(form.contract_value)}</span>
             </div>
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => { setShowModal(false); setEditingProject(null); }}>إلغاء</Button>
@@ -438,7 +440,7 @@ export default function ProjectsPage() {
               <Input label="الموقع" value={form.location} onChange={(e) => setForm({...form, location: e.target.value})} placeholder="مثال: الرياض - الياسمين" />
               <div className="rounded-xl bg-bg-secondary px-4 py-2.5 flex items-center justify-between">
                 <span className="text-sm text-text-muted">قيمة العقد (تُحتسب تلقائياً من البنود)</span>
-                <span className="font-mono font-bold text-accent text-lg">{formatCurrency(form.contract_value)}</span>
+                <span className="font-mono font-bold text-accent text-lg">{money(form.contract_value)}</span>
               </div>
             </div>
             <Textarea
@@ -526,7 +528,7 @@ export default function ProjectsPage() {
                       className="input-base !py-2 text-sm text-center font-mono"
                     />
                     <div className="flex items-center justify-end md:justify-start font-mono font-bold text-sm text-text-primary">
-                      {formatCurrency(item.total)}
+                      {money(item.total)}
                     </div>
                   </div>
                   <div className="flex items-center justify-end">
@@ -553,7 +555,7 @@ export default function ProjectsPage() {
               </div>
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-text-muted">إجمالي قيمة العقد:</span>
-                <span className="font-mono font-bold text-accent text-lg">{formatCurrency(form.contract_value)}</span>
+                <span className="font-mono font-bold text-accent text-lg">{money(form.contract_value)}</span>
               </div>
             </div>
           </section>

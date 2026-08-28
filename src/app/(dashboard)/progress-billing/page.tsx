@@ -14,11 +14,12 @@ import { Checkbox } from '@/components/ui/Checkbox';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
 import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface ClaimRow {
   id: string;
@@ -44,6 +45,7 @@ interface ClaimForm {
 }
 
 export default function ProgressBillingPage() {
+  const { money } = useCompanyMoney();
   const [claims, setClaims] = useState<ClaimRow[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -159,9 +161,9 @@ export default function ProgressBillingPage() {
     { key: 'claim_number', label: 'الرقم', sortable: true, render: (row: ClaimRow) => formatDocumentNumber('progress_billing', row.claim_number) },
     { key: 'project_name', label: 'المشروع', sortable: true },
     { key: 'date', label: 'التاريخ', render: (row: ClaimRow) => formatDate(row.date) },
-    { key: 'gross_amount', label: 'الإجمالي', render: (row: ClaimRow) => formatCurrency(row.gross_amount) },
-    { key: 'retention_amount', label: 'الاحتجاز', render: (row: ClaimRow) => formatCurrency(row.retention_amount ?? 0) },
-    { key: 'net_amount', label: 'الصافي', render: (row: ClaimRow) => formatCurrency(row.net_amount ?? 0) },
+    { key: 'gross_amount', label: 'الإجمالي', render: (row: ClaimRow) => money(row.gross_amount) },
+    { key: 'retention_amount', label: 'الاحتجاز', render: (row: ClaimRow) => money(row.retention_amount ?? 0) },
+    { key: 'net_amount', label: 'الصافي', render: (row: ClaimRow) => money(row.net_amount ?? 0) },
     { key: 'status', label: 'الحالة', render: (row: ClaimRow) => (
       <div className="flex items-center gap-2">
         {statusBadge(row.status)}

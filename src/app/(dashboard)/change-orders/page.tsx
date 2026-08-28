@@ -16,8 +16,8 @@ import { RecordViewModal } from '@/components/ui/RecordViewModal';
 import { fetchRecord, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatCurrency } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 const statusMeta: Record<string, { variant: 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'; label: string }> = {
   draft: { variant: 'default', label: 'مسودة' },
@@ -43,6 +43,7 @@ interface ProjectOption { id: string; name: string; }
 interface ChangeOrderForm { project_id: string; title: string; description: string; change_amount: number; status: string; }
 
 export default function ChangeOrdersPage() {
+  const { money } = useCompanyMoney();
   const [rows, setRows] = useState<ChangeOrderRow[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -127,9 +128,9 @@ export default function ChangeOrdersPage() {
     { key: 'number', label: 'الرقم', render: (row: ChangeOrderRow) => formatDocumentNumber('change_order', row.number) },
     { key: 'title', label: 'العنوان' },
     { key: 'projects', label: 'المشروع', render: (r: ChangeOrderRow) => r.projects?.name || r.project_id },
-    { key: 'base_contract_amount', label: 'العقد الأساسي', render: (r: ChangeOrderRow) => formatCurrency(r.base_contract_amount ?? 0) },
-    { key: 'change_amount', label: 'قيمة التغيير', render: (r: ChangeOrderRow) => <span className={r.change_amount >= 0 ? 'text-success font-bold' : 'text-danger font-bold'}>{formatCurrency(r.change_amount)}</span> },
-    { key: 'new_contract_amount', label: 'العقد بعد التعديل', render: (r: ChangeOrderRow) => <span className="font-bold">{formatCurrency(r.new_contract_amount)}</span> },
+    { key: 'base_contract_amount', label: 'العقد الأساسي', render: (r: ChangeOrderRow) => money(r.base_contract_amount ?? 0) },
+    { key: 'change_amount', label: 'قيمة التغيير', render: (r: ChangeOrderRow) => <span className={r.change_amount >= 0 ? 'text-success font-bold' : 'text-danger font-bold'}>{money(r.change_amount)}</span> },
+    { key: 'new_contract_amount', label: 'العقد بعد التعديل', render: (r: ChangeOrderRow) => <span className="font-bold">{money(r.new_contract_amount)}</span> },
     { key: 'status', label: 'الحالة', render: (r: ChangeOrderRow) => { const m = statusMeta[r.status] || statusMeta.draft; return <Badge variant={m.variant}>{m.label}</Badge>; } },
     {
       key: 'actions', label: 'إجراءات',

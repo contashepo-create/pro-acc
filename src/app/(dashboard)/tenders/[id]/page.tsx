@@ -14,9 +14,9 @@ import { Textarea } from '@/components/ui/Textarea';
 import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { parseCompanyVatRate, vatOnAmount, vatPercentLabel } from '@/lib/company-vat';
-
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface TenderDetail {
   id: string;
@@ -78,6 +78,7 @@ const EXPENSE_FORM_OPTIONS = [
 ];
 
 export default function TenderDetailPage() {
+  const { money } = useCompanyMoney();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
@@ -260,7 +261,7 @@ export default function TenderDetailPage() {
       {activeTab === 'overview' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <InfoCard icon={<Hash size={16} />} label="رقم المرجع" value={tender.reference_number || '—'} />
-          <InfoCard icon={<Banknote size={16} />} label="القيمة التقديرية" value={tender.estimated_value ? formatCurrency(tender.estimated_value) : '—'} />
+          <InfoCard icon={<Banknote size={16} />} label="القيمة التقديرية" value={tender.estimated_value ? money(tender.estimated_value) : '—'} />
           <InfoCard icon={<Percent size={16} />} label="احتمالية الفوز" value={tender.win_probability != null ? `${tender.win_probability}%` : '—'} />
           <InfoCard icon={<Calendar size={16} />} label="موعد التقديم" value={tender.submission_deadline ? formatDate(tender.submission_deadline) : '—'} />
           <InfoCard icon={<Calendar size={16} />} label="تاريخ الفتح" value={tender.opening_date ? formatDate(tender.opening_date) : '—'} />
@@ -281,15 +282,15 @@ export default function TenderDetailPage() {
           <div className="md:col-span-3 grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-bg-card rounded-xl border border-border p-4">
               <div className="text-xs text-text-secondary mb-1">إجمالي بنود التكلفة</div>
-              <div className="text-lg font-bold">{formatCurrency(tender.total_cost || 0)}</div>
+              <div className="text-lg font-bold">{money(tender.total_cost || 0)}</div>
             </div>
             <div className="bg-bg-card rounded-xl border border-border p-4">
               <div className="text-xs text-text-secondary mb-1">المصاريف الفعلية</div>
-              <div className="text-lg font-bold">{formatCurrency(tender.total_expenses || 0)}</div>
+              <div className="text-lg font-bold">{money(tender.total_expenses || 0)}</div>
             </div>
             <div className="bg-bg-card rounded-xl border border-border p-4">
               <div className="text-xs text-text-secondary mb-1">القيمة التقديرية</div>
-              <div className="text-lg font-bold">{formatCurrency(tender.bid_amount || 0)}</div>
+              <div className="text-lg font-bold">{money(tender.bid_amount || 0)}</div>
             </div>
             <div className="bg-bg-card rounded-xl border border-border p-4">
               <div className="text-xs text-text-secondary mb-1">هامش الربح</div>
@@ -316,14 +317,14 @@ export default function TenderDetailPage() {
                     <tr key={item.id} className="border-t border-border">
                       <td className="p-3"><Badge variant="info">{item.category}</Badge></td>
                       <td className="p-3">{item.description || '—'}</td>
-                      <td className="p-3 text-left font-medium">{formatCurrency(item.amount)}</td>
+                      <td className="p-3 text-left font-medium">{money(item.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-bg-hover">
                     <td colSpan={2} className="p-3 font-bold">الإجمالي</td>
-                    <td className="p-3 text-left font-bold">{formatCurrency(tender.total_cost || 0)}</td>
+                    <td className="p-3 text-left font-bold">{money(tender.total_cost || 0)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -360,16 +361,16 @@ export default function TenderDetailPage() {
                       <td className="p-3"><Badge variant="warning">{EXPENSE_LABELS[exp.expense_type] || exp.expense_type}</Badge></td>
                       <td className="p-3">{exp.description || '—'}</td>
                       <td className="p-3">{formatDate(exp.date)}</td>
-                      <td className="p-3 text-left">{formatCurrency(exp.amount)}</td>
-                      <td className="p-3 text-left">{formatCurrency(exp.vat_amount)}</td>
-                      <td className="p-3 text-left font-medium">{formatCurrency(exp.amount + exp.vat_amount)}</td>
+                      <td className="p-3 text-left">{money(exp.amount)}</td>
+                      <td className="p-3 text-left">{money(exp.vat_amount)}</td>
+                      <td className="p-3 text-left font-medium">{money(exp.amount + exp.vat_amount)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-bg-hover">
                     <td colSpan={5} className="p-3 font-bold">الإجمالي</td>
-                    <td className="p-3 text-left font-bold">{formatCurrency(tender.total_expenses || 0)}</td>
+                    <td className="p-3 text-left font-bold">{money(tender.total_expenses || 0)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -409,7 +410,7 @@ export default function TenderDetailPage() {
                       onClick={() => router.push(`/bonds/${bond.id}`)}>
                       <td className="p-3 font-medium">{bond.title}</td>
                       <td className="p-3"><Badge variant="accent">{bond.type}</Badge></td>
-                      <td className="p-3 text-left">{formatCurrency(bond.amount)}</td>
+                      <td className="p-3 text-left">{money(bond.amount)}</td>
                       <td className="p-3"><Badge variant={bond.status === 'active' ? 'success' : 'default'}>{bond.status}</Badge></td>
                       <td className="p-3">{formatDate(bond.expiry_date)}</td>
                     </tr>

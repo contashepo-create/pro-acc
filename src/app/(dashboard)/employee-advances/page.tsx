@@ -12,9 +12,10 @@ import { Textarea } from '@/components/ui/Textarea';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface AdvanceRow {
   id: string;
@@ -30,6 +31,7 @@ interface BankSafeOption { id: string; name: string; is_active?: boolean; }
 interface AdvanceForm { employee_id: string; amount: number; date: string; reason: string; bank_safe_id: string; }
 
 export default function EmployeeAdvancesPage() {
+  const { money } = useCompanyMoney();
   const [advances, setAdvances] = useState<AdvanceRow[]>([]);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [banks, setBanks] = useState<BankSafeOption[]>([]);
@@ -129,8 +131,8 @@ export default function EmployeeAdvancesPage() {
 
   const columns = [
     { key: 'employee_name', label: 'الموظف', sortable: true },
-    { key: 'amount', label: 'المبلغ', render: (row: AdvanceRow) => formatCurrency(row.amount) },
-    { key: 'remaining_amount', label: 'المتبقي', render: (row: AdvanceRow) => formatCurrency(row.remaining_amount ?? 0) },
+    { key: 'amount', label: 'المبلغ', render: (row: AdvanceRow) => money(row.amount) },
+    { key: 'remaining_amount', label: 'المتبقي', render: (row: AdvanceRow) => money(row.remaining_amount ?? 0) },
     { key: 'date', label: 'التاريخ', render: (row: AdvanceRow) => formatDate(row.date) },
     { key: 'reason', label: 'السبب' },
     {

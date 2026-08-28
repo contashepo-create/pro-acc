@@ -12,11 +12,12 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface ReceiptRow {
   id: string;
@@ -45,6 +46,7 @@ interface ReceiptForm {
 interface CurrencyOption { id: string; code: string; rate: number; is_base: boolean; }
 
 export default function ReceiptPage() {
+  const { money } = useCompanyMoney();
   const [receipts, setReceipts] = useState<ReceiptRow[]>([]);
   const [banks, setBanks] = useState<BankOption[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
@@ -202,7 +204,7 @@ export default function ReceiptPage() {
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: ReceiptRow) => formatDate(row.date) },
     { key: 'receipt_type', label: 'النوع', sortable: true, render: (row: ReceiptRow) => typeBadge(row.receipt_type) },
     { key: 'contact_name', label: 'الطرف', sortable: true },
-    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: ReceiptRow) => formatCurrency(row.amount) },
+    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: ReceiptRow) => money(row.amount) },
     { key: 'bank_name', label: 'الخزينة/البنك', sortable: true },
     { key: 'status', label: 'الحالة', render: (row: ReceiptRow) => (
       <Badge variant={row.status === 'approved' ? 'success' : row.status === 'rejected' ? 'danger' : 'warning'}>

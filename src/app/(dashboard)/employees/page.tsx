@@ -12,8 +12,9 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface EmployeeRow {
   id: string;
@@ -29,6 +30,7 @@ interface EmployeeRow {
 interface EmployeeForm { name: string; phone: string; email: string; salary: number; department: string; position: string; hire_date: string; }
 
 export default function EmployeesPage() {
+  const { money } = useCompanyMoney();
   const [employees, setEmployees] = useState<EmployeeRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -155,7 +157,7 @@ export default function EmployeesPage() {
     { key: 'phone', label: 'الجوال' },
     { key: 'department', label: 'القسم' },
     { key: 'position', label: 'الوظيفة' },
-    { key: 'salary', label: 'الراتب', sortable: true, render: (row: EmployeeRow) => formatCurrency(row.salary ?? 0) },
+    { key: 'salary', label: 'الراتب', sortable: true, render: (row: EmployeeRow) => money(row.salary ?? 0) },
     { key: 'hire_date', label: 'تاريخ التعيين', render: (row: EmployeeRow) => formatDate(row.hire_date) },
     {
       key: 'actions',

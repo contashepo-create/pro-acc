@@ -37,8 +37,9 @@ export async function POST(request: NextRequest) {
     if (snapshotError) throw snapshotError;
     const snapshot = (data || {}) as Record<string, unknown>;
     const { data: companyMoney } = await s.from('companies')
-      .select('currency_symbol').eq('id', auth.companyId).maybeSingle();
-    const money = String((companyMoney as { currency_symbol?: string } | null)?.currency_symbol || '').trim() || 'ر.س';
+      .select('currency_symbol, country_code, locale, currency_code').eq('id', auth.companyId).maybeSingle();
+    const { companyMoneyParts } = await import('@/lib/company-money');
+    const money = companyMoneyParts(companyMoney as { currency_symbol?: string; country_code?: string; locale?: string; currency_code?: string } | null).symbol;
 
     if (financialIntent) {
       const revenue = amount(snapshot.revenue);

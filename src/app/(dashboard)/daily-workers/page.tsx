@@ -11,15 +11,16 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatCurrency } from '@/lib/utils';
 import { fetchRecord, recordOrRow } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface WorkerRow { id: string; name: string; phone?: string; daily_wage?: number; is_active?: boolean; }
 interface WorkerForm { name: string; phone: string; daily_wage: number; }
 
 export default function DailyWorkersPage() {
+  const { money } = useCompanyMoney();
   const [rows, setRows] = useState<WorkerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -88,7 +89,7 @@ export default function DailyWorkersPage() {
   const columns = [
     { key: 'name', label: 'اسم العامل', sortable: true },
     { key: 'phone', label: 'الجوال', render: (r: WorkerRow) => <span dir="ltr">{r.phone || '—'}</span> },
-    { key: 'daily_wage', label: 'الأجر اليومي', render: (r: WorkerRow) => formatCurrency(r.daily_wage ?? 0) },
+    { key: 'daily_wage', label: 'الأجر اليومي', render: (r: WorkerRow) => money(r.daily_wage ?? 0) },
     { key: 'is_active', label: 'الحالة', render: (r: WorkerRow) => <Badge variant={r.is_active ? 'success' : 'danger'}>{r.is_active ? 'نشط' : 'معطّل'}</Badge> },
     { key: 'actions', label: 'إجراءات', render: (r: WorkerRow) => <ActionButtons item={r} onEdit={() => handleEdit(r)} onDelete={() => handleDelete(r)} /> },
   ];

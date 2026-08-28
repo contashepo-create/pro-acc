@@ -255,9 +255,11 @@ export async function sendInvoiceReminder(companyId: string, userId: string, inv
   if (reservationError) throw reservationError;
   const row = reservation as Record<string, unknown>;
   const { data: companyMoney } = await s.from('companies')
-    .select('currency_symbol, locale').eq('id', companyId).maybeSingle();
-  const money = String((companyMoney as { currency_symbol?: string } | null)?.currency_symbol || '').trim() || 'ر.س';
-  const locale = String((companyMoney as { locale?: string } | null)?.locale || '').trim() || 'ar-SA';
+    .select('currency_symbol, locale, country_code, currency_code').eq('id', companyId).maybeSingle();
+  const { companyMoneyParts } = await import('@/lib/company-money');
+  const parts = companyMoneyParts(companyMoney as { currency_symbol?: string; locale?: string; country_code?: string; currency_code?: string } | null);
+  const money = parts.symbol;
+  const locale = parts.locale;
   const channel = String(row.channel) as Channel;
   const recipient = channel === 'whatsapp' ? String(row.phone || '') : String(row.email || '');
   const dueDate = String(row.due_date || '');

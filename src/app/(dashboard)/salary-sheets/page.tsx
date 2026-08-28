@@ -11,10 +11,11 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface SalarySheetRow {
   id: string;
@@ -29,6 +30,7 @@ interface EmployeeOption { id: string; name: string; }
 interface SalarySheetForm { name: string; month: number; year: number; date: string; }
 
 export default function SalarySheetsPage() {
+  const { money } = useCompanyMoney();
   const [sheets, setSheets] = useState<SalarySheetRow[]>([]);
   const [, setEmployees] = useState<EmployeeOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,7 +128,7 @@ export default function SalarySheetsPage() {
     { key: 'month', label: 'الشهر' },
     { key: 'year', label: 'السنة' },
     { key: 'date', label: 'التاريخ', render: (row: SalarySheetRow) => formatDate(row.date) },
-    { key: 'total_amount', label: 'الإجمالي', render: (row: SalarySheetRow) => formatCurrency(row.total_amount ?? 0) },
+    { key: 'total_amount', label: 'الإجمالي', render: (row: SalarySheetRow) => money(row.total_amount ?? 0) },
     { key: 'status', label: 'الحالة', render: (row: SalarySheetRow) => statusBadge(row.status ?? '') },
     {
       key: 'actions',

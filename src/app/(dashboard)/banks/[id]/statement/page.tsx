@@ -3,13 +3,13 @@
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { PrintTemplate, type PrintColumn } from '@/components/ui/PrintTemplate';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface Row { seq: number; date: string; number: string; description: string; debit: number; credit: number; balance: number }
 interface Totals { debit: number; credit: number; balance: number }
 
-const fmt = (n: number) => n.toLocaleString('ar-SA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
 export default function BankStatementPage() {
+  const { money } = useCompanyMoney();
   const params = useParams();
   const [rows, setRows] = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals | null>(null);
@@ -34,9 +34,9 @@ export default function BankStatementPage() {
     { key: 'date', label: 'التاريخ' },
     { key: 'number', label: 'رقم القيد', align: 'center' },
     { key: 'description', label: 'البيان' },
-    { key: 'debit', label: 'مدين (قبض)', render: (r) => r.debit ? fmt(r.debit) : '—', align: 'end' },
-    { key: 'credit', label: 'دائن (صرف)', render: (r) => r.credit ? fmt(r.credit) : '—', align: 'end' },
-    { key: 'balance', label: 'الرصيد', render: (r) => fmt(r.balance), align: 'end' },
+    { key: 'debit', label: 'مدين (قبض)', render: (r) => r.debit ? money(r.debit) : '—', align: 'end' },
+    { key: 'credit', label: 'دائن (صرف)', render: (r) => r.credit ? money(r.credit) : '—', align: 'end' },
+    { key: 'balance', label: 'الرصيد', render: (r) => money(r.balance), align: 'end' },
   ];
 
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
@@ -50,12 +50,12 @@ export default function BankStatementPage() {
       extraInfo={[
         { label: 'عدد الحركات', value: String(rows.length) },
         ...(totals ? [
-          { label: 'إجمالي مدين', value: fmt(totals.debit) },
-          { label: 'إجمالي دائن', value: fmt(totals.credit) },
-          { label: 'الرصيد النهائي', value: fmt(totals.balance) },
+          { label: 'إجمالي مدين', value: money(totals.debit) },
+          { label: 'إجمالي دائن', value: money(totals.credit) },
+          { label: 'الرصيد النهائي', value: money(totals.balance) },
         ] : []),
       ]}
-      footerTotals={totals ? [{ label: 'الرصيد الختامي', value: fmt(totals.balance) }] : undefined}
+      footerTotals={totals ? [{ label: 'الرصيد الختامي', value: money(totals.balance) }] : undefined}
     />
   );
 }

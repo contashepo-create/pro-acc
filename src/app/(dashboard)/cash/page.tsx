@@ -13,9 +13,10 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface CashTransactionRow {
   id: string;
@@ -37,6 +38,7 @@ function groupHeader(label: string) {
 }
 
 export default function CashPage() {
+  const { money } = useCompanyMoney();
   const [transactions, setTransactions] = useState<CashTransactionRow[]>([]);
   const [banks, setBanks] = useState<BankSafeOption[]>([]);
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
@@ -269,7 +271,7 @@ export default function CashPage() {
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: CashTransactionRow) => formatDate(row.date) },
     { key: 'type', label: 'النوع', sortable: true, render: (row: CashTransactionRow) => typeBadge(row.type) },
     { key: 'account_name', label: 'الحساب', sortable: true },
-    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: CashTransactionRow) => formatCurrency(row.amount) },
+    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: CashTransactionRow) => money(row.amount) },
     { key: 'reason', label: 'البيان', sortable: true },
     {
       key: 'actions',

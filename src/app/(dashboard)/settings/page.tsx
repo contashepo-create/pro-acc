@@ -17,6 +17,7 @@ import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
 import { getCountryConfig } from '@/lib/countries';
+import { companyMoneyParts } from '@/lib/company-money';
 import { defaultFiscalStart } from '@/lib/fiscal-calendar';
 import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
 import { taxQrCaption } from '@/lib/tax-authority';
@@ -51,9 +52,10 @@ export default function SettingsPage() {
   const [decimalPlaces, setDecimalPlaces] = useState('2');
   const [autoAllocateFifo, setAutoAllocateFifo] = useState(false);
   const [vatRate, setVatRate] = useState('15');
-  const [countryCode, setCountryCode] = useState('SA');
-  const [currencySymbol, setCurrencySymbol] = useState('ر.س');
-  const [currencyCode, setCurrencyCode] = useState('SAR');
+  const [countryCode, setCountryCode] = useState(company?.country_code || 'SA');
+  const initialMoney = companyMoneyParts(company);
+  const [currencySymbol, setCurrencySymbol] = useState(initialMoney.symbol);
+  const [currencyCode, setCurrencyCode] = useState(initialMoney.code);
   
   // Notifications
   const [notifInvoice, setNotifInvoice] = useState(true);
@@ -153,8 +155,11 @@ interface TelegramSettings {
             setAutoAllocateFifo(v === true || v === 'true' || v === '1');
           }
           if (c?.country_code) setCountryCode(c.country_code);
-          if (c?.currency_symbol) setCurrencySymbol(c.currency_symbol);
-          if (c?.currency_code) setCurrencyCode(c.currency_code);
+          if (c) {
+            const parts = companyMoneyParts(c);
+            setCurrencySymbol(parts.symbol);
+            setCurrencyCode(parts.code);
+          }
           if (c) setVatRate(vatPercentLabel(parseCompanyVatRate(c)));
           if (s.notif_invoice !== undefined) setNotifInvoice(s.notif_invoice === 'true' || s.notif_invoice === true);
           if (s.notif_due !== undefined) setNotifDue(s.notif_due === 'true' || s.notif_due === true);

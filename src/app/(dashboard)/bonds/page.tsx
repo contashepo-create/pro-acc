@@ -13,8 +13,9 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { parseCompanyVatRate, vatOnAmount, vatPercentLabel } from '@/lib/company-vat';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface BondRow {
   id: string;
@@ -50,6 +51,7 @@ const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' 
 };
 
 export default function BondsPage() {
+  const { money, code: companyCurrency } = useCompanyMoney();
   const [bonds, setBonds] = useState<BondRow[]>([]);
   const [banksSafes, setBanksSafes] = useState<BankSafe[]>([]);
   const [tenders, setTenders] = useState<TenderOption[]>([]);
@@ -63,7 +65,7 @@ export default function BondsPage() {
   const [typeFilter, setTypeFilter] = useState('');
 
   const [form, setForm] = useState({
-    title: '', type: 'bid_bond', amount: '', currency: 'SAR',
+    title: '', type: 'bid_bond', amount: '', currency: companyCurrency,
     issue_date: new Date().toISOString().split('T')[0], expiry_date: '',
     issuing_bank: '', bank_safe_id: '', beneficiary_name: '',
     reference_number: '', commission: '', vat_amount: '', margin_amount: '', notes: '',
@@ -119,13 +121,13 @@ export default function BondsPage() {
       const res = await fetch('/api/bonds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, currency: companyCurrency }),
       });
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
         setForm({
-          title: '', type: 'bid_bond', amount: '', currency: 'SAR',
+          title: '', type: 'bid_bond', amount: '', currency: companyCurrency,
           issue_date: new Date().toISOString().split('T')[0], expiry_date: '',
           issuing_bank: '', bank_safe_id: '', beneficiary_name: '',
           reference_number: '', commission: '', vat_amount: '', margin_amount: '', notes: '',
@@ -142,7 +144,7 @@ export default function BondsPage() {
       <a href={`/bonds/${row.id}`} className="text-accent hover:underline font-medium">{row.title}</a>
     )},
     { key: 'type', label: 'النوع', render: (row: BondRow) => <Badge variant="accent">{TYPE_LABELS[row.type] || row.type}</Badge> },
-    { key: 'amount', label: 'المبلغ', render: (row: BondRow) => formatCurrency(row.amount) },
+    { key: 'amount', label: 'المبلغ', render: (row: BondRow) => money(row.amount) },
     { key: 'beneficiary_name', label: 'المستفيد', render: (row: BondRow) => row.beneficiary_name || '—' },
     { key: 'expiry_date', label: 'الانتهاء', render: (row: BondRow) => {
       if (!row.expiry_date) return '—';
