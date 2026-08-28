@@ -96,12 +96,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const body = await parseBody(request);
+    const body = await parseBody<Row>(request);
 
     const collectedAmount = Number(body.collected_amount ?? body.collectedAmount ?? 0);
     const bankSafeId = body.bank_safe_id || body.bankSafeId || null;
 
-    const bodyToValidate = { ...body, collected_amount: collectedAmount, bank_safe_id: bankSafeId || null };
+    const bodyToValidate: Row = { ...body, collected_amount: collectedAmount, bank_safe_id: bankSafeId || null };
     delete bodyToValidate.collectedAmount;
     delete bodyToValidate.bankSafeId;
     delete bodyToValidate.payment_method;
