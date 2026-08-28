@@ -1,7 +1,7 @@
 const PREFIXES: Record<string, string> = {
   sales_invoice: 'INV', purchase_invoice: 'PI', purchase_order: 'PO',
   receipt_voucher: 'RV', disbursement_voucher: 'DV', journal: 'JE', quotation: 'QT',
-  credit_note: 'CN', debit_note: 'DN', change_order: 'CO', progress_billing: 'PB', pos_sale: 'POS',
+  credit_note: 'CN', debit_note: 'DN', purchase_return: 'PR', change_order: 'CO', progress_billing: 'PB', pos_sale: 'POS',
   cash_transaction: 'CT', inventory_transaction: 'STK', bank_reconciliation: 'BR',
 };
 

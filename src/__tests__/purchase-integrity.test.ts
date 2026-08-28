@@ -117,6 +117,27 @@ describe('purchase invoice atomic boundary', () => {
       p_items: [{ description: 'حديد', quantity: 2, unit_price: 100 }], p_tax_rate: 0.15,
     });
     expect(rpc('create_purchase_invoice_atomic')!.params).not.toHaveProperty('p_total');
+    expect(rpc('create_purchase_invoice_atomic')!.params).toMatchObject({
+      p_paid_amount: 0,
+      p_bank_safe_id: null,
+    });
+  });
+
+  test('passes immediate supplier payment into the same invoice RPC', async () => {
+    const SAFE = '00000000-0000-4000-8000-0000000000b1';
+    const response = await invoicePOST(request(invoiceBody({ paid_amount: 50, bank_safe_id: SAFE })));
+    expect(response.status).toBe(201);
+    expect(rpc('create_purchase_invoice_atomic')!.params).toMatchObject({
+      p_paid_amount: 50,
+      p_bank_safe_id: SAFE,
+    });
+  });
+
+  test('rejects cash payment without a treasury or bank', async () => {
+    const response = await invoicePOST(request(invoiceBody({ paid_amount: 50 })));
+    expect(response.status).toBe(400);
+    expect((await response.json()).message).toContain('الخزينة');
+    expect(mockDb.rpcCalls).toHaveLength(0);
   });
 
   test('metadata update cannot manually manufacture a paid state', async () => {

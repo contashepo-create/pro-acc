@@ -20,6 +20,7 @@ import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
 import { companyDisplayMoney } from '@/lib/company-money';
 import { localDateISO } from '@/lib/fiscal-calendar';
 import { useAuthStore } from '@/store/auth-store';
+import { CashSettlementFields } from '@/components/accounting/CashSettlementFields';
 
 /**
  * الإشعارات الدائنة/المدينة — البديل النظامي عن تعديل الفاتورة.
@@ -54,12 +55,17 @@ interface NoteForm {
   date: string;
   vat_enabled: boolean;
   items: NoteItem[];
+  settlement_amount: string;
+  bank_safe_id: string;
 }
+interface BankSafeOption { id: string; name: string; type?: string; }
 
 const emptyForm = (): NoteForm => ({
   invoice_id: '', project_id: '', contact_id: '', reason: '',
   date: localDateISO(), vat_enabled: true,
   items: [{ description: '', quantity: 1, unit_price: 0 }],
+  settlement_amount: '0',
+  bank_safe_id: '',
 });
 
 export default function CreditNotesPage() {
@@ -78,20 +84,22 @@ export default function CreditNotesPage() {
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<NoteForm>(emptyForm());
   const [companyVatRate, setCompanyVatRate] = useState(0.15);
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [cnRes, dnRes, invRes, projRes, conRes, setRes] = await Promise.all([
+      const [cnRes, dnRes, invRes, projRes, conRes, setRes, bankRes] = await Promise.all([
         fetch('/api/credit-notes'),
         fetch('/api/debit-notes'),
         fetch('/api/invoices'),
         fetch('/api/projects'),
         fetch('/api/contacts'),
         fetch('/api/auth/me'),
+        fetch('/api/banks?pageSize=500'),
       ]);
-      const [cnJson, dnJson, invJson, projJson, conJson, setJson] = await Promise.all([
-        cnRes.json(), dnRes.json(), invRes.json(), projRes.json(), conRes.json(), setRes.json(),
+      const [cnJson, dnJson, invJson, projJson, conJson, setJson, bankJson] = await Promise.all([
+        cnRes.json(), dnRes.json(), invRes.json(), projRes.json(), conRes.json(), setRes.json(), bankRes.json(),
       ]);
       if (cnJson.success) setCreditNotes(cnJson.data?.credit_notes || []);
       else setError(cnJson.message || 'فشل');
@@ -100,6 +108,7 @@ export default function CreditNotesPage() {
       if (projJson.success) setProjects(projJson.data?.projects || []);
       if (conJson.success) setContacts(conJson.data?.contacts || []);
       if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
+      if (bankJson.success) setBanks(bankJson.data?.banks || []);
     } catch { setError('فشل تحميل البيانات'); }
     finally { setLoading(false); }
   }, []);
@@ -142,6 +151,10 @@ export default function CreditNotesPage() {
           date: form.date,
           tax_rate: form.vat_enabled ? companyVatRate : 0,
           items: validItems,
+          ...(tab === 'credit'
+            ? { refund_amount: Number(form.settlement_amount) || 0 }
+            : { collected_amount: Number(form.settlement_amount) || 0 }),
+          bank_safe_id: form.bank_safe_id || null,
         }),
       });
       const json = await res.json();

@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
       || (dateFrom && dateTo && dateFrom > dateTo)) return error('فترة الفواتير غير صالحة');
 
     let query = s.from('invoices')
-      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at', { count: 'exact' })
+      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, paid_amount, status, notes, journal_entry_id, zatca_qr, created_at', { count: 'exact' })
       .eq('company_id', auth.companyId)
       .is('deleted_at', null);
     if (status) query = query.eq('status', status);
@@ -55,6 +55,7 @@ export async function GET(request: NextRequest) {
     }
     const invoices = (data || []).map((invoice: Row) => ({
       ...invoice,
+      paid_amount: Number(invoice.paid_amount) || 0,
       client_name: contactNames[String(invoice.contact_id)] || '',
     }));
     return success({
@@ -97,14 +98,11 @@ export async function POST(request: NextRequest) {
 
     const body = await parseBody(request);
 
-    // استخلاص حقول التحصيل النقدي الفوري المسبق لتلافي تعطل الـ Zod Schema Strict
-    const collectedAmount = Number(body.collected_amount || body.collectedAmount || 0);
+    const collectedAmount = Number(body.collected_amount ?? body.collectedAmount ?? 0);
     const bankSafeId = body.bank_safe_id || body.bankSafeId || null;
 
-    const bodyToValidate = { ...body };
-    delete bodyToValidate.collected_amount;
+    const bodyToValidate = { ...body, collected_amount: collectedAmount, bank_safe_id: bankSafeId || null };
     delete bodyToValidate.collectedAmount;
-    delete bodyToValidate.bank_safe_id;
     delete bodyToValidate.bankSafeId;
     delete bodyToValidate.payment_method;
     delete bodyToValidate.paymentMethod;
@@ -115,9 +113,8 @@ export async function POST(request: NextRequest) {
     const { clientId, projectId, date, dueDate, items, vatRate, notes, vatEnabled } = parsed.data;
     const currencyCode = parsed.data.currency_code || null;
     const exchangeRate = parsed.data.exchange_rate ?? null;
-    if (!Number.isFinite(collectedAmount) || collectedAmount < 0
-      || Math.abs(collectedAmount * 100 - Math.round(collectedAmount * 100)) > 1e-8) {
-      return error('مبلغ التحصيل غير صالح');
+    if (collectedAmount > 0 && !bankSafeId) {
+      return error('حدد الخزينة أو البنك للتحصيل النقدي');
     }
 
     // Return the actual accounting reason to the user instead of allowing the

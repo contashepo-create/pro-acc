@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import type { Row } from '@/lib/types';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, FileMinus } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -23,6 +23,7 @@ import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
 import { openPrintWindow } from '@/lib/print';
 import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { CashSettlementFields } from '@/components/accounting/CashSettlementFields';
 
 interface PurchaseItem {
   description: string;
@@ -66,7 +67,10 @@ interface PurchaseInvoiceForm {
   other_expenses?: OtherExpense[];
   payment_account_id?: string;
   withholding_percent?: number;
+  paid_amount?: string;
+  bank_safe_id?: string;
 }
+interface BankSafeOption { id: string; name: string; type?: string; }
 interface SupplierOption { id: string; name: string; }
 interface PurchaseOrderOption {
   id: string;
@@ -113,24 +117,35 @@ export default function PurchaseInvoicesPage() {
     other_expenses: [] as { description: string; amount: number }[],
     payment_account_id: '',
     withholding_percent: 0,
+    paid_amount: '0',
+    bank_safe_id: '',
   });
   const [form, setForm] = useState<PurchaseInvoiceForm>(emptyForm(15));
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
+  const [returningInvoice, setReturningInvoice] = useState<PurchaseInvoiceRow | null>(null);
+  const [returnReason, setReturnReason] = useState('');
+  const [returnRefund, setReturnRefund] = useState('0');
+  const [returnBank, setReturnBank] = useState('');
+  const [returnSaving, setReturnSaving] = useState(false);
+  const [returnError, setReturnError] = useState('');
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
-      const [invRes, supRes, ordRes, setRes] = await Promise.all([
+      const [invRes, supRes, ordRes, setRes, bankRes] = await Promise.all([
         fetch('/api/purchases/invoices'),
         fetch('/api/contacts?type=supplier'),
         fetch('/api/purchases/orders'),
         fetch('/api/settings'),
+        fetch('/api/banks?pageSize=500'),
       ]);
-      const [invJson, supJson, ordJson, setJson] = await Promise.all([
+      const [invJson, supJson, ordJson, setJson, bankJson] = await Promise.all([
         invRes.json(),
         supRes.json(),
         ordRes.json(),
         setRes.json(),
+        bankRes.json(),
       ]);
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
@@ -142,6 +157,7 @@ export default function PurchaseInvoicesPage() {
         const wh = setJson.data?.withholding_enabled;
         setWithholdingEnabled(wh === true || wh === 'true' || setJson.data?.company?.country_code === 'EG');
       }
+      if (bankJson.success) setBanks(bankJson.data?.banks || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -231,6 +247,8 @@ export default function PurchaseInvoicesPage() {
             other_expenses: (form.other_expenses || []).filter((o: OtherExpense) => String(o.description || '').trim() && Number(o.amount) > 0),
             payment_account_id: form.payment_account_id || null,
             withholding_rate: withholdingEnabled ? (Number(form.withholding_percent) || 0) / 100 : 0,
+            paid_amount: Number(form.paid_amount) || 0,
+            bank_safe_id: form.bank_safe_id || null,
           };
 
       const url = editingInvoice ? `/api/purchases/invoices/${editingInvoice.id}` : '/api/purchases/invoices';
@@ -385,6 +403,23 @@ export default function PurchaseInvoicesPage() {
       key: 'actions',
       label: 'إجراءات',
       render: (row: PurchaseInvoiceRow) => (
+        <div className="flex items-center gap-1">
+          {row.status !== 'cancelled' && (
+            <button
+              type="button"
+              title="مرتجع مشتريات"
+              className="p-2 rounded-md text-success hover:bg-success/10 transition-colors"
+              onClick={() => {
+                setReturningInvoice(row);
+                setReturnReason('');
+                setReturnRefund('0');
+                setReturnBank('');
+                setReturnError('');
+              }}
+            >
+              <FileMinus size={16} />
+            </button>
+          )}
         <ActionButtons
           item={row}
           onPrint={() => handlePrint(row)}
@@ -399,6 +434,7 @@ export default function PurchaseInvoicesPage() {
           onEdit={row.status !== 'cancelled' ? handleEdit : undefined}
           onDelete={!row.journal_entry_id && (parseFloat(String(row.paid_amount ?? '')) || 0) <= 0 ? handleDelete : undefined}
         />
+        </div>
       ),
     },
   ];
@@ -534,6 +570,18 @@ export default function PurchaseInvoicesPage() {
             )}
           </div>
 
+          {!isEdit && (
+            <CashSettlementFields
+              mode="pay"
+              total={grandTotal - otherExpensesTotal}
+              amount={form.paid_amount || '0'}
+              bankSafeId={form.bank_safe_id || ''}
+              banks={banks}
+              money={money}
+              onAmountChange={(value) => setForm({ ...form, paid_amount: value })}
+              onBankChange={(value) => setForm({ ...form, bank_safe_id: value })}
+            />
+          )}
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="ملاحظات الفاتورة" />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>
@@ -570,6 +618,67 @@ export default function PurchaseInvoicesPage() {
           </div>
         ) : null}
       />
+      <Modal
+        isOpen={!!returningInvoice}
+        onClose={() => setReturningInvoice(null)}
+        title={returningInvoice ? `مرتجع مشتريات — ${formatDocumentNumber('purchase_invoice', returningInvoice.number || returningInvoice.invoice_number)}` : 'مرتجع مشتريات'}
+        footer={(
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => setReturningInvoice(null)}>إلغاء</Button>
+            <Button
+              disabled={returnSaving}
+              onClick={async () => {
+                if (!returningInvoice) return;
+                setReturnSaving(true);
+                setReturnError('');
+                try {
+                  const res = await fetch('/api/purchases/returns', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      purchase_invoice_id: returningInvoice.id,
+                      date: new Date().toISOString().split('T')[0],
+                      reason: returnReason,
+                      refund_amount: Number(returnRefund) || 0,
+                      bank_safe_id: returnBank || null,
+                    }),
+                  });
+                  const json = await res.json();
+                  if (json.success) {
+                    toast.success('تم تسجيل مرتجع المشتريات');
+                    setReturningInvoice(null);
+                    fetchData();
+                  } else setReturnError(json.message || 'فشل تسجيل المرتجع');
+                } catch {
+                  setReturnError('خطأ في الاتصال');
+                } finally {
+                  setReturnSaving(false);
+                }
+              }}
+            >
+              {returnSaving ? 'جاري الحفظ...' : 'حفظ المرتجع'}
+            </Button>
+          </div>
+        )}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-text-secondary leading-6">
+            المرتجع يخفض ذمة المورد ويعكس الضريبة وتكلفة الشراء. إن كان المورد قد سُدّد له نقداً يمكن قبض الرد الآن، وإلا يبقى الرصيد في ذمة المورد.
+          </p>
+          <Textarea label="سبب المرتجع" value={returnReason} onChange={(e) => setReturnReason(e.target.value)} placeholder="سبب الإرجاع" />
+          <CashSettlementFields
+            mode="refund"
+            total={Number(returningInvoice?.total) || 0}
+            amount={returnRefund}
+            bankSafeId={returnBank}
+            banks={banks}
+            money={money}
+            onAmountChange={setReturnRefund}
+            onBankChange={setReturnBank}
+          />
+          {returnError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{returnError}</div>}
+        </div>
+      </Modal>
     </div>
   );
 }

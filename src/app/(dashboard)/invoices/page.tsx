@@ -19,6 +19,7 @@ import { useAuthStore } from '@/store/auth-store';
 import { companyDisplayMoney } from '@/lib/company-money';
 import { formatDocumentNumber } from '@/lib/document-number';
 import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { CashSettlementFields } from '@/components/accounting/CashSettlementFields';
 
 interface InvoiceItem {
   id?: string;
@@ -61,8 +62,11 @@ interface InvoiceForm {
   items: InvoiceItem[];
   currency_code: string;
   exchange_rate: string;
+  collected_amount: string;
+  bank_safe_id: string;
 }
 interface CurrencyOption { id: string; code: string; name: string; rate: number; is_base: boolean; }
+interface BankSafeOption { id: string; name: string; type?: string; }
 
 export default function InvoicesPage() {
   const { company } = useAuthStore();
@@ -90,22 +94,26 @@ export default function InvoicesPage() {
     items: [{ ...emptyItem }],
     currency_code: '',
     exchange_rate: '',
+    collected_amount: '0',
+    bank_safe_id: '',
   });
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
-      const [invRes, cliRes, projRes, stockRes, curRes, setRes] = await Promise.all([
+      const [invRes, cliRes, projRes, stockRes, curRes, setRes, bankRes] = await Promise.all([
         fetch('/api/invoices'),
         fetch('/api/clients'),
         fetch('/api/projects'),
         fetch('/api/inventory?items=1'),
         fetch('/api/currencies'),
         fetch('/api/auth/me'),
+        fetch('/api/banks?pageSize=500'),
       ]);
-      const [invJson, cliJson, projJson, stockJson, curJson, setJson] = await Promise.all([
-        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(), curRes.json(), setRes.json(),
+      const [invJson, cliJson, projJson, stockJson, curJson, setJson, bankJson] = await Promise.all([
+        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(), curRes.json(), setRes.json(), bankRes.json(),
       ]);
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
@@ -119,6 +127,7 @@ export default function InvoicesPage() {
       }
       if (curJson.success) setCurrencies(curJson.data || []);
       if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
+      if (bankJson.success) setBanks(bankJson.data?.banks || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -137,6 +146,8 @@ export default function InvoicesPage() {
       exchange_rate: '',
       vat_enabled: true,
       items: [{ ...emptyItem }],
+      collected_amount: '0',
+      bank_safe_id: '',
     });
     setSaveError('');
     setShowEditor(true);
@@ -175,6 +186,8 @@ export default function InvoicesPage() {
           currency_code: form.currency_code || undefined,
           exchange_rate: form.currency_code && form.exchange_rate ? Number(form.exchange_rate) : undefined,
           subtotal, vatRate, vatAmount, vatEnabled: form.vat_enabled, total, notes: form.notes,
+          collected_amount: Number(form.collected_amount) || 0,
+          bank_safe_id: form.bank_safe_id || null,
         }),
       });
       const json = await res.json();
@@ -582,6 +595,17 @@ export default function InvoicesPage() {
                     {form.vat_enabled ? `مفعّلة (${vatPct}%)` : 'معفاة'}
                   </Badge>
                 </div>
+
+                <CashSettlementFields
+                  mode="collect"
+                  total={total}
+                  amount={form.collected_amount}
+                  bankSafeId={form.bank_safe_id}
+                  banks={banks}
+                  money={money}
+                  onAmountChange={(value) => setForm({ ...form, collected_amount: value })}
+                  onBankChange={(value) => setForm({ ...form, bank_safe_id: value })}
+                />
               </div>
 
               {/* Action buttons */}
