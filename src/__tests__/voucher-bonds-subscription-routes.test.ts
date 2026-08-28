@@ -69,7 +69,7 @@ function baseDb() {
     users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
     companies: [{ id: C1, is_active: true }],
     subscriptions: [{ id: 's1', company_id: C1, status: 'active', end_date: '2099-01-01', plan_code: 'enterprise',
-      subscription_plans: { code: 'enterprise', features_modules: { projects: true, reports: true, bonds: true, receipts: true } } }],
+      subscription_plans: { code: 'enterprise', features_modules: { projects: true, reports: true, bonds: true, receipts: true, disbursements: true } } }],
     bonds: [], contacts: [], invoices: [],
   } as Record<string, Row[]>;
 }

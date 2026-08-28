@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     const { isHeaderAccount } = await import('@/lib/account-resolve');
     const { findAccountByCode } = await import('@/lib/account-code');
     const resolvedLines: Array<{
-      accountId: string; debit: number; credit: number; description: string | null; contactId: null; projectId: null;
+      accountId: string; debit: number; credit: number; description: string | null; contactId: string | null; projectId: string | null;
     }> = [];
     for (const line of lines) {
       const account = await findAccountByCode(s, auth.companyId, line.accountCode);
@@ -116,7 +116,9 @@ export async function POST(request: NextRequest) {
       if (isHeaderAccount(account)) return error(`الحساب ${account.code} حساب رئيسي ولا يُرحّل عليه`);
       resolvedLines.push({
         accountId: account.id, debit: line.debit, credit: line.credit,
-        description: line.description || null, contactId: null, projectId: null,
+        description: line.description || null,
+        contactId: line.contactId || null,
+        projectId: line.projectId || null,
       });
     }
     const { data: rpcResult, error: rpcError } = await s.rpc('create_journal_entry', {

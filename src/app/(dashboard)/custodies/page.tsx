@@ -16,6 +16,7 @@ import { ActionButtons } from '@/components/ui/ActionButtons';
 import { formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import { useCompanyMoney } from '@/hooks/use-company-money';
+import { localDateISO } from '@/lib/fiscal-calendar';
 
 interface CustodyRow {
   id: string;
@@ -54,7 +55,7 @@ export default function CustodiesPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<CustodyForm>({
-    employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0],
+    employee_id: '', amount: 0, date: localDateISO(),
     bank_safe_id: '', project_id: '', description: '',
   });
 
@@ -62,7 +63,7 @@ export default function CustodiesPage() {
     try {
       setLoading(true); setError('');
       const [custRes, empRes, bankRes, projRes] = await Promise.all([
-        fetch('/api/custodies'), fetch('/api/employees'), fetch('/api/banks'), fetch('/api/projects'),
+        fetch('/api/custodies'), fetch('/api/employees'), fetch('/api/banks?pageSize=500'), fetch('/api/projects'),
       ]);
       const [custJson, empJson, bankJson, projJson] = await Promise.all([
         custRes.json(), empRes.json(), bankRes.json(), projRes.json(),
@@ -102,7 +103,7 @@ export default function CustodiesPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false);
-        setForm({ employee_id: '', amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: '', project_id: '', description: '' });
+        setForm({ employee_id: '', amount: 0, date: localDateISO(), bank_safe_id: '', project_id: '', description: '' });
         toast.success('تم فتح ملف العهدة وترحيل القيد');
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -174,8 +175,8 @@ export default function CustodiesPage() {
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
             <Select label="الخزينة / البنك" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}
               options={[{ value: '', label: 'اختر المصدر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />
-            <Select label="المشروع (اختياري)" value={form.project_id} onChange={(v) => setForm({ ...form, project_id: v })}
-              options={[{ value: '', label: 'بدون مشروع' }, ...(Array.isArray(projects) ? projects : []).map((p: ProjectOption) => ({ value: p.id, label: p.name }))]} />
+            <Select label="المشروع (اختياري — تكلفة المشروع وإلا عام للشركة)" value={form.project_id} onChange={(v) => setForm({ ...form, project_id: v })}
+              options={[{ value: '', label: 'بدون مشروع — عام للشركة' }, ...(Array.isArray(projects) ? projects : []).map((p: ProjectOption) => ({ value: p.id, label: p.name }))]} />
             <Input label="الغرض" className="col-span-2" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}

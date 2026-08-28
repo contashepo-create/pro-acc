@@ -154,11 +154,18 @@ export const accountUpdateSchema = z.object({
 
 // --------------- Journal Entry ---------------
 
+const optionalUuid = z.preprocess(
+  (value) => (value === '' || value === undefined ? null : value),
+  z.string().uuid().nullable().optional(),
+);
+
 export const journalEntryLineSchema = z.object({
   accountCode: z.string().min(1, 'رمز الحساب مطلوب'),
   debit: moneyAmount({ label: 'المدين' }).default(0),
   credit: moneyAmount({ label: 'الدائن' }).default(0),
   description: z.string().optional(),
+  projectId: optionalUuid,
+  contactId: optionalUuid,
 }).refine(
   (line) => line.debit > 0 || line.credit > 0,
   { message: 'يجب إدخال مبلغ المدين أو الدائن' }
@@ -390,6 +397,7 @@ export const receiptVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
+  auto_fifo: z.boolean().optional(),
   // عملة السند (اختيارية) وسعر الصرف لفروق العملة المحققة (097)
   currency_code: z.string().regex(/^[A-Za-z]{3}$/, 'رمز العملة يجب أن يكون 3 أحرف').optional().nullable(),
   exchange_rate: z.number().positive('سعر الصرف يجب أن يكون موجباً').optional().nullable(),
@@ -421,6 +429,7 @@ export const disbursementVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
+  auto_fifo: z.boolean().optional(),
 }).strict().superRefine((voucher, ctx) => {
   const contactRequired = ['supplier', 'subcontractor', 'client_refund'].includes(voucher.disbursement_type);
   if (contactRequired && !voucher.contact_id) {
