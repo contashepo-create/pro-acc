@@ -42,7 +42,9 @@ function makeDb(db: Record<string, Row[]>) {
       rpcCalls.push({ name, params });
       return { data: name === 'post_custody_expense'
         ? { id: CUSTODY, applied_from_custody: 5, excess: 0 }
-        : name === 'settle_custody_file' ? { id: CUSTODY, shortage: 0 } : { id: CUSTODY }, error: null };
+        : name === 'settle_custody_file' ? { id: CUSTODY, shortage: 0 }
+        : name === 'pay_purchase_invoice_from_custody' ? { id: CUSTODY, paid_amount: 12, invoice_status: 'paid' }
+        : { id: CUSTODY }, error: null };
     },
   };
 }
@@ -57,6 +59,7 @@ import { GET as detailGET, PUT as detailPUT, DELETE as detailDELETE } from '@/ap
 import { POST as addPOST } from '@/app/api/custodies/[id]/add/route';
 import { POST as expensePOST } from '@/app/api/custodies/[id]/expense/route';
 import { POST as settlePOST } from '@/app/api/custodies/[id]/settle/route';
+import { POST as payInvoicePOST } from '@/app/api/custodies/[id]/pay-invoice/route';
 
 const C1 = 'company-1'; const C2 = 'company-2'; const USER = 'u1';
 const EMPLOYEE = '00000000-0000-4000-8000-000000000101';
@@ -66,6 +69,7 @@ const FOREIGN_CUSTODY = '00000000-0000-4000-8000-000000000309';
 const PROJECT = '00000000-0000-4000-8000-000000000401';
 const FOREIGN_PROJECT = '00000000-0000-4000-8000-000000000409';
 const EXPENSE_ACCOUNT = '00000000-0000-4000-8000-000000000501';
+const INVOICE = '00000000-0000-4000-8000-000000000601';
 
 function seed() {
   return {
@@ -160,6 +164,15 @@ describe('custody lifecycle route boundaries', () => {
     expect((await settlePOST(request({ confirm: true, returned_cash: 20, bank_safe_id: BANK }), context(CUSTODY))).status).toBe(200);
     expect(rpc('settle_custody_file')!.params).toMatchObject({
       p_company_id: C1, p_custody_id: CUSTODY, p_returned_cash: 20, p_created_by: USER,
+    });
+  });
+
+  test('paying an existing supplier invoice delegates to the AP-from-custody RPC', async () => {
+    expect((await payInvoicePOST(request({ purchase_invoice_id: INVOICE, company_id: C2 }), context(CUSTODY))).status).toBe(400);
+    expect(mockDb.rpcCalls).toHaveLength(0);
+    expect((await payInvoicePOST(request({ purchase_invoice_id: INVOICE, amount: 12, date: '2026-08-03' }), context(CUSTODY))).status).toBe(201);
+    expect(rpc('pay_purchase_invoice_from_custody')!.params).toMatchObject({
+      p_company_id: C1, p_custody_id: CUSTODY, p_purchase_invoice_id: INVOICE, p_amount: 12, p_created_by: USER,
     });
   });
 

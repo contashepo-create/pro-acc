@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 import { addCustodyFundsSchema, custodyUuid } from '@/lib/custody-validation';
+import { localDateISO } from '@/lib/fiscal-calendar';
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -14,7 +15,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const { data: updated, error: rpcError } = await getSupabase().rpc('add_custody_funds', {
       p_company_id: auth.companyId,
       p_custody_id: id,
-      p_date: input.date || new Date().toISOString().slice(0, 10),
+      p_date: input.date || localDateISO(),
       p_amount: input.amount,
       p_description: input.description || 'تعزيز عهدة',
       p_bank_safe_id: input.bank_safe_id,
