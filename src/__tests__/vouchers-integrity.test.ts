@@ -152,7 +152,7 @@ describe('voucher atomic route boundaries', () => {
     expect(response.status).toBe(201);
     expect(rpc('create_voucher_receipt_atomic')!.params).toMatchObject({
       p_company_id: C1, p_user_id: USER, p_contact_id: CONTACT, p_bank_safe_id: SAFE,
-      p_amount: 125.5, p_request_approval: false,
+      p_amount: 125.5, p_request_approval: false, p_project_id: null,
     });
     // Only the financial audit trail is written directly (fail-open logging);
     // no business data bypasses the atomic RPC.
@@ -209,7 +209,22 @@ describe('voucher atomic route boundaries', () => {
     expect(response.status).toBe(201);
     expect(rpc('create_voucher_disbursement_atomic')!.params).toMatchObject({
       p_company_id: C1, p_user_id: USER, p_contact_id: CONTACT, p_amount: 75,
-      p_bank_safe_id: SAFE, p_request_approval: false,
+      p_bank_safe_id: SAFE, p_request_approval: false, p_project_id: null,
+    });
+  });
+
+  test('receipt stamps an explicit project and disables FIFO when asked', async () => {
+    const projectId = '00000000-0000-4000-8000-0000000000b1';
+    const invoiceId = '00000000-0000-4000-8000-000000000011';
+    const response = await receiptPOST(request({
+      date: '2026-08-01', receipt_type: 'client', contact_id: CONTACT,
+      project_id: projectId, amount: 40, bank_safe_id: SAFE, reason: 'تحصيل مشروع',
+      auto_fifo: false, invoice_items: [{ invoice_id: invoiceId, amount: 40 }],
+    }));
+    expect(response.status).toBe(201);
+    expect(rpc('create_voucher_receipt_atomic')!.params).toMatchObject({
+      p_company_id: C1, p_project_id: projectId, p_auto_fifo: false,
+      p_allocations: [{ invoice_id: invoiceId, amount: 40 }],
     });
   });
 

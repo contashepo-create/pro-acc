@@ -15,7 +15,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth-store';
+import { companyDisplayMoney } from '@/lib/company-money';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
@@ -46,6 +48,8 @@ interface InventoryItemOption { id: string; code: string; name: string; warehous
 interface PurchaseOrderForm { date: string; supplier_id: string; notes: string; items: OrderItem[]; }
 
 export default function PurchaseOrdersPage() {
+  const { company } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const [orders, setOrders] = useState<PurchaseOrderRow[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItemOption[]>([]);
@@ -196,7 +200,7 @@ export default function PurchaseOrdersPage() {
     { key: 'po_number', label: 'الرقم', sortable: true, render: (row: PurchaseOrderRow) => formatDocumentNumber('purchase_order', row.number || row.po_number) },
     { key: 'date', label: 'التاريخ', render: (row: PurchaseOrderRow) => formatDate(row.date) },
     { key: 'supplier_name', label: 'المورد', sortable: true },
-    { key: 'total', label: 'الإجمالي', render: (row: PurchaseOrderRow) => formatCurrency(row.total) },
+    { key: 'total', label: 'الإجمالي', render: (row: PurchaseOrderRow) => money(row.total) },
     { key: 'status', label: 'الحالة', render: (row: PurchaseOrderRow) => statusBadge(row.status) },
     {
       key: 'actions',
@@ -297,7 +301,7 @@ export default function PurchaseOrdersPage() {
                       <td className="p-2">
                         <input className="w-full bg-transparent outline-none" type="number" min={0} step="any" value={item.unit_price} onChange={(e) => updateItem(i, { unit_price: Number(e.target.value) })} />
                       </td>
-                      <td className="p-2">{formatCurrency((Number(item.quantity) || 0) * (Number(item.unit_price) || 0))}</td>
+                      <td className="p-2">{money((Number(item.quantity) || 0) * (Number(item.unit_price) || 0))}</td>
                       <td className="p-2">
                         <button type="button" className="text-danger disabled:opacity-30" onClick={() => removeItem(i)} disabled={form.items.length <= 1} aria-label="حذف البند">
                           <Trash2 size={16} />
@@ -309,7 +313,7 @@ export default function PurchaseOrdersPage() {
               </table>
             </div>
             <div className="flex justify-end border-t border-border pt-3">
-              <div className="text-base">الإجمالي: <span className="font-bold">{formatCurrency(grandTotal)}</span></div>
+              <div className="text-base">الإجمالي: <span className="font-bold">{money(grandTotal)}</span></div>
             </div>
           </div>
 
@@ -342,8 +346,8 @@ export default function PurchaseOrdersPage() {
                     <td className="p-2 font-medium">{it.description}</td>
                     <td className="p-2 text-center font-mono">{it.quantity}</td>
                     <td className="p-2 text-center font-mono text-success">{it.received_quantity || 0}</td>
-                    <td className="p-2 text-center font-mono">{formatCurrency(it.unit_price || 0)}</td>
-                    <td className="p-2 text-left font-bold font-mono">{formatCurrency((Number(it.quantity) || 0) * (Number(it.unit_price) || 0))}</td>
+                    <td className="p-2 text-center font-mono">{money(it.unit_price || 0)}</td>
+                    <td className="p-2 text-left font-bold font-mono">{money((Number(it.quantity) || 0) * (Number(it.unit_price) || 0))}</td>
                   </tr>
                 ))}
               </tbody>

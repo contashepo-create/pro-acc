@@ -51,6 +51,11 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var id=JSON.parse(localStorage.getItem('accweb_theme_id')||'"sapphire"');var dark=JSON.parse(localStorage.getItem('accweb_theme_dark')||'false');var r=document.documentElement;['theme-sapphire','theme-amber','theme-teal','light'].forEach(function(c){r.classList.remove(c)});r.classList.add('theme-'+(id||'sapphire'));if(!dark)r.classList.add('light');}catch(e){document.documentElement.classList.add('theme-sapphire','light');}})();`,
+          }}
+        />
         <ThemeInitializer />
         <VisitorTracker />
         <Providers>{children}</Providers>

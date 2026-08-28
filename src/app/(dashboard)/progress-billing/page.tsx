@@ -14,10 +14,12 @@ import { Checkbox } from '@/components/ui/Checkbox';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface ClaimRow {
   id: string;
@@ -43,6 +45,7 @@ interface ClaimForm {
 }
 
 export default function ProgressBillingPage() {
+  const { money } = useCompanyMoney();
   const [claims, setClaims] = useState<ClaimRow[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +54,7 @@ export default function ProgressBillingPage() {
   const [editingClaim, setEditingClaim] = useState<ClaimRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [form, setForm] = useState<ClaimForm>({
     project_id: '', date: new Date().toISOString().split('T')[0],
     gross_amount: 0, retention_percentage: 10, notes: '', is_final: false, tax_enabled: false, tax_rate: 0.15,
@@ -60,17 +64,20 @@ export default function ProgressBillingPage() {
     try {
       setLoading(true);
       setError('');
-      const [claimRes, projRes] = await Promise.all([
+      const [claimRes, projRes, setRes] = await Promise.all([
         fetch('/api/progress-billing'),
         fetch('/api/projects'),
+        fetch('/api/auth/me'),
       ]);
-      const [claimJson, projJson] = await Promise.all([
+      const [claimJson, projJson, setJson] = await Promise.all([
         claimRes.json(),
         projRes.json(),
+        setRes.json(),
       ]);
       if (claimJson.success) setClaims(claimJson.data?.claims || []);
       else setError(claimJson.message || 'فشل');
       if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || []);
+      if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -99,7 +106,7 @@ export default function ProgressBillingPage() {
         setEditingClaim(null);
         setForm({
           project_id: '', date: new Date().toISOString().split('T')[0],
-          gross_amount: 0, retention_percentage: 10, notes: '', is_final: false, tax_enabled: false, tax_rate: 0.15,
+          gross_amount: 0, retention_percentage: 10, notes: '', is_final: false, tax_enabled: false, tax_rate: companyVatRate,
         });
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -119,7 +126,7 @@ export default function ProgressBillingPage() {
       notes: String(src.notes ?? src.description ?? ''),
       is_final: Boolean(src.is_final),
       tax_enabled: Number(src.tax_rate || 0) > 0,
-      tax_rate: Number(src.tax_rate) || 0.15,
+      tax_rate: Number(src.tax_rate) || companyVatRate,
     }, ['date']));
     setShowModal(true);
   };
@@ -154,9 +161,9 @@ export default function ProgressBillingPage() {
     { key: 'claim_number', label: 'الرقم', sortable: true, render: (row: ClaimRow) => formatDocumentNumber('progress_billing', row.claim_number) },
     { key: 'project_name', label: 'المشروع', sortable: true },
     { key: 'date', label: 'التاريخ', render: (row: ClaimRow) => formatDate(row.date) },
-    { key: 'gross_amount', label: 'الإجمالي', render: (row: ClaimRow) => formatCurrency(row.gross_amount) },
-    { key: 'retention_amount', label: 'الاحتجاز', render: (row: ClaimRow) => formatCurrency(row.retention_amount ?? 0) },
-    { key: 'net_amount', label: 'الصافي', render: (row: ClaimRow) => formatCurrency(row.net_amount ?? 0) },
+    { key: 'gross_amount', label: 'الإجمالي', render: (row: ClaimRow) => money(row.gross_amount) },
+    { key: 'retention_amount', label: 'الاحتجاز', render: (row: ClaimRow) => money(row.retention_amount ?? 0) },
+    { key: 'net_amount', label: 'الصافي', render: (row: ClaimRow) => money(row.net_amount ?? 0) },
     { key: 'status', label: 'الحالة', render: (row: ClaimRow) => (
       <div className="flex items-center gap-2">
         {statusBadge(row.status)}
@@ -192,7 +199,7 @@ export default function ProgressBillingPage() {
             <Input label="نسبة الاحتجاز (%)" type="number" value={form.retention_percentage} disabled={!!editingClaim} onChange={(e) => setForm({...form, retention_percentage: parseFloat(e.target.value) || 10})} />
           </div>
           <Textarea label="ملاحظات" value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} placeholder="ملاحظات الفاتورة المرحلية" />
-          <Checkbox label="تطبيق ضريبة القيمة المضافة (15%)" checked={form.tax_enabled} disabled={!!editingClaim} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0})} />
+          <Checkbox label={`تطبيق ضريبة القيمة المضافة (${vatPercentLabel(companyVatRate)}%)`} checked={form.tax_enabled} disabled={!!editingClaim} onChange={(checked: boolean) => setForm({...form, tax_enabled: checked, tax_rate: checked ? companyVatRate : 0})} />
           <Checkbox label="دفعة نهائية" checked={form.is_final} onChange={(checked: boolean) => setForm({...form, is_final: checked})} />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

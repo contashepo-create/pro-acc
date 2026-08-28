@@ -14,8 +14,12 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth-store';
+import { companyDisplayMoney } from '@/lib/company-money';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { CashSettlementFields } from '@/components/accounting/CashSettlementFields';
 
 interface InvoiceItem {
   id?: string;
@@ -26,14 +30,13 @@ interface InvoiceItem {
   total: number;
   item_type?: 'service' | 'product' | 'inventory';
   unit?: string;
-  save_to_inventory?: boolean;
   item_code?: string;
   inventory_item_id?: string;
 }
 
 const emptyItem: InvoiceItem = {
   description: '', quantity: 1, unitPrice: 0, discount: 0, total: 0,
-  item_type: 'service', unit: 'وحدة', save_to_inventory: false,
+  item_type: 'service', unit: 'وحدة',
 };
 
 interface SalesInvoiceRow {
@@ -59,15 +62,21 @@ interface InvoiceForm {
   items: InvoiceItem[];
   currency_code: string;
   exchange_rate: string;
+  collected_amount: string;
+  bank_safe_id: string;
 }
 interface CurrencyOption { id: string; code: string; name: string; rate: number; is_base: boolean; }
+interface BankSafeOption { id: string; name: string; type?: string; }
 
 export default function InvoicesPage() {
+  const { company } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const [invoices, setInvoices] = useState<SalesInvoiceRow[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryOption[]>([]);
   const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showEditor, setShowEditor] = useState(false);
@@ -85,21 +94,26 @@ export default function InvoicesPage() {
     items: [{ ...emptyItem }],
     currency_code: '',
     exchange_rate: '',
+    collected_amount: '0',
+    bank_safe_id: '',
   });
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
-      const [invRes, cliRes, projRes, stockRes, curRes] = await Promise.all([
+      const [invRes, cliRes, projRes, stockRes, curRes, setRes, bankRes] = await Promise.all([
         fetch('/api/invoices'),
         fetch('/api/clients'),
         fetch('/api/projects'),
         fetch('/api/inventory?items=1'),
         fetch('/api/currencies'),
+        fetch('/api/auth/me'),
+        fetch('/api/banks?pageSize=500'),
       ]);
-      const [invJson, cliJson, projJson, stockJson, curJson] = await Promise.all([
-        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(), curRes.json(),
+      const [invJson, cliJson, projJson, stockJson, curJson, setJson, bankJson] = await Promise.all([
+        invRes.json(), cliRes.json(), projRes.json(), stockRes.json(), curRes.json(), setRes.json(), bankRes.json(),
       ]);
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       else setError(invJson.message || 'فشل');
@@ -112,6 +126,8 @@ export default function InvoicesPage() {
         })));
       }
       if (curJson.success) setCurrencies(curJson.data || []);
+      if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
+      if (bankJson.success) setBanks(bankJson.data?.banks || []);
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   };
 
@@ -130,6 +146,8 @@ export default function InvoicesPage() {
       exchange_rate: '',
       vat_enabled: true,
       items: [{ ...emptyItem }],
+      collected_amount: '0',
+      bank_safe_id: '',
     });
     setSaveError('');
     setShowEditor(true);
@@ -146,7 +164,7 @@ export default function InvoicesPage() {
     setSaving(true); setSaveError('');
     try {
       const subtotal = validItems.reduce((sum: number, item: InvoiceItem) => sum + item.total, 0);
-      const vatRate = form.vat_enabled ? 0.15 : 0;
+      const vatRate = form.vat_enabled ? companyVatRate : 0;
       const vatAmount = subtotal * vatRate;
       const total = subtotal + vatAmount;
 
@@ -162,12 +180,14 @@ export default function InvoicesPage() {
             description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, total: i.total,
             discount: Number(i.discount) || 0,
             item_type: i.item_type || 'service', unit: i.unit || 'وحدة',
-            save_to_inventory: i.save_to_inventory || false, item_code: i.item_code || undefined,
+            item_code: i.item_code || undefined,
             inventory_item_id: i.inventory_item_id || undefined,
           })),
           currency_code: form.currency_code || undefined,
           exchange_rate: form.currency_code && form.exchange_rate ? Number(form.exchange_rate) : undefined,
           subtotal, vatRate, vatAmount, vatEnabled: form.vat_enabled, total, notes: form.notes,
+          collected_amount: Number(form.collected_amount) || 0,
+          bank_safe_id: form.bank_safe_id || null,
         }),
       });
       const json = await res.json();
@@ -217,7 +237,6 @@ export default function InvoicesPage() {
         total: (Number(it.quantity) || 0) * (Number(it.unit_price) || 0),
         item_type: 'service',
         unit: String(it.unit || 'وحدة').trim(),
-        save_to_inventory: false,
       }));
       setForm((prev) => ({
         ...prev,
@@ -255,7 +274,8 @@ export default function InvoicesPage() {
   const totalDiscount = form.items.reduce((sum: number, item: InvoiceItem) => {
     return sum + (item.quantity * item.unitPrice * (item.discount || 0) / 100);
   }, 0);
-  const vatAmount = form.vat_enabled ? subtotal * 0.15 : 0;
+  const vatAmount = form.vat_enabled ? subtotal * companyVatRate : 0;
+  const vatPct = vatPercentLabel(companyVatRate);
   const total = subtotal + vatAmount;
 
   const filtered = statusTab === 'all' ? invoices : invoices.filter(i => i.status === statusTab);
@@ -264,8 +284,8 @@ export default function InvoicesPage() {
     { key: 'number', label: 'رقم الفاتورة', sortable: true, render: (row: SalesInvoiceRow) => formatDocumentNumber('sales_invoice', row.number) },
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: SalesInvoiceRow) => formatDate(row.date) },
     { key: 'contact_name', label: 'العميل', sortable: true, render: (row: SalesInvoiceRow) => row.contact_name || row.client_name || '—' },
-    { key: 'total', label: 'الإجمالي', sortable: true, render: (row: SalesInvoiceRow) => formatCurrency(row.total) },
-    { key: 'paid_amount', label: 'المدفوع', render: (row: SalesInvoiceRow) => formatCurrency(row.paid_amount) },
+    { key: 'total', label: 'الإجمالي', sortable: true, render: (row: SalesInvoiceRow) => money(row.total) },
+    { key: 'paid_amount', label: 'المدفوع', render: (row: SalesInvoiceRow) => money(row.paid_amount) },
     { key: 'actions', label: '', render: (row: SalesInvoiceRow) => (
       <div className="flex items-center gap-1">
         {/* بديل التعديل: إشعار دائن (تخفيض) / إشعار مدين (زيادة) */}
@@ -367,7 +387,7 @@ export default function InvoicesPage() {
                   </div>
                   <div className="flex items-center gap-4 pt-2">
                     <Checkbox
-                      label="ضريبة القيمة المضافة (15%)"
+                      label={`ضريبة القيمة المضافة (${vatPct}%)`}
                       checked={form.vat_enabled}
                       onChange={(checked: boolean) => setForm({ ...form, vat_enabled: checked })}
                     />
@@ -397,7 +417,6 @@ export default function InvoicesPage() {
                       <th className="p-3 text-center font-medium w-28">سعر الوحدة</th>
                       <th className="p-3 text-center font-medium w-20">خصم %</th>
                       <th className="p-3 text-center font-medium w-28">الإجمالي</th>
-                      <th className="p-3 text-center font-medium w-20">للمستودع</th>
                       <th className="p-3 w-10"></th>
                     </tr>
                   </thead>
@@ -490,15 +509,7 @@ export default function InvoicesPage() {
                           />
                         </td>
                         <td className="p-2 text-center font-bold text-text-primary whitespace-nowrap">
-                          {formatCurrency(item.total || 0)}
-                        </td>
-                        <td className="p-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={item.save_to_inventory || false}
-                            onChange={(e) => updateItem(i, 'save_to_inventory', e.target.checked)}
-                            className="w-4 h-4 accent-accent cursor-pointer"
-                          />
+                          {money(item.total || 0)}
                         </td>
                         <td className="p-2">
                           {form.items.length > 1 && (
@@ -549,22 +560,22 @@ export default function InvoicesPage() {
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-text-secondary">الإجمالي قبل الخصم</span>
-                    <span className="font-bold text-text-primary">{formatCurrency(subtotal + totalDiscount)}</span>
+                    <span className="font-bold text-text-primary">{money(subtotal + totalDiscount)}</span>
                   </div>
                   {totalDiscount > 0 && (
                     <div className="flex justify-between items-center">
                       <span className="text-text-secondary">إجمالي الخصم</span>
-                      <span className="font-bold text-danger">- {formatCurrency(totalDiscount)}</span>
+                      <span className="font-bold text-danger">- {money(totalDiscount)}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-center pt-2 border-t border-border">
                     <span className="text-text-secondary">المجموع الفرعي</span>
-                    <span className="font-bold text-text-primary text-lg" data-testid="invoice-subtotal">{formatCurrency(subtotal)}</span>
+                    <span className="font-bold text-text-primary text-lg" data-testid="invoice-subtotal">{money(subtotal)}</span>
                   </div>
                   {form.vat_enabled && (
                     <div className="flex justify-between items-center">
-                      <span className="text-text-secondary">ضريبة القيمة المضافة (15%)</span>
-                      <span className="font-bold text-text-primary" data-testid="invoice-vat">{formatCurrency(vatAmount)}</span>
+                      <span className="text-text-secondary">ضريبة القيمة المضافة ({vatPct}%)</span>
+                      <span className="font-bold text-text-primary" data-testid="invoice-vat">{money(vatAmount)}</span>
                     </div>
                   )}
                 </div>
@@ -573,7 +584,7 @@ export default function InvoicesPage() {
                 <div className="bg-accent/10 border border-accent/20 rounded-xl p-4">
                   <div className="flex justify-between items-center">
                     <span className="text-text-secondary text-sm">الإجمالي النهائي</span>
-                    <span className="text-2xl font-bold text-accent" data-testid="invoice-total">{formatCurrency(total)}</span>
+                    <span className="text-2xl font-bold text-accent" data-testid="invoice-total">{money(total)}</span>
                   </div>
                 </div>
 
@@ -581,9 +592,20 @@ export default function InvoicesPage() {
                 <div className="flex items-center justify-between bg-bg-secondary rounded-lg p-3">
                   <span className="text-xs text-text-secondary">حالة الضريبة</span>
                   <Badge variant={form.vat_enabled ? 'success' : 'warning'}>
-                    {form.vat_enabled ? 'مفعّلة (15%)' : 'معفاة'}
+                    {form.vat_enabled ? `مفعّلة (${vatPct}%)` : 'معفاة'}
                   </Badge>
                 </div>
+
+                <CashSettlementFields
+                  mode="collect"
+                  total={total}
+                  amount={form.collected_amount}
+                  bankSafeId={form.bank_safe_id}
+                  banks={banks}
+                  money={money}
+                  onAmountChange={(value) => setForm({ ...form, collected_amount: value })}
+                  onBankChange={(value) => setForm({ ...form, bank_safe_id: value })}
+                />
               </div>
 
               {/* Action buttons */}

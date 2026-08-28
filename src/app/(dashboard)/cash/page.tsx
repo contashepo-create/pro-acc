@@ -13,9 +13,11 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { useCompanyMoney } from '@/hooks/use-company-money';
+import { localDateISO } from '@/lib/fiscal-calendar';
 
 interface CashTransactionRow {
   id: string;
@@ -26,10 +28,10 @@ interface CashTransactionRow {
   amount: number;
   reason?: string;
 }
-interface BankSafeOption { id: string; name: string; account_id?: string; }
+interface BankSafeOption { id: string; name: string; account_id?: string; type?: string; }
 interface AccountOption { id: string; code: string; name: string; type?: string; is_header?: boolean; children?: AccountOption[]; }
 interface ContactOption { id: string; name: string; }
-interface CashForm { date: string; type: string; amount: number; account_id: string; bank_safe_id: string; contact_id: string; reason: string; }
+interface CashForm { date: string; type: string; amount: number; account_id: string; bank_safe_id: string; contact_id: string; project_id: string; reason: string; }
 
 /** Disabled option used as a visual section header inside the Select dropdown. */
 function groupHeader(label: string) {
@@ -37,10 +39,12 @@ function groupHeader(label: string) {
 }
 
 export default function CashPage() {
+  const { money } = useCompanyMoney();
   const [transactions, setTransactions] = useState<CashTransactionRow[]>([]);
   const [banks, setBanks] = useState<BankSafeOption[]>([]);
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
+  const [projects, setProjects] = useState<ContactOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -49,12 +53,13 @@ export default function CashPage() {
   const [saveError, setSaveError] = useState('');
   const [advancedAccounts, setAdvancedAccounts] = useState(false);
   const [form, setForm] = useState<CashForm>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateISO(),
     type: 'receipt',
     amount: 0,
     account_id: '',
     bank_safe_id: '',
     contact_id: '',
+    project_id: '',
     reason: '',
   });
 
@@ -62,17 +67,19 @@ export default function CashPage() {
     try {
       setLoading(true);
       setError('');
-      const [txRes, bankRes, accRes, conRes] = await Promise.all([
+      const [txRes, bankRes, accRes, conRes, projRes] = await Promise.all([
         fetch('/api/cash'),
-        fetch('/api/banks'),
+        fetch('/api/banks?pageSize=500'),
         fetch('/api/accounts'),
-        fetch('/api/contacts'),
+        fetch('/api/contacts?pageSize=500'),
+        fetch('/api/projects'),
       ]);
-      const [txJson, bankJson, accJson, conJson] = await Promise.all([
+      const [txJson, bankJson, accJson, conJson, projJson] = await Promise.all([
         txRes.json(),
         bankRes.json(),
         accRes.json(),
         conRes.json(),
+        projRes.json(),
       ]);
       if (txJson.success) {
         setTransactions(txJson.data?.transactions || txJson.data?.rows || []);
@@ -92,6 +99,7 @@ export default function CashPage() {
         setAccounts(flatten(accJson.data?.accounts || []));
       }
       if (conJson.success) setContacts(conJson.data?.contacts || []);
+      if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || projJson.data || []);
     } catch {
       setError('فشل تحميل البيانات');
       toast.error('خطأ في الاتصال بالخادم');
@@ -132,6 +140,7 @@ export default function CashPage() {
           accountId: form.account_id,
           bankSafeId: form.bank_safe_id,
           contactId: form.contact_id || null,
+          projectId: form.project_id || null,
           reason: form.reason.trim(),
         }),
       });
@@ -140,12 +149,13 @@ export default function CashPage() {
         setShowModal(false);
         setEditingTransaction(null);
         setForm({
-          date: new Date().toISOString().split('T')[0],
+          date: localDateISO(),
           type: 'receipt',
           amount: 0,
           account_id: '',
           bank_safe_id: '',
           contact_id: '',
+          project_id: '',
           reason: '',
         });
         toast.success(editingTransaction ? 'تم تحديث المعاملة بنجاح' : 'تم إضافة المعاملة بنجاح');
@@ -172,6 +182,7 @@ export default function CashPage() {
       account_id: String(src.account_id ?? ''),
       bank_safe_id: String(src.bank_safe_id ?? ''),
       contact_id: String(src.contact_id ?? ''),
+      project_id: String(src.project_id ?? ''),
       reason: String(src.reason ?? ''),
     }, ['date']));
     setShowModal(true);
@@ -269,7 +280,7 @@ export default function CashPage() {
     { key: 'date', label: 'التاريخ', sortable: true, render: (row: CashTransactionRow) => formatDate(row.date) },
     { key: 'type', label: 'النوع', sortable: true, render: (row: CashTransactionRow) => typeBadge(row.type) },
     { key: 'account_name', label: 'الحساب', sortable: true },
-    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: CashTransactionRow) => formatCurrency(row.amount) },
+    { key: 'amount', label: 'المبلغ', sortable: true, render: (row: CashTransactionRow) => money(row.amount) },
     { key: 'reason', label: 'البيان', sortable: true },
     {
       key: 'actions',
@@ -291,7 +302,7 @@ export default function CashPage() {
     <div className="space-y-6">
       <PageHeader
         title="حركة النقدية"
-        description="قبض وصرف يومي مرتبط بالخزائن والبنوك المسجّلة في دليل الحسابات"
+        description="إيراد أو مصروف نقدي مباشر على الخزينة — ليس تحصيل فاتورة ولا سداد مورد. المشروع اختياري لتكلفة المشروع وإلا يبقى في نتيجة الشركة."
         actions={
           <Button onClick={() => { setEditingTransaction(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>
             إضافة معاملة

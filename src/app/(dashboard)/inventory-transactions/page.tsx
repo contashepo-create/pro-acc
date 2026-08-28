@@ -13,8 +13,9 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface InvTxRow {
   id: string;
@@ -41,6 +42,7 @@ interface InvTxForm {
 }
 
 export default function InventoryTransactionsPage() {
+  const { money } = useCompanyMoney();
   const [transactions, setTransactions] = useState<InvTxRow[]>([]);
   const [items, setItems] = useState<ItemOption[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
@@ -146,8 +148,6 @@ export default function InventoryTransactionsPage() {
     }
   };
 
-
-
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'success' | 'danger' | 'warning' | 'info'; label: string }> = {
       add: { variant: 'success', label: 'إضافة' },
@@ -167,8 +167,8 @@ export default function InventoryTransactionsPage() {
     { key: 'warehouse_name', label: 'المستودع', sortable: true },
     { key: 'type', label: 'النوع', render: (row: InvTxRow) => typeBadge(row.type) },
     { key: 'quantity', label: 'الكمية', sortable: true },
-    { key: 'unit_price', label: 'السعر', render: (row: InvTxRow) => formatCurrency(row.unit_price) },
-    { key: 'total_value', label: 'الإجمالي', render: (row: InvTxRow) => formatCurrency(row.total_value) },
+    { key: 'unit_price', label: 'السعر', render: (row: InvTxRow) => money(row.unit_price) },
+    { key: 'total_value', label: 'الإجمالي', render: (row: InvTxRow) => money(row.total_value) },
     { key: 'date', label: 'التاريخ', render: (row: InvTxRow) => formatDate(row.date) },
     {
       key: 'actions',

@@ -100,7 +100,7 @@ export const bondActionSchema = z.object({
 
 // Tender expense recording (accounting-linked)
 export const tenderExpenseSchema = z.object({
-  expense_type: z.enum(['karasa', 'platform_fee', 'bid_bond_margin', 'bid_bond_commission', 'consulting', 'other']),
+  expense_type: z.enum(['karasa', 'platform_fee', 'bid_bond_commission', 'consulting', 'other']),
   amount: positiveMoney,
   vat_amount: money.optional().default(0),
   bank_safe_id: uuid,
@@ -119,11 +119,16 @@ export const bondCreateWithAccountingSchema = z.object({
   project_id: nullableUuid, tender_id: nullableUuid, contact_id: nullableUuid,
   reference_number: shortText(120).nullable().optional(),
   commission: money.optional().default(0),
+  margin_amount: money.optional().default(0),
   vat_amount: money.optional().default(0),
   notes: shortText(2000).nullable().optional(),
-}).strict().refine((value) => value.issue_date <= value.expiry_date, {
-  message: 'تاريخ انتهاء الضمان يسبق تاريخ الإصدار', path: ['expiry_date'],
-});
+}).strict()
+  .refine((value) => value.issue_date <= value.expiry_date, {
+    message: 'تاريخ انتهاء الضمان يسبق تاريخ الإصدار', path: ['expiry_date'],
+  })
+  .refine((value) => (value.margin_amount ?? 0) <= value.amount, {
+    message: 'الغطاء النقدي لا يجوز أن يتجاوز قيمة خطاب الضمان', path: ['margin_amount'],
+  });
 
 const taskStatus = z.enum(['not_started', 'in_progress', 'completed', 'blocked', 'on_hold']);
 const taskPriority = z.enum(['low', 'medium', 'high', 'critical']);

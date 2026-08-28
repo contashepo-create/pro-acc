@@ -9,6 +9,7 @@ const db = {
   from: jest.fn(() => {
     const api = {
       select: () => api, eq: () => api, lt: async () => overdueResult,
+      maybeSingle: async () => ({ data: { currency_symbol: 'ر.س', locale: 'ar-SA' }, error: null }),
     };
     return api;
   }),
@@ -37,6 +38,8 @@ describe('message templates and channel adapters', () => {
   test('renders every occurrence of provided variables and leaves unknown placeholders', () => {
     expect(renderTemplate('{{name}} / {{name}} / {{missing}}', { name: 'Ali' })).toBe('Ali / Ali / {{missing}}');
     expect(TEMPLATES.invoice_overdue_ar.language).toBe('ar');
+    expect(TEMPLATES.invoice_overdue_en.body).toContain('{{currency}}');
+    expect(TEMPLATES.invoice_overdue_en.body).not.toMatch(/SAR/);
   });
 
   test('propagates email provider true/false/errors', async () => {

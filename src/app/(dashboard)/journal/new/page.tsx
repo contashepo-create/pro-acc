@@ -10,12 +10,13 @@ import { Select } from '@/components/ui/Select';
 import { Textarea } from '@/components/ui/Textarea';
 import { toast } from '@/components/ui/Toast';
 import { toDateInput } from '@/lib/form-utils';
+import { localDateISO } from '@/lib/fiscal-calendar';
 
-interface JournalLine { accountCode: string; debit: number; credit: number; description: string; projectId: string; }
+interface JournalLine { accountCode: string; debit: number; credit: number; description: string; projectId: string; contactId: string; }
 
 interface AccountNode { code: string; name: string; is_header?: boolean; children?: AccountNode[]; }
 interface FlatAccount { code: string; name: string; label: string; depth: number; isParent: boolean; }
-interface RawLine { account_code?: string; accountCode?: string; debit?: number; credit?: number; description?: string; }
+interface RawLine { account_code?: string; accountCode?: string; debit?: number; credit?: number; description?: string; project_id?: string; projectId?: string; contact_id?: string; contactId?: string; }
 interface JournalForm { date: string; type: string; description: string; lines: JournalLine[]; }
 
 function flatten(accounts: AccountNode[], depth = 0, out: FlatAccount[] = []): FlatAccount[] {
@@ -42,15 +43,16 @@ export default function NewJournalPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<FlatAccount[]>([]);
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [contacts, setContacts] = useState<Array<{ id: string; name: string }>>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<JournalForm>({
-    date: new Date().toISOString().split('T')[0],
+    date: localDateISO(),
     type: 'general',
     description: '',
     lines: [
-      { accountCode: '', debit: 0, credit: 0, description: '', projectId: '' },
-      { accountCode: '', debit: 0, credit: 0, description: '', projectId: '' },
+      { accountCode: '', debit: 0, credit: 0, description: '', projectId: '', contactId: '' },
+      { accountCode: '', debit: 0, credit: 0, description: '', projectId: '', contactId: '' },
     ],
   });
 
@@ -64,7 +66,11 @@ export default function NewJournalPage() {
 
     fetch('/api/projects', { credentials: 'same-origin' })
       .then((r) => r.json())
-      .then((j) => { if (j.success) setProjects(j.data?.rows || j.data || []); });
+      .then((j) => { if (j.success) setProjects(j.data?.rows || j.data?.projects || j.data || []); });
+
+    fetch('/api/contacts?pageSize=500', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((j) => { if (j.success) setContacts(j.data?.contacts || []); });
 
     if (p) {
       fetch(`/api/journal/${p}`, { credentials: 'same-origin' })
@@ -82,6 +88,8 @@ export default function NewJournalPage() {
                   debit: Number(l.debit) || 0,
                   credit: Number(l.credit) || 0,
                   description: l.description || '',
+                  projectId: l.project_id || l.projectId || '',
+                  contactId: l.contact_id || l.contactId || '',
                 })),
             });
           } else {
@@ -106,7 +114,7 @@ export default function NewJournalPage() {
   const addLine = () =>
     setForm((f) => ({
       ...f,
-      lines: [...f.lines, { accountCode: '', debit: 0, credit: 0, description: '', projectId: '' }],
+      lines: [...f.lines, { accountCode: '', debit: 0, credit: 0, description: '', projectId: '', contactId: '' }],
     }));
 
   const removeLine = (i: number) =>
@@ -131,10 +139,15 @@ export default function NewJournalPage() {
       setSaveError(`القيد غير متوازن: مدين ${totalDebit} ≠ دائن ${totalCredit}`); return;
     }
 
+    if (editId) {
+      setSaveError('القيود المرحلة لا تُعدَّل. أنشئ قيداً عكسياً من قائمة القيود ثم قيد تصحيح جديداً.');
+      return;
+    }
+
     setSaving(true); setSaveError('');
     try {
-      const url = editId ? `/api/journal/${editId}` : '/api/journal';
-      const method = editId ? 'PUT' : 'POST';
+      const url = '/api/journal';
+      const method = 'POST';
       const res = await fetch(url, {
         method,
         credentials: 'same-origin',
@@ -149,6 +162,7 @@ export default function NewJournalPage() {
             credit: Number(l.credit) || 0,
             description: l.description,
             projectId: l.projectId || null,
+            contactId: l.contactId || null,
           })),
         }),
       });
@@ -193,8 +207,8 @@ export default function NewJournalPage() {
   return (
     <div className="w-full max-w-5xl mx-auto pb-28 sm:pb-8">
       <PageHeader
-        title={editId ? 'تعديل قيد' : 'تسجيل قيد جديد'}
-        description="تسجيل الأطراف المدينة والدائنة على الحسابات الفرعية"
+        title={editId ? 'عرض قيد مرحّل' : 'تسجيل قيد جديد'}
+        description="سطر مدين أو دائن على حساب فرعي. المشروع يحمّل تكلفة المشروع، وتركه فارغاً يبقي المبلغ في نتيجة الشركة. الطرف يوسّم كشف الحساب."
         actions={<Button variant="ghost" onClick={() => router.push('/journal')} leftIcon={<ArrowRight size={16} />}>رجوع للقيود</Button>}
       />
 
@@ -204,6 +218,11 @@ export default function NewJournalPage() {
           <Select label="النوع" value={form.type} onChange={(v) => setForm({ ...form, type: v })} options={[{ value: 'general', label: 'عام' }, { value: 'opening_balance', label: 'افتتاحي' }, { value: 'accrual', label: 'استحقاق' }]} />
         </div>
 
+        {editId && (
+          <div className="bg-warning/10 border border-warning/30 text-sm rounded-lg p-3">
+            هذا قيد مرحّل للعرض فقط. التعديل يتم بقيد عكسي من قائمة القيود ثم قيد تصحيح جديد.
+          </div>
+        )}
         <Textarea label="البيان العام للقيد" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
 
         <div className="space-y-3">
@@ -246,10 +265,16 @@ export default function NewJournalPage() {
                   onChange={(e) => updateLine(i, 'description', e.target.value)}
                 />
                 <Select
-                  label="المشروع (اختياري — لتكلفة المشروع)"
+                  label="المشروع (اختياري — تكلفة المشروع وإلا عام للشركة)"
                   value={line.projectId || ''}
                   onChange={(v) => updateLine(i, 'projectId', v)}
-                  options={[{ value: '', label: 'بدون مشروع' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+                  options={[{ value: '', label: 'بدون مشروع — عام للشركة' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+                />
+                <Select
+                  label="الطرف (اختياري — عميل أو مورد أو مقاول)"
+                  value={line.contactId || ''}
+                  onChange={(v) => updateLine(i, 'contactId', v)}
+                  options={[{ value: '', label: 'بدون طرف' }, ...contacts.map((c) => ({ value: c.id, label: c.name }))]}
                 />
                 <div className="grid grid-cols-2 gap-3">
                   {amountField(i, 'debit', 'مدين')}
@@ -267,7 +292,7 @@ export default function NewJournalPage() {
         {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
 
         <div className="hidden sm:flex gap-2">
-          <Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ القيد'}</Button>
+          <Button onClick={handleSave} disabled={saving || !!editId}>{saving ? 'جاري الحفظ...' : 'حفظ القيد'}</Button>
           <Button variant="ghost" onClick={() => router.push('/journal')}>إلغاء</Button>
         </div>
       </div>

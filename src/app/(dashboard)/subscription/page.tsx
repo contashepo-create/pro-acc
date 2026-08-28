@@ -44,7 +44,6 @@ interface SubscriptionState {
   extra_storage_gb?: number;
   is_expired?: boolean;
   is_expiring_soon?: boolean;
-  subscriber_number?: string | null;
   limits?: {
     max_users?: number;
     max_invoices_per_month?: number | null;
@@ -395,23 +394,12 @@ export default function SubscriptionPageEnhanced() {
         <>
           {subscription && (
             <Card title="اشتراكك الحالي">
-              <div className="flex items-center justify-between flex-wrap gap-4">
-                <div className="flex items-center gap-3">
-                  <Crown size={20} className="text-amber-500" />
-                  <div>
-                    <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
-                    <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
-                  </div>
+              <div className="flex items-center gap-3">
+                <Crown size={20} className="text-amber-500" />
+                <div>
+                  <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
+                  <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
                 </div>
-                {subscription.subscriber_number && (
-                  <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-accent/10 border border-accent/20">
-                    <KeyIcon size={16} className="text-accent" />
-                    <div>
-                      <div className="text-[10px] text-text-muted">رقم المشترك</div>
-                      <div className="text-lg font-bold text-accent font-mono" dir="ltr">#{subscription.subscriber_number}</div>
-                    </div>
-                  </div>
-                )}
               </div>
               {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-warning-light border border-warning rounded-lg text-xs font-semibold text-warning flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
             </Card>
@@ -510,7 +498,7 @@ export default function SubscriptionPageEnhanced() {
             <div key={plan.id} className={`border rounded-2xl p-5 flex flex-col ${isCurrent ? 'border-accent ring-2 ring-accent/30 bg-accent/5' : 'border-border bg-card'}`}>
               <h3 className="font-bold text-lg">{plan.name}</h3>
               <p className="text-xs text-text-muted mt-1">{plan.description_ar || plan.description}</p>
-              {isTrial && <span className="mt-2 text-xs bg-blue-900/30 text-blue-300 px-2 py-1 rounded-full w-fit">{plan.trial_days} أيام تجريبية</span>}
+              {isTrial && <span className="mt-2 text-xs bg-info-light text-info px-2 py-1 rounded-full w-fit">{plan.trial_days} أيام تجريبية</span>}
 
               <div className="mt-4">
                 <div className="flex items-baseline gap-2">
@@ -518,7 +506,7 @@ export default function SubscriptionPageEnhanced() {
                   <span className="text-xs text-text-muted">/شهر</span>
                 </div>
                 <div className="text-xs text-text-muted mt-1">
-                  {sym}{yearlyPrice}/سنة <span className="text-green-400">خصم {yearlyDiscount}%</span>
+                  {sym}{yearlyPrice}/سنة <span className="text-success">خصم {yearlyDiscount}%</span>
                 </div>
               </div>
 
@@ -601,7 +589,7 @@ export default function SubscriptionPageEnhanced() {
                 className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm"
               />
               {receiptUploading === 'upgrade' && <p className="text-xs text-text-muted mt-1">جاري رفع الإيصال...</p>}
-              {form.receipt_url && <p className="text-xs text-emerald-400 mt-1">تم إرفاق الإيصال بأمان</p>}
+              {form.receipt_url && <p className="text-xs text-success mt-1">تم إرفاق الإيصال بأمان</p>}
             </div>
 
             <div>
@@ -609,7 +597,7 @@ export default function SubscriptionPageEnhanced() {
               <textarea value={form.notes} onChange={(e)=>setForm({...form, notes: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm h-20" placeholder="اكتب تفاصيل إضافية..."></textarea>
             </div>
 
-            <div className="bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 text-xs text-amber-300">
+            <div className="bg-warning-light border border-warning rounded-xl p-3 text-xs text-warning">
               <div className="font-bold">المبلغ المطلوب: ${priceForSelected} ({duration === 'yearly' ? 'سنوي' : 'شهري'})</div>
               <div className="mt-1">بعد التحويل، ارفق قيمة التحويل وتاريخه ووقته وصورة الإيصال. سيصل الطلب للإدارة عبر البوت وسيتم تنبيه الإدارة في لوحة التحكم.</div>
             </div>
@@ -735,7 +723,7 @@ export default function SubscriptionPageEnhanced() {
               </select>
             </div>
           </div>
-          <div className="p-3 bg-amber-950/20 border border-amber-900/30 rounded-xl text-xs text-amber-300">
+          <div className="p-3 bg-warning-light border border-warning rounded-xl text-xs text-warning">
             المبلغ المطلوب: <strong>${addonTotal()}</strong>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

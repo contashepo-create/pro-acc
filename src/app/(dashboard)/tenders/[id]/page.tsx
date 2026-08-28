@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowRight, Plus, Trophy, XCircle, Send, FileText, Banknote,
-  TrendingUp, Building2, Calendar, MapPin, Percent, Hash,
+  Building2, Calendar, MapPin, Percent, Hash,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -14,8 +14,9 @@ import { Textarea } from '@/components/ui/Textarea';
 import { Badge } from '@/components/ui/Badge';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
-import { toDateInput } from '@/lib/form-utils';
+import { formatDate } from '@/lib/utils';
+import { parseCompanyVatRate, vatOnAmount, vatPercentLabel } from '@/lib/company-vat';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface TenderDetail {
   id: string;
@@ -60,16 +61,24 @@ const STATUS_LABELS: Record<string, string> = {
   draft: 'مسودة', preparing: 'قيد التحضير', submitted: 'مُقدَّمة',
   won: 'رابحة', lost: 'خاسرة', cancelled: 'ملغاة',
 };
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'gray', preparing: 'blue', submitted: 'amber',
-  won: 'green', lost: 'red', cancelled: 'gray',
+const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'> = {
+  draft: 'default', preparing: 'info', submitted: 'warning',
+  won: 'success', lost: 'danger', cancelled: 'default',
 };
 const EXPENSE_LABELS: Record<string, string> = {
-  karasa: 'كراسة الشروط', platform_fee: 'رسوم المنصة', bid_bond_margin: 'غطاء ضمان ابتدائي',
-  bid_bond_commission: 'عمولة ضمان', consulting: 'استشارات', other: 'أخرى',
+  karasa: 'كراسة الشروط', platform_fee: 'رسوم المنصة',
+  bid_bond_margin: 'غطاء ضمان ابتدائي', bid_bond_commission: 'عمولة ضمان',
+  consulting: 'استشارات', other: 'أخرى',
 };
+const EXPENSE_FORM_OPTIONS = [
+  { value: 'karasa', label: 'كراسة الشروط' },
+  { value: 'platform_fee', label: 'رسوم المنصة' },
+  { value: 'consulting', label: 'استشارات' },
+  { value: 'other', label: 'أخرى' },
+];
 
 export default function TenderDetailPage() {
+  const { money } = useCompanyMoney();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
@@ -80,6 +89,7 @@ export default function TenderDetailPage() {
   const [activeTab, setActiveTab] = useState<'overview' | 'costs' | 'expenses' | 'bonds'>('overview');
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [banksSafes, setBanksSafes] = useState<BankSafe[]>([]);
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [saving, setSaving] = useState(false);
   const [expenseForm, setExpenseForm] = useState({
     expense_type: 'karasa',
@@ -102,12 +112,13 @@ export default function TenderDetailPage() {
 
   const fetchBanks = async () => {
     try {
-      const res = await fetch('/api/banks');
-      const json = await res.json();
+      const [banksRes, setRes] = await Promise.all([fetch('/api/banks'), fetch('/api/auth/me')]);
+      const [json, setJson] = await Promise.all([banksRes.json(), setRes.json()]);
       if (json.success) {
         const all = [...(json.data?.banks || []), ...(json.data?.safes || [])];
         setBanksSafes(all);
       }
+      if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
     } catch { /* ignore */ }
   };
 
@@ -190,7 +201,7 @@ export default function TenderDetailPage() {
             <h1 className="text-xl font-bold">{tender.title}</h1>
             <p className="text-text-secondary text-sm">{tender.client_name}</p>
           </div>
-          <Badge color={STATUS_COLORS[tender.status]}>{STATUS_LABELS[tender.status]}</Badge>
+          <Badge variant={STATUS_VARIANTS[tender.status] || 'default'}>{STATUS_LABELS[tender.status]}</Badge>
         </div>
         <div className="flex gap-2">
           {canTransition('submitted') && (
@@ -208,13 +219,16 @@ export default function TenderDetailPage() {
               <XCircle size={16} className="ml-1" /> خسارة
             </Button>
           )}
+          {canTransition('cancelled') && (
+            <Button variant="ghost" onClick={() => handleStatusChange('cancelled')}>إلغاء</Button>
+          )}
           {tender.status === 'won' && !tender.project_id && (
             <Button onClick={handleConvertToProject}>
               <Building2 size={16} className="ml-1" /> تحويل إلى مشروع
             </Button>
           )}
           {tender.project_id && (
-            <Button variant="outline" onClick={() => router.push(`/projects/${tender.project_id}`)}>
+            <Button variant="outline" onClick={() => router.push('/projects')}>
               <Building2 size={16} className="ml-1" /> المشروع
             </Button>
           )}
@@ -247,7 +261,7 @@ export default function TenderDetailPage() {
       {activeTab === 'overview' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <InfoCard icon={<Hash size={16} />} label="رقم المرجع" value={tender.reference_number || '—'} />
-          <InfoCard icon={<Banknote size={16} />} label="القيمة التقديرية" value={tender.estimated_value ? formatCurrency(tender.estimated_value) : '—'} />
+          <InfoCard icon={<Banknote size={16} />} label="القيمة التقديرية" value={tender.estimated_value ? money(tender.estimated_value) : '—'} />
           <InfoCard icon={<Percent size={16} />} label="احتمالية الفوز" value={tender.win_probability != null ? `${tender.win_probability}%` : '—'} />
           <InfoCard icon={<Calendar size={16} />} label="موعد التقديم" value={tender.submission_deadline ? formatDate(tender.submission_deadline) : '—'} />
           <InfoCard icon={<Calendar size={16} />} label="تاريخ الفتح" value={tender.opening_date ? formatDate(tender.opening_date) : '—'} />
@@ -268,15 +282,15 @@ export default function TenderDetailPage() {
           <div className="md:col-span-3 grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-bg-card rounded-xl border border-border p-4">
               <div className="text-xs text-text-secondary mb-1">إجمالي بنود التكلفة</div>
-              <div className="text-lg font-bold">{formatCurrency(tender.total_cost || 0)}</div>
+              <div className="text-lg font-bold">{money(tender.total_cost || 0)}</div>
             </div>
             <div className="bg-bg-card rounded-xl border border-border p-4">
               <div className="text-xs text-text-secondary mb-1">المصاريف الفعلية</div>
-              <div className="text-lg font-bold">{formatCurrency(tender.total_expenses || 0)}</div>
+              <div className="text-lg font-bold">{money(tender.total_expenses || 0)}</div>
             </div>
             <div className="bg-bg-card rounded-xl border border-border p-4">
               <div className="text-xs text-text-secondary mb-1">القيمة التقديرية</div>
-              <div className="text-lg font-bold">{formatCurrency(tender.bid_amount || 0)}</div>
+              <div className="text-lg font-bold">{money(tender.bid_amount || 0)}</div>
             </div>
             <div className="bg-bg-card rounded-xl border border-border p-4">
               <div className="text-xs text-text-secondary mb-1">هامش الربح</div>
@@ -301,16 +315,16 @@ export default function TenderDetailPage() {
                 <tbody>
                   {tender.cost_items.map((item) => (
                     <tr key={item.id} className="border-t border-border">
-                      <td className="p-3"><Badge color="blue">{item.category}</Badge></td>
+                      <td className="p-3"><Badge variant="info">{item.category}</Badge></td>
                       <td className="p-3">{item.description || '—'}</td>
-                      <td className="p-3 text-left font-medium">{formatCurrency(item.amount)}</td>
+                      <td className="p-3 text-left font-medium">{money(item.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-bg-hover">
                     <td colSpan={2} className="p-3 font-bold">الإجمالي</td>
-                    <td className="p-3 text-left font-bold">{formatCurrency(tender.total_cost || 0)}</td>
+                    <td className="p-3 text-left font-bold">{money(tender.total_cost || 0)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -344,19 +358,19 @@ export default function TenderDetailPage() {
                 <tbody>
                   {tender.expenses.map((exp) => (
                     <tr key={exp.id} className="border-t border-border">
-                      <td className="p-3"><Badge color="amber">{EXPENSE_LABELS[exp.expense_type] || exp.expense_type}</Badge></td>
+                      <td className="p-3"><Badge variant="warning">{EXPENSE_LABELS[exp.expense_type] || exp.expense_type}</Badge></td>
                       <td className="p-3">{exp.description || '—'}</td>
                       <td className="p-3">{formatDate(exp.date)}</td>
-                      <td className="p-3 text-left">{formatCurrency(exp.amount)}</td>
-                      <td className="p-3 text-left">{formatCurrency(exp.vat_amount)}</td>
-                      <td className="p-3 text-left font-medium">{formatCurrency(exp.amount + exp.vat_amount)}</td>
+                      <td className="p-3 text-left">{money(exp.amount)}</td>
+                      <td className="p-3 text-left">{money(exp.vat_amount)}</td>
+                      <td className="p-3 text-left font-medium">{money(exp.amount + exp.vat_amount)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-bg-hover">
                     <td colSpan={5} className="p-3 font-bold">الإجمالي</td>
-                    <td className="p-3 text-left font-bold">{formatCurrency(tender.total_expenses || 0)}</td>
+                    <td className="p-3 text-left font-bold">{money(tender.total_expenses || 0)}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -374,7 +388,7 @@ export default function TenderDetailPage() {
       {activeTab === 'bonds' && (
         <div>
           <div className="flex justify-end mb-3">
-            <Button onClick={() => router.push(`/bonds/new?tender_id=${tender.id}`)}>
+            <Button onClick={() => router.push(`/bonds?tender_id=${tender.id}`)}>
               <Plus size={16} className="ml-1" /> خطاب ضمان
             </Button>
           </div>
@@ -395,9 +409,9 @@ export default function TenderDetailPage() {
                     <tr key={bond.id} className="border-t border-border hover:bg-bg-hover cursor-pointer"
                       onClick={() => router.push(`/bonds/${bond.id}`)}>
                       <td className="p-3 font-medium">{bond.title}</td>
-                      <td className="p-3"><Badge color="purple">{bond.type}</Badge></td>
-                      <td className="p-3 text-left">{formatCurrency(bond.amount)}</td>
-                      <td className="p-3"><Badge color={bond.status === 'active' ? 'green' : 'gray'}>{bond.status}</Badge></td>
+                      <td className="p-3"><Badge variant="accent">{bond.type}</Badge></td>
+                      <td className="p-3 text-left">{money(bond.amount)}</td>
+                      <td className="p-3"><Badge variant={bond.status === 'active' ? 'success' : 'default'}>{bond.status}</Badge></td>
                       <td className="p-3">{formatDate(bond.expiry_date)}</td>
                     </tr>
                   ))}
@@ -414,27 +428,36 @@ export default function TenderDetailPage() {
       )}
 
       {/* Expense Modal */}
-      <Modal open={showExpenseModal} onClose={() => setShowExpenseModal(false)} title="تسجيل مصروف مناقصة" size="md">
+      <Modal isOpen={showExpenseModal} onClose={() => setShowExpenseModal(false)} title="تسجيل مصروف مناقصة" size="md">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Select label="نوع المصروف *" value={expenseForm.expense_type}
-            onChange={(e) => setExpenseForm({ ...expenseForm, expense_type: e.target.value })}>
-            {Object.entries(EXPENSE_LABELS).map(([val, label]) => (
-              <option key={val} value={val}>{label}</option>
-            ))}
-          </Select>
+          <Select
+            label="نوع المصروف *"
+            value={expenseForm.expense_type}
+            onChange={(v) => setExpenseForm({ ...expenseForm, expense_type: v })}
+            options={EXPENSE_FORM_OPTIONS}
+          />
           <Input label="التاريخ" type="date" value={expenseForm.date}
             onChange={(e) => setExpenseForm({ ...expenseForm, date: e.target.value })} />
           <Input label="المبلغ *" type="number" value={expenseForm.amount}
-            onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} placeholder="0.00" />
-          <Input label="الضريبة (15%)" type="number" value={expenseForm.vat_amount}
+            onChange={(e) => {
+              const amount = e.target.value;
+              const vat = vatOnAmount(Number(amount) || 0, companyVatRate);
+              setExpenseForm({ ...expenseForm, amount, vat_amount: vat ? String(vat) : '' });
+            }} placeholder="0.00" />
+          <Input label={`الضريبة (${vatPercentLabel(companyVatRate)}%)`} type="number" value={expenseForm.vat_amount}
             onChange={(e) => setExpenseForm({ ...expenseForm, vat_amount: e.target.value })} placeholder="0.00" />
-          <Select label="البنك / الخزينة *" value={expenseForm.bank_safe_id}
-            onChange={(e) => setExpenseForm({ ...expenseForm, bank_safe_id: e.target.value })}>
-            <option value="">اختر...</option>
-            {banksSafes.map((b) => (
-              <option key={b.id} value={b.id}>{b.name} ({b.type === 'bank' ? 'بنك' : 'خزينة'})</option>
-            ))}
-          </Select>
+          <Select
+            label="البنك / الخزينة *"
+            value={expenseForm.bank_safe_id}
+            onChange={(v) => setExpenseForm({ ...expenseForm, bank_safe_id: v })}
+            options={[
+              { value: '', label: 'اختر...' },
+              ...banksSafes.map((b) => ({
+                value: b.id,
+                label: `${b.name} (${b.type === 'bank' ? 'بنك' : 'خزينة'})`,
+              })),
+            ]}
+          />
           <div className="md:col-span-2">
             <Textarea label="الوصف" value={expenseForm.description}
               onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} rows={2} />

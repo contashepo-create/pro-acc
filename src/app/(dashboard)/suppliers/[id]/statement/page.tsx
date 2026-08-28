@@ -8,8 +8,9 @@ import { Button } from '@/components/ui/Button';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { PrintButton } from '@/components/ui/PrintButton';
 import { StatementHeader, SignatureFooter } from '@/components/ui/PrintTemplate';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { printCurrentPage } from '@/lib/print';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 const typeLabel: Record<string, string> = {
   voucher_disbursement: 'سند صرف',
@@ -22,6 +23,7 @@ const typeLabel: Record<string, string> = {
 };
 
 export default function SupplierStatementPage() {
+  const { money } = useCompanyMoney();
 interface SupplierStatementEntry {
   id: string;
   date: string;
@@ -86,19 +88,19 @@ interface SupplierStatementData {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="rounded-xl border border-border bg-bg-secondary p-4">
           <div className="text-xs text-text-muted">الرصيد الافتتاحي</div>
-          <div className="text-lg font-bold mt-1">{formatCurrency(s.opening_balance)}</div>
+          <div className="text-lg font-bold mt-1">{money(s.opening_balance)}</div>
         </div>
         <div className="rounded-xl border border-border bg-bg-secondary p-4">
           <div className="text-xs text-text-muted">الحركات المدينة</div>
-          <div className="text-lg font-bold mt-1">{formatCurrency(s.total_debit)}</div>
+          <div className="text-lg font-bold mt-1">{money(s.total_debit)}</div>
         </div>
         <div className="rounded-xl border border-border bg-bg-secondary p-4">
           <div className="text-xs text-text-muted">الحركات الدائنة</div>
-          <div className="text-lg font-bold mt-1">{formatCurrency(s.total_credit)}</div>
+          <div className="text-lg font-bold mt-1">{money(s.total_credit)}</div>
         </div>
         <div className="rounded-xl border border-border bg-bg-secondary p-4">
           <div className="text-xs text-text-muted">الرصيد الحالي</div>
-          <div className="text-lg font-bold mt-1">{formatCurrency(s.balance)}</div>
+          <div className="text-lg font-bold mt-1">{money(s.balance)}</div>
         </div>
       </div>
 
@@ -122,9 +124,9 @@ interface SupplierStatementData {
                 <td className="p-3 whitespace-nowrap">{formatDate(e.date)}</td>
                 <td className="p-3"><span className="text-xs bg-surface rounded-md px-2 py-1">{typeLabel[e.type ?? ''] || e.type}</span></td>
                 <td className="p-3 text-text-muted">{e.description || '—'}</td>
-                <td className="p-3">{e.debit > 0 ? formatCurrency(e.debit) : '—'}</td>
-                <td className="p-3">{e.credit > 0 ? formatCurrency(e.credit) : '—'}</td>
-                <td className="p-3 font-bold">{formatCurrency(e.balance)}</td>
+                <td className="p-3">{e.debit > 0 ? money(e.debit) : '—'}</td>
+                <td className="p-3">{e.credit > 0 ? money(e.credit) : '—'}</td>
+                <td className="p-3 font-bold">{money(e.balance)}</td>
               </tr>
             ))}
           </tbody>
@@ -137,7 +139,7 @@ interface SupplierStatementData {
           <div className="flex flex-wrap gap-2">
             {s.purchase_invoices.map((inv) => (
               <span key={inv.id} className="text-xs bg-surface rounded-md px-2 py-1">
-                {inv.number} — {formatCurrency(inv.total)}
+                {inv.number} — {money(inv.total)}
               </span>
             ))}
           </div>
@@ -149,7 +151,7 @@ interface SupplierStatementData {
           <div className="flex flex-wrap gap-2">
             {s.disbursements.map((d) => (
               <span key={d.id} className="text-xs bg-surface rounded-md px-2 py-1">
-                {d.number} — {formatCurrency(d.amount)}
+                {d.number} — {money(d.amount)}
               </span>
             ))}
           </div>

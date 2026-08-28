@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface AnalyticsData {
   revenueChart: Array<{ month: string; revenue: number; expenses: number }>;
@@ -91,6 +92,7 @@ function DonutChart({ segments, size = 120 }: { segments: Array<{ value: number;
 }
 
 export default function AnalyticsDashboard() {
+  const { money } = useCompanyMoney();
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -152,7 +154,7 @@ export default function AnalyticsDashboard() {
           <div key={i} className="bg-white rounded-xl p-4 shadow-sm">
             <p className="text-xs text-gray-500 mb-1">{kpi.label}</p>
             <p className={`text-xl font-bold ${kpi.color}`}>
-              {kpi.format === 'currency' && `${kpi.value.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} ر.س`}
+              {kpi.format === 'currency' && money(kpi.value)}
               {kpi.format === 'percent' && `${kpi.value.toFixed(1)}%`}
               {kpi.format === 'days' && `${kpi.value} يوم`}
             </p>
@@ -208,7 +210,7 @@ export default function AnalyticsDashboard() {
                     <span className="text-sm font-medium">{client.name}</span>
                   </div>
                   <div className="text-left">
-                    <p className="text-sm font-bold">{client.revenue.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} ر.س</p>
+                    <p className="text-sm font-bold">{money(client.revenue)}</p>
                     <p className="text-xs text-gray-400">{client.invoiceCount} فاتورة</p>
                   </div>
                 </div>

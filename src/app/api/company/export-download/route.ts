@@ -81,9 +81,9 @@ function escapeHtml(v: unknown): string {
 
 function reportsToExcelHtml(sections: { spec: ReportSpec; headers: string[]; records: string[][] }[], companyName: string, stamp: string): string {
   const sheets = sections.map(({ spec, headers, records }) => {
-    const head = `<tr style="background:#1e3a5f;color:#ffffff;font-weight:bold;">${headers.map((h) => `<th style="padding:6px;border:1px solid #6b7280;">${escapeHtml(h)}</th>`).join('')}</tr>`;
+    const head = `<tr style="background:#1f2937;color:#ffffff;font-weight:bold;">${headers.map((h) => `<th style="padding:6px;border:1px solid #9ca3af;">${escapeHtml(h)}</th>`).join('')}</tr>`;
     const body = records.map((rec, i) =>
-      `<tr style="background:${i % 2 ? '#e8edf2' : '#ffffff'};color:#111827;">${rec.map((cell) => `<td style="padding:4px;border:1px solid #d1d5db;">${escapeHtml(cell)}</td>`).join('')}</tr>`
+      `<tr style="background:${i % 2 ? '#f3f4f6' : '#ffffff'};">${rec.map((cell) => `<td style="padding:4px;border:1px solid #d1d5db;">${escapeHtml(cell)}</td>`).join('')}</tr>`
     ).join('');
     return `<h2 style="font-family:Arial;color:#111827;">${escapeHtml(spec.title)}</h2>` +
       `<p style="font-family:Arial;color:#4b5563;font-size:12px;">شركة: ${escapeHtml(companyName)} — تاريخ التصدير: ${escapeHtml(stamp)} — عدد السجلات: ${records.length}</p>` +

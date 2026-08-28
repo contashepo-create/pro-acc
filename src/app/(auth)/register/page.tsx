@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2, UserPlus, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/auth-store';
-import { getCountriesList } from '@/lib/countries';
+import { getOperatingCountriesList } from '@/lib/countries';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -127,16 +127,19 @@ export default function RegisterPage() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-text-secondary mb-1.5">الدولة</label>
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">دولة التشغيل</label>
           <select
             value={country}
             onChange={(e) => setCountry(e.target.value)}
             className="input-base"
           >
-            {getCountriesList().map((c) => (
+            {getOperatingCountriesList().map((c) => (
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
+          <p className="text-xs text-text-muted mt-1">
+            تُثبَّت عند إنشاء الحساب: الضريبة والعملة والتأمينات وفاتورة الزكاة/ETA تتبع هذه الدولة ولا يمكن تغييرها لاحقاً.
+          </p>
         </div>
 
         <div>

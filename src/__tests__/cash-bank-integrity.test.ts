@@ -113,9 +113,21 @@ describe('cash lifecycle boundary', () => {
     expect(response.status).toBe(201);
     expect(rpc('post_cash_transaction')!.params).toMatchObject({
       p_company_id: C1, p_created_by: USER, p_bank_safe_id: BANK,
-      p_account_id: ACCOUNT, p_amount: 10.25, p_tax_rate: 0.1234,
+      p_account_id: ACCOUNT, p_amount: 10.25, p_tax_rate: 0.1234, p_project_id: null,
     });
     expect(mockDb.calls.filter((call) => call.mut)).toHaveLength(0);
+  });
+
+  test('posts a cash movement onto a project cost center', async () => {
+    const projectId = '00000000-0000-4000-8000-000000000701';
+    const response = await cashPOST(request({
+      date: '2026-08-01', type: 'expense', amount: 8, bankSafeId: BANK,
+      accountId: ACCOUNT, reason: 'مواد موقع', projectId,
+    }));
+    expect(response.status).toBe(201);
+    expect(rpc('post_cash_transaction')!.params).toMatchObject({
+      p_company_id: C1, p_project_id: projectId, p_amount: 8,
+    });
   });
 
   test('rejects invalid precision and caller-supplied fields before RPC', async () => {

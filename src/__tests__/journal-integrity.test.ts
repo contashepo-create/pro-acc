@@ -245,6 +245,25 @@ describe('journalEntrySchema — double-entry rules', () => {
     expect(res.success).toBe(true);
   });
 
+  test('keeps optional project and party identifiers on lines', () => {
+    const projectId = '00000000-0000-4000-8000-0000000000b1';
+    const contactId = '00000000-0000-4000-8000-0000000000c1';
+    const res = journalEntrySchema.safeParse({
+      date: '2026-08-01', type: 'general',
+      lines: [
+        { accountCode: '1110', debit: 100, credit: 0, projectId, contactId: '' },
+        { accountCode: '4100', debit: 0, credit: 100, projectId: '', contactId },
+      ],
+    });
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.lines[0].projectId).toBe(projectId);
+      expect(res.data.lines[0].contactId).toBeNull();
+      expect(res.data.lines[1].projectId).toBeNull();
+      expect(res.data.lines[1].contactId).toBe(contactId);
+    }
+  });
+
   test('rejects the same account as both debit and credit in one entry', () => {
     const res = journalEntrySchema.safeParse({
       date: '2026-08-01', type: 'general',
@@ -426,6 +445,7 @@ describe('POST /api/journal — atomic posting boundary', () => {
     const rpcLines = (mockDb.rpcCalls[0].params?.p_lines ?? []) as Row[];
     expect(rpcLines).toHaveLength(3);
     expect(rpcLines.every((line) => line.accountId)).toBe(true);
+    expect(rpcLines.every((line) => line.projectId === null && line.contactId === null)).toBe(true);
     expect(mockDb.calls.find((call) => call.mut.kind === 'insert' && call.table === 'journal_entries')).toBeUndefined();
   });
 

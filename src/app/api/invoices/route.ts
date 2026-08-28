@@ -5,6 +5,7 @@ import { invoiceSchema } from '@/lib/validation';
 import { generateZatcaQRData, validateInvoiceForZatca } from '@/lib/zatca';
 import { isValidDate } from '@/lib/utils';
 import { assertOpenFiscalPeriod } from '@/lib/fiscal-guard';
+import { parseCompanyVatRate } from '@/lib/company-vat';
 
 import type { Row } from '@/lib/types';
 
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest) {
       || (dateFrom && dateTo && dateFrom > dateTo)) return error('فترة الفواتير غير صالحة');
 
     let query = s.from('invoices')
-      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, status, notes, journal_entry_id, zatca_qr, created_at', { count: 'exact' })
+      .select('id, number, contact_id, project_id, date, due_date, subtotal, vat_rate, vat_amount, total, paid_amount, status, notes, journal_entry_id, zatca_qr, created_at', { count: 'exact' })
       .eq('company_id', auth.companyId)
       .is('deleted_at', null);
     if (status) query = query.eq('status', status);
@@ -54,6 +55,7 @@ export async function GET(request: NextRequest) {
     }
     const invoices = (data || []).map((invoice: Row) => ({
       ...invoice,
+      paid_amount: Number(invoice.paid_amount) || 0,
       client_name: contactNames[String(invoice.contact_id)] || '',
     }));
     return success({
@@ -94,16 +96,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const body = await parseBody(request);
+    const body = await parseBody<Row>(request);
 
-    // استخلاص حقول التحصيل النقدي الفوري المسبق لتلافي تعطل الـ Zod Schema Strict
-    const collectedAmount = Number(body.collected_amount || body.collectedAmount || 0);
+    const collectedAmount = Number(body.collected_amount ?? body.collectedAmount ?? 0);
     const bankSafeId = body.bank_safe_id || body.bankSafeId || null;
 
-    const bodyToValidate = { ...body };
-    delete bodyToValidate.collected_amount;
+    const bodyToValidate: Row = { ...body, collected_amount: collectedAmount, bank_safe_id: bankSafeId || null };
     delete bodyToValidate.collectedAmount;
-    delete bodyToValidate.bank_safe_id;
     delete bodyToValidate.bankSafeId;
     delete bodyToValidate.payment_method;
     delete bodyToValidate.paymentMethod;
@@ -114,9 +113,8 @@ export async function POST(request: NextRequest) {
     const { clientId, projectId, date, dueDate, items, vatRate, notes, vatEnabled } = parsed.data;
     const currencyCode = parsed.data.currency_code || null;
     const exchangeRate = parsed.data.exchange_rate ?? null;
-    if (!Number.isFinite(collectedAmount) || collectedAmount < 0
-      || Math.abs(collectedAmount * 100 - Math.round(collectedAmount * 100)) > 1e-8) {
-      return error('مبلغ التحصيل غير صالح');
+    if (collectedAmount > 0 && !bankSafeId) {
+      return error('حدد الخزينة أو البنك للتحصيل النقدي');
     }
 
     // Return the actual accounting reason to the user instead of allowing the
@@ -131,10 +129,8 @@ export async function POST(request: NextRequest) {
     if (auth.role !== 'admin' && vatEnabled !== false) {
       try {
         const { data: companyRow } = await s.from('companies')
-          .select('vat_rate').eq('id', auth.companyId).maybeSingle();
-        const companyVatRate = Number((companyRow as Row | null)?.vat_rate);
-        const configured = Number.isFinite(companyVatRate) && companyVatRate > 0 && companyVatRate <= 1
-          ? companyVatRate : 0.15;
+          .select('vat_rate, country_code').eq('id', auth.companyId).maybeSingle();
+        const configured = parseCompanyVatRate(companyRow as Row | null);
         const allowedRates = [0, configured];
         if (!allowedRates.includes(vatRate)) {
           return error(
@@ -181,12 +177,15 @@ export async function POST(request: NextRequest) {
     // creation remains committed even when seller tax metadata is incomplete.
     let zatcaQRData: string | null = null;
     try {
+      const { data: companyForQr } = await s.from('companies')
+        .select('country_code').eq('id', auth.companyId).maybeSingle();
+      const operatingCountry = String((companyForQr as Row | null)?.country_code || 'SA');
       const taxSnapshot = invoice.tax_snapshot as Row | undefined;
       const seller = taxSnapshot?.seller as Row | undefined;
       const sellerName = typeof seller?.name === 'string' ? seller.name.trim() : '';
       const vatNumber = typeof seller?.vat_number === 'string' ? seller.vat_number.trim() : '';
       const createdAt = new Date(String(invoice.created_at));
-      if (sellerName && /^\d{15}$/.test(vatNumber) && Number.isFinite(createdAt.getTime())) {
+      if (operatingCountry === 'SA' && sellerName && /^\d{15}$/.test(vatNumber) && Number.isFinite(createdAt.getTime())) {
         const qrPayload = {
           sellerName,
           vatNumber,

@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
 import { success, error, parseBody, requireModulePermission, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
-import { ACCOUNT_CODES } from '@/lib/constants';
 import { loadCustodyFile, assertFileOpen } from '@/lib/custody';
 import { custodyExpenseSchema, custodyUuid } from '@/lib/custody-validation';
+import { localDateISO } from '@/lib/fiscal-calendar';
 
 import type { Row } from '@/lib/types';
 
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       projectId = String(project.id);
     }
 
-    const expenseCode = input.expense_account_code || ACCOUNT_CODES.DIRECT_COSTS;
+    const expenseCode = input.expense_account_code || '5400';
     const { data: expenseAccount } = await s.from('accounts').select('id').eq('company_id', auth.companyId)
       .eq('code', expenseCode).eq('type', 'expense').eq('is_active', true).eq('is_header', false).maybeSingle();
     if (!expenseAccount?.id) return error('حساب المصروف غير موجود أو غير صالح');
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const { data: updated, error: rpcError } = await s.rpc('post_custody_expense', {
       p_company_id: auth.companyId,
       p_custody_id: id,
-      p_date: input.date || new Date().toISOString().slice(0, 10),
+      p_date: input.date || localDateISO(),
       p_amount: input.amount,
       p_description: input.description,
       p_expense_account_id: expenseAccount.id,

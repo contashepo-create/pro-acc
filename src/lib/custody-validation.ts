@@ -56,3 +56,9 @@ export const updateCustodySchema = z.object({
   notes: custodyText.nullable().optional(),
   project_id: custodyUuid.nullable().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, 'لا توجد بيانات للتحديث');
+
+export const payCustodyInvoiceSchema = z.object({
+  purchase_invoice_id: custodyUuid,
+  amount: custodyMoney.optional(),
+  date: custodyDate.optional(),
+}).strict();

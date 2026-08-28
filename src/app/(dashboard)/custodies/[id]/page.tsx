@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowRight, Plus, Receipt, Lock, Wallet } from 'lucide-react';
+import { ArrowRight, Plus, Receipt, Lock, Wallet, Landmark } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -11,27 +11,31 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Checkbox } from '@/components/ui/Checkbox';
-import { formatCurrency, formatDate } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import { PrintButton } from '@/components/ui/PrintButton';
+import { useCompanyMoney } from '@/hooks/use-company-money';
+import { localDateISO } from '@/lib/fiscal-calendar';
+import { parseCompanyVatRate } from '@/lib/company-vat';
 
-// حسابات مصروف شائعة من شجرة الحسابات الافتراضية:
-// 5100–5140 تكلفة مشروع، 5200/5300/5400 مصروفات تشغيلية/عمومية للشركة.
+// حسابات ترحيل فرعية فقط — رأسا التكلفة والتشغيل لا يُرحَّل عليهما.
 const EXPENSE_ACCOUNT_OPTIONS = [
-  { value: '5100', label: 'تكلفة مباشرة (مشروع)' },
-  { value: '5110', label: 'مواد خام' },
-  { value: '5120', label: 'أجور عمالة مباشرة' },
-  { value: '5130', label: 'تكاليف مقاولي باطن' },
-  { value: '5140', label: 'إيجار معدات' },
-  { value: '5210', label: 'رواتب وأجور' },
-  { value: '5220', label: 'إيجارات' },
-  { value: '5230', label: 'كهرباء ومياه' },
-  { value: '5240', label: 'اتصالات وانترنت' },
-  { value: '5250', label: 'صيانة' },
-  { value: '5270', label: 'محروقات' },
-  { value: '5280', label: 'قرطاسية ومطبوعات' },
-  { value: '5290', label: 'مصروفات بنكية' },
-  { value: '5400', label: 'مصروفات إدارية وعمومية' },
+  { value: '5110', label: 'مواد خام — تكلفة مشروع' },
+  { value: '5120', label: 'أجور عمالة مباشرة — تكلفة مشروع' },
+  { value: '5130', label: 'تكاليف مقاولي باطن — تكلفة مشروع' },
+  { value: '5140', label: 'إيجار معدات — تكلفة مشروع' },
+  { value: '5210', label: 'رواتب وأجور — تشغيلي للشركة' },
+  { value: '5215', label: 'تأمينات اجتماعية — تشغيلي للشركة' },
+  { value: '5216', label: 'مستحقات نهاية الخدمة — تشغيلي للشركة' },
+  { value: '5220', label: 'إيجارات — تشغيلي للشركة' },
+  { value: '5230', label: 'كهرباء ومياه — تشغيلي للشركة' },
+  { value: '5240', label: 'اتصالات وانترنت — تشغيلي للشركة' },
+  { value: '5250', label: 'صيانة — تشغيلي للشركة' },
+  { value: '5270', label: 'محروقات — تشغيلي للشركة' },
+  { value: '5280', label: 'قرطاسية ومطبوعات — تشغيلي للشركة' },
+  { value: '5290', label: 'مصروفات بنكية — تشغيلي للشركة' },
+  { value: '5300', label: 'مصروفات تسويقية — للشركة' },
+  { value: '5400', label: 'مصروفات إدارية وعمومية — للشركة' },
 ];
 
 interface CustodyTransaction {
@@ -64,6 +68,15 @@ interface CustodyFile {
 interface BankSafeOption { id: string; name: string; }
 interface ContactOption { id: string; name: string; }
 interface ProjectOption { id: string; name: string; }
+interface UnpaidInvoice {
+  id: string;
+  invoice_number?: string;
+  number?: number;
+  total?: number;
+  paid_amount?: number;
+  status?: string;
+  supplier_name?: string;
+}
 interface CustodyForm {
   amount?: number;
   date: string;
@@ -86,6 +99,7 @@ interface ExpenseForm {
 }
 
 export default function CustodyFilePage() {
+  const { money, company } = useCompanyMoney();
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [file, setFile] = useState<CustodyFile | null>(null);
@@ -94,10 +108,13 @@ export default function CustodyFilePage() {
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [modal, setModal] = useState<'add' | 'expense' | 'general' | 'close' | null>(null);
+  const [modal, setModal] = useState<'add' | 'expense' | 'general' | 'pay' | 'close' | null>(null);
+  const [unpaidInvoices, setUnpaidInvoices] = useState<UnpaidInvoice[]>([]);
+  const [payInvoiceId, setPayInvoiceId] = useState('');
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<CustodyForm>({ amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: '', description: '', allow_excess: false, returned_cash: 0 });
-  const [expenseForm, setExpenseForm] = useState<ExpenseForm>({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', expense_account_code: '5100', project_mode: 'none', project_id: '', allow_excess: false });
+  const [form, setForm] = useState<CustodyForm>({ amount: 0, date: localDateISO(), bank_safe_id: '', description: '', allow_excess: false, returned_cash: 0 });
+  const [expenseForm, setExpenseForm] = useState<ExpenseForm>({ amount: 0, date: localDateISO(), description: '', expense_account_code: '5400', project_mode: 'none', project_id: '', allow_excess: false });
+  const [taxEnabled, setTaxEnabled] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -164,17 +181,34 @@ export default function CustodyFilePage() {
         ].map(([label, val]) => (
           <Card key={String(label)} className="p-4">
             <p className="text-xs text-text-muted">{label}</p>
-            <p className="text-lg font-bold mt-1">{val === null ? (file.project_name || 'عام') : formatCurrency(Number(val) || 0)}</p>
+            <p className="text-lg font-bold mt-1">{val === null ? (file.project_name || 'عام') : money(Number(val) || 0)}</p>
           </Card>
         ))}
       </div>
 
       {!closed && (
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => { setForm({ amount: 0, date: new Date().toISOString().split('T')[0], bank_safe_id: file.bank_safe_id || '', description: 'تعزيز' }); setModal('add'); }}>تعزيز</Button>
-          <Button size="sm" variant="secondary" leftIcon={<Receipt size={14} />} onClick={() => { setForm({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', supplier_id: '', project_mode: file.project_id ? 'custody' : 'none', project_id: file.project_id || '', allow_excess: false }); setModal('expense'); }}>فاتورة مدفوعة من العهدة</Button>
-          <Button size="sm" variant="secondary" leftIcon={<Wallet size={14} />} onClick={() => { setExpenseForm({ amount: 0, date: new Date().toISOString().split('T')[0], description: '', expense_account_code: '5100', project_mode: file.project_id ? 'custody' : 'none', project_id: file.project_id || '', allow_excess: false }); setModal('general'); }}>مصروف / مصروف تشغيلي</Button>
-          <Button size="sm" variant="outline" leftIcon={<Lock size={14} />} onClick={() => { setForm({ returned_cash: file.remaining_amount, date: new Date().toISOString().split('T')[0], bank_safe_id: file.bank_safe_id || '', description: '' }); setModal('close'); }}>إغلاق الملف</Button>
+          <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => { setForm({ amount: 0, date: localDateISO(), bank_safe_id: file.bank_safe_id || '', description: 'تعزيز' }); setModal('add'); }}>تعزيز</Button>
+          <Button size="sm" variant="secondary" leftIcon={<Receipt size={14} />} onClick={() => { setForm({ amount: 0, date: localDateISO(), description: '', supplier_id: '', project_mode: file.project_id ? 'custody' : 'none', project_id: file.project_id || '', allow_excess: false }); setTaxEnabled(false); setModal('expense'); }}>فاتورة مدفوعة من العهدة</Button>
+          <Button size="sm" variant="secondary" leftIcon={<Wallet size={14} />} onClick={() => { setExpenseForm({ amount: 0, date: localDateISO(), description: '', expense_account_code: file.project_id ? '5110' : '5400', project_mode: file.project_id ? 'custody' : 'none', project_id: file.project_id || '', allow_excess: false }); setModal('general'); }}>مصروف / كهرباء / ديزل</Button>
+          <Button size="sm" variant="secondary" leftIcon={<Landmark size={14} />} onClick={async () => {
+            setPayInvoiceId('');
+            setForm({ amount: 0, date: localDateISO() });
+            try {
+              const [uRes, pRes] = await Promise.all([
+                fetch('/api/purchases/invoices?status=unpaid&pageSize=100'),
+                fetch('/api/purchases/invoices?status=partial&pageSize=100'),
+              ]);
+              const [uJson, pJson] = await Promise.all([uRes.json(), pRes.json()]);
+              const rows = [
+                ...((uJson.success && uJson.data?.invoices) || []),
+                ...((pJson.success && pJson.data?.invoices) || []),
+              ] as UnpaidInvoice[];
+              setUnpaidInvoices(rows);
+            } catch { setUnpaidInvoices([]); }
+            setModal('pay');
+          }}>تسديد مورد قائم</Button>
+          <Button size="sm" variant="outline" leftIcon={<Lock size={14} />} onClick={() => { setForm({ returned_cash: file.remaining_amount, date: localDateISO(), bank_safe_id: file.bank_safe_id || '', description: '' }); setModal('close'); }}>إغلاق الملف</Button>
         </div>
       )}
 
@@ -191,20 +225,20 @@ export default function CustodyFilePage() {
             </thead>
             <tbody>
               {(file.transactions || []).length === 0 && (
-                <tr><td colSpan={3} className="py-6 text-center text-text-muted">لا حركات بعد الافتتاح</td></tr>
+                <tr><td colSpan={4} className="py-6 text-center text-text-muted">لا حركات بعد الافتتاح</td></tr>
               )}
               {(file.transactions || []).map((t: CustodyTransaction) => (
                 <tr key={t.id} className="border-b border-border/60">
-                  <td className="py-2 whitespace-nowrap">{t.created_at ? new Date(t.created_at).toISOString().slice(0, 10) : '—'}</td>
+                  <td className="py-2 whitespace-nowrap">{formatDate(t.date || t.created_at)}</td>
                   <td className="py-2">{t.type === 'addition' ? (Number(t.amount) === Number(file.total_received) && String(t.description || '').startsWith('افتتاح') ? 'افتتاح' : 'تعزيز') : t.type === 'expense' ? 'مصروف' : t.type === 'shortage' ? 'عجز' : t.type === 'surplus' ? 'زيادة' : t.type === 'return' ? 'مرتجع' : t.type}</td>
                   <td className="py-2">{t.description}</td>
-                  <td className="py-2 font-mono">{formatCurrency(Number(t.amount) || 0)}</td>
+                  <td className="py-2 font-mono">{money(Number(t.amount) || 0)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="text-xs text-text-muted mt-3">التاريخ: {formatDate(file.date)} — المصروف يُخصم من 1150 فلا يُصرف نقداً مرة أخرى. الإغلاق لا يتم إلا بتأكيد.</p>
+        <p className="text-xs text-text-muted mt-3">التاريخ: {formatDate(file.date)} — المصروف يُخصم من حساب العهد فلا يُصرف نقداً مرة أخرى. الإغلاق لا يتم إلا بتأكيد.</p>
       </Card>
 
       <Modal isOpen={modal === 'add'} onClose={() => setModal(null)} title="تعزيز الملف" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>إلغاء</Button><Button disabled={saving} onClick={() => post(`/api/custodies/${id}/add`, {
@@ -212,11 +246,10 @@ export default function CustodyFilePage() {
       })}>ترحيل التعزيز</Button></div>}>
         <div className="space-y-3">
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
-          <Input label="الملاحظات" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="سبب التعزيز (اختياري)" />
           <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
           <Select label="المصدر" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}
-            options={[{ value: '', label: 'اختر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />
-          <Input label="البيان" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            options={[{ value: '', label: 'اختر الخزينة أو البنك' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />
+          <Input label="البيان" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="سبب التعزيز (اختياري)" />
         </div>
       </Modal>
 
@@ -228,7 +261,7 @@ export default function CustodyFilePage() {
           date: form.date,
           supplier_id: form.supplier_id,
           items: [{ description: form.description || 'مشتريات من عهدة', quantity: 1, unit_price: form.amount }],
-          tax_rate: 0,
+          tax_rate: taxEnabled ? parseCompanyVatRate(company) : 0,
           notes: `مدفوعة من ملف ${file.file_number || ''}`,
           custody_id: id,
           project_id: project_id || null,
@@ -236,7 +269,7 @@ export default function CustodyFilePage() {
         });
       }}>إنشاء وخصم من الملف</Button></div>}>
         <div className="space-y-3">
-          <p className="text-xs text-text-muted">فاتورة رسمية مدفوعة: مدين مصروف / دائن 1150. المشروع افتراضي من الملف ويمكن فكه أو تغييره.</p>
+          <p className="text-xs text-text-muted">فاتورة مورد جديدة تُسدَّد فوراً من العهدة: مدين تكلفة المشروع أو العموميات وضريبة المشتريات إن وُجدت / دائن حساب العهد. للكهرباء والديزل استخدم مصروف تشغيلي. يمكن تحميل مشروع آخر غير مشروع الملف أو تركه عاماً للشركة.</p>
           <Select label="المورد" value={form.supplier_id || ''} onChange={(v) => setForm({ ...form, supplier_id: v })}
             options={[{ value: '', label: 'اختر المورد' }, ...suppliers.map((s) => ({ value: s.id, label: s.name }))]} />
           <Input label="المبلغ" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
@@ -256,6 +289,39 @@ export default function CustodyFilePage() {
             <Select label="المشروع" value={form.project_id || ''} onChange={(v) => setForm({ ...form, project_id: v })}
               options={[{ value: '', label: 'اختر مشروعاً' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]} />
           )}
+          <Checkbox checked={taxEnabled} onChange={setTaxEnabled} label="إضافة ضريبة المشتريات بنسبة المنشأة" />
+        </div>
+      </Modal>
+
+      <Modal isOpen={modal === 'pay'} onClose={() => setModal(null)} title="تسديد فاتورة مورد قائمة من العهدة" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>إلغاء</Button><Button disabled={saving} onClick={() => {
+        if (!payInvoiceId) { toast.error('اختر فاتورة'); return; }
+        post(`/api/custodies/${id}/pay-invoice`, {
+          purchase_invoice_id: payInvoiceId,
+          amount: form.amount || undefined,
+          date: form.date,
+        });
+      }}>سداد وخصم من الملف</Button></div>}>
+        <div className="space-y-3">
+          <p className="text-xs text-text-muted">يسدّد ذمة مورد قائمة: مدين الموردين / دائن حساب العهد. لا ينشئ فاتورة جديدة ولا يكرّر المصروف.</p>
+          <Select
+            label="الفاتورة غير المسددة"
+            value={payInvoiceId}
+            onChange={(v) => {
+              setPayInvoiceId(v);
+              const inv = unpaidInvoices.find((row) => row.id === v);
+              const remain = Math.max(0, Number(inv?.total || 0) - Number(inv?.paid_amount || 0));
+              setForm({ ...form, amount: remain });
+            }}
+            options={[
+              { value: '', label: unpaidInvoices.length ? 'اختر فاتورة' : 'لا فواتير غير مسددة' },
+              ...unpaidInvoices.map((inv) => {
+                const remain = Math.max(0, Number(inv.total || 0) - Number(inv.paid_amount || 0));
+                return { value: inv.id, label: `${inv.supplier_name || 'مورد'} — ${inv.invoice_number || inv.number || ''} — متبقي ${money(remain)}` };
+              }),
+            ]}
+          />
+          <Input label="مبلغ السداد" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} />
+          <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
         </div>
       </Modal>
 
@@ -272,7 +338,7 @@ export default function CustodyFilePage() {
         });
       }}>ترحيل وخصم من الملف</Button></div>}>
         <div className="space-y-3">
-          <p className="text-xs text-text-muted">مصروف بلا فاتورة مورد: مدين حساب المصروف / دائن 1150. حسابات 5100–5140 تكلفة مشروع، و5200/5300/5400 مصروفات تشغيلية/عمومية للشركة.</p>
+          <p className="text-xs text-text-muted">مصروف بلا فاتورة مورد (كهرباء، ديزل، تشغيل): مدين حساب المصروف المختار / دائن حساب العهد. يمكن صرف مشروع آخر غير مشروع الملف أو تركه عاماً للشركة.</p>
           <Select label="حساب المصروف" value={expenseForm.expense_account_code} onChange={(v) => setExpenseForm({ ...expenseForm, expense_account_code: v })}
             options={EXPENSE_ACCOUNT_OPTIONS} />
           <Input label="المبلغ" type="number" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: parseFloat(e.target.value) || 0 })} />
@@ -299,8 +365,8 @@ export default function CustodyFilePage() {
 
       <Modal isOpen={modal === 'close'} onClose={() => setModal(null)} title="تأكيد إغلاق الملف" footer={<div className="flex gap-2"><Button variant="ghost" onClick={() => setModal(null)}>تراجع</Button><Button disabled={saving} onClick={() => post(`/api/custodies/${id}/settle`, { confirm: true, returned_cash: form.returned_cash, bank_safe_id: form.bank_safe_id, date: form.date, description: form.description })}>أؤكد الإغلاق</Button></div>}>
         <div className="space-y-3">
-          <p className="text-sm">المتبقي الحالي: <b>{formatCurrency(file.remaining_amount ?? 0)}</b></p>
-          <p className="text-xs text-text-muted">المرتجع يدخل الخزينة. ما يزيد عن المرتجع يُسجَّل سلفة (1160) على راتب الموظف. لا يُغلق الملف مرتين.</p>
+          <p className="text-sm">المتبقي الحالي: <b>{money(file.remaining_amount ?? 0)}</b></p>
+          <p className="text-xs text-text-muted">المرتجع يدخل الخزينة. ما يزيد عن المرتجع يُسجَّل سلفة على راتب الموظف. لا يُغلق الملف مرتين.</p>
           <Input label="مرتجع نقدي" type="number" value={form.returned_cash} onChange={(e) => setForm({ ...form, returned_cash: parseFloat(e.target.value) || 0 })} />
           <Select label="خزينة المرتجع" value={form.bank_safe_id} onChange={(v) => setForm({ ...form, bank_safe_id: v })}
             options={[{ value: '', label: 'اختر' }, ...banks.map((b) => ({ value: b.id, label: b.name }))]} />

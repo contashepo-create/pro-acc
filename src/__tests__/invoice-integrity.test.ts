@@ -263,6 +263,13 @@ describe('POST /api/invoices — atomic financial boundary', () => {
     });
   });
 
+  test('rejects cash collection without a treasury or bank', async () => {
+    const res = await invoicesPOST(authedRequest(invoiceBody({ collected_amount: 100 })));
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toContain('الخزينة');
+    expect(mockDb.rpcCalls).toHaveLength(0);
+  });
+
   test.each([
     [{ collected_amount: -1 }, 'مبلغ التحصيل'],
     [{ collected_amount: 1.001 }, 'مبلغ التحصيل'],
@@ -355,6 +362,19 @@ describe('GET /api/invoices/[id]/zatca — immutable tenant tax document', () =>
       format: 'ubl_2_1_unsigned', cryptographicallySigned: false,
       clearanceSubmitted: false, reportingSubmitted: false, phase2Compliant: false,
     });
+  });
+
+  test('does not build a Saudi tax QR for an Egyptian company', async () => {
+    const db = baseDb();
+    db.companies[0] = { ...db.companies[0], country_code: 'EG' };
+    db.invoices = [invoiceRow];
+    db.invoice_items = [{ id: 'line-1', company_id: C1, invoice_id: invoiceId, description: 'خدمة', quantity: 1, unit_price: 100, total: 100 }];
+    mockDb = makeDb(db);
+    const res = await invoiceZatcaGET(authedRequest(), paramsOf(invoiceId));
+    expect(res.status).toBe(200);
+    const payload = (await res.json()).data;
+    expect(payload.qrData).toBeNull();
+    expect(payload.artifact.format).toBe('eta');
   });
 
   test('does not expose an invoice owned by another company', async () => {

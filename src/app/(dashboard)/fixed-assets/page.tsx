@@ -11,9 +11,10 @@ import { Select } from '@/components/ui/Select';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
 import { toast } from '@/components/ui/Toast';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface AssetRow {
   id: string;
@@ -41,6 +42,7 @@ interface AssetForm {
 }
 
 export default function FixedAssetsPage() {
+  const { money } = useCompanyMoney();
   const [assets, setAssets] = useState<AssetRow[]>([]);
   const [banks, setBanks] = useState<BankSafeOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -187,8 +189,8 @@ export default function FixedAssetsPage() {
     { key: 'name', label: 'الاسم', sortable: true },
     { key: 'category', label: 'الفئة' },
     { key: 'purchase_date', label: 'تاريخ الشراء', render: (row: AssetRow) => formatDate(row.purchase_date) },
-    { key: 'purchase_cost', label: 'التكلفة', render: (row: AssetRow) => formatCurrency(row.purchase_cost) },
-    { key: 'net_book_value', label: 'القيمة الدفترية', render: (row: AssetRow) => formatCurrency(row.net_book_value ?? 0) },
+    { key: 'purchase_cost', label: 'التكلفة', render: (row: AssetRow) => money(row.purchase_cost) },
+    { key: 'net_book_value', label: 'القيمة الدفترية', render: (row: AssetRow) => money(row.net_book_value ?? 0) },
     {
       key: 'actions',
       label: 'إجراءات',
@@ -236,8 +238,8 @@ export default function FixedAssetsPage() {
         <Modal isOpen onClose={() => setDisposeTarget(null)} title={`استبعاد الأصل: ${disposeTarget.name}`}>
           <div className="space-y-4">
             <div className="bg-bg-secondary rounded-lg p-3 text-sm text-text-secondary">
-              التكلفة: <b className="text-text-primary">{formatCurrency(disposeTarget.purchase_cost)}</b>
-              {' '}— القيمة الدفترية: <b className="text-text-primary">{formatCurrency(disposeTarget.net_book_value ?? 0)}</b>
+              التكلفة: <b className="text-text-primary">{money(disposeTarget.purchase_cost)}</b>
+              {' '}— القيمة الدفترية: <b className="text-text-primary">{money(disposeTarget.net_book_value ?? 0)}</b>
             </div>
             <p className="text-sm text-text-secondary">
               اترك قيمة البيع صفراً للشطب المباشر (تُثبت الخسارة الدفترية)، أو أدخل قيمة البيع لحساب الربح/الخسارة تلقائياً.

@@ -15,7 +15,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 const EXPENSE_TYPES: Record<string, { label: string; variant: 'info' | 'success' | 'warning' | 'danger' }> = {
   materials: { label: 'مواد', variant: 'info' },
@@ -52,6 +54,7 @@ interface ExpenseForm {
 }
 
 export default function ProjectExpensesPage() {
+  const { money } = useCompanyMoney();
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
@@ -62,6 +65,7 @@ export default function ProjectExpensesPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [filterProject, setFilterProject] = useState('');
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
   const [form, setForm] = useState<ExpenseForm>({
     project_id: '',
     expense_type: 'materials',
@@ -78,20 +82,23 @@ export default function ProjectExpensesPage() {
     try {
       setLoading(true);
       setError('');
-      const [expRes, projRes, conRes] = await Promise.all([
+      const [expRes, projRes, conRes, setRes] = await Promise.all([
         fetch(`/api/project-expenses${filterProject ? `?projectId=${filterProject}` : ''}`),
         fetch('/api/projects'),
         fetch('/api/contacts'),
+        fetch('/api/auth/me'),
       ]);
-      const [expJson, projJson, conJson] = await Promise.all([
+      const [expJson, projJson, conJson, setJson] = await Promise.all([
         expRes.json(),
         projRes.json(),
         conRes.json(),
+        setRes.json(),
       ]);
       if (expJson.success) setExpenses(expJson.data?.expenses || []);
       else setError(expJson.message || 'فشل');
       if (projJson.success) setProjects(projJson.data?.projects || projJson.data?.rows || []);
       if (conJson.success) setContacts(conJson.data?.contacts || []);
+      if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
     } catch { setError('فشل تحميل البيانات'); } finally { setLoading(false); }
   }, [filterProject]);
 
@@ -124,7 +131,7 @@ export default function ProjectExpensesPage() {
         setForm({
           project_id: '', expense_type: 'materials', description: '',
           amount: 0, date: new Date().toISOString().split('T')[0],
-          contact_id: '', notes: '', tax_enabled: false, tax_rate: 0.15,
+          contact_id: '', notes: '', tax_enabled: false, tax_rate: companyVatRate,
         });
         fetchData();
         toast.success(editingItem ? 'تم تحديث المصروف' : 'تم تسجيل المصروف');
@@ -171,7 +178,7 @@ export default function ProjectExpensesPage() {
     { key: 'project_name', label: 'المشروع', sortable: true },
     { key: 'expense_type', label: 'النوع', render: (row: ExpenseRow) => expenseBadge(row.expense_type) },
     { key: 'description', label: 'الوصف', sortable: true },
-    { key: 'amount', label: 'المبلغ', render: (row: ExpenseRow) => formatCurrency(row.amount), sortable: true },
+    { key: 'amount', label: 'المبلغ', render: (row: ExpenseRow) => money(row.amount), sortable: true },
     { key: 'contact_name', label: 'الطرف' },
     {
       key: 'actions',
@@ -208,7 +215,7 @@ export default function ProjectExpensesPage() {
           className="w-64"
         />
         <div className="text-sm text-text-secondary">
-          إجمالي المصروفات: <span className="font-bold text-text-primary">{formatCurrency(totalAmount)}</span>
+          إجمالي المصروفات: <span className="font-bold text-text-primary">{money(totalAmount)}</span>
         </div>
       </div>
 
@@ -284,10 +291,10 @@ export default function ProjectExpensesPage() {
             placeholder="ملاحظات إضافية"
           />
           <Checkbox
-            label="تطبيق ضريبة مدخلات (15%)"
+            label={`تطبيق ضريبة مدخلات (${vatPercentLabel(companyVatRate)}%)`}
             checked={!!form.tax_enabled}
             disabled={!!editingItem}
-            onChange={(checked: boolean) => setForm({ ...form, tax_enabled: checked, tax_rate: checked ? 0.15 : 0 })}
+            onChange={(checked: boolean) => setForm({ ...form, tax_enabled: checked, tax_rate: checked ? companyVatRate : 0 })}
           />
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
         </div>

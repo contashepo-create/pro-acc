@@ -1,6 +1,8 @@
 import {NextRequest} from 'next/server';
 import {success, handleApiError, requireModulePermission} from '@/lib/api-helpers';
 import {getSupabase} from '@/lib/supabase-client';
+import { companyMoneyParts } from '@/lib/company-money';
+import { defaultFiscalWindow } from '@/lib/fiscal-calendar';
 
 const sb = () => getSupabase();
 
@@ -24,6 +26,9 @@ export async function GET(request: NextRequest) {
     const notifications: SmartNotification[] = [];
     const now = new Date();
     const today = now.toISOString().split('T')[0];
+    const { data: companyMoney } = await s.from('companies')
+      .select('currency_symbol, country_code, locale, currency_code').eq('id', auth.companyId).maybeSingle();
+    const money = companyMoneyParts(companyMoney as { currency_symbol?: string; country_code?: string; locale?: string; currency_code?: string } | null).symbol;
 
     // 1. Overdue invoices check
     try {
@@ -40,7 +45,7 @@ export async function GET(request: NextRequest) {
           id: 'overdue-invoices',
           type: 'danger',
           title: 'فواتير متأخرة',
-          message: `لديك ${overdue.length} فاتورة متأخرة بإجمالي ${totalOverdue.toFixed(2)} ر.س`,
+          message: `لديك ${overdue.length} فاتورة متأخرة بإجمالي ${totalOverdue.toFixed(2)} ${money}`,
           action: { label: 'عرض الفواتير', href: '/invoices?status=unpaid' },
           createdAt: now.toISOString(),
         });
@@ -49,8 +54,11 @@ export async function GET(request: NextRequest) {
 
     // 2. Fiscal year end approaching
     try {
-      const fiscalEndDate = `${now.getFullYear()}-12-31`;
-      const daysToFiscalEnd = Math.ceil((new Date(fiscalEndDate).getTime() - now.getTime()) / 86400000);
+      const fiscalEndDate = defaultFiscalWindow(
+        (companyMoney as { country_code?: string } | null)?.country_code,
+        now,
+      ).end;
+      const daysToFiscalEnd = Math.ceil((new Date(`${fiscalEndDate}T00:00:00`).getTime() - now.getTime()) / 86400000);
       
       if (daysToFiscalEnd <= 30 && daysToFiscalEnd > 0) {
         notifications.push({
@@ -80,7 +88,7 @@ export async function GET(request: NextRequest) {
               id: `low-balance-${bank.account_id}`,
               type: 'warning',
               title: `رصيد منخفض: ${bank.name}`,
-              message: `الرصيد الحالي: ${bal.toFixed(2)} ر.س`,
+              message: `الرصيد الحالي: ${bal.toFixed(2)} ${money}`,
               action: { label: 'عرض الحساب', href: '/banks' },
               createdAt: now.toISOString(),
             });

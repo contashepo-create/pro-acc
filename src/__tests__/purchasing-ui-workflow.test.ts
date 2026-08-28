@@ -9,6 +9,7 @@ describe('document number presentation', () => {
   test('uses stable prefixes and zero-padded automatic sequences', () => {
     expect(formatDocumentNumber('purchase_order', 1)).toBe('PO-0001');
     expect(formatDocumentNumber('purchase_invoice', '27')).toBe('PI-0027');
+    expect(formatDocumentNumber('purchase_return', 4)).toBe('PR-0004');
     expect(formatDocumentNumber('sales_invoice', 18)).toBe('INV-0018');
     expect(formatDocumentNumber('receipt_voucher', 3)).toBe('RV-0003');
     expect(formatDocumentNumber('progress_billing', 'PB-000014')).toBe('PB-000014');

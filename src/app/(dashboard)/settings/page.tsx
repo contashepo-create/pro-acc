@@ -8,7 +8,7 @@ import {
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
+
 import { Textarea } from '@/components/ui/Textarea';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
@@ -16,7 +16,11 @@ import { Badge } from '@/components/ui/Badge';
 import { useThemeStore } from '@/store/theme-store';
 import { useAuthStore } from '@/store/auth-store';
 import { themes } from '@/lib/themes';
-import { getCountriesList, getCountryConfig } from '@/lib/countries';
+import { getCountryConfig } from '@/lib/countries';
+import { companyMoneyParts } from '@/lib/company-money';
+import { defaultFiscalStart } from '@/lib/fiscal-calendar';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { taxQrCaption } from '@/lib/tax-authority';
 import OverheadSettings from '@/components/settings/OverheadSettings';
 import { 
   INVOICE_TEMPLATES, 
@@ -48,9 +52,10 @@ export default function SettingsPage() {
   const [decimalPlaces, setDecimalPlaces] = useState('2');
   const [autoAllocateFifo, setAutoAllocateFifo] = useState(false);
   const [vatRate, setVatRate] = useState('15');
-  const [countryCode, setCountryCode] = useState('SA');
-  const [currencySymbol, setCurrencySymbol] = useState('ر.س');
-  const [currencyCode, setCurrencyCode] = useState('SAR');
+  const [countryCode, setCountryCode] = useState(company?.country_code || 'SA');
+  const initialMoney = companyMoneyParts(company);
+  const [currencySymbol, setCurrencySymbol] = useState(initialMoney.symbol);
+  const [currencyCode, setCurrencyCode] = useState(initialMoney.code);
   
   // Notifications
   const [notifInvoice, setNotifInvoice] = useState(true);
@@ -143,16 +148,19 @@ interface TelegramSettings {
             setInvoiceSettings({ ...DEFAULT_INVOICE_SETTINGS, ...saved });
           }
           if (s.fiscal_start) setFiscalStart(s.fiscal_start);
+          else if (c?.country_code) setFiscalStart(defaultFiscalStart(c.country_code));
           if (s.decimal_places) setDecimalPlaces(s.decimal_places);
           if (s.auto_allocate_receipts_fifo !== undefined) {
             const v = s.auto_allocate_receipts_fifo;
             setAutoAllocateFifo(v === true || v === 'true' || v === '1');
           }
           if (c?.country_code) setCountryCode(c.country_code);
-          if (c?.currency_symbol) setCurrencySymbol(c.currency_symbol);
-          if (c?.currency_code) setCurrencyCode(c.currency_code);
-          if (c?.vat_rate) setVatRate(String(parseFloat(c.vat_rate) * 100));
-          else if (s.vat_rate) setVatRate(String(parseFloat(s.vat_rate) * 100));
+          if (c) {
+            const parts = companyMoneyParts(c);
+            setCurrencySymbol(parts.symbol);
+            setCurrencyCode(parts.code);
+          }
+          if (c) setVatRate(vatPercentLabel(parseCompanyVatRate(c)));
           if (s.notif_invoice !== undefined) setNotifInvoice(s.notif_invoice === 'true' || s.notif_invoice === true);
           if (s.notif_due !== undefined) setNotifDue(s.notif_due === 'true' || s.notif_due === true);
           if (s.notif_stock !== undefined) setNotifStock(s.notif_stock === 'true' || s.notif_stock === true);
@@ -243,6 +251,11 @@ interface TelegramSettings {
   };
 
   const handleSaveCompany = async () => {
+    const pct = parseFloat(vatRate);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      showToast('نسبة الضريبة غير صالحة');
+      return;
+    }
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
@@ -255,8 +268,7 @@ interface TelegramSettings {
             phone: phone,
             email: email,
             address: address,
-            country_code: countryCode,
-            vat_rate: parseFloat(vatRate) / 100,
+            vat_rate: pct / 100,
           },
         }),
       });
@@ -321,13 +333,18 @@ interface TelegramSettings {
   };
 
   const handleSaveTax = async () => {
+    const pct = parseFloat(vatRate);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      showToast('نسبة الضريبة غير صالحة');
+      return;
+    }
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          settings: {
-            vat_rate: vatRate,
+          company: {
+            vat_rate: pct / 100,
           }
         }),
       });
@@ -456,23 +473,19 @@ interface TelegramSettings {
           <div className="mt-6 pt-6 border-t border-border">
             <h4 className="text-sm font-bold text-text-primary mb-3">البلد والعملة</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Select
-                label="الدولة"
-                value={countryCode}
-                onChange={(v) => {
-                  setCountryCode(v);
-                  const config = getCountriesList().find(c => c.value === v);
-                  if (config) {
-                    const cc = getCountryConfig(v);
-                    setCurrencySymbol(cc.currencySymbol);
-                    setCurrencyCode(cc.currencyCode);
-                    setVatRate(String(cc.vatRate * 100));
-                  }
-                }}
-                options={getCountriesList()}
+              <Input
+                label="دولة التشغيل"
+                value={getCountryConfig(countryCode).name}
+                disabled
               />
+              <p className="sm:col-span-2 text-xs text-text-muted -mt-2">
+                تُختار مرة واحدة عند إنشاء الحساب (السعودية أو مصر) ولا يمكن تغييرها. العملة ونسبة الضريبة والتأمينات تتبع هذه الدولة.
+              </p>
               <Input label="رمز العملة" value={currencyCode} disabled />
-              <Input label="رمز العملة (العرض)" value={currencySymbol} onChange={(e) => setCurrencySymbol(e.target.value)} />
+              <Input label="رمز العملة (العرض)" value={currencySymbol} disabled />
+              <p className="sm:col-span-2 text-xs text-text-muted -mt-2">
+                رمز العرض يتبع دولة التشغيل ولا يُعدَّل يدوياً حتى لا تختلف التقارير عن الدفاتر.
+              </p>
               <Input label="نسبة الضريبة (%)" type="number" value={vatRate} onChange={(e) => setVatRate(e.target.value)} />
             </div>
           </div>
@@ -656,7 +669,7 @@ interface TelegramSettings {
               </label>
               <label className="flex items-center gap-2.5 cursor-pointer">
                 <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showQR} onChange={e => setInvoiceSettings({ ...invoiceSettings, showQR: e.target.checked })} />
-                <span>إظهار رمز ZATCA للمرحلة الأولى (TLV 1–5)</span>
+                <span>{taxQrCaption(countryCode)}</span>
               </label>
               <label className="flex items-center gap-2.5 cursor-pointer">
                 <input type="checkbox" className="rounded accent-accent w-4 h-4" checked={invoiceSettings.showSignatureArea} onChange={e => setInvoiceSettings({ ...invoiceSettings, showSignatureArea: e.target.checked })} />
@@ -701,6 +714,11 @@ interface TelegramSettings {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="بداية السنة المالية" type="date" value={fiscalStart} onChange={(e)=>setFiscalStart(e.target.value)} />
             <Input label="عدد المنازل العشرية" type="number" value={decimalPlaces} onChange={(e)=>setDecimalPlaces(e.target.value)} />
+            <p className="sm:col-span-2 text-xs text-text-muted -mt-2">
+              {countryCode === 'EG'
+                ? 'الافتراضي لمصر: أول يوليو حتى آخر يونيو. لا يغيّر السنوات المفتوحة القائمة.'
+                : 'الافتراضي للسعودية: أول يناير حتى آخر ديسمبر.'}
+            </p>
           </div>
           <label className="flex items-start gap-3 mt-5 cursor-pointer">
             <input
@@ -1192,7 +1210,7 @@ interface TelegramSettings {
                     {telegramConfig.approvals_enabled && (
                       <div className="pl-4 pr-4 py-3 rounded-lg bg-bg-secondary border border-border max-w-md">
                         <Input 
-                          label="فرض الموافقات فقط للمبالغ التي تتجاوز (ريال):" 
+                          label={`فرض الموافقات فقط للمبالغ التي تتجاوز (${currencySymbol}):`} 
                           type="number" 
                           placeholder="5000" 
                           value={telegramConfig.approval_threshold} 

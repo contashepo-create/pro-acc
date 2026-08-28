@@ -13,7 +13,7 @@ export const ACCOUNT_CODES = {
   SUBCONTRACTOR_ADVANCES: '1191',
   FIXED_ASSETS_START: '1200',
   FIXED_ASSETS_END: '1220',
-  ACCUM_DEPRECIATION: '1230',
+  ACCUM_DEPRECIATION: '1290',
   ACCOUNTS_PAYABLE: '2110',
   VAT_SALES: '2120',
   LOANS: '2130',
@@ -26,16 +26,18 @@ export const ACCOUNT_CODES = {
   EMPLOYEE_BENEFITS: '2190',
   CAPITAL: '3100',
   RETAINED_EARNINGS: '3200',
+  OPERATING_REVENUE: '4100',
   CONTRACT_REVENUE: '4100',
   OTHER_REVENUE: '4200',
   DISCOUNT_RECEIVED: '4250',
   INTEREST_INCOME: '4300',
-  DIRECT_COSTS: '5100',
+  DIRECT_COSTS: '5110',
   MATERIALS: '5110',
-  EQUIPMENT_RENTAL: '5120',
+  DIRECT_LABOR: '5120',
+  EQUIPMENT_RENTAL: '5140',
   SUBCONTRACTOR_COSTS: '5130',
   SALARIES_EXPENSE: '5210',
-  EQUIPMENT_MAINTENANCE: '5220',
+  EQUIPMENT_MAINTENANCE: '5250',
   DEPRECIATION: '5260',
   BAD_DEBT: '5330',
 } as const;
@@ -94,6 +96,7 @@ export const ACCOUNT_RANGES: Record<string, { start: string; end: string; label:
   EXPENSES: { start: '5000', end: '5999', label: 'المصروفات' },
 };
 
+/** نسبة افتراضية للسعودية فقط. الترحيل يستخدم نسبة المنشأة من دولة التشغيل. */
 export const VAT_RATE = 0.15;
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 500;

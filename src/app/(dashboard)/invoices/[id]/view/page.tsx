@@ -12,6 +12,9 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { toast } from '@/components/ui/Toast';
 import { formatDate, formatCurrency } from '@/lib/utils';
+import { companyMoneyParts } from '@/lib/company-money';
+import { normalizeVatFraction, vatPercentLabel } from '@/lib/company-vat';
+import { taxAuthorityName, taxQrCaption, taxQrFootnote, usesPhaseOneTaxQr } from '@/lib/tax-authority';
 import { printCurrentPage } from '@/lib/print';
 import { 
   INVOICE_TEMPLATES, 
@@ -34,6 +37,7 @@ type ViewCompany = {
   logo_url?: string;
   currency_symbol?: string;
   locale?: string;
+  country_code?: string;
 };
 type ViewInvoiceItem = {
   description: string;
@@ -249,21 +253,24 @@ export default function InvoiceViewPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [invRes, zatcaRes] = await Promise.all([
-          fetch(`/api/invoices/${params.id}`),
-          fetch(`/api/invoices/${params.id}/zatca`),
-        ]);
-        const [invJson, zatcaJson] = await Promise.all([invRes.json(), zatcaRes.json()]);
+        const invRes = await fetch(`/api/invoices/${params.id}`);
+        const invJson = await invRes.json();
         if (invJson.success) { 
           setInvoice(invJson.data); 
           setCompany(invJson.data?.company || {}); 
         } else {
           setError(invJson.message || 'فشل تحميل الفاتورة');
         }
-        if (zatcaJson.success) { setZatcaData(zatcaJson.data); setZatcaError(''); }
-        else if (invJson.success) {
-          // Surface why the tax QR is missing instead of rendering silently without it.
-          setZatcaError(zatcaJson.message || 'تعذر إنشاء الرمز الضريبي');
+        const country = invJson.data?.company?.country_code;
+        if (invJson.success && country !== 'EG') {
+          const zatcaRes = await fetch(`/api/invoices/${params.id}/zatca`);
+          const zatcaJson = await zatcaRes.json();
+          if (zatcaJson.success) { setZatcaData(zatcaJson.data); setZatcaError(''); }
+          else {
+            setZatcaError(zatcaJson.message || 'تعذر إنشاء الرمز الضريبي');
+          }
+        } else {
+          setZatcaData(null); setZatcaError('');
         }
 
         // Load invoice template settings from DB
@@ -340,14 +347,20 @@ export default function InvoiceViewPage() {
   if (error) return <div className="p-6"><div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div></div>;
   if (!invoice) return null;
 
-  const vatRate = Number(invoice.tax_rate || invoice.vat_rate || 0);
+  const vatRate = normalizeVatFraction(invoice.tax_rate || invoice.vat_rate || 0);
+  const vatPercent = vatPercentLabel(vatRate);
   const vatAmount = Number(invoice.tax_amount || invoice.vat_amount || 0);
   const subtotal = Number(invoice.subtotal || 0);
   const total = Number(invoice.total || 0);
   const paidAmount = Number(invoice.paid_amount || 0);
   const remaining = Math.max(0, total - paidAmount);
-  const currencySymbol = company?.currency_symbol || 'ر.س';
-  const locale = company?.locale || 'ar-SA';
+  const moneyParts = companyMoneyParts(company);
+  const currencySymbol = moneyParts.symbol;
+  const locale = moneyParts.locale;
+  const showPhaseOneQr = usesPhaseOneTaxQr(company?.country_code);
+  const qrCaption = taxQrCaption(company?.country_code);
+  const qrFootnote = taxQrFootnote(company?.country_code);
+  const authorityName = taxAuthorityName(company?.country_code);
   
   const currentTemplate = getTemplateConfig(template);
   const titleInfo = resolveInvoiceTitle(invoice, settings.invoiceType);
@@ -502,10 +515,10 @@ export default function InvoiceViewPage() {
             return (
               <div className="space-y-2">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <div className="bg-bg-secondary rounded-lg p-2"><span className="text-text-secondary block">أصل الفاتورة</span><strong>{formatCurrency(total)}</strong></div>
-                  <div className="bg-success/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات دائنة</span><strong className="text-success">- {formatCurrency(credited)}</strong></div>
-                  <div className="bg-warning/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات مدينة</span><strong className="text-warning">+ {formatCurrency(debited)}</strong></div>
-                  <div className="bg-accent/10 rounded-lg p-2"><span className="text-text-secondary block">الصافي</span><strong className="text-accent">{formatCurrency(netTotal)}</strong></div>
+                  <div className="bg-bg-secondary rounded-lg p-2"><span className="text-text-secondary block">أصل الفاتورة</span><strong>{formatCurrency(total, locale, currencySymbol)}</strong></div>
+                  <div className="bg-success/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات دائنة</span><strong className="text-success">- {formatCurrency(credited, locale, currencySymbol)}</strong></div>
+                  <div className="bg-warning/10 rounded-lg p-2"><span className="text-text-secondary block">إشعارات مدينة</span><strong className="text-warning">+ {formatCurrency(debited, locale, currencySymbol)}</strong></div>
+                  <div className="bg-accent/10 rounded-lg p-2"><span className="text-text-secondary block">الصافي</span><strong className="text-accent">{formatCurrency(netTotal, locale, currencySymbol)}</strong></div>
                 </div>
                 <ul className="text-xs divide-y divide-border border border-border rounded-lg overflow-hidden">
                   {linkedNotes.map((n) => (
@@ -518,7 +531,7 @@ export default function InvoiceViewPage() {
                         <span className="text-text-muted truncate max-w-[16rem]" title={n.reason || ''}>{n.reason || ''}</span>
                       </span>
                       <span className={`font-bold ${n.note_type === 'debit' ? 'text-warning' : 'text-success'}`}>
-                        {n.note_type === 'debit' ? '+' : '-'}{formatCurrency(Number(n.total) || 0)}
+                        {n.note_type === 'debit' ? '+' : '-'}{formatCurrency(Number(n.total) || 0, locale, currencySymbol)}
                       </span>
                     </li>
                   ))}
@@ -629,7 +642,7 @@ export default function InvoiceViewPage() {
               </label>
               <label className="flex items-center gap-2 cursor-pointer text-text-secondary hover:text-text-primary">
                 <input type="checkbox" className="rounded accent-accent" checked={settings.showQR} onChange={e => setSettings({ ...settings, showQR: e.target.checked })} />
-                <span>رمز ZATCA للمرحلة الأولى (TLV 1–5)</span>
+                <span>{taxQrCaption(company?.country_code)}</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer text-text-secondary hover:text-text-primary">
                 <input type="checkbox" className="rounded accent-accent" checked={settings.showNotes} onChange={e => setSettings({ ...settings, showNotes: e.target.checked })} />
@@ -690,12 +703,12 @@ export default function InvoiceViewPage() {
             </div>
 
             <div className="flex justify-between items-start p-6 bg-slate-50/80 border-t border-slate-100 gap-6">
-              {settings.showQR && (
+              {settings.showQR && showPhaseOneQr && (
                 <div className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col items-center gap-1.5">
                   {zatcaData?.qrData ? (
                     <>
                       <QRCode value={zatcaData.qrData ?? ''} size={110} />
-                      <span className="text-[9px] font-bold text-slate-500">هيئة الزكاة والضريبة والجمارك</span>
+                      <span className="text-[9px] font-bold text-slate-500">{qrCaption}</span>
                     </>
                   ) : (
                     <span className="text-xs text-slate-400 p-4">QR غير متاح</span>
@@ -710,7 +723,7 @@ export default function InvoiceViewPage() {
                 </div>
                 {vatAmount > 0 && (
                   <div className="flex justify-between text-slate-600">
-                    <span>ضريبة القيمة المضافة ({vatRate * 100}%):</span>
+                    <span>ضريبة القيمة المضافة ({vatPercent}%):</span>
                     <span className="font-bold text-slate-900 font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                   </div>
                 )}
@@ -812,12 +825,12 @@ export default function InvoiceViewPage() {
 
             <div className="grid grid-cols-2 gap-6 items-start border border-slate-800 p-4 mb-6">
               <div>
-                {settings.showQR && (
+                {settings.showQR && showPhaseOneQr && (
                   <div className="flex items-center gap-4">
                     <QRCode value={zatcaData?.qrData || ''} size={100} />
                     <div className="text-[11px] text-slate-600 leading-relaxed">
                       <strong>الفاتورة الإلكترونية المعتمدة</strong>
-                      <p>مطابقة لمتطلبات الفوترة الضريبية الصادرة عن هيئة الزكاة والضريبة والجمارك.</p>
+                      <p>مطابقة لمتطلبات الفوترة الضريبية الصادرة عن {authorityName}.</p>
                     </div>
                   </div>
                 )}
@@ -828,7 +841,7 @@ export default function InvoiceViewPage() {
                   <span className="font-mono">{formatCurrency(subtotal, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-slate-700">
-                  <span>نسبة الضريبة ({vatRate * 100}%):</span>
+                  <span>نسبة الضريبة ({vatPercent}%):</span>
                   <span className="font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between font-black text-sm pt-2 border-t-2 border-slate-800 text-slate-900">
@@ -906,10 +919,10 @@ export default function InvoiceViewPage() {
             </table>
 
             <div className="flex justify-between items-center pt-3 border-t border-slate-200">
-              {settings.showQR && (
+              {settings.showQR && showPhaseOneQr && (
                 <div className="flex items-center gap-2">
                   <QRCode value={zatcaData?.qrData || ''} size={70} />
-                  <span className="text-[9px] text-slate-400">فاتورة زاتكا الإلكترونية</span>
+                  <span className="text-[9px] text-slate-400">{taxQrCaption(company?.country_code)}</span>
                 </div>
               )}
               <div className="w-64 space-y-1 text-right">
@@ -918,7 +931,7 @@ export default function InvoiceViewPage() {
                   <span className="font-mono">{formatCurrency(subtotal, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-slate-500">
-                  <span>الضريبة ({vatRate * 100}%):</span>
+                  <span>الضريبة ({vatPercent}%):</span>
                   <span className="font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between font-black text-sm text-teal-800 pt-1 border-t border-slate-300">
@@ -981,7 +994,7 @@ export default function InvoiceViewPage() {
             </div>
 
             <div className="flex justify-between items-center p-6 rounded-2xl bg-purple-900 text-white">
-              {settings.showQR ? (
+              {settings.showQR && showPhaseOneQr ? (
                 <div className="p-2 bg-white rounded-xl">
                   <QRCode value={zatcaData?.qrData || ''} size={90} />
                 </div>
@@ -992,7 +1005,7 @@ export default function InvoiceViewPage() {
                   <span className="font-mono font-bold">{formatCurrency(subtotal, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-purple-200 text-xs">
-                  <span>ضريبة القيمة المضافة ({vatRate * 100}%):</span>
+                  <span>ضريبة القيمة المضافة ({vatPercent}%):</span>
                   <span className="font-mono font-bold">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-base font-black pt-2 border-t border-purple-700">
@@ -1053,10 +1066,10 @@ export default function InvoiceViewPage() {
             </table>
 
             <div className="grid grid-cols-2 gap-6 items-start p-4 bg-slate-50 rounded-lg border border-slate-200">
-              {settings.showQR && (
+              {settings.showQR && showPhaseOneQr && (
                 <div className="flex items-center gap-3">
                   <QRCode value={zatcaData?.qrData || ''} size={90} />
-                  <p className="text-[10px] text-slate-500">فاتورة ضريبية رسمية متوافقة مع منظومة الفاتورة الإلكترونية (فاتورة).</p>
+                  <p className="text-[10px] text-slate-500">{qrFootnote}</p>
                 </div>
               )}
               <div className="space-y-1.5 text-right">
@@ -1065,7 +1078,7 @@ export default function InvoiceViewPage() {
                   <span className="font-mono font-bold">{formatCurrency(subtotal, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-slate-600">
-                  <span>ضريبة القيمة المضافة ({vatRate * 100}%):</span>
+                  <span>ضريبة القيمة المضافة ({vatPercent}%):</span>
                   <span className="font-mono">{formatCurrency(vatAmount, locale, currencySymbol)}</span>
                 </div>
                 <div className="flex justify-between text-sm font-black text-amber-900 pt-2 border-t border-slate-300">
@@ -1125,7 +1138,7 @@ export default function InvoiceViewPage() {
                 <span>{subtotal.toFixed(2)} {currencySymbol}</span>
               </div>
               <div className="flex justify-between">
-                <span>الضريبة (15%):</span>
+                <span>الضريبة ({vatPercent}%):</span>
                 <span>{vatAmount.toFixed(2)} {currencySymbol}</span>
               </div>
               <div className="flex justify-between font-black text-xs pt-1 border-t border-black">
@@ -1134,7 +1147,7 @@ export default function InvoiceViewPage() {
               </div>
             </div>
 
-            {settings.showQR && zatcaData?.qrData && (
+            {settings.showQR && showPhaseOneQr && zatcaData?.qrData && (
               <div className="mt-4 pt-2 border-t border-dashed border-black text-center flex flex-col items-center">
                 <QRCode value={zatcaData.qrData ?? ''} size={110} />
                 <p className="text-[9px] mt-1">شكراً لزيارتكم</p>

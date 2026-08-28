@@ -14,8 +14,13 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
 import { formatDocumentNumber } from '@/lib/document-number';
+import { parseCompanyVatRate, vatPercentLabel } from '@/lib/company-vat';
+import { companyDisplayMoney } from '@/lib/company-money';
+import { localDateISO } from '@/lib/fiscal-calendar';
+import { useAuthStore } from '@/store/auth-store';
+import { CashSettlementFields } from '@/components/accounting/CashSettlementFields';
 
 /**
  * الإشعارات الدائنة/المدينة — البديل النظامي عن تعديل الفاتورة.
@@ -50,15 +55,22 @@ interface NoteForm {
   date: string;
   vat_enabled: boolean;
   items: NoteItem[];
+  settlement_amount: string;
+  bank_safe_id: string;
 }
+interface BankSafeOption { id: string; name: string; type?: string; }
 
 const emptyForm = (): NoteForm => ({
   invoice_id: '', project_id: '', contact_id: '', reason: '',
-  date: new Date().toISOString().split('T')[0], vat_enabled: true,
+  date: localDateISO(), vat_enabled: true,
   items: [{ description: '', quantity: 1, unit_price: 0 }],
+  settlement_amount: '0',
+  bank_safe_id: '',
 });
 
 export default function CreditNotesPage() {
+  const { company: authCompany } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, authCompany);
   const [tab, setTab] = useState<NoteType>('credit');
   const [creditNotes, setCreditNotes] = useState<NoteRow[]>([]);
   const [debitNotes, setDebitNotes] = useState<NoteRow[]>([]);
@@ -71,19 +83,23 @@ export default function CreditNotesPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<NoteForm>(emptyForm());
+  const [companyVatRate, setCompanyVatRate] = useState(0.15);
+  const [banks, setBanks] = useState<BankSafeOption[]>([]);
 
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [cnRes, dnRes, invRes, projRes, conRes] = await Promise.all([
+      const [cnRes, dnRes, invRes, projRes, conRes, setRes, bankRes] = await Promise.all([
         fetch('/api/credit-notes'),
         fetch('/api/debit-notes'),
         fetch('/api/invoices'),
         fetch('/api/projects'),
         fetch('/api/contacts'),
+        fetch('/api/auth/me'),
+        fetch('/api/banks?pageSize=500'),
       ]);
-      const [cnJson, dnJson, invJson, projJson, conJson] = await Promise.all([
-        cnRes.json(), dnRes.json(), invRes.json(), projRes.json(), conRes.json(),
+      const [cnJson, dnJson, invJson, projJson, conJson, setJson, bankJson] = await Promise.all([
+        cnRes.json(), dnRes.json(), invRes.json(), projRes.json(), conRes.json(), setRes.json(), bankRes.json(),
       ]);
       if (cnJson.success) setCreditNotes(cnJson.data?.credit_notes || []);
       else setError(cnJson.message || 'فشل');
@@ -91,6 +107,8 @@ export default function CreditNotesPage() {
       if (invJson.success) setInvoices(invJson.data?.invoices || []);
       if (projJson.success) setProjects(projJson.data?.projects || []);
       if (conJson.success) setContacts(conJson.data?.contacts || []);
+      if (setJson.success) setCompanyVatRate(parseCompanyVatRate(setJson.data?.company));
+      if (bankJson.success) setBanks(bankJson.data?.banks || []);
     } catch { setError('فشل تحميل البيانات'); }
     finally { setLoading(false); }
   }, []);
@@ -131,8 +149,12 @@ export default function CreditNotesPage() {
           contact_id: form.invoice_id ? null : (form.contact_id || null),
           reason: form.reason,
           date: form.date,
-          tax_rate: form.vat_enabled ? 0.15 : 0,
+          tax_rate: form.vat_enabled ? companyVatRate : 0,
           items: validItems,
+          ...(tab === 'credit'
+            ? { refund_amount: Number(form.settlement_amount) || 0 }
+            : { collected_amount: Number(form.settlement_amount) || 0 }),
+          bank_safe_id: form.bank_safe_id || null,
         }),
       });
       const json = await res.json();
@@ -166,7 +188,8 @@ export default function CreditNotesPage() {
 
   const selectedInvoice = invoices.find((inv) => inv.id === form.invoice_id);
   const subtotal = form.items.reduce((s: number, it: NoteItem) => s + (it.quantity * it.unit_price || 0), 0);
-  const vatAmount = form.vat_enabled ? subtotal * 0.15 : 0;
+  const vatAmount = form.vat_enabled ? subtotal * companyVatRate : 0;
+  const vatPct = vatPercentLabel(companyVatRate);
   const grandTotal = subtotal + vatAmount;
 
   // متاح الإشعار الدائن لكل فاتورة = الأصل − (الدائن المعتمد − المدين المعتمد)
@@ -192,8 +215,8 @@ export default function CreditNotesPage() {
     { key: 'contact_name', label: 'العميل', sortable: true },
     { key: 'invoice_number', label: 'الفاتورة الأصل', render: (row: NoteRow) => row.invoice_number ? formatDocumentNumber('sales_invoice', row.invoice_number) : '—' },
     { key: 'reason', label: 'السبب' },
-    { key: 'vat_amount', label: 'الضريبة', render: (row: NoteRow) => formatCurrency(row.vat_amount || 0) },
-    { key: 'total', label: 'القيمة', render: (row: NoteRow) => formatCurrency(row.total), sortable: true },
+    { key: 'vat_amount', label: 'الضريبة', render: (row: NoteRow) => money(row.vat_amount || 0) },
+    { key: 'total', label: 'القيمة', render: (row: NoteRow) => money(row.total), sortable: true },
     { key: 'status', label: 'الحالة', render: (row: NoteRow) => <Badge variant={row.status === 'approved' ? 'success' : 'warning'}>{row.status === 'approved' ? 'معتمد' : row.status === 'cancelled' ? 'ملغي' : row.status}</Badge> },
     { key: 'actions', label: 'إجراءات', render: (row: NoteRow) => <ActionButtons item={row} onDelete={row.status === 'cancelled' ? undefined : handleDelete} /> },
   ];
@@ -256,7 +279,7 @@ export default function CreditNotesPage() {
                 ...invoices.filter((inv) => inv.status !== 'cancelled').map((inv) => {
                   const net = inv.total - (creditedByInvoice[inv.id] || 0);
                   const avail = tab === 'credit' ? net : inv.total;
-                  return { value: inv.id, label: `#${inv.number} — ${formatCurrency(inv.total)}${tab === 'credit' ? ` (المتاح: ${formatCurrency(Math.max(0, avail))})` : ''}` };
+                  return { value: inv.id, label: `#${inv.number} — ${money(inv.total)}${tab === 'credit' ? ` (المتاح: ${money(Math.max(0, avail))})` : ''}` };
                 }),
               ]}
             />
@@ -295,7 +318,7 @@ export default function CreditNotesPage() {
                     <td className="p-1"><Input value={item.description} onChange={(e) => updateItem(i, 'description', e.target.value)} /></td>
                     <td className="p-1"><Input type="number" value={item.quantity} onChange={(e) => updateItem(i, 'quantity', parseFloat(e.target.value) || 0)} /></td>
                     <td className="p-1"><Input type="number" value={item.unit_price} onChange={(e) => updateItem(i, 'unit_price', parseFloat(e.target.value) || 0)} /></td>
-                    <td className="p-1 text-center font-bold">{formatCurrency(item.quantity * item.unit_price)}</td>
+                    <td className="p-1 text-center font-bold">{money(item.quantity * item.unit_price)}</td>
                     <td className="p-1">{form.items.length > 1 && <Button variant="ghost" size="sm" onClick={() => removeItem(i)}><Trash2 size={14} className="text-danger" /></Button>}</td>
                   </tr>
                 ))}
@@ -306,11 +329,11 @@ export default function CreditNotesPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label className="flex items-center gap-2 text-sm text-text-secondary">
               <input type="checkbox" checked={form.vat_enabled} onChange={(e) => setForm({ ...form, vat_enabled: e.target.checked })} />
-              ضريبة القيمة المضافة 15% {form.invoice_id ? '(تُطبَّق نسبة الفاتورة الأصل)' : ''}
+              ضريبة القيمة المضافة {vatPct}% {form.invoice_id ? '(تُطبَّق نسبة الفاتورة الأصل)' : ''}
             </label>
             <div className="text-sm flex gap-4">
-              <span>الضريبة: <strong>{formatCurrency(vatAmount)}</strong></span>
-              <span>{typeLabel}: <strong className="text-accent">{formatCurrency(grandTotal)}</strong></span>
+              <span>الضريبة: <strong>{money(vatAmount)}</strong></span>
+              <span>{typeLabel}: <strong className="text-accent">{money(grandTotal)}</strong></span>
             </div>
           </div>
           {saveError && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}

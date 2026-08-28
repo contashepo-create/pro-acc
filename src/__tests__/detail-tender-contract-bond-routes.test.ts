@@ -115,9 +115,23 @@ describe('tenders/[id] PUT', () => {
   });
 
   test('converts a won tender to project', async () => {
-    mockDb.rpcResults.set('convert_won_tender_to_project_atomic', { data: { id: 'p1' }, error: null });
+    mockDb.rpcResults.set('convert_won_tender_with_accounting_atomic', { data: { project_id: 'p1' }, error: null });
     const res = await tenderPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'convert_to_project' }), { params: Promise.resolve({ id: TID }) });
     expect(res.status).toBe(201);
+  });
+
+  test('closes period costs after marking a tender cancelled', async () => {
+    mockDb.rpcResults.set('transition_tender_atomic', { data: { id: TID, status: 'cancelled' }, error: null });
+    mockDb.rpcResults.set('close_lost_tender_atomic', { data: { suspense_closed: 0 }, error: null });
+    const res = await tenderPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'update_status', status: 'cancelled' }), { params: Promise.resolve({ id: TID }) });
+    expect(res.status).toBe(200);
+  });
+
+  test('surfaces close_lost errors after marking a tender lost', async () => {
+    mockDb.rpcResults.set('transition_tender_atomic', { data: { id: TID, status: 'lost' }, error: null });
+    mockDb.rpcResults.set('close_lost_tender_atomic', { data: null, error: { message: 'حساب مصاريف المناقصات الخاسرة غير موجود' } });
+    const res = await tenderPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'update_status', status: 'lost' }), { params: Promise.resolve({ id: TID }) });
+    expect(res.status).toBe(400);
   });
 
   test('updates tender fields via RPC', async () => {
@@ -151,6 +165,14 @@ describe('tenders/[id] DELETE + POST', () => {
   test('POST adds a cost item', async () => {
     mockDb.rpcResults.set('create_tender_cost_item_atomic', { data: { id: 'ci2' }, error: null });
     const res = await tenderPOST(req('admin', 'POST', 'http://localhost/x', { category: 'materials', amount: 100 }), { params: Promise.resolve({ id: TID }) });
+    expect(res.status).toBe(201);
+  });
+
+  test('POST records a tender expense without re-reading the body', async () => {
+    mockDb.rpcResults.set('record_tender_expense_atomic', { data: { expense_id: 'e1' }, error: null });
+    const res = await tenderPOST(req('admin', 'POST', 'http://localhost/x', {
+      expense_type: 'karasa', amount: 150, vat_amount: 22.5, bank_safe_id: BID, date: '2026-08-01',
+    }), { params: Promise.resolve({ id: TID }) });
     expect(res.status).toBe(201);
   });
 
@@ -215,7 +237,7 @@ describe('bonds/[id]', () => {
   });
 
   test('PUT releases or cancels a bond', async () => {
-    mockDb.rpcResults.set('transition_bond_atomic', { data: { id: BID, status: 'released' }, error: null });
+    mockDb.rpcResults.set('release_bond_atomic', { data: { bond_id: BID }, error: null });
     const res = await bondPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'release' }), { params: Promise.resolve({ id: BID }) });
     expect(res.status).toBe(200);
   });
@@ -227,7 +249,7 @@ describe('bonds/[id]', () => {
   });
 
   test('DELETE cancels a bond', async () => {
-    mockDb.rpcResults.set('transition_bond_atomic', { data: { id: BID }, error: null });
+    mockDb.rpcResults.set('cancel_bond_atomic', { data: { id: BID }, error: null });
     const res = await bondDELETE(req('admin', 'DELETE', `http://localhost/x/${BID}`), { params: Promise.resolve({ id: BID }) });
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -235,7 +257,7 @@ describe('bonds/[id]', () => {
   });
 
   test('PUT maps mutation errors', async () => {
-    mockDb.rpcResults.set('transition_bond_atomic', { data: null, error: { message: 'غير موجود' } });
+    mockDb.rpcResults.set('release_bond_atomic', { data: null, error: { message: 'غير موجود' } });
     const res1 = await bondPUT(req('admin', 'PUT', 'http://localhost/x', { action: 'release' }), { params: Promise.resolve({ id: BID }) });
     expect(res1.status).toBe(404);
   });

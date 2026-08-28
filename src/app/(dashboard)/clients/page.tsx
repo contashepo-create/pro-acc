@@ -15,7 +15,9 @@ import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { Pagination } from '@/components/ui/Pagination';
 import { toast } from '@/components/ui/Toast';
-import { formatCurrency } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth-store';
+import { getCountryConfig } from '@/lib/countries';
+import { companyDisplayMoney } from '@/lib/company-money';
 
 interface ClientRow {
   id: string;
@@ -58,6 +60,9 @@ interface ClientForm {
 }
 
 export default function ClientsPage() {
+  const { company } = useAuthStore();
+  const defaultCountryName = getCountryConfig(company?.country_code || 'SA').name;
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -72,7 +77,7 @@ export default function ClientsPage() {
     name: '', type: 'client', phone: '', email: '', address: '',
     tax_number: '', commercial_registration: '', credit_limit: 0,
     contact_person: '', contact_person_phone: '', contact_person_email: '',
-    city: '', region: '', country: 'السعودية', postal_code: '',
+    city: '', region: '', country: defaultCountryName, postal_code: '',
     website: '', iban: '', bank_name: '', swift_code: '',
     opening_balance: 0, opening_balance_type: 'debit',
     payment_terms: 'immediate', notes: '',
@@ -114,7 +119,7 @@ export default function ClientsPage() {
       const json = await res.json();
       if (json.success) {
         setShowModal(false); setEditingClient(null);
-        setForm({ name: '', type: 'client', phone: '', email: '', address: '', tax_number: '', commercial_registration: '', credit_limit: 0, contact_person: '', contact_person_phone: '', contact_person_email: '', city: '', region: '', country: 'السعودية', postal_code: '', website: '', iban: '', bank_name: '', swift_code: '', opening_balance: 0, opening_balance_type: 'debit', payment_terms: 'immediate', notes: '', date_of_birth: '', gender: '', national_id: '', category: '' });
+        setForm({ name: '', type: 'client', phone: '', email: '', address: '', tax_number: '', commercial_registration: '', credit_limit: 0, contact_person: '', contact_person_phone: '', contact_person_email: '', city: '', region: '', country: defaultCountryName, postal_code: '', website: '', iban: '', bank_name: '', swift_code: '', opening_balance: 0, opening_balance_type: 'debit', payment_terms: 'immediate', notes: '', date_of_birth: '', gender: '', national_id: '', category: '' });
         toast.success(editingClient ? 'تم تحديث العميل' : 'تم إضافة العميل');
         fetchData();
       } else setSaveError(json.message || 'فشل الحفظ');
@@ -134,7 +139,7 @@ export default function ClientsPage() {
           address: d.address || '', tax_number: d.tax_number || '', commercial_registration: d.commercial_registration || '',
           credit_limit: d.credit_limit || 0, contact_person: d.contact_person || '', contact_person_phone: d.contact_person_phone || '',
           contact_person_email: d.contact_person_email || '', city: d.city || '', region: d.region || '',
-          country: d.country || 'السعودية', postal_code: d.postal_code || '', website: d.website || '',
+          country: d.country || defaultCountryName, postal_code: d.postal_code || '', website: d.website || '',
           iban: d.iban || '', bank_name: d.bank_name || '', swift_code: d.swift_code || '',
           opening_balance: d.opening_balance || 0, opening_balance_type: d.opening_balance_type || 'debit',
           payment_terms: d.payment_terms || 'immediate', notes: d.notes || '',
@@ -172,12 +177,12 @@ export default function ClientsPage() {
       const bal = Number(row.balance) || 0;
       return (
         <div className="flex items-center gap-2">
-          <span className={`font-bold ${bal > 0 ? 'text-green-600' : bal < 0 ? 'text-red-600' : 'text-text-muted'}`}>{formatCurrency(Math.abs(bal))}</span>
+          <span className={`font-bold ${bal > 0 ? 'text-green-600' : bal < 0 ? 'text-red-600' : 'text-text-muted'}`}>{money(Math.abs(bal))}</span>
           {bal !== 0 && <Badge variant={bal > 0 ? 'success' : 'danger'}>{bal > 0 ? 'مدين' : 'دائن'}</Badge>}
         </div>
       );
     }, sortable: true },
-    { key: 'credit_limit', label: 'الحد الائتماني', render: (row: ClientRow) => formatCurrency(row.credit_limit) },
+    { key: 'credit_limit', label: 'الحد الائتماني', render: (row: ClientRow) => money(row.credit_limit) },
     { key: 'actions', label: 'إجراءات', render: (row: ClientRow) => (
       <div className="flex items-center gap-2">
         <a href={`/clients/${row.id}/statement`} target="_blank" rel="noopener noreferrer">

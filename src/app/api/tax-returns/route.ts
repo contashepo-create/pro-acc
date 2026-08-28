@@ -65,9 +65,11 @@ export async function GET(request: NextRequest) {
 
     return success({
       vatReturn: {
+        standardRatedSales: Math.max(0, totalSales - zeroRatedSales),
         standardRatedSalesInSAR: Math.max(0, totalSales - zeroRatedSales),
         standardRatedVAT: outputVAT,
         zeroRatedSales,
+        standardRatedPurchases: totalPurchases,
         standardRatedPurchasesInSAR: totalPurchases,
         standardRatedPurchaseVAT: inputVAT,
         adjustments: 0,

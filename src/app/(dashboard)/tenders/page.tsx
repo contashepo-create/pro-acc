@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, FileText, Trophy, XCircle, Clock, TrendingUp } from 'lucide-react';
+import { Plus, FileText, Trophy, XCircle, Clock } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -13,8 +13,8 @@ import { Badge } from '@/components/ui/Badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
-import { toDateInput } from '@/lib/form-utils';
+import { formatDate } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface TenderRow {
   id: string;
@@ -52,16 +52,17 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: 'ملغاة',
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'gray',
-  preparing: 'blue',
-  submitted: 'amber',
-  won: 'green',
-  lost: 'red',
-  cancelled: 'gray',
+const STATUS_VARIANTS: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'accent' | 'default'> = {
+  draft: 'default',
+  preparing: 'info',
+  submitted: 'warning',
+  won: 'success',
+  lost: 'danger',
+  cancelled: 'default',
 };
 
 export default function TendersPage() {
+  const { money } = useCompanyMoney();
   const [tenders, setTenders] = useState<TenderRow[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -133,17 +134,17 @@ export default function TendersPage() {
     )},
     { key: 'client_name', label: 'العميل' },
     { key: 'estimated_value', label: 'القيمة التقديرية', render: (row: TenderRow) =>
-      row.estimated_value ? formatCurrency(row.estimated_value) : '—' },
+      row.estimated_value ? money(row.estimated_value) : '—' },
     { key: 'submission_deadline', label: 'موعد التقديم', render: (row: TenderRow) => {
       if (!row.submission_deadline) return '—';
       const overdue = row.isOverdue;
       const days = row.daysUntilDeadline;
       return (
         <div>
-          <span className={overdue ? 'text-red-500' : days !== null && days <= 7 ? 'text-amber-500' : ''}>
+          <span className={overdue ? 'text-red-500' : days != null && days <= 7 ? 'text-amber-500' : ''}>
             {formatDate(row.submission_deadline)}
           </span>
-          {days !== null && days > 0 && !overdue && (
+          {days != null && days > 0 && !overdue && (
             <span className="text-xs text-text-secondary mr-1">({days} يوم)</span>
           )}
           {overdue && <span className="text-xs text-red-500 mr-1">(منتهي)</span>}
@@ -151,14 +152,14 @@ export default function TendersPage() {
       );
     }},
     { key: 'status', label: 'الحالة', render: (row: TenderRow) =>
-      <Badge color={STATUS_COLORS[row.status] || 'gray'}>{STATUS_LABELS[row.status] || row.status}</Badge> },
+      <Badge variant={STATUS_VARIANTS[row.status] || 'default'}>{STATUS_LABELS[row.status] || row.status}</Badge> },
     { key: 'win_probability', label: 'الاحتمالية', render: (row: TenderRow) =>
       row.win_probability != null ? `${row.win_probability}%` : '—' },
   ];
 
   return (
     <div>
-      <PageHeader title="المناقصات" subtitle="إدارة المناقصات والعطاءات والضمانات البنكية" />
+      <PageHeader title="المناقصات" description="إدارة المناقصات والعطاءات والضمانات البنكية" />
 
       {/* Stats Cards */}
       {stats && (
@@ -176,14 +177,13 @@ export default function TendersPage() {
       <div className="flex items-center justify-between mb-4 gap-3">
         <Select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          onChange={setStatusFilter}
           className="w-48"
-        >
-          <option value="">كل الحالات</option>
-          {Object.entries(STATUS_LABELS).map(([val, label]) => (
-            <option key={val} value={val}>{label}</option>
-          ))}
-        </Select>
+          options={[
+            { value: '', label: 'كل الحالات' },
+            ...Object.entries(STATUS_LABELS).map(([val, label]) => ({ value: val, label })),
+          ]}
+        />
         <Button onClick={() => setShowModal(true)}>
           <Plus size={18} className="ml-1" />
           مناقصة جديدة
@@ -199,7 +199,8 @@ export default function TendersPage() {
           icon={<FileText size={48} />}
           title="لا توجد مناقصات"
           description="ابدأ بإنشاء مناقصة جديدة لتتبع التكاليف والضمانات"
-          action={<Button onClick={() => setShowModal(true)}><Plus size={18} className="ml-1" />مناقصة جديدة</Button>}
+          actionLabel="مناقصة جديدة"
+          onAction={() => setShowModal(true)}
         />
       ) : (
         <DataTable data={tenders} columns={columns} />
@@ -207,7 +208,7 @@ export default function TendersPage() {
 
       {/* Create Modal */}
       <Modal
-        open={showModal}
+        isOpen={showModal}
         onClose={() => setShowModal(false)}
         title="مناقصة جديدة"
         size="lg"

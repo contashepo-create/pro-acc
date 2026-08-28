@@ -68,7 +68,7 @@ jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET as dnGET, POST as dnPOST } from '@/app/api/debit-notes/route';
 import { GET as dnDetailGET, DELETE as dnDetailDELETE } from '@/app/api/debit-notes/[id]/route';
-import { GET as cnGET } from '@/app/api/credit-notes/route';
+import { GET as cnGET, POST as cnPOST } from '@/app/api/credit-notes/route';
 import { GET as unpaidGET } from '@/app/api/vouchers/unpaid-invoices/route';
 import type { TestBuilder } from './mocks';
 import type { NextRequest } from 'next/server';
@@ -215,6 +215,20 @@ describe('عزل النوعين في قوائم credit-notes', () => {
     const json = await res.json();
     expect(json.data.credit_notes).toHaveLength(1);
     expect(json.data.credit_notes[0].note_type).toBe('credit');
+  });
+
+  test('POST يمرّر الرد النقدي للإشعار الدائن', async () => {
+    const SAFE = '00000000-0000-4000-8000-0000000000b1';
+    mockDb.rpcResults.set('create_credit_note_atomic', { data: { id: ID1, note_type: 'credit' }, error: null });
+    const res = await cnPOST(req('admin', 'POST', 'http://localhost/api/credit-notes', {
+      invoice_id: INV1, reason: 'مرتجع', items: [{ description: 'بند', quantity: 1, unit_price: 20 }],
+      date: '2026-01-05', tax_rate: 0.15, refund_amount: 20, bank_safe_id: SAFE,
+    }));
+    expect(res.status).toBe(201);
+    expect(mockDb.rpcCalls.find((c) => c.name === 'create_credit_note_atomic')?.args).toMatchObject({
+      p_refund_amount: 20,
+      p_bank_safe_id: SAFE,
+    });
   });
 });
 

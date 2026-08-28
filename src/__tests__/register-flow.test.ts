@@ -59,7 +59,8 @@ const validBody = {
   companyName: 'شركة الأمل للمقاولات',
   name: 'أحمد محمد',
   email: 'ahmed@example.com',
-  password: 'Str0ng!Passw0rd',
+  password: 'UnitTestPass26',
+  country: 'SA',
 };
 
 describe('register — password policy & validation', () => {

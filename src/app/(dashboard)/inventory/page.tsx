@@ -12,7 +12,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { PrintButton } from '@/components/ui/PrintButton';
-import { formatCurrency } from '@/lib/utils';
+import { useCompanyMoney } from '@/hooks/use-company-money';
 
 interface InventoryItemRow {
   id: string;
@@ -29,6 +29,7 @@ interface WarehouseOption { id: string; name: string; is_active?: boolean; }
 interface InventoryItemForm { name: string; code: string; unit: string; quantity: number; unit_price: number; warehouse_id: string; category: string; }
 
 export default function InventoryPage() {
+  const { money } = useCompanyMoney();
   const [items, setItems] = useState<InventoryItemRow[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,7 +130,7 @@ export default function InventoryPage() {
     { key: 'unit', label: 'الوحدة' },
     { key: 'warehouse_name', label: 'المستودع', sortable: true },
     { key: 'quantity', label: 'الكمية', sortable: true },
-    { key: 'unit_price', label: 'السعر', render: (row: InventoryItemRow) => formatCurrency(row.unit_price ?? 0) },
+    { key: 'unit_price', label: 'السعر', render: (row: InventoryItemRow) => money(row.unit_price ?? 0) },
     { key: 'category', label: 'الفئة' },
     {
       key: 'actions',

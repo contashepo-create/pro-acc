@@ -44,6 +44,7 @@ const navGroups: NavGroup[] = [
       { id: 'accounts', label: 'الحسابات' },
       { id: 'journal', label: 'القيود' },
       { id: 'invoices', label: 'الفواتير' },
+      { id: 'credit-notes', label: 'إشعارات دائنة ومدينة' },
       { id: 'vouchers/receipt', label: 'سندات قبض' },
       { id: 'vouchers/disbursement', label: 'سندات صرف' },
       { id: 'cash', label: 'حركة النقدية' },
@@ -77,6 +78,7 @@ const navGroups: NavGroup[] = [
     items: [
       { id: 'purchases/orders', label: 'أوامر الشراء' },
       { id: 'purchases/invoices', label: 'فواتير المشتريات' },
+      { id: 'purchases/returns', label: 'مرتجعات المشتريات' },
       { id: 'warehouses', label: 'المستودعات' },
       { id: 'inventory', label: 'الأصناف والأرصدة' },
       { id: 'inventory-transactions', label: 'حركات وتسوية المخزون' },

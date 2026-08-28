@@ -58,7 +58,7 @@ describe('Password policy (zod)', () => {
   });
 
   test('accepts a strong, uncommon password (latin & arabic)', () => {
-    expect(passwordPolicy.safeParse('Str0ng!Passw0rd').success).toBe(true);
+    expect(passwordPolicy.safeParse('UnitTestPass26').success).toBe(true);
     expect(passwordPolicy.safeParse('محاسبة@آمنة2026').success).toBe(true);
   });
 
@@ -72,24 +72,29 @@ describe('Schema wiring', () => {
   test('registerSchema enforces email format and password policy', () => {
     expect(
       registerSchema.safeParse({
-        companyName: 'شركة', name: 'أحمد', email: 'not-an-email', password: 'Str0ng!Pass',
+        companyName: 'شركة', name: 'أحمد', email: 'not-an-email', password: 'UnitTestPass26', country: 'SA',
       }).success
     ).toBe(false);
     expect(
       registerSchema.safeParse({
-        companyName: 'شركة', name: 'أحمد', email: 'a@b.com', password: '123456',
+        companyName: 'شركة', name: 'أحمد', email: 'a@b.com', password: '123456', country: 'SA',
       }).success
     ).toBe(false);
     expect(
       registerSchema.safeParse({
-        companyName: 'شركة', name: 'أحمد', email: 'a@b.com', password: 'Str0ng!Pass',
+        companyName: 'شركة', name: 'أحمد', email: 'a@b.com', password: 'UnitTestPass26', country: 'SA',
       }).success
     ).toBe(true);
+    expect(
+      registerSchema.safeParse({
+        companyName: 'شركة', name: 'أحمد', email: 'a@b.com', password: 'UnitTestPass26', country: 'AE',
+      }).success
+    ).toBe(false);
   });
 
   test('resetPasswordSchema enforces password policy', () => {
     expect(resetPasswordSchema.safeParse({ token: 't', password: '123456' }).success).toBe(false);
-    expect(resetPasswordSchema.safeParse({ token: 'a'.repeat(64), password: 'Str0ng!Pass' }).success).toBe(true);
+    expect(resetPasswordSchema.safeParse({ token: 'a'.repeat(64), password: 'UnitTestPass26' }).success).toBe(true);
   });
 
   test('loginSchema stays permissive for legacy 6-char passwords', () => {
@@ -213,7 +218,8 @@ describe('Register route — CAPTCHA mandatory', () => {
       companyName: 'شركة الاختبار',
       name: 'مستخدم',
       email: 'user@example.com',
-      password: 'Str0ng!Passw0rd',
+      password: 'UnitTestPass26',
+      country: 'SA',
     }));
 
     expect(res.status).toBe(400);
@@ -228,7 +234,8 @@ describe('Register route — CAPTCHA mandatory', () => {
       companyName: 'شركة الاختبار',
       name: 'مستخدم',
       email: 'user@example.com',
-      password: 'Str0ng!Passw0rd',
+      password: 'UnitTestPass26',
+      country: 'SA',
       captchaId: challengeId,
       captchaAnswer: -999,
     }));

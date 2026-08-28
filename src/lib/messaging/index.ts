@@ -41,7 +41,7 @@ export const TEMPLATES: Record<string, MessageTemplate> = {
 
 نود تذكيركم بالفاتورة رقم #{{invoice_number}} المستحقة منذ {{days_overdue}} يوم.
 
-المبلغ المستحق: {{amount}} ر.س
+المبلغ المستحق: {{amount}} {{currency}}
 تاريخ الاستحقاق: {{due_date}}
 
 نرجو السداد في أقرب وقت. شكراً لتعاونكم.
@@ -56,7 +56,7 @@ export const TEMPLATES: Record<string, MessageTemplate> = {
 
 This is a reminder for invoice #{{invoice_number}} which is overdue by {{days_overdue}} days.
 
-Amount due: {{amount}} SAR
+Amount due: {{amount}} {{currency}}
 Due date: {{due_date}}
 
 Please arrange payment at your earliest convenience.
@@ -69,7 +69,7 @@ Please arrange payment at your earliest convenience.
     channel: 'whatsapp',
     body: `السلام عليكم {{customer_name}}،
 
-تم إصدار الفاتورة رقم #{{invoice_number}} بمبلغ {{amount}} ر.س.
+تم إصدار الفاتورة رقم #{{invoice_number}} بمبلغ {{amount}} {{currency}}.
 
 تاريخ الاستحقاق: {{due_date}}
 
@@ -85,7 +85,7 @@ Please arrange payment at your earliest convenience.
     channel: 'whatsapp',
     body: `السلام عليكم {{customer_name}}،
 
-تم استلام دفعتكم بقيمة {{amount}} ر.س للفاتورة رقم #{{invoice_number}}.
+تم استلام دفعتكم بقيمة {{amount}} {{currency}} للفاتورة رقم #{{invoice_number}}.
 
 شكراً لكم.
 
@@ -254,6 +254,12 @@ export async function sendInvoiceReminder(companyId: string, userId: string, inv
   });
   if (reservationError) throw reservationError;
   const row = reservation as Record<string, unknown>;
+  const { data: companyMoney } = await s.from('companies')
+    .select('currency_symbol, locale, country_code, currency_code').eq('id', companyId).maybeSingle();
+  const { companyMoneyParts } = await import('@/lib/company-money');
+  const parts = companyMoneyParts(companyMoney as { currency_symbol?: string; locale?: string; country_code?: string; currency_code?: string } | null);
+  const money = parts.symbol;
+  const locale = parts.locale;
   const channel = String(row.channel) as Channel;
   const recipient = channel === 'whatsapp' ? String(row.phone || '') : String(row.email || '');
   const dueDate = String(row.due_date || '');
@@ -265,7 +271,8 @@ export async function sendInvoiceReminder(companyId: string, userId: string, inv
       customer_name: String(row.customer_name || 'العميل'),
       invoice_number: String(row.invoice_number || ''),
       amount: Number(row.amount || 0).toFixed(2),
-      due_date: new Date(dueDate).toLocaleDateString('ar-SA'),
+      currency: money,
+      due_date: new Date(dueDate).toLocaleDateString(locale),
       days_overdue: String(Math.max(0, Math.floor((Date.now() - new Date(dueDate).getTime()) / 86400000))),
       company_name: String(row.company_name || 'شركتنا'),
     },

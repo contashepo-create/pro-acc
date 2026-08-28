@@ -53,11 +53,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '2130', name: 'القروض قصيرة الأجل', nameEn: 'Short-term Loans', type: 'liability', parentCode: '2100' },
   { code: '2140', name: 'رواتب مستحقة', nameEn: 'Accrued Salaries', type: 'liability', parentCode: '2100' },
   { code: '2145', name: 'مصروفات مستحقة', nameEn: 'Accrued Expenses', type: 'liability', parentCode: '2100' },
+  { code: '2155', name: 'مستحقات التأمينات الاجتماعية', nameEn: 'Social insurance payable', type: 'liability', parentCode: '2100' },
   { code: '2150', name: 'مقاولو باطن - مستحق', nameEn: 'Subcontractors Payable', type: 'liability', parentCode: '2100' },
   { code: '2160', name: 'محجوزات ضمان', nameEn: 'Retentions Payable', type: 'liability', parentCode: '2100' },
   { code: '2170', name: 'عمالة يومية مستحقة', nameEn: 'Daily Workers Payable', type: 'liability', parentCode: '2100' },
   { code: '2180', name: 'دفعات مقدمة من عملاء', nameEn: 'Advances from Clients', type: 'liability', parentCode: '2100' },
-  { code: '2190', name: 'مكافأة نهاية الخدمة', nameEn: 'End of Service Benefits', type: 'liability', parentCode: '2100' },
+  { code: '2190', name: 'مكافأة نهاية الخدمة', nameEn: 'End of Service Benefits', type: 'liability', parentCode: '2200' },
   
   { code: '2200', name: 'الخصوم غير المتداولة', nameEn: 'Non-current Liabilities', type: 'liability', parentCode: '2000', isHeader: true },
   { code: '2210', name: 'القروض طويلة الأجل', nameEn: 'Long-term Loans', type: 'liability', parentCode: '2200' },
@@ -70,7 +71,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
 
   // الإيرادات - Revenue 4000-4999
   { code: '4000', name: 'الإيرادات', nameEn: 'Revenue', type: 'revenue', isHeader: true },
-  { code: '4100', name: 'إيرادات مقاولات', nameEn: 'Contracting Revenue', type: 'revenue', parentCode: '4000' },
+  { code: '4100', name: 'إيرادات النشاط', nameEn: 'Operating Revenue', type: 'revenue', parentCode: '4000' },
   { code: '4110', name: 'إيرادات صيانة', nameEn: 'Maintenance Revenue', type: 'revenue', parentCode: '4000' },
   { code: '4120', name: 'إيرادات استشارات', nameEn: 'Consulting Revenue', type: 'revenue', parentCode: '4000' },
   { code: '4200', name: 'إيرادات أخرى', nameEn: 'Other Revenue', type: 'revenue', parentCode: '4000' },
@@ -85,9 +86,12 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '5130', name: 'تكاليف مقاولي باطن', nameEn: 'Subcontractor Costs', type: 'expense', parentCode: '5100' },
   { code: '5140', name: 'إيجار معدات', nameEn: 'Equipment Rental', type: 'expense', parentCode: '5100' },
   { code: '5410', name: 'مصاريف مناقصات تحت التسوية', nameEn: 'Tender Costs in Suspense', type: 'expense', parentCode: '5100' },
+  { code: '5195', name: 'تكاليف ما قبل التعاقد', nameEn: 'Pre-contract Tender Costs', type: 'expense', parentCode: '5100' },
   
   { code: '5200', name: 'مصروفات تشغيلية', nameEn: 'Operating Expenses', type: 'expense', parentCode: '5000', isHeader: true },
   { code: '5210', name: 'رواتب وأجور', nameEn: 'Salaries & Wages', type: 'expense', parentCode: '5200' },
+  { code: '5215', name: 'مصروف التأمينات الاجتماعية', nameEn: 'Social insurance expense', type: 'expense', parentCode: '5200' },
+  { code: '5216', name: 'مصروف مستحقات نهاية الخدمة', nameEn: 'End of service expense', type: 'expense', parentCode: '5200' },
   { code: '5220', name: 'إيجارات', nameEn: 'Rent', type: 'expense', parentCode: '5200' },
   { code: '5230', name: 'كهرباء ومياه', nameEn: 'Utilities', type: 'expense', parentCode: '5200' },
   { code: '5240', name: 'اتصالات وانترنت', nameEn: 'Communication', type: 'expense', parentCode: '5200' },
@@ -96,7 +100,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '5270', name: 'محروقات', nameEn: 'Fuel', type: 'expense', parentCode: '5200' },
   { code: '5280', name: 'قرطاسية ومطبوعات', nameEn: 'Stationery', type: 'expense', parentCode: '5200' },
   { code: '5290', name: 'مصروفات بنكية', nameEn: 'Bank Charges', type: 'expense', parentCode: '5200' },
-  { code: '5291', name: 'عمولات بنكية لضمانات', nameEn: 'Bank Guarantee Commissions', type: 'expense', parentCode: '5290' },
+  { code: '5291', name: 'عمولات بنكية لضمانات', nameEn: 'Bank Guarantee Commissions', type: 'expense', parentCode: '5200' },
   
   { code: '5300', name: 'مصروفات تسويقية', nameEn: 'Marketing Expenses', type: 'expense', parentCode: '5000' },
   { code: '5400', name: 'مصروفات إدارية وعمومية', nameEn: 'General & Admin Expenses', type: 'expense', parentCode: '5000' },

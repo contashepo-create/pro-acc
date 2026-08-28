@@ -11,7 +11,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate, formatCurrency } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth-store';
+import { companyDisplayMoney } from '@/lib/company-money';
 
 interface PayrollRecord {
   date?: string;
@@ -25,6 +27,8 @@ interface PayrollRecord {
 interface EmployeeOption { id: string; }
 
 export default function PayrollPage() {
+  const { company } = useAuthStore();
+  const money = (n: number) => companyDisplayMoney(Number(n) || 0, company);
   const [records, setRecords] = useState<PayrollRecord[]>([]);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -110,11 +114,11 @@ export default function PayrollPage() {
   const columns = [
     { key: 'date', label: 'الشهر', sortable: true, render: (row: PayrollRecord) => row.date?.substring(0, 7) },
     { key: 'employee_name', label: 'الموظف', sortable: true },
-    { key: 'basic_salary', label: 'الراتب الأساسي', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.basic_salary) },
-    { key: 'advance_deduction', label: 'خصم السلف', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.advance_deduction) },
-    { key: 'gosi_employer', label: 'التأمينات (صاحب عمل)', render: (row: PayrollRecord) => formatCurrency(row.gosi_employer ?? 0) },
-    { key: 'gosi_employee', label: 'التأمينات (الموظف)', render: (row: PayrollRecord) => formatCurrency(row.gosi_employee ?? 0) },
-    { key: 'net_pay', label: 'صافي الراتب', sortable: true, render: (row: PayrollRecord) => formatCurrency(row.net_pay) },
+    { key: 'basic_salary', label: 'الراتب الأساسي', sortable: true, render: (row: PayrollRecord) => money(row.basic_salary) },
+    { key: 'advance_deduction', label: 'خصم السلف', sortable: true, render: (row: PayrollRecord) => money(row.advance_deduction) },
+    { key: 'gosi_employer', label: 'التأمينات (صاحب عمل)', render: (row: PayrollRecord) => money(row.gosi_employer ?? 0) },
+    { key: 'gosi_employee', label: 'التأمينات (الموظف)', render: (row: PayrollRecord) => money(row.gosi_employee ?? 0) },
+    { key: 'net_pay', label: 'صافي الراتب', sortable: true, render: (row: PayrollRecord) => money(row.net_pay) },
     {
       key: 'actions',
       label: 'إجراءات',
@@ -154,7 +158,7 @@ export default function PayrollPage() {
       >
         <div className="space-y-4">
           <Input label="الشهر" type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-          <p className="text-sm text-text-muted">سيتم معالجة رواتب {employees.length} موظف وإنشاء قيد محاسبي متزن (مدين مصروف رواتب / دائن رواتب مستحقة + سلف).</p>
+          <p className="text-sm text-text-muted">سيتم معالجة رواتب {employees.length} موظف نشط. القيد: مدين مصروف الرواتب ومصروف التأمينات، دائن الرواتب المستحقة ومستحقات التأمينات (حصة الموظف وصاحب العمل) وسلف الموظفين إن وُجدت. راجع الحصص بعد الترحيل في الجدول.</p>
         </div>
       </Modal>
     </div>

@@ -80,6 +80,7 @@ export const registerSchema = z.object({
   email: z.string().email('البريد الإلكتروني غير صالح').max(254),
   password: passwordPolicy,
   phone: z.string().optional(),
+  country: z.enum(['SA', 'EG'], { message: 'اختر دولة التشغيل: السعودية أو مصر' }),
 });
 
 export const forgotPasswordSchema = z.object({
@@ -153,11 +154,18 @@ export const accountUpdateSchema = z.object({
 
 // --------------- Journal Entry ---------------
 
+const optionalUuid = z.preprocess(
+  (value) => (value === '' || value === undefined ? null : value),
+  z.string().uuid().nullable().optional(),
+);
+
 export const journalEntryLineSchema = z.object({
   accountCode: z.string().min(1, 'رمز الحساب مطلوب'),
   debit: moneyAmount({ label: 'المدين' }).default(0),
   credit: moneyAmount({ label: 'الدائن' }).default(0),
   description: z.string().optional(),
+  projectId: optionalUuid,
+  contactId: optionalUuid,
 }).refine(
   (line) => line.debit > 0 || line.credit > 0,
   { message: 'يجب إدخال مبلغ المدين أو الدائن' }
@@ -245,7 +253,13 @@ export const invoiceSchema = z.object({
   total: moneyAmount({ label: 'المجموع الكلي' }),
   vatEnabled: z.boolean().optional().default(true),
   notes: z.string().optional(),
-}).strict();
+  collected_amount: moneyAmount({ label: 'مبلغ التحصيل' }).optional().default(0),
+  bank_safe_id: z.string().uuid('رقم الخزينة غير صالح').optional().nullable(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.collected_amount || 0) > 0 && !value.bank_safe_id) {
+    ctx.addIssue({ code: 'custom', path: ['bank_safe_id'], message: 'حدد الخزينة أو البنك للتحصيل النقدي' });
+  }
+});
 
 // --------------- Purchases ---------------
 // NOTE: purchase APIs use snake_case fields (supplier_id, unit_price, ...)
@@ -278,7 +292,18 @@ export const purchaseInvoiceSchema = z.object({
     account_code: z.string().max(20).optional(),
     account_id: z.string().uuid().optional().nullable(),
   }).strict()).max(100).optional(),
-}).strict();
+  withholding_rate: z.number().min(0, 'نسبة خصم المنبع لا يمكن أن تكون سالبة').max(0.2, 'نسبة خصم المنبع غير صالحة')
+    .refine((value) => Math.abs(value * 10000 - Math.round(value * 10000)) < 1e-8, 'نسبة خصم المنبع غير صالحة').optional().default(0),
+  paid_amount: moneyAmount({ label: 'مبلغ السداد' }).optional().default(0),
+  bank_safe_id: z.string().uuid('رقم الخزينة غير صالح').optional().nullable(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.paid_amount || 0) > 0 && !value.bank_safe_id) {
+    ctx.addIssue({ code: 'custom', path: ['bank_safe_id'], message: 'حدد الخزينة أو البنك للسداد النقدي' });
+  }
+  if (value.paid_amount && value.custody_id) {
+    ctx.addIssue({ code: 'custom', path: ['paid_amount'], message: 'لا يجتمع السداد النقدي مع سداد العهدة' });
+  }
+});
 
 export const purchaseInvoiceUpdateSchema = z.object({
   status: z.enum(['unpaid', 'partial', 'paid', 'cancelled'] as const, {
@@ -387,6 +412,7 @@ export const receiptVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
+  auto_fifo: z.boolean().optional(),
   // عملة السند (اختيارية) وسعر الصرف لفروق العملة المحققة (097)
   currency_code: z.string().regex(/^[A-Za-z]{3}$/, 'رمز العملة يجب أن يكون 3 أحرف').optional().nullable(),
   exchange_rate: z.number().positive('سعر الصرف يجب أن يكون موجباً').optional().nullable(),
@@ -418,6 +444,7 @@ export const disbursementVoucherCreateSchema = z.object({
     invoice_id: z.string().uuid(),
     amount: z.number().positive(),
   })).optional(),
+  auto_fifo: z.boolean().optional(),
 }).strict().superRefine((voucher, ctx) => {
   const contactRequired = ['supplier', 'subcontractor', 'client_refund'].includes(voucher.disbursement_type);
   if (contactRequired && !voucher.contact_id) {
