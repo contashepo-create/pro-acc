@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Check, Loader2, Crown, AlertTriangle, Send, Key as KeyIcon, UserPlus, Building2, HardDrive, Download } from 'lucide-react';
+import { Check, Loader2, Crown, AlertTriangle, Send, Key as KeyIcon, UserPlus, Building2, HardDrive, Download, CreditCard } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -34,6 +34,8 @@ interface PaymentMethod {
 type AddonId = 'extra_user' | 'extra_branch' | 'storage_gb';
 
 interface SubscriptionState {
+  id?: string;
+  subscriber_number?: string | null;
   plan_code?: string;
   plan_name?: string;
   status?: string;
@@ -394,13 +396,28 @@ export default function SubscriptionPageEnhanced() {
         <>
           {subscription && (
             <Card title="اشتراكك الحالي">
-              <div className="flex items-center gap-3">
-                <Crown size={20} className="text-amber-500" />
-                <div>
-                  <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
-                  <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <Crown size={20} className="text-amber-500" />
+                  <div>
+                    <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
+                    <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
+                  </div>
+                </div>
+                {/* رقم المشترك — نفس منطق صفحة الإعدادات: القيمة الفريدة الدائمة
+                    من subscriptions.subscriber_number (الهجرة 112)، مع تجزئة
+                    المعرف كبديل احتياطي فقط للاشتراكات الأقدم من تعيين الأرقام */}
+                <div className="flex items-center gap-3 bg-bg-secondary border border-border rounded-xl px-4 py-2.5">
+                  <CreditCard size={18} className="text-accent shrink-0" />
+                  <div>
+                    <p className="text-[0.7rem] text-text-muted">رقم المشترك</p>
+                    <p className="text-xl font-bold text-accent font-mono leading-tight" dir="ltr">
+                      #{subscription.subscriber_number || subscription.id?.substring(0, 8) || '—'}
+                    </p>
+                  </div>
                 </div>
               </div>
+              <p className="mt-2 text-[0.7rem] text-text-muted">رقم المشترك فريد ودائم لا يتغير — استخدمه عند التواصل مع الدعم</p>
               {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-warning-light border border-warning rounded-lg text-xs font-semibold text-warning flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
             </Card>
           )}
