@@ -28720,9 +28720,11 @@ SELECT 'Migration 115 completed — payment proofs via Telegram, cancellable pen
 --      (مع سياسته RLS وفهارسه — كلها كائنات تابعة).
 --   3. يعيد تركيب محفزات حراسة العلاقات دون contract_documents (محفز الجدول
 --      المحذوف يسقط معه تلقائياً — إعادة الحلقة تجعل القائمة صريحة).
---   4. يفرّغ دلو contract-documents ويمسحه من storage (محمول: يتخطى الخطوة
---      على محركات PostgreSQL بلا مخطط storage مثل بيئات الاختبار).
---      حذف كائنات الدلو هنا يحرر مساحة التخزين على Supabase فعلياً.
+--   4. يحاول إسقاط صف دلو contract-documents حرساً (محمول: يتخطى الخطوة على
+--      محركات PostgreSQL بلا مخطط storage مثل بيئات الاختبار).
+--      (حذف الكائنات عبر SQL ممنوع على Supabase [storage.protect_delete] —
+--       تفريغ المساحة الفعلي يتم عبر scripts/purge-contract-documents-storage.mjs
+--       بواجهة Storage API الرسمية.)
 
 CREATE OR REPLACE FUNCTION public.delete_draft_contract_atomic(p_company_id UUID,p_contract_id UUID,p_user_id UUID)
 RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
@@ -28751,11 +28753,20 @@ BEGIN
   END LOOP;
 END $$;
 
+-- Supabase forbids direct SQL deletes on storage.objects (storage.protect_delete
+-- trigger raises 42501). Object purge + bucket removal therefore happen via the
+-- Storage API — run scripts/purge-contract-documents-storage.mjs once (or delete
+-- the bucket from the Supabase dashboard). Here we only attempt the bucket-row
+-- delete guarded, in case the bucket was already emptied by hand.
 DO $$
 BEGIN
-  IF to_regclass('storage.objects') IS NOT NULL THEN
-    DELETE FROM storage.objects WHERE bucket_id='contract-documents';
-    DELETE FROM storage.buckets WHERE id='contract-documents';
+  IF to_regclass('storage.buckets') IS NOT NULL THEN
+    BEGIN
+      DELETE FROM storage.buckets WHERE id = 'contract-documents';
+      RAISE NOTICE 'contract-documents bucket row removed';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'bucket row not removed by SQL (%) — purge objects and delete the bucket via scripts/purge-contract-documents-storage.mjs', SQLERRM;
+    END;
   END IF;
 END $$;
 

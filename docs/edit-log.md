@@ -4827,3 +4827,13 @@ src/store/auth-store.ts
 ### التحقق
 - `npm run test:migrations` ناجح (يشمل تأكيدات 116: الجدول والدالة محلّيان، حذف المسودة يعمل بلا storage_paths).
 - `npx tsc --noEmit` نظيف · eslint 0 أخطاء (67 تحذيراً تراثياً) · jest **205 مجموعات / 2213 اختبار ناجح** · `npm run build` ناجح · إعادة توليد `supabase-full-schema.sql` (117 ميجريشن).
+
+## 2026-08-29 (2) — إصلاح تطبيق 116 على Supabase: حماية storage.protect_delete
+
+### المشكلة
+تشغيل 116 في محرر SQL على Supabase فشل: `DELETE FROM storage.objects` يرفضه محفز `storage.protect_delete` (42501 «Direct deletion from storage tables is not allowed») — والمحرر يكلف المعاملة كوحدة فتراجع الميجريشن بالكامل.
+
+### الإصلاح
+1. الميجريشن لم يعد يحاول حذف كائنات storage عبر SQL إطلاقاً؛ محاولة إسقاط صف الدلو أصبحت **محروسة** (EXCEPTION → NOTICE) لتنجح على كل المحركات، والقيد الموثّق في relationship-integrity يمنع عودة `DELETE FROM storage.objects`.
+2. **سكربت تفريغ جديد** `scripts/purge-contract-documents-storage.mjs`: يسرد كل كائنات الدلو بشكل تكراري ويحذفها دفعات عبر **Storage API** (service-role من .env.local تلقائياً) ثم يحذف الدلو — يحرر مساحة Supabase فعلياً. آمن لإعادة التشغيل (idempotent).
+3. تحديث MIGRATIONS.md + إعادة توليد supabase-full-schema.sql.

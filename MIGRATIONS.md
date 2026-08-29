@@ -183,11 +183,14 @@ matching the incoming Telegram receipt to the panel request is trivial.
 ### 116-remove-contract-document-storage.sql
 Cancels the contract-documents storage feature entirely (same policy as 115:
 no files stored on the platform's database/storage).
-- Drops `create_contract_document_atomic`, the `contract_documents` table and
-  the private `contract-documents` storage bucket (objects deleted first, so
-  Supabase storage space is actually freed).
+- Drops `create_contract_document_atomic` and the `contract_documents` table.
 - Rewrites `delete_draft_contract_atomic` without storage-path collection.
 - Re-attaches the relationship write-guard triggers without the dropped table.
+- Attempts the `contract-documents` bucket-row delete guarded; Supabase forbids
+  SQL deletes on `storage.objects` (`storage.protect_delete` → 42501), so the
+  actual object purge + bucket deletion run ONCE via the Storage API:
+  `node scripts/purge-contract-documents-storage.mjs` (reads the service-role
+  key from .env.local) — or delete the bucket from the Supabase dashboard.
 - `/api/contracts/[id]` POST (upload) and `/api/contracts/[id]/documents/[id]`
   (signed download) were removed from the app; contract GET no longer returns
   a `documents` array.
