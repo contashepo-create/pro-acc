@@ -51,6 +51,10 @@ regexes = [
   '''(?i)test-only''',
   '''(?i)(test-secret-key-for-unit-tests-32chars|test-admin-secret-key-for-unit-tests-32chars|user-test-secret-that-is-at-least-32-characters|admin-test-secret-that-is-at-least-32-characters|tenant-entitlement-test-secret-32-characters|test-admin-separate-secret-32chars|test-portal-secret-that-is-at-least-32-characters-long|portal-test-secret-at-least-32-characters-long|expected-secret-value-32chars)''',
   '''(?i)(dedicated-backup-secret-at-least-32-characters|fallback-token-secret-at-least-32-characters|long-token-secret-that-must-not-fallback-production|company-context-test-secret-at-least-32-chars)''',
+  # Deterministic TOKEN_SECRET for the local live-repro harness
+  # (scripts/equipment-live-repro.ts, PR #34). Signs throwaway JWTs against an
+  # in-process PGlite only; never a deployed credential.
+  '''(?i)live-repro-token-secret-0123456789abcdef''',
 ]
 
 [allowlist]
@@ -79,6 +83,11 @@ regexes = [
   # suite. Throwaway non-production values; a real secret beside them is still
   # reported because these markers never appear in issued credentials.
   '''(?i)(test-secret-key-for-unit-tests-32chars|test-admin-secret-key-for-unit-tests-32chars|user-test-secret-that-is-at-least-32-characters|admin-test-secret-that-is-at-least-32-characters|tenant-entitlement-test-secret-32-characters|test-admin-separate-secret-32chars|test-portal-secret-that-is-at-least-32-characters-long|portal-test-secret-at-least-32-characters-long|expected-secret-value-32chars)''',
+  # Deterministic TOKEN_SECRET for the local live-repro harness
+  # (scripts/equipment-live-repro.ts, PR #34): signs throwaway JWTs against an
+  # in-process PGlite only, never a deployed credential. Listed here too
+  # because gitleaks scans history and the value first landed in commit 2e24757.
+  '''(?i)live-repro-token-secret-0123456789abcdef''',
   '''postgres(?:ql)?://(postgres:postgres|user:password)@''',
   # Pinned known-answer test vectors for the Telegram token at-rest
   # encryption (migration 081). Non-issued deterministic fixtures shared by
