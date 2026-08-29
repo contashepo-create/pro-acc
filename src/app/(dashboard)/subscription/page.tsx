@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Check, Loader2, Crown, AlertTriangle, Send, Key as KeyIcon, UserPlus, Building2, HardDrive, Download, CreditCard } from 'lucide-react';
+import { Check, Loader2, Crown, AlertTriangle, Send, Key as KeyIcon, UserPlus, Building2, HardDrive, Download, CreditCard, Copy, ExternalLink, Ban } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -76,14 +76,27 @@ interface AddonRequest {
 }
 interface SupportTicket { id: string; subject?: string; status?: string; created_at: string; }
 
+const requestStatusLabel = (status?: string) =>
+  status === 'pending' ? 'معلق' : status === 'approved' ? 'مقبول' : status === 'cancelled' ? 'ملغى' : 'مرفوض';
+const requestStatusClass = (status?: string) =>
+  status === 'pending'
+    ? 'bg-warning-light text-warning font-semibold'
+    : status === 'approved'
+      ? 'bg-success-light text-success font-semibold'
+      : status === 'cancelled'
+        ? 'bg-bg-secondary text-text-muted'
+        : 'bg-danger-light text-danger font-semibold';
+
 export default function SubscriptionPageEnhanced() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [supportTelegram, setSupportTelegram] = useState<string>('');
 
   const searchParams = useSearchParams();
+  const { company } = useAuthStore();
 
   // صفحة الباقات/التجديد متاحة لكل مستخدمي الشركة (وليس المدير فقط):
-  // عند انتهاء الاشتراك يوجَّه الجميع сюда لتجديد الاشتراك أو تفعيل كود أو
+  // عند انتهاء الاشتراك يوجَّه الجميع هنا لتجديد الاشتراك أو تفعيل كود أو
   // تحميل جداول بياناتهم — ولا يمكنهم الوصول لأي قسم آخر.
 
   const [subscription, setSubscription] = useState<SubscriptionState | null>(null);
@@ -94,37 +107,32 @@ export default function SubscriptionPageEnhanced() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [duration, setDuration] = useState<'monthly' | 'yearly'>('monthly');
-  const [form, setForm] = useState({ payment_method: 'instapay', amount: '', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
+  const [form, setForm] = useState({ payment_method: 'instapay', amount: '', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), notes: '' });
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<FlashMessage | null>(null);
+  const [copiedNumber, setCopiedNumber] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   // Add-on modal
   const [showAddonModal, setShowAddonModal] = useState(false);
   const [selectedAddon, setSelectedAddon] = useState<AddonId>('extra_user');
   const [addonQty, setAddonQty] = useState(1);
   const [addonDuration, setAddonDuration] = useState<'monthly'|'yearly'>('monthly');
-  const [addonForm, setAddonForm] = useState({ payment_method: 'instapay', amount: '5', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
+  const [addonForm, setAddonForm] = useState({ payment_method: 'instapay', amount: '5', date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), notes: '' });
   const [addonSubmitting, setAddonSubmitting] = useState(false);
-  const [receiptUploading, setReceiptUploading] = useState<'upgrade'|'addon'|null>(null);
 
-  const uploadReceipt = async (file: File, target: 'upgrade'|'addon') => {
-    setReceiptUploading(target);
-    setMessage(null);
+  // رقم المشترك الدائم (الهجرة 114): حروف وأرقام عشوائية غير قابلة للتخمين.
+  const subscriberNumber = subscription?.subscriber_number || null;
+  const telegramHandle = supportTelegram || process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || '';
+  const telegramUrl = telegramHandle ? `https://t.me/${telegramHandle.replace(/^@/, '')}` : '';
+
+  const copySubscriberNumber = async () => {
+    if (!subscriberNumber) return;
     try {
-      const payload = new FormData();
-      payload.append('file', file);
-      const response = await fetch('/api/upload/receipt', { method: 'POST', body: payload });
-      const json = await response.json();
-      if (!response.ok || !json.success) throw new Error(json.message || 'فشل رفع الإيصال');
-      const reference = json.data.reference || json.data.fileName;
-      if (target === 'upgrade') setForm((current) => ({ ...current, receipt_url: reference }));
-      else setAddonForm((current) => ({ ...current, receipt_url: reference }));
-      setMessage({ type: 'success', text: 'تم رفع إيصال الدفع إلى التخزين الآمن.' });
-    } catch (uploadError) {
-      setMessage({ type: 'error', text: uploadError instanceof Error ? uploadError.message : 'فشل رفع الإيصال' });
-    } finally {
-      setReceiptUploading(null);
-    }
+      await navigator.clipboard.writeText(subscriberNumber);
+      setCopiedNumber(true);
+      setTimeout(() => setCopiedNumber(false), 2000);
+    } catch { /* المتصفح لا يدعم النسخ — يبقى النص ظاهراً للنسخ اليدوي */ }
   };
 
   // Activation code state
@@ -150,12 +158,14 @@ export default function SubscriptionPageEnhanced() {
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
 
   const refreshAll = async () => {
-    const [subData, payData, reqData, addonData, supData] = await Promise.all([
+    const [subData, payData, reqData, addonData, supData, settingsData] = await Promise.all([
       fetch('/api/auth/subscription').then(r=>r.json()),
       fetch('/api/payment-methods').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/subscription/upgrade-request').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/subscription/addon-request').then(r=>r.json()).catch(()=>({success:false})),
       fetch('/api/support').then(r=>r.json()).catch(()=>({success:false})),
+      // بيانات التواصل العام (من ضمنها تليجرام الدعم) — مسموح بها حتى مع انتهاء الاشتراك
+      fetch('/api/app-settings').then(r=>r.json()).catch(()=>({success:false})),
     ]);
     if (subData.success) { setPlans(subData.data.plans || []); setSubscription(subData.data.subscription); }
     if (payData.success) {
@@ -176,6 +186,7 @@ export default function SubscriptionPageEnhanced() {
     if (reqData.success) setUpgradeRequests(reqData.data.requests || []);
     if (addonData.success) setAddonRequests(addonData.data.requests || []);
     if (supData.success) setSupportTickets(supData.data.tickets || []);
+    if (settingsData.success && settingsData.data?.support_telegram) setSupportTelegram(String(settingsData.data.support_telegram));
     setLoading(false);
   };
 
@@ -183,11 +194,58 @@ export default function SubscriptionPageEnhanced() {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { refreshAll(); }, []);
 
+  const priceForPlan = (plan: Plan, d: 'monthly' | 'yearly') => d === 'yearly'
+    ? (plan.price_yearly || Math.round(plan.price_monthly * 12 * (1 - (plan.yearly_discount_percent || 20) / 100)))
+    : plan.price_monthly;
+
   const openUpgrade = (plan: Plan) => {
     setSelectedPlan(plan);
-    const price = duration === 'yearly' ? (plan.price_yearly || plan.price_monthly * 12 * (1 - plan.yearly_discount_percent/100)) : plan.price_monthly;
-    setForm(prev => ({ ...prev, amount: String(Math.round(price)) }));
+    setForm(prev => ({ ...prev, amount: String(Math.round(priceForPlan(plan, duration))) }));
     setShowUpgradeModal(true);
+  };
+
+  // تبديل المدة داخل النافذة يحدّث المبلغ تلقائياً — لم يعد العميل يدخله يدوياً
+  const changeDuration = (d: 'monthly' | 'yearly') => {
+    setDuration(d);
+    if (selectedPlan) setForm(prev => ({ ...prev, amount: String(Math.round(priceForPlan(selectedPlan, d))) }));
+  };
+
+  const cancelUpgradeRequest = async (id: string) => {
+    setCancellingId(id);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/subscription/upgrade-request?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        setMessage({ type: 'success', text: 'تم إلغاء الطلب المعلق' });
+        refreshAll();
+      } else {
+        setMessage({ type: 'error', text: json.message || 'تعذر إلغاء الطلب' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'خطأ في الاتصال' });
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  const cancelAddonRequest = async (id: string) => {
+    setCancellingId(id);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/subscription/addon-request?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        setMessage({ type: 'success', text: 'تم إلغاء الطلب المعلق' });
+        refreshAll();
+      } else {
+        setMessage({ type: 'error', text: json.message || 'تعذر إلغاء الطلب' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'خطأ في الاتصال' });
+    } finally {
+      setCancellingId(null);
+    }
   };
 
   const checkCode = async () => {
@@ -224,16 +282,11 @@ export default function SubscriptionPageEnhanced() {
       if (json.success) {
         setActivationMsg({ 
           type: 'success', 
-          text: `✅ تم تفعيل الباقة "${json.data.plan_name}" لمدة ${json.data.duration_months} شهر! تنتهي في ${json.data.end_date}` 
+          text: json.message || 'تم التفعيل بنجاح! سيتم تحديث الصفحة...'
         });
         setActivationCode('');
         setCodePreview(null);
-        // Refresh subscription data
-        const subData = await fetch('/api/auth/subscription').then(r => r.json());
-        if (subData.success) {
-          setPlans(subData.data.plans || []);
-          setSubscription(subData.data.subscription);
-        }
+        setTimeout(() => { refreshAll(); }, 1500);
       } else {
         setActivationMsg({ type: 'error', text: json.message || 'فشل التفعيل' });
       }
@@ -258,13 +311,12 @@ export default function SubscriptionPageEnhanced() {
           payment_amount: Number(form.amount),
           payment_date: form.date,
           payment_time: form.time,
-          receipt_image_url: form.receipt_url,
           notes: form.notes,
         })
       });
       const data = await res.json();
       if (data.success) {
-        setMessage({ type: 'success', text: 'تم إرسال طلب الترقية. سيتم مراجعته قريباً.' });
+        setMessage({ type: 'success', text: 'تم إرسال الطلب. لا تنسَ إرسال صورة الإيصال على تليجرام — سيتم المراجعة بعد وصولها.' });
         setShowUpgradeModal(false);
         refreshAll();
       } else {
@@ -280,7 +332,7 @@ export default function SubscriptionPageEnhanced() {
     setSelectedAddon(id);
     setAddonQty(1);
     setAddonDuration('monthly');
-    setAddonForm({ payment_method: paymentMethods[0]?.code || 'instapay', amount: String(addon.monthly), date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), receipt_url: '', notes: '' });
+    setAddonForm({ payment_method: paymentMethods[0]?.code || 'instapay', amount: String(addon.monthly), date: new Date().toISOString().split('T')[0], time: new Date().toTimeString().slice(0,5), notes: '' });
     setShowAddonModal(true);
   };
 
@@ -304,13 +356,12 @@ export default function SubscriptionPageEnhanced() {
           payment_amount: Number(addonForm.amount) || addonTotal(),
           payment_date: addonForm.date,
           payment_time: addonForm.time,
-          receipt_image_url: addonForm.receipt_url,
           notes: addonForm.notes,
         }),
       });
       const data = await res.json();
       if (data.success) {
-        setMessage({ type: 'success', text: 'تم إرسال طلب الإضافة. سيتم تفعيلها بعد مراجعة الدفع.' });
+        setMessage({ type: 'success', text: 'تم إرسال طلب الإضافة. أرسل صورة الإيصال على تليجرام وسيتم التفعيل بعد المراجعة.' });
         setShowAddonModal(false);
         refreshAll();
       } else {
@@ -347,7 +398,6 @@ export default function SubscriptionPageEnhanced() {
   if (loading) return <div className="flex justify-center h-64 items-center"><Loader2 className="animate-spin" /></div>;
 
   const currentPlanCode = subscription?.plan_code;
-  const priceForSelected = selectedPlan ? (duration === 'yearly' ? (selectedPlan.price_yearly || selectedPlan.price_monthly * 12 * 0.8) : selectedPlan.price_monthly) : 0;
 
   // وضع التجديد: عند انتهاء الاشتراك (أو القدوم عبر ?renew=1) تظهر لافتة
   // بارزة توضح أن الأقسام مغلقة وأن المتاح هنا هو التجديد أو تحميل
@@ -361,9 +411,34 @@ export default function SubscriptionPageEnhanced() {
     { id: 'export', label: 'تحميل تقارير بياناتي' },
   ] as const;
 
+  // بطاقة رقم المشترك الموحدة — تُعرض داخل بطاقة الاشتراك الحالي (مصدر واحد
+  // للحقيقة) ولا تتكرر في أقسام أخرى من الصفحة.
+  const subscriberNumberBox = (
+    <div className="flex items-center gap-3 bg-bg-secondary border border-border rounded-xl px-4 py-2.5">
+      <CreditCard size={18} className="text-accent shrink-0" />
+      <div>
+        <p className="text-[0.7rem] text-text-muted">رقم المشترك</p>
+        <div className="flex items-center gap-2">
+          <p className="text-xl font-bold text-accent font-mono leading-tight" dir="ltr">
+            {subscriberNumber ? `#${subscriberNumber}` : '—'}
+          </p>
+          {subscriberNumber && (
+            <button
+              onClick={copySubscriberNumber}
+              title="نسخ رقم المشترك"
+              className="p-1.5 rounded-lg text-text-muted hover:text-accent hover:bg-accent/10 transition-colors"
+            >
+              {copiedNumber ? <Check size={14} className="text-success" /> : <Copy size={14} />}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
-      <PageHeader title="الباقات والاشتراك" description="اختر الباقة، اطلب إضافات، تواصل مع الدعم، أو حمّل تقارير بياناتك" />
+      <PageHeader title="الباقات والاشتراك" description="اشتراكك، باقات الترقية، الإضافات، والدعم — كل ما يخص اشتراكك في مكان واحد" />
 
       {renewMode && (
         <div className="rounded-xl p-4 border-2 bg-danger-light border-danger text-danger flex flex-col sm:flex-row sm:items-center gap-3">
@@ -394,110 +469,80 @@ export default function SubscriptionPageEnhanced() {
 
       {activeTab === 'plans' && (
         <>
+          {/* بطاقة الاشتراك الحالي الموحدة: الباقة والحالة والانتهاء والإضافات
+              ورقم المشترك — بدلاً من بطاقات متعددة تكرر نفس المعلومة */}
           {subscription && (
             <Card title="اشتراكك الحالي">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <Crown size={20} className="text-amber-500" />
+              <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <Crown size={20} className="text-amber-500 mt-1 shrink-0" />
                   <div>
-                    <div className="font-bold">{subscription.plan_name || subscription.plan_code} {subscription.status === 'trial' && '(تجريبي - 7 أيام)'}</div>
-                    <div className="text-xs text-text-muted">ينتهي: {subscription.end_date} - متبقي {subscription.days_remaining || '?'} يوم · مقاعد إضافية: {subscription.extra_users ?? 0} · فروع إضافية: {subscription.extra_branches ?? 0}</div>
+                    <div className="font-bold">
+                      {subscription.plan_name || subscription.plan_code}
+                      {subscription.status === 'trial' && ' (تجريبي - 7 أيام)'}
+                    </div>
+                    <div className="text-xs text-text-muted mt-1">
+                      ينتهي: {subscription.end_date || '—'} · متبقي {subscription.days_remaining ?? '?'} يوم
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-bg-secondary border border-border text-text-muted">
+                        مقاعد إضافية: {subscription.extra_users ?? 0}
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-bg-secondary border border-border text-text-muted">
+                        فروع إضافية: {subscription.extra_branches ?? 0}
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-bg-secondary border border-border text-text-muted">
+                        تخزين إضافي: {subscription.extra_storage_gb ?? 0} GB
+                      </span>
+                      {subscription.limits?.max_users != null && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-accent/10 text-accent">
+                          إجمالي المقاعد: {subscription.limits.max_users}
+                        </span>
+                      )}
+                      {subscription.limits?.max_storage_mb != null && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-accent/10 text-accent">
+                          إجمالي التخزين: {(subscription.limits.max_storage_mb / 1024).toFixed(1)} GB
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-                {/* رقم المشترك — نفس منطق صفحة الإعدادات: القيمة الفريدة الدائمة
-                    من subscriptions.subscriber_number (الهجرة 112)، مع تجزئة
-                    المعرف كبديل احتياطي فقط للاشتراكات الأقدم من تعيين الأرقام */}
-                <div className="flex items-center gap-3 bg-bg-secondary border border-border rounded-xl px-4 py-2.5">
-                  <CreditCard size={18} className="text-accent shrink-0" />
-                  <div>
-                    <p className="text-[0.7rem] text-text-muted">رقم المشترك</p>
-                    <p className="text-xl font-bold text-accent font-mono leading-tight" dir="ltr">
-                      #{subscription.subscriber_number || subscription.id?.substring(0, 8) || '—'}
-                    </p>
-                  </div>
-                </div>
+                {subscriberNumberBox}
               </div>
-              <p className="mt-2 text-[0.7rem] text-text-muted">رقم المشترك فريد ودائم لا يتغير — استخدمه عند التواصل مع الدعم</p>
+              <p className="mt-2 text-[0.7rem] text-text-muted">
+                رقم المشترك {company?.name ? `لشركة «${company.name}» ` : ''}فريد ودائم لا يتغير ولا يمكن تخمينه — أرسله مع إيصال الدفع على تليجرام واستخدمه عند التواصل مع الدعم
+              </p>
               {subscription.is_expiring_soon && <div className="mt-3 p-2 bg-warning-light border border-warning rounded-lg text-xs font-semibold text-warning flex items-center gap-2"><AlertTriangle size={14} /> اشتراكك ينتهي قريباً، اطلب تمديد أو ترقية</div>}
             </Card>
           )}
 
-          {/* الإضافات المفعلة فعلياً على الاشتراك (من أعمدة subscriptions بعد
-              اعتماد الإدارة) — عرض صريح لكل إضافة وكميتها وحدودها الفعلية */}
-          {subscription && (
-            <Card title="الإضافات المفعلة على اشتراكك">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="flex items-center gap-3 p-3 bg-bg-secondary rounded-xl border border-border">
-                  <UserPlus size={20} className="text-accent shrink-0" />
-                  <div className="text-sm">
-                    <div className="font-bold">{subscription.extra_users ?? 0} × مستخدم إضافي</div>
-                    <div className="text-xs text-text-muted">إجمالي المقاعد: {subscription.limits?.max_users ?? '—'}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 bg-bg-secondary rounded-xl border border-border">
-                  <Building2 size={20} className="text-accent shrink-0" />
-                  <div className="text-sm">
-                    <div className="font-bold">{subscription.extra_branches ?? 0} × فرع/مستودع إضافي</div>
-                    <div className="text-xs text-text-muted">تُحتسب ضمن حدود الباقة + الإضافات</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 bg-bg-secondary rounded-xl border border-border">
-                  <HardDrive size={20} className="text-accent shrink-0" />
-                  <div className="text-sm">
-                    <div className="font-bold">{subscription.extra_storage_gb ?? 0} GB تخزين إضافي</div>
-                    <div className="text-xs text-text-muted">
-                      إجمالي التخزين: {subscription.limits?.max_storage_mb != null ? `${(subscription.limits.max_storage_mb / 1024).toFixed(1)} GB` : '—'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              {(subscription.extra_users ?? 0) === 0 && (subscription.extra_branches ?? 0) === 0 && (subscription.extra_storage_gb ?? 0) === 0 && (
-                <p className="mt-3 text-xs text-text-muted">لا توجد إضافات مفعلة حالياً — يمكنك طلبها من تبويب «الإضافات» بالأسفل.</p>
-              )}
-            </Card>
-          )}
-
           {upgradeRequests.length > 0 && (
-            <Card title="طلبات الترقية السابقة">
+            <Card title="طلبات الترقية والتجديد">
               <div className="space-y-2">
                 {upgradeRequests.map((req: UpgradeRequest) => (
-                  <div key={req.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
-                    <div>
+                  <div key={req.id} className="flex justify-between items-center gap-3 p-3 bg-bg-secondary rounded-lg text-sm">
+                    <div className="min-w-0">
                       <div className="font-medium">{req.subscription_plans?.name || req.requested_plan_id} - {req.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
                       <div className="text-xs text-text-muted">{new Date(req.created_at).toLocaleDateString()} - {req.payment_method_code} - ${req.payment_amount}</div>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs ${req.status === 'pending' ? 'bg-warning-light text-warning font-semibold' : req.status === 'approved' ? 'bg-success-light text-success font-semibold' : 'bg-danger-light text-danger font-semibold'}`}>{req.status === 'pending' ? 'معلق' : req.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className={`px-2 py-1 rounded-full text-xs ${requestStatusClass(req.status)}`}>{requestStatusLabel(req.status)}</span>
+                      {req.status === 'pending' && (
+                        <button
+                          onClick={() => cancelUpgradeRequest(req.id)}
+                          disabled={cancellingId !== null}
+                          title="إلغاء الطلب المعلق"
+                          className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger-light transition-colors disabled:opacity-50"
+                        >
+                          {cancellingId === req.id ? <Loader2 size={14} className="animate-spin" /> : <Ban size={14} />}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             </Card>
           )}
-
-          <Card>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
-                <KeyIcon size={20} className="text-green-600" />
-              </div>
-              <div>
-                <h3 className="font-bold">تفعيل بكود</h3>
-                <p className="text-xs text-text-muted">أدخل كود التفعيل لتفعيل الباقة أو الإضافات فوراً</p>
-              </div>
-            </div>
-            {activationMsg && (
-              <div className={`mb-3 p-3 rounded-lg text-sm ${activationMsg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{activationMsg.text}</div>
-            )}
-            {codePreview && (
-              <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700">
-                <div><strong>الباقة:</strong> {codePreview.plan_name}</div>
-                <div><strong>المدة:</strong> {codePreview.duration_months} شهر</div>
-              </div>
-            )}
-            <div className="flex gap-2">
-              <Input placeholder="أدخل كود التفعيل هنا..." value={activationCode} onChange={(e) => { setActivationCode(e.target.value); setCodePreview(null); }} dir="ltr" className="flex-1" />
-              <Button variant="outline" onClick={checkCode} disabled={!activationCode || codeChecking}>{codeChecking ? '...' : 'تحقق'}</Button>
-              <Button onClick={activateCode} disabled={!activationCode || !codePreview || codePreview?.is_used || activating}>{activating ? 'جاري التفعيل...' : 'تفعيل'}</Button>
-            </div>
-          </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {plans.map((plan) => {
@@ -541,90 +586,42 @@ export default function SubscriptionPageEnhanced() {
                 {Object.entries(plan.features_modules || {}).filter(([k,v])=>v && isNaN(Number(k))).length > 5 && <span className="text-[10px] text-text-muted">+{Object.entries(plan.features_modules || {}).filter(([k,v])=>v && isNaN(Number(k))).length - 5} أكثر</span>}
               </div>
 
-              <Button disabled={isCurrent} onClick={() => openUpgrade(plan)} className="w-full mt-5">
-                {isCurrent ? 'الباقة الحالية' : isTrial ? 'تجربة مجانية' : 'طلب ترقية'}
+              {/* الباقة الحالية قابلة للتجديد (نفس الباقة = طلب تجديد)،
+                  والتجريبية وحدها غير قابلة للطلب لأنها مجانية */}
+              <Button disabled={isTrial} onClick={() => openUpgrade(plan)} className="w-full mt-5">
+                {isTrial ? 'الباقة التجريبية' : isCurrent ? 'تجديد نفس الباقة' : 'طلب ترقية'}
               </Button>
             </div>
           );
         })}
       </div>
 
-      <Modal isOpen={showUpgradeModal} onClose={() => setShowUpgradeModal(false)} title={`طلب ترقية إلى ${selectedPlan?.name}`} size="lg">
-        {selectedPlan && (
-          <div className="space-y-5">
-            <div className="flex gap-2 p-1 bg-bg-secondary rounded-xl">
-              <button onClick={() => setDuration('monthly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'monthly' ? 'bg-accent text-white' : 'text-text-muted'}`}>شهري - ${selectedPlan.price_monthly}</button>
-              <button onClick={() => setDuration('yearly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'yearly' ? 'bg-accent text-white' : 'text-text-muted'}`}>سنوي - ${Math.round((selectedPlan.price_yearly || selectedPlan.price_monthly * 12 * 0.8))} (خصم {selectedPlan.yearly_discount_percent}%)</button>
-            </div>
-
-            <div className="p-3 bg-info-light border border-info rounded-xl text-xs text-text-primary">
-              <div className="font-bold mb-1">طرق الدفع المتاحة (يتحكم فيها الأدمن):</div>
-              {paymentMethods.length === 0 ? (
-                <div>انستا باي، أورنج كاش، تحويل بنكي - حول المبلغ ثم ارفق الإيصال</div>
-              ) : paymentMethods.map((pm) => (
-                <div key={pm.code} className="flex justify-between py-1"><span>{pm.name_ar}</span><span className="text-text-muted">{pm.account_number}</span></div>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-text-muted">طريقة الدفع</label>
-                <select value={form.payment_method} onChange={(e) => setForm({...form, payment_method: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-lg text-sm">
-                  {paymentMethods.length > 0 ? paymentMethods.map((pm) => (
-                    <option key={pm.code} value={pm.code}>{pm.name_ar}</option>
-                  )) : (<>
-                  <option value="instapay">انستا باي</option>
-                  <option value="orange_cash">أورنج كاش</option>
-                  <option value="bank_transfer">تحويل بنكي</option>
-                  </>)}
-                </select>
+          {/* تفعيل بكود — أداة تفعيل مستقلة تحت الباقات */}
+          <Card>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
+                <KeyIcon size={20} className="text-green-600" />
               </div>
               <div>
-                <label className="text-xs text-text-muted">المبلغ المحول</label>
-                <Input type="number" value={form.amount} onChange={(e)=>setForm({...form, amount: e.target.value})} />
-              </div>
-              <div>
-                <label className="text-xs text-text-muted">تاريخ التحويل</label>
-                <Input type="date" value={form.date} onChange={(e)=>setForm({...form, date: e.target.value})} />
-              </div>
-              <div>
-                <label className="text-xs text-text-muted">وقت التحويل</label>
-                <Input type="time" value={form.time} onChange={(e)=>setForm({...form, time: e.target.value})} />
+                <h3 className="font-bold">تفعيل بكود</h3>
+                <p className="text-xs text-text-muted">أدخل كود التفعيل لتفعيل الباقة أو الإضافات فوراً</p>
               </div>
             </div>
-
-            <div>
-              <label className="text-xs text-text-muted">صورة إيصال الدفع (JPG أو PNG أو PDF، حتى 5MB)</label>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,application/pdf"
-                disabled={receiptUploading !== null}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void uploadReceipt(file, 'upgrade');
-                }}
-                className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm"
-              />
-              {receiptUploading === 'upgrade' && <p className="text-xs text-text-muted mt-1">جاري رفع الإيصال...</p>}
-              {form.receipt_url && <p className="text-xs text-success mt-1">تم إرفاق الإيصال بأمان</p>}
+            {activationMsg && (
+              <div className={`mb-3 p-3 rounded-lg text-sm ${activationMsg.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{activationMsg.text}</div>
+            )}
+            {codePreview && (
+              <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700">
+                <div><strong>الباقة:</strong> {codePreview.plan_name}</div>
+                <div><strong>المدة:</strong> {codePreview.duration_months} شهر</div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input placeholder="أدخل كود التفعيل هنا..." value={activationCode} onChange={(e) => { setActivationCode(e.target.value); setCodePreview(null); }} dir="ltr" className="flex-1" />
+              <Button variant="outline" onClick={checkCode} disabled={!activationCode || codeChecking}>{codeChecking ? '...' : 'تحقق'}</Button>
+              <Button onClick={activateCode} disabled={!activationCode || !codePreview || codePreview?.is_used || activating}>{activating ? 'جاري التفعيل...' : 'تفعيل'}</Button>
             </div>
-
-            <div>
-              <label className="text-xs text-text-muted">ملاحظات إضافية</label>
-              <textarea value={form.notes} onChange={(e)=>setForm({...form, notes: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm h-20" placeholder="اكتب تفاصيل إضافية..."></textarea>
-            </div>
-
-            <div className="bg-warning-light border border-warning rounded-xl p-3 text-xs text-warning">
-              <div className="font-bold">المبلغ المطلوب: ${priceForSelected} ({duration === 'yearly' ? 'سنوي' : 'شهري'})</div>
-              <div className="mt-1">بعد التحويل، ارفق قيمة التحويل وتاريخه ووقته وصورة الإيصال. سيصل الطلب للإدارة عبر البوت وسيتم تنبيه الإدارة في لوحة التحكم.</div>
-            </div>
-
-            <Button onClick={submitUpgrade} disabled={submitting || receiptUploading !== null || !form.receipt_url} className="w-full" leftIcon={submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>
-              {submitting ? 'جاري الإرسال...' : 'رفع طلب ترقية'}
-            </Button>
-          </div>
-        )}
-      </Modal>
+          </Card>
       </>)}
 
       {activeTab === 'addons' && (
@@ -663,12 +660,24 @@ export default function SubscriptionPageEnhanced() {
             <Card title="طلبات الإضافات السابقة">
               <div className="space-y-2">
                 {addonRequests.map((r: AddonRequest) => (
-                  <div key={r.id} className="flex justify-between items-center p-3 bg-bg-secondary rounded-lg text-sm">
-                    <div>
+                  <div key={r.id} className="flex justify-between items-center gap-3 p-3 bg-bg-secondary rounded-lg text-sm">
+                    <div className="min-w-0">
                       <div className="font-medium">{r.addon_type === 'extra_user' ? 'مستخدم إضافي' : r.addon_type === 'extra_branch' ? 'فرع/مستودع إضافي' : 'تخزين إضافي'} ×{r.quantity} - {r.duration_type === 'yearly' ? 'سنوي' : 'شهري'}</div>
                       <div className="text-xs text-text-muted">{new Date(r.created_at).toLocaleDateString()} - ${r.total_amount_usd}</div>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs ${r.status === 'pending' ? 'bg-warning-light text-warning font-semibold' : r.status === 'approved' ? 'bg-success-light text-success font-semibold' : 'bg-danger-light text-danger font-semibold'}`}>{r.status === 'pending' ? 'معلق' : r.status === 'approved' ? 'مقبول' : 'مرفوض'}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className={`px-2 py-1 rounded-full text-xs ${requestStatusClass(r.status)}`}>{requestStatusLabel(r.status)}</span>
+                      {r.status === 'pending' && (
+                        <button
+                          onClick={() => cancelAddonRequest(r.id)}
+                          disabled={cancellingId !== null}
+                          title="إلغاء الطلب المعلق"
+                          className="p-1.5 rounded-lg text-text-muted hover:text-danger hover:bg-danger-light transition-colors disabled:opacity-50"
+                        >
+                          {cancellingId === r.id ? <Loader2 size={14} className="animate-spin" /> : <Ban size={14} />}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -678,33 +687,69 @@ export default function SubscriptionPageEnhanced() {
       )}
 
       {activeTab === 'support' && (
-        <div className="grid md:grid-cols-2 gap-4">
-          <Card title="رسالة جديدة للدعم">
-            <div className="space-y-3">
-              <select value={supportForm.category} onChange={e => setSupportForm({...supportForm, category: e.target.value})} className="w-full px-3 py-2 bg-bg-secondary border rounded-lg text-sm">
-                <option value="billing">دفع/اشتراك</option>
-                <option value="technical">مشكلة تقنية</option>
-                <option value="account">حسابي</option>
-                <option value="data_request">طلب بيانات</option>
-                <option value="other">أخرى</option>
-              </select>
-              <Input placeholder="عنوان الرسالة" value={supportForm.subject} onChange={(e) => setSupportForm({...supportForm, subject: e.target.value})} />
-              <textarea value={supportForm.message} onChange={e => setSupportForm({...supportForm, message: e.target.value})} className="w-full px-3 py-2 bg-bg-secondary border rounded-xl text-sm h-32" placeholder="اشرح طلبك بوضوح..."></textarea>
-              <Button onClick={submitSupport} disabled={supportSubmitting} leftIcon={supportSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}>{supportSubmitting ? 'جاري الإرسال...' : 'إرسال'}</Button>
-              <p className="text-[10px] text-text-muted">تعمل الرسائل حتى مع انتهاء الاشتراك.</p>
-            </div>
-          </Card>
-          <Card title="الرسائل السابقة">
-            <div className="space-y-2">
-              {supportTickets.length === 0 ? <p className="text-sm text-text-muted">لا توجد رسائل سابقة.</p> :
-                supportTickets.map((t: SupportTicket) => (
-                  <div key={t.id} className="p-3 bg-bg-secondary rounded-lg text-sm">
-                    <div className="flex justify-between"><strong>{t.subject}</strong> <span className={`text-xs ${t.status === 'open' ? 'text-warning font-semibold' : t.status === 'resolved' ? 'text-success font-semibold' : 'text-text-muted'}`}>{t.status === 'open' ? 'مفتوحة' : t.status === 'in_progress' ? 'قيد المعالجة' : t.status === 'resolved' ? 'تم الحل' : 'مغلقة'}</span></div>
-                    <div className="text-xs text-text-muted">{new Date(t.created_at).toLocaleDateString()}</div>
+        <div className="space-y-4">
+          {/* إرسال إيصال الدفع — تليجرام فقط، لا يوجد رفع ملفات في المنصة */}
+          <Card title="إرسال إيصال الدفع">
+            <div className="space-y-3 text-sm">
+              <p className="text-text-secondary">
+                بعد تحويل المبلغ عبر إحدى طرق الدفع المعتمدة، أرسل صورة الإيصال إلى تليجرام الدعم مباشرة، وذكّرنا برقم مشتركك. لا نستقبل الإيصالات عبر رفع الملفات داخل المنصة.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                {subscriberNumber && (
+                  <div className="flex items-center gap-2 bg-bg-secondary border border-border rounded-xl px-3 py-2">
+                    <span className="text-xs text-text-muted">رقم المشترك:</span>
+                    <span className="font-mono font-bold text-accent" dir="ltr">#{subscriberNumber}</span>
+                    <button onClick={copySubscriberNumber} title="نسخ" className="p-1 rounded text-text-muted hover:text-accent transition-colors">
+                      {copiedNumber ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+                    </button>
                   </div>
-                ))}
+                )}
+                {telegramUrl ? (
+                  <a href={telegramUrl} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#229ED9] text-white text-sm font-semibold hover:opacity-90 transition-opacity">
+                    <Send size={15} /> فتح تليجرام الدعم {telegramHandle ? `(${telegramHandle.startsWith('@') ? telegramHandle : `@${telegramHandle}`})` : ''}
+                  </a>
+                ) : (
+                  <span className="text-xs text-text-muted">جهة تليجرام الدعم غير مضبوطة بعد — تواصل معنا من تبويب «رسالة للدعم» بالأسفل.</span>
+                )}
+              </div>
+              <div className="p-3 rounded-xl bg-bg-secondary border border-border text-xs text-text-secondary space-y-1">
+                <div>1️⃣ حوّل المبلغ عبر إحدى طرق الدفع المعتمدة (تجدها في نافذة الطلب).</div>
+                <div>2️⃣ أرسل صورة الإيصال على تليجرام مع رقم مشتركك.</div>
+                <div>3️⃣ سجّل الطلب من نافذة «طلب ترقية/تجديد» أو «شراء الإضافة» ببيانات التحويل.</div>
+                <div>4️⃣ بعد مطابقة الإيصال يعتمد المطور طلبك ويتفعَّل الاشتراك/الإضافة فوراً.</div>
+              </div>
             </div>
           </Card>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <Card title="رسالة جديدة للدعم">
+              <div className="space-y-3">
+                <select value={supportForm.category} onChange={e => setSupportForm({...supportForm, category: e.target.value})} className="w-full px-3 py-2 bg-bg-secondary border rounded-lg text-sm">
+                  <option value="billing">دفع/اشتراك</option>
+                  <option value="technical">مشكلة تقنية</option>
+                  <option value="account">حسابي</option>
+                  <option value="data_request">طلب بيانات</option>
+                  <option value="other">أخرى</option>
+                </select>
+                <Input placeholder="عنوان الرسالة" value={supportForm.subject} onChange={(e) => setSupportForm({...supportForm, subject: e.target.value})} />
+                <textarea value={supportForm.message} onChange={e => setSupportForm({...supportForm, message: e.target.value})} className="w-full px-3 py-2 bg-bg-secondary border rounded-xl text-sm h-32" placeholder="اشرح طلبك بوضوح..."></textarea>
+                <Button onClick={submitSupport} disabled={supportSubmitting} leftIcon={supportSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}>{supportSubmitting ? 'جاري الإرسال...' : 'إرسال'}</Button>
+                <p className="text-[10px] text-text-muted">تعمل الرسائل حتى مع انتهاء الاشتراك.</p>
+              </div>
+            </Card>
+            <Card title="الرسائل السابقة">
+              <div className="space-y-2">
+                {supportTickets.length === 0 ? <p className="text-sm text-text-muted">لا توجد رسائل سابقة.</p> :
+                  supportTickets.map((t: SupportTicket) => (
+                    <div key={t.id} className="p-3 bg-bg-secondary rounded-lg text-sm">
+                      <div className="flex justify-between"><strong>{t.subject}</strong> <span className={`text-xs ${t.status === 'open' ? 'text-warning font-semibold' : t.status === 'resolved' ? 'text-success font-semibold' : 'text-text-muted'}`}>{t.status === 'open' ? 'مفتوحة' : t.status === 'in_progress' ? 'قيد المعالجة' : t.status === 'resolved' ? 'تم الحل' : 'مغلقة'}</span></div>
+                      <div className="text-xs text-text-muted">{new Date(t.created_at).toLocaleDateString()}</div>
+                    </div>
+                  ))}
+              </div>
+            </Card>
+          </div>
         </div>
       )}
 
@@ -716,7 +761,7 @@ export default function SubscriptionPageEnhanced() {
             </p>
             <div className="p-3 rounded-xl bg-bg-secondary border border-border text-xs text-text-secondary space-y-1">
               <div>• الصيغتان (Excel / CSV) مقبولتان في البرامج المحاسبية الأخرى عند الاستيراد، لذا يمكنك مراجعة بياناتك أو الانتقال بها لمنصة أخرى بسهولة.</div>
-              <div>• لا تتوفر "نسخة من قاعدة البيانات" ولا يمكن استعادة هذه الملفات داخل المنصة — أي إدخال للبيانات يتم يدوياً فقط.</div>
+              <div>• لا تتوفر &quot;نسخة من قاعدة البيانات&quot; ولا يمكن استعادة هذه الملفات داخل المنصة — أي إدخال للبيانات يتم يدوياً فقط.</div>
             </div>
             <a href="/export-data" className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-accent text-white text-sm font-semibold hover:opacity-90 transition-opacity">
               <Download size={16} /> فتح صفحة تحميل التقارير (Excel / CSV)
@@ -724,6 +769,92 @@ export default function SubscriptionPageEnhanced() {
           </div>
         </Card>
       )}
+
+      <Modal isOpen={showUpgradeModal} onClose={() => setShowUpgradeModal(false)} title={`طلب ترقية إلى ${selectedPlan?.name}`} size="lg">
+        {selectedPlan && (
+          <div className="space-y-5">
+            <div className="flex gap-2 p-1 bg-bg-secondary rounded-xl">
+              <button onClick={() => changeDuration('monthly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'monthly' ? 'bg-accent text-white' : 'text-text-muted'}`}>شهري - ${selectedPlan.price_monthly}</button>
+              <button onClick={() => changeDuration('yearly')} className={`flex-1 py-2 rounded-lg text-sm ${duration === 'yearly' ? 'bg-accent text-white' : 'text-text-muted'}`}>سنوي - ${Math.round((selectedPlan.price_yearly || selectedPlan.price_monthly * 12 * 0.8))} (خصم {selectedPlan.yearly_discount_percent}%)</button>
+            </div>
+
+            {/* خطوة الدفع: طرق التحويل ثم إرسال الإيصال على تليجرام */}
+            <div className="p-3 bg-info-light border border-info rounded-xl text-xs text-text-primary space-y-2">
+              <div className="font-bold">1) طرق الدفع المتاحة (يتحكم فيها الأدمن):</div>
+              {paymentMethods.length === 0 ? (
+                <div className="text-text-muted">لم تُضف طرق دفع بعد — تواصل مع الدعم.</div>
+              ) : paymentMethods.map((pm) => (
+                <div key={pm.code} className="flex justify-between gap-3 py-0.5">
+                  <span className="font-semibold">{pm.name_ar}</span>
+                  <span className="text-text-muted font-mono" dir="ltr">{pm.account_number}</span>
+                </div>
+              ))}
+              <div className="font-bold pt-1">2) أرسل صورة الإيصال على تليجرام:</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {subscriberNumber && (
+                  <span className="inline-flex items-center gap-1.5 bg-bg-primary border border-border rounded-lg px-2 py-1">
+                    <span className="text-text-muted">رقمك:</span>
+                    <span className="font-mono font-bold text-accent" dir="ltr">#{subscriberNumber}</span>
+                    <button onClick={copySubscriberNumber} title="نسخ رقم المشترك" className="p-0.5 text-text-muted hover:text-accent transition-colors">
+                      {copiedNumber ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+                    </button>
+                  </span>
+                )}
+                {telegramUrl ? (
+                  <a href={telegramUrl} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#229ED9] text-white font-semibold hover:opacity-90 transition-opacity">
+                    <ExternalLink size={13} /> فتح تليجرام الدعم
+                  </a>
+                ) : (
+                  <span className="text-text-muted">جهة تليجرام غير مضبوطة — أرسل الإيصال لجهة الدعم المعروفة لديك.</span>
+                )}
+              </div>
+              <div className="text-text-muted">3) ثم سجّل بيانات التحويل هنا وارفع الطلب — يصلك اعتماد المطور بعد مطابقة الإيصال.</div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-text-muted">طريقة الدفع</label>
+                <select value={form.payment_method} onChange={(e) => setForm({...form, payment_method: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-lg text-sm">
+                  {paymentMethods.length > 0 ? paymentMethods.map((pm) => (
+                    <option key={pm.code} value={pm.code}>{pm.name_ar}</option>
+                  )) : (<>
+                  <option value="instapay">انستا باي</option>
+                  <option value="orange_cash">أورنج كاش</option>
+                  <option value="bank_transfer">تحويل بنكي</option>
+                  </>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-text-muted">المبلغ المحول</label>
+                <Input type="number" value={form.amount} onChange={(e)=>setForm({...form, amount: e.target.value})} />
+              </div>
+              <div>
+                <label className="text-xs text-text-muted">تاريخ التحويل</label>
+                <Input type="date" value={form.date} onChange={(e)=>setForm({...form, date: e.target.value})} />
+              </div>
+              <div>
+                <label className="text-xs text-text-muted">وقت التحويل</label>
+                <Input type="time" value={form.time} onChange={(e)=>setForm({...form, time: e.target.value})} />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-xs text-text-muted">ملاحظات إضافية</label>
+              <textarea value={form.notes} onChange={(e)=>setForm({...form, notes: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm h-20" placeholder="اكتب تفاصيل إضافية..."></textarea>
+            </div>
+
+            <div className="bg-warning-light border border-warning rounded-xl p-3 text-xs text-warning">
+              <div className="font-bold">المبلغ المطلوب: ${selectedPlan ? Math.round(priceForPlan(selectedPlan, duration)) : 0} ({duration === 'yearly' ? 'سنوي' : 'شهري'})</div>
+              <div className="mt-1">الإيصال يُرسل على تليجرام فقط — لا يوجد رفع ملفات. بعد اعتماد المطور للطلب يتم تفعيل الباقة فوراً.</div>
+            </div>
+
+            <Button onClick={submitUpgrade} disabled={submitting} className="w-full" leftIcon={submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>
+              {submitting ? 'جاري الإرسال...' : 'إرسال طلب الترقية/التجديد'}
+            </Button>
+          </div>
+        )}
+      </Modal>
 
       <Modal isOpen={showAddonModal} onClose={() => setShowAddonModal(false)} title={`شراء: ${ADDONS.find(a => a.id === selectedAddon)?.label || ''}`} size="lg">
         <div className="space-y-5">
@@ -740,9 +871,38 @@ export default function SubscriptionPageEnhanced() {
               </select>
             </div>
           </div>
-          <div className="p-3 bg-warning-light border border-warning rounded-xl text-xs text-warning">
-            المبلغ المطلوب: <strong>${addonTotal()}</strong>
+
+          {/* خطوة الدفع: طرق التحويل ثم إرسال الإيصال على تليجرام */}
+          <div className="p-3 bg-info-light border border-info rounded-xl text-xs text-text-primary space-y-2">
+            <div className="font-bold">1) حوّل المبلغ عبر إحدى الطرق:</div>
+            {paymentMethods.length === 0 ? (
+              <div className="text-text-muted">لم تُضف طرق دفع بعد — تواصل مع الدعم.</div>
+            ) : paymentMethods.map((pm) => (
+              <div key={pm.code} className="flex justify-between gap-3 py-0.5">
+                <span className="font-semibold">{pm.name_ar}</span>
+                <span className="text-text-muted font-mono" dir="ltr">{pm.account_number}</span>
+              </div>
+            ))}
+            <div className="font-bold pt-1">2) أرسل صورة الإيصال على تليجرام مع رقم مشتركك:</div>
+            <div className="flex flex-wrap items-center gap-2">
+              {subscriberNumber && (
+                <span className="inline-flex items-center gap-1.5 bg-bg-primary border border-border rounded-lg px-2 py-1">
+                  <span className="text-text-muted">رقمك:</span>
+                  <span className="font-mono font-bold text-accent" dir="ltr">#{subscriberNumber}</span>
+                  <button onClick={copySubscriberNumber} title="نسخ رقم المشترك" className="p-0.5 text-text-muted hover:text-accent transition-colors">
+                    {copiedNumber ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+                  </button>
+                </span>
+              )}
+              {telegramUrl && (
+                <a href={telegramUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#229ED9] text-white font-semibold hover:opacity-90 transition-opacity">
+                  <ExternalLink size={13} /> فتح تليجرام الدعم
+                </a>
+              )}
+            </div>
           </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-text-muted">طريقة الدفع</label>
@@ -764,21 +924,13 @@ export default function SubscriptionPageEnhanced() {
             <div><label className="text-xs text-text-muted">الوقت</label><Input type="time" value={addonForm.time} onChange={(e)=>setAddonForm({...addonForm, time: e.target.value})} /></div>
           </div>
           <div>
-            <label className="text-xs text-text-muted">إيصال الدفع (JPG أو PNG أو PDF، حتى 5MB)</label>
-            <input
-              type="file"
-              accept="image/jpeg,image/png,application/pdf"
-              disabled={receiptUploading !== null}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void uploadReceipt(file, 'addon');
-              }}
-              className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm"
-            />
-            {receiptUploading === 'addon' && <p className="text-xs text-text-muted mt-1">جاري رفع الإيصال...</p>}
-            {addonForm.receipt_url && <p className="text-xs text-emerald-400 mt-1">تم إرفاق الإيصال بأمان</p>}
+            <label className="text-xs text-text-muted">ملاحظات إضافية</label>
+            <textarea value={addonForm.notes} onChange={(e)=>setAddonForm({...addonForm, notes: e.target.value})} className="w-full mt-1 px-3 py-2 bg-bg-secondary border border-border rounded-xl text-sm h-16" placeholder="اكتب تفاصيل إضافية..."></textarea>
           </div>
-          <Button onClick={submitAddon} disabled={addonSubmitting || receiptUploading !== null || !addonForm.receipt_url} className="w-full" leftIcon={addonSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>{addonSubmitting ? 'جاري الإرسال...' : 'رفع طلب الإضافة'}</Button>
+          <div className="p-3 bg-warning-light border border-warning rounded-xl text-xs text-warning">
+            المبلغ المطلوب: <strong>${addonTotal()}</strong> — الإيصال يُرسل على تليجرام فقط.
+          </div>
+          <Button onClick={submitAddon} disabled={addonSubmitting} className="w-full" leftIcon={addonSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}>{addonSubmitting ? 'جاري الإرسال...' : 'إرسال طلب الإضافة'}</Button>
         </div>
       </Modal>
     </div>

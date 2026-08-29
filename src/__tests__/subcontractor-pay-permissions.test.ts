@@ -1,6 +1,6 @@
 /**
- * Route-boundary tests for upload/receipt, subcontractors/payments,
- * permissions GET (userId).
+ * Route-boundary tests for subcontractors/payments and permissions GET (userId).
+ * (The payment-receipt upload endpoint was removed — receipts go via Telegram.)
  */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
@@ -61,7 +61,6 @@ function makeDb(db: Record<string, Row[]>) {
 let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
-import { POST as upPOST } from '@/app/api/upload/receipt/route';
 import type { TestBuilder } from './mocks';
 import type { NextRequest } from 'next/server';
 import { POST as payPOST } from '@/app/api/subcontractors/payments/route';
@@ -77,10 +76,6 @@ function req(role = 'admin', method = 'GET', url = 'http://localhost/x', body?: 
     cookies: { get: () => undefined }, json: async () => body } as unknown as NextRequest;
 }
 
-function makeFile(type: string, size: number, bytes: Uint8Array) {
-  return { type, size, arrayBuffer: async () => bytes } as unknown as File;
-}
-
 function baseDb() {
   return {
     users: [{ id: 'u1', company_id: C1, name: 'م', email: 'admin@example.com', is_active: true, token_version: 0, role: 'admin' }],
@@ -92,31 +87,6 @@ function baseDb() {
 }
 
 beforeEach(() => { resetRateLimits(); mockDb = makeDb(baseDb()); });
-
-describe('upload/receipt POST', () => {
-  function upReq(file: File | null) {
-    const base = req('admin', 'POST', 'http://localhost/x');
-    return { ...base, formData: async () => ({ get: () => file }) } as unknown as NextRequest;
-  }
-
-  test('rejects a missing file and unsupported type', async () => {
-    const res1 = await upPOST(upReq(null));
-    expect(res1.status).toBe(400);
-    const res2 = await upPOST(upReq(makeFile('text/html', 10, new Uint8Array([1, 2, 3]))));
-    expect(res2.status).toBe(400);
-  });
-
-  test('rejects an oversized file', async () => {
-    const res = await upPOST(upReq(makeFile('application/pdf', 6 * 1024 * 1024, new Uint8Array([0x25, 0x50, 0x44, 0x46]))));
-    expect(res.status).toBe(400);
-  });
-
-  test('uploads a valid PDF receipt', async () => {
-    const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from('x'.repeat(30)), Buffer.from('\n%%EOF')]);
-    const res = await upPOST(upReq(makeFile('application/pdf', pdf.length, new Uint8Array(pdf))));
-    expect(res.status).toBe(200);
-  });
-});
 
 describe('subcontractors/payments POST', () => {
   test('rejects missing fields and invalid amount', async () => {

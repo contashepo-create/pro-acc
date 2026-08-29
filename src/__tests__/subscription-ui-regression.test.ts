@@ -1,80 +1,13 @@
-/** Regression coverage for subscription payment-proof uploads and live badge updates. */
+/** Regression coverage for the subscription billing surface (Telegram receipt flow). */
 
-const COMPANY = '90000000-0000-4000-8000-000000000001';
-const USER = '91000000-0000-4000-8000-000000000001';
-const storageCalls: Array<{ method: string; path?: string }> = [];
+import fs from 'fs';
+import path from 'path';
 
-const storageBucket = {
-  list: jest.fn(async (path: string) => {
-    storageCalls.push({ method: 'list', path });
-    return { data: [], error: null };
-  }),
-  upload: jest.fn(async (path: string) => {
-    storageCalls.push({ method: 'upload', path });
-    return { data: { path }, error: null };
-  }),
-  createSignedUrl: jest.fn(async (path: string) => ({
-    data: { signedUrl: `https://storage.example/${path}` }, error: null,
-  })),
-  remove: jest.fn(async () => ({ data: [], error: null })),
-};
-
-const db = {
-  storage: { from: jest.fn(() => storageBucket) },
-  from: jest.fn(() => ({ insert: jest.fn(async () => ({ error: null })) })),
-};
-
-jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => db }));
-jest.mock('@/lib/api-helpers', () => {
-  const actual = jest.requireActual('@/lib/api-helpers');
-  return {
-    ...actual,
-    requireApiAuth: jest.fn(async () => ({ companyId: COMPANY, userId: USER, role: 'admin' })),
-  };
-});
-
-import { POST as uploadReceipt } from '@/app/api/upload/receipt/route';
-import type { NextRequest } from 'next/server';
 import {
   NOTIFICATIONS_UPDATED_EVENT,
   publishUnreadNotificationCount,
   readUnreadNotificationCount,
 } from '@/lib/notification-events';
-
-beforeEach(() => {
-  storageCalls.length = 0;
-  jest.clearAllMocks();
-});
-
-describe('subscription payment-proof upload', () => {
-  test('uploads a valid proof without requiring a purchased storage add-on', async () => {
-    const png = Buffer.concat([
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      Buffer.from([0, 0, 0, 13]),
-      Buffer.from('IHDR'),
-      Buffer.alloc(16),
-    ]);
-    const file = {
-      type: 'image/png', size: png.length,
-      arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
-    };
-    const request = { formData: async () => new Map([['file', file]]) } as unknown as NextRequest;
-
-    const response = await uploadReceipt(request);
-    const payload = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(payload.success).toBe(true);
-    expect(payload.data.reference).toMatch(new RegExp(`^${COMPANY}/payment-proofs/.+\\.png$`));
-    expect(storageCalls).toEqual(expect.arrayContaining([
-      { method: 'list', path: `${COMPANY}/payment-proofs` },
-      expect.objectContaining({ method: 'upload', path: expect.stringContaining(`${COMPANY}/payment-proofs/`) }),
-    ]));
-    // The old broken flow queried subscriptions and rejected all zero-storage plans.
-    expect(db.from).toHaveBeenCalledTimes(1);
-    expect(db.from).toHaveBeenCalledWith('security_audit_log');
-  });
-});
 
 describe('notification badge event', () => {
   test('is safe server-side and rejects malformed event details', () => {
@@ -102,5 +35,36 @@ describe('notification badge event', () => {
     } finally {
       (globalThis as { window?: unknown }).window = originalWindow;
     }
+  });
+});
+
+describe('subscription page source (Telegram receipt flow)', () => {
+  const page = fs.readFileSync(
+    path.join(process.cwd(), 'src/app/(dashboard)/subscription/page.tsx'),
+    'utf8',
+  );
+
+  test('no receipt file upload UI remains — receipts go through Telegram', () => {
+    expect(page).not.toContain('/api/upload/receipt');
+    expect(page).not.toContain('uploadReceipt');
+    expect(page).not.toContain('receipt_image_url');
+    expect(page).toContain('t.me');
+    expect(page).toContain('أرسل صورة الإيصال');
+  });
+
+  test('no sequential-number fallback: subscriber number comes from the API only', () => {
+    expect(page).not.toContain("id?.substring(0, 8)");
+    expect(page).toContain('subscriber_number');
+  });
+
+  test('unified current-subscription card replaces duplicated cards', () => {
+    expect(page).not.toContain('الإضافات المفعلة على اشتراكك');
+    expect(page).toContain('اشتراكك الحالي');
+    // current plan is renewable instead of disabled
+    expect(page).toContain('تجديد نفس الباقة');
+  });
+
+  test('pending requests can be cancelled by the owner', () => {
+    expect(page).toContain("method: 'DELETE'");
   });
 });

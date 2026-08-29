@@ -2,6 +2,7 @@ type SubRow = {
   status: string;
   end_date: string | null;
   plan_code: string | null;
+  subscriber_number?: string | null;
   subscription_plans: { code: string | null; name: string | null; features_modules: Record<string, unknown> | string | null } | null;
 };
 let subscription: SubRow | null = null;
@@ -49,6 +50,15 @@ describe('subscription access status branches', () => {
     subscription = { status: 'active', end_date: future(), plan_code: 'legacy', subscription_plans: null };
     await expect(getSubscriptionAccess('c')).resolves.toMatchObject({ planCode: 'legacy', planName: null, features: {} });
   });
+
+  test('exposes the permanent subscriber number and tolerates missing/blank values', async () => {
+    subscription = sub('active', future());
+    await expect(getSubscriptionAccess('c')).resolves.toMatchObject({ subscriberNumber: null });
+    subscription = { ...sub('active', future()), subscriber_number: '   ' };
+    await expect(getSubscriptionAccess('c')).resolves.toMatchObject({ subscriberNumber: null });
+    subscription = { ...sub('active', future()), subscriber_number: '7KQ2-9X4M-3ZTD' };
+    await expect(getSubscriptionAccess('c')).resolves.toMatchObject({ subscriberNumber: '7KQ2-9X4M-3ZTD' });
+  });
 });
 
 describe('subscription request enforcement branches', () => {
@@ -72,7 +82,7 @@ describe('subscription request enforcement branches', () => {
     }
     // The renewal flow and the table data download keep working.
     for (const path of [
-      '/api/support', '/api/support/ticket', '/api/upload/receipt', '/api/auth/logout?x=1',
+      '/api/support', '/api/support/ticket', '/api/app-settings', '/api/auth/logout?x=1',
       '/api/company/export-download', '/api/payment-methods', '/api/subscription/activate-code',
       '/api/subscription/upgrade-request', '/api/subscription/addon-request', '/api/auth/subscription-status',
     ]) {

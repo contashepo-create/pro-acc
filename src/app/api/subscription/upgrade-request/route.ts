@@ -83,9 +83,10 @@ export async function POST(request: NextRequest) {
     if (createError) throw createError;
 
     // Best-effort admin-bot announcement with the subscriber reference so the
-    // developer can match the incoming Telegram receipt to this request.
-    // Never fails the request when Telegram is unreachable.
-    void notifyAdminOfUpgradeRequest(auth.companyId, auth.userId, data as Row | null, {
+    // developer can match the incoming Telegram receipt to this request. It
+    // has a bounded delivery window and never fails the request when Telegram
+    // is unreachable.
+    await notifyAdminOfUpgradeRequest(auth.companyId, auth.userId, data as Row | null, {
       plan_id: requestedPlanId,
       duration_type: String(durationType),
       payment_method_code: paymentMethod,

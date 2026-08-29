@@ -46,6 +46,21 @@ describe('Telegram transport functions', () => {
     jest.useRealTimers();
   });
 
+  test('aborts a hung admin notification after ten seconds', async () => {
+    jest.useFakeTimers();
+    global.fetch = jest.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      // Simulate real fetch: rejects when the caller's signal aborts.
+      init.signal!.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+    })) as unknown as typeof fetch;
+    const mod = await loadTelegram('token', 'admin');
+    const pending = mod.sendAdminNotification('hello');
+    jest.advanceTimersByTime(10_000);
+    const signal = (global.fetch as jest.Mock).mock.calls[0][1].signal as AbortSignal;
+    expect(signal.aborted).toBe(true);
+    await expect(pending).resolves.toBe(false);
+    jest.useRealTimers();
+  });
+
   test('returns false for HTTP and network failures', async () => {
     global.fetch = jest.fn(async () => new Response('denied', { status: 403 })) as unknown as typeof fetch;
     let mod = await loadTelegram('token', 'admin');

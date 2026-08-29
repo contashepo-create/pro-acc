@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     if (createError?.code === '23505') return error('يوجد طلب إضافة من نفس النوع معلق بالفعل', 409);
     if (createError) throw createError;
 
-    void notifyAdminOfAddonRequest(auth.companyId, auth.userId, inserted as Row | null, {
+    await notifyAdminOfAddonRequest(auth.companyId, auth.userId, inserted as Row | null, {
       addon_type, quantity, duration_type,
       payment_method_code: body.payment_method_code,
       payment_date: body.payment_date,

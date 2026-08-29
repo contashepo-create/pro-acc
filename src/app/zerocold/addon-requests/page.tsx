@@ -13,6 +13,7 @@ interface AddonRequest {
   payment_method_code: string;
   payment_amount: number | null;
   receipt_image_url: string | null;
+  subscriber_number?: string | null;
   notes: string | null;
   status: 'pending'|'approved'|'rejected'|'cancelled';
   created_at: string;
@@ -84,8 +85,14 @@ export default function AdminAddonRequests() {
                   <div className="text-xs mt-1">
                     طريقة الدفع: <strong>{r.payment_method_code}</strong> ·
                     المبلغ: <strong>${r.total_amount_usd}</strong> · محول: ${r.payment_amount ?? '—'}
+                    {r.subscriber_number && (
+                      <> · رقم المشترك: <strong className="font-mono text-accent" dir="ltr">#{r.subscriber_number}</strong></>
+                    )}
                   </div>
-                  {r.receipt_image_url && <a href={r.receipt_image_url} target="_blank" rel="noreferrer" className="text-xs text-accent underline block mt-1">عرض الإيصال</a>}
+                  {/* الإيصالات تصل على تليجرام — يطابقها المطور برقم المشترك */}
+                  {r.receipt_image_url
+                    ? <a href={r.receipt_image_url} target="_blank" rel="noreferrer" className="text-xs text-accent underline block mt-1">عرض الإيصال (سجل قديم)</a>
+                    : <span className="inline-flex items-center gap-1 text-xs text-[#229ED9] mt-1">الإيصال عبر تليجرام — طابقه مع رقم المشترك</span>}
                   {r.notes && <div className="text-xs text-text-muted mt-1">ملاحظات: {r.notes}</div>}
                   <div className="text-[10px] text-text-muted mt-1">{new Date(r.created_at).toLocaleString('ar-SA')}</div>
                 </div>

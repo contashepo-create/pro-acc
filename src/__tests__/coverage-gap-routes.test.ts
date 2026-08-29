@@ -59,7 +59,7 @@ jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 import { POST as maintPOST } from '@/app/api/equipment/[id]/maintenance/route';
 import type { TestBuilder } from './mocks';
 import type { NextRequest } from 'next/server';
-import { GET as addonGET, POST as addonPOST } from '@/app/api/subscription/addon-request/route';
+import { GET as addonGET, POST as addonPOST, DELETE as addonDELETE } from '@/app/api/subscription/addon-request/route';
 import { GET as faGET } from '@/app/api/financial-audit/route';
 import { GET as payMethodsGET } from '@/app/api/payment-methods/route';
 import { POST as subscribePOST } from '@/app/api/auth/subscribe/route';
@@ -80,6 +80,7 @@ const U1 = '00000000-0000-4000-8000-0000000000u1';
 const A1 = '00000000-0000-4000-8000-0000000000a1';
 const EQID = '00000000-0000-4000-8000-0000000000e1';
 const EQUID = '00000000-0000-4000-8000-0000000000f1';
+const REQ_ID = '00000000-0000-4000-8000-0000000000a9';
 
 function userReq(method = 'GET', url = 'http://localhost/x', body?: Row) {
   const token = createToken(U1, 'admin', 0);
@@ -189,7 +190,7 @@ describe('subscription/addon-request', () => {
     expect(res.status).toBe(400);
   });
 
-  test('POST rejects a missing receipt reference', async () => {
+  test('POST rejects any receipt reference — receipts go via Telegram only', async () => {
     const res = await addonPOST(userReq('POST', 'http://localhost/x', {
       addon_type: 'extra_user', quantity: 1, duration_type: 'monthly',
       payment_method_code: 'card', receipt_image_url: 'https://evil.com/x.png',
@@ -200,7 +201,7 @@ describe('subscription/addon-request', () => {
   test('POST rejects an invalid payment date', async () => {
     const res = await addonPOST(userReq('POST', 'http://localhost/x', {
       addon_type: 'extra_user', quantity: 1, duration_type: 'monthly',
-      payment_method_code: 'card', receipt_image_url: `${C1}/receipt.png`, payment_date: 'bad-date',
+      payment_method_code: 'card', payment_date: 'bad-date',
     }));
     expect(res.status).toBe(400);
   });
@@ -210,7 +211,7 @@ describe('subscription/addon-request', () => {
     const res = await addonPOST(userReq('POST', 'http://localhost/x', {
       addon_type: 'extra_user', quantity: 2, duration_type: 'yearly',
       payment_method_code: 'bank-transfer', payment_date: '2026-05-01', payment_time: '14:30',
-      receipt_image_url: `${C1}/receipt.png`, notes: 'سريع',
+      notes: 'سريع',
     }));
     expect(res.status).toBe(201);
   });
@@ -220,9 +221,24 @@ describe('subscription/addon-request', () => {
     const res = await addonPOST(userReq('POST', 'http://localhost/x', {
       addon_type: 'extra_user', quantity: 1, duration_type: 'monthly',
       payment_method_code: 'card', payment_date: '2026-05-01',
-      receipt_image_url: `${C1}/receipt.png`,
     }));
     expect(res.status).toBe(409);
+  });
+
+  test('DELETE cancels the caller own pending request', async () => {
+    mockDb.rpcResults.set('cancel_own_subscription_request', { data: { id: 'r2', status: 'cancelled' }, error: null });
+    const res = await addonDELETE(userReq('DELETE', `http://localhost/x?id=${REQ_ID}`));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.request.status).toBe('cancelled');
+  });
+
+  test('DELETE rejects an invalid id and maps not-found', async () => {
+    const res1 = await addonDELETE(userReq('DELETE', 'http://localhost/x?id=nope'));
+    expect(res1.status).toBe(400);
+    mockDb.rpcResults.set('cancel_own_subscription_request', { data: null, error: { message: 'request not found or already reviewed' } });
+    const res2 = await addonDELETE(userReq('DELETE', `http://localhost/x?id=${REQ_ID}`));
+    expect(res2.status).toBe(404);
   });
 });
 
@@ -339,11 +355,13 @@ describe('admin/companies', () => {
 });
 
 describe('auth/subscription-status', () => {
-  test('GET returns subscription access', async () => {
+  test('GET returns subscription access incl. the permanent subscriber number', async () => {
     const res = await subStatusGET(userReq('GET', 'http://localhost/subscription-status'));
     const body = await res.json();
     expect(body.success).toBe(true);
     expect(body.data.status).toBe('active');
+    // رقم المشترك يظهر الآن في تاب الاشتراك بالإعدادات (كان مفقوداً)
+    expect('subscriber_number' in body.data).toBe(true);
   });
 });
 
