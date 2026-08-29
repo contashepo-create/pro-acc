@@ -33,15 +33,15 @@ export interface SchemaContext {
 const COA_SEED = [
   '1000', '1110', '1130', '1150', '1160', '1170', '1180', '1230', '1290',
   '2120', '2140',
-  '3000', '3200',
-  '4100',
-  '5100',
+  '3000', '3100', '3200',
+  '4100', '4210',
+  '5100', '5450',
 ].map((code) => ({
   code,
   name: `حساب ${code}`,
   name_en: `Account ${code}`,
-  type: code === '4100' ? 'revenue'
-    : code === '5100' ? 'expense'
+  type: code === '4100' || code === '4210' ? 'revenue'
+    : code === '5100' || code === '5450' ? 'expense'
     : ['2120', '2140'].includes(code) ? 'liability'
     : code.startsWith('3') ? 'equity'
     : 'asset',
