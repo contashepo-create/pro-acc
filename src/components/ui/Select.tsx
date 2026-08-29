@@ -135,7 +135,7 @@ export function Select({
               ref={searchInputRef}
               type="text"
               dir="auto"
-              className="input-base !pr-8 text-sm bg-bg-primary"
+              className="input-base !pr-8 !pl-8 text-sm bg-bg-primary"
               placeholder="بحث بالرمز أو الاسم..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}

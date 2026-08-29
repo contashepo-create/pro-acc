@@ -81,7 +81,7 @@ function ResetPasswordForm() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="input-base pl-10"
+              className="input-base !pl-10"
               dir="ltr"
               autoFocus
             />

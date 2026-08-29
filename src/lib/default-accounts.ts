@@ -80,7 +80,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
 
   // المصروفات - Expenses 5000-5999
   { code: '5000', name: 'المصروفات', nameEn: 'Expenses', type: 'expense', isHeader: true },
-  { code: '5100', name: 'تكلفة مباشرة', nameEn: 'Direct Costs', type: 'expense', parentCode: '5000', isHeader: true },
+  { code: '5100', name: 'تكلفة مباشرة', nameEn: 'Direct Costs', type: 'expense', parentCode: '5000' },
   { code: '5110', name: 'مواد خام', nameEn: 'Raw Materials', type: 'expense', parentCode: '5100' },
   { code: '5120', name: 'أجور عمالة مباشرة', nameEn: 'Direct Labor', type: 'expense', parentCode: '5100' },
   { code: '5130', name: 'تكاليف مقاولي باطن', nameEn: 'Subcontractor Costs', type: 'expense', parentCode: '5100' },

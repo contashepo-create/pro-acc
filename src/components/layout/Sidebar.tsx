@@ -41,7 +41,7 @@ const navGroups: NavGroup[] = [
     label: 'المحاسبة',
     icon: Calculator,
     items: [
-      { id: 'accounts', label: 'الحسابات' },
+      { id: 'accounts', label: 'شجرة الحسابات' },
       { id: 'journal', label: 'القيود' },
       { id: 'invoices', label: 'الفواتير' },
       { id: 'credit-notes', label: 'إشعارات دائنة ومدينة' },

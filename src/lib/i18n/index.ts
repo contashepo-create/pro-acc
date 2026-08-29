@@ -82,7 +82,7 @@ export const translations = {
     'dashboard.loss': 'صافي الخسارة',
 
     // Accounts
-    'accounts.title': 'دليل الحسابات',
+    'accounts.title': 'شجرة الحسابات',
     'accounts.addAccount': 'إضافة حساب',
     'accounts.asset': 'أصول',
     'accounts.liability': 'خصوم',
