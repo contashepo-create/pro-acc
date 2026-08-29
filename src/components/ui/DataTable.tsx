@@ -118,7 +118,7 @@ export function DataTable<T extends Record<string, any>>({
             <input
               type="text"
               dir="auto"
-              className="input-base !pr-10"
+              className="input-base !pr-10 !pl-10"
               placeholder="بحث..."
               value={searchQuery}
               onChange={(e) => {

@@ -75,12 +75,13 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '4110', name: 'إيرادات صيانة', nameEn: 'Maintenance Revenue', type: 'revenue', parentCode: '4000' },
   { code: '4120', name: 'إيرادات استشارات', nameEn: 'Consulting Revenue', type: 'revenue', parentCode: '4000' },
   { code: '4200', name: 'إيرادات أخرى', nameEn: 'Other Revenue', type: 'revenue', parentCode: '4000' },
+  { code: '4210', name: 'أرباح فروق العملة', nameEn: 'Foreign Exchange Gains', type: 'revenue', parentCode: '4000' },
   { code: '4250', name: 'خصم مكتسب', nameEn: 'Discount Received', type: 'revenue', parentCode: '4000' },
   { code: '4300', name: 'إيرادات فوائد', nameEn: 'Interest Income', type: 'revenue', parentCode: '4000' },
 
   // المصروفات - Expenses 5000-5999
   { code: '5000', name: 'المصروفات', nameEn: 'Expenses', type: 'expense', isHeader: true },
-  { code: '5100', name: 'تكلفة مباشرة', nameEn: 'Direct Costs', type: 'expense', parentCode: '5000', isHeader: true },
+  { code: '5100', name: 'تكلفة مباشرة', nameEn: 'Direct Costs', type: 'expense', parentCode: '5000' },
   { code: '5110', name: 'مواد خام', nameEn: 'Raw Materials', type: 'expense', parentCode: '5100' },
   { code: '5120', name: 'أجور عمالة مباشرة', nameEn: 'Direct Labor', type: 'expense', parentCode: '5100' },
   { code: '5130', name: 'تكاليف مقاولي باطن', nameEn: 'Subcontractor Costs', type: 'expense', parentCode: '5100' },
@@ -105,6 +106,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '5300', name: 'مصروفات تسويقية', nameEn: 'Marketing Expenses', type: 'expense', parentCode: '5000' },
   { code: '5400', name: 'مصروفات إدارية وعمومية', nameEn: 'General & Admin Expenses', type: 'expense', parentCode: '5000' },
   { code: '5420', name: 'مصاريف مناقصات خاسرة', nameEn: 'Lost Tender Costs', type: 'expense', parentCode: '5400' },
+  { code: '5450', name: 'خسائر فروق العملة', nameEn: 'Foreign Exchange Losses', type: 'expense', parentCode: '5000' },
 ];
 
 async function insertAccount(supabase: SupabaseLike, row: Record<string, unknown>) {

@@ -94,7 +94,7 @@ export default function AdminMessagesPage() {
                   placeholder="البحث برقم الشركة..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="input-base pr-9 w-full"
+                  className="input-base !pr-9 w-full"
                 />
               </div>
               <select

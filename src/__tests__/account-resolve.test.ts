@@ -26,7 +26,7 @@ describe('isHeaderAccount', () => {
       '2000', '2100', '2200', // liabilities
       '3000',                  // equity
       '4000',                  // revenue
-      '5000', '5100', '5200', // expenses
+      '5000', '5200',         // expenses (5100 is a posting account, not a header)
     ];
     for (const code of expectedHeaders) {
       expect(isHeaderAccount({ code })).toBe(true);
@@ -34,7 +34,7 @@ describe('isHeaderAccount', () => {
   });
 
   test('returns false for leaf account codes', () => {
-    const leafCodes = ['1110', '1130', '2120', '4100', '5110'];
+    const leafCodes = ['1110', '1130', '2120', '4100', '5100', '5110'];
     for (const code of leafCodes) {
       expect(isHeaderAccount({ code })).toBe(false);
     }
@@ -46,7 +46,7 @@ describe('isHeaderAccount', () => {
   });
 
   test('HEADER_ACCOUNT_CODES set has expected size', () => {
-    expect(HEADER_ACCOUNT_CODES.size).toBe(11);
+    expect(HEADER_ACCOUNT_CODES.size).toBe(10);
   });
 });
 

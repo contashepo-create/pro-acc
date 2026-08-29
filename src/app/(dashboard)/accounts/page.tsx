@@ -196,8 +196,8 @@ export default function AccountsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="دليل الحسابات"
-        description="إدارة دليل الحسابات الموحد والمصمم وفق المعايير المحاسبية الدولية (IFRS)"
+        title="شجرة الحسابات"
+        description="إدارة شجرة الحسابات الموحدة والمصممة وفق المعايير المحاسبية الدولية (IFRS)"
         actions={
           <Button onClick={handleOpenAdd} leftIcon={<Plus size={18} />}>
             إضافة حساب
@@ -208,7 +208,7 @@ export default function AccountsPage() {
       {error && <div className="bg-danger/10 border border-danger/30 rounded-lg p-4 text-danger">{error}</div>}
 
       {flatData.length === 0 ? (
-        <EmptyState title="لا توجد حسابات" description="أضف حساباً جديداً إلى دليل الحسابات" actionLabel="إضافة حساب" onAction={handleOpenAdd} />
+        <EmptyState title="لا توجد حسابات" description="أضف حساباً جديداً إلى شجرة الحسابات" actionLabel="إضافة حساب" onAction={handleOpenAdd} />
       ) : (
         <DataTable columns={[...columns, { 
           key: 'actions', 
