@@ -18,9 +18,9 @@ function run1(cmd: string): string {
   try { return run(cmd); } catch { return ''; }
 }
 
-interface Rule { id: string; regex: string; keywords?: string[] }
+interface Rule { id: string; regex: string; keywords?: string[]; allowlists?: Array<{ regexes?: string[] }> }
 interface GitleaksConfig {
-  rules: Array<{ id: string; regex: string; keywords?: string[]; allowlists?: Array<{ regexes?: string[] }> }>;
+  rules: Rule[];
   allowlist?: { regexes?: string[]; paths?: string[] };
 }
 
