@@ -68,4 +68,18 @@ describe('relationship lifecycle routes and database guards', () => {
     expect(migration).toContain('invalid tender cost tenant link');
     expect(migration).toContain('invalid reminder tenant link');
   });
+
+  it('116 re-attaches relationship guards without contract_documents; storage purge stays on the API side', () => {
+    const migration = read('src/migrations/116-remove-contract-document-storage.sql');
+    expect(migration).toContain("ARRAY['crm_contacts','crm_followups','contracts','tenders','tender_cost_items','bonds','project_tasks','reminder_log']");
+    expect(migration).toContain('DROP TABLE IF EXISTS public.contract_documents');
+    expect(migration).toContain('DROP FUNCTION IF EXISTS public.create_contract_document_atomic');
+    expect(migration).not.toContain('FROM contract_documents WHERE');
+    // Supabase raises 42501 (storage.protect_delete) for SQL deletes on
+    // storage.objects — the migration must never attempt them; the bucket-row
+    // delete is guarded and the real purge happens via the Storage API script.
+    expect(migration).not.toContain('DELETE FROM storage.objects');
+    expect(migration).toContain("WHERE id = 'contract-documents'");
+    expect(migration).toContain('EXCEPTION WHEN OTHERS');
+  });
 });

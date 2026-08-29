@@ -78,11 +78,11 @@ describe('no client-facing database copy or restore exists', () => {
     expect(route).toContain('EXPORT_TABLES');
   });
 
-  test('no client route accepts a data-file upload (images/PDF receipts only)', () => {
+  test('no client route accepts a data-file upload (payment receipts go via Telegram now)', () => {
     const routes = listRoutes('src/app/api');
     const uploadRoutes = routes.filter((route) => route.startsWith('upload'));
-    // The only upload surface is the payment-receipt/image upload used by
-    // support & billing flows — there is no bulk table import endpoint.
-    expect(uploadRoutes).toEqual(['upload/receipt']);
+    // Payment-receipt uploads were removed: proof screenshots are sent to the
+    // developer on Telegram. There is no file-upload surface at all.
+    expect(uploadRoutes).toEqual([]);
   });
 });

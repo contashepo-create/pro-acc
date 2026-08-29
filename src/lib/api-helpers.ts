@@ -241,6 +241,61 @@ export async function requireAdminAuth(request: Request): Promise<{ userId: stri
   }
 }
 
+/**
+ * رسائل الرفض المحاسبي الثابتة من دوال RPC الذرية (الفواتير، السندات، القيود،
+ * المخزون). نصوصها مكتوبة في كود قاعدة البيانات الخاص بنا ولا تحمل أي بيانات
+ * حساسة — لكنها كانت تصل للعميل كـ«حدث خطأ في الخادم» (500) لأنها ليست من
+ * فئتي AuthError/BusinessRuleError. المستخدم يستطيع فعلاً إصلاح سببها (رصيد
+ * غير كافٍ، تخصيص يتجاوز المتبقي، حسابات غير مكتملة…) فيُعرض السبب الحقيقي
+ * كرفض أعمال (400) بدل خطأ خادم عام.
+ */
+const ACCOUNTING_RPC_MESSAGES: ReadonlySet<string> = new Set([
+  // فاتورة المبيعات (097)
+  'بيانات الفاتورة غير صالحة', 'بند فاتورة غير صالح', 'العميل غير موجود',
+  'مبلغ التحصيل غير صالح', 'العملة المحددة غير موجودة لهذه الشركة',
+  'سعر الصرف غير صالح', 'حسابات المبيعات غير مكتملة', 'حساب ضريبة المبيعات غير موجود',
+  // سند القبض (097)
+  'بيانات سند القبض غير صالحة', 'الطرف غير موجود', 'البنك أو الخزينة غير موجود',
+  'الحساب المقابل غير صالح', 'مبلغ التخصيص غير صالح', 'بيانات التخصيص غير صالحة',
+  'تخصيص فاتورة مكرر', 'فاتورة البيع غير صالحة للتخصيص', 'مجموع التخصيصات يتجاوز مبلغ السند',
+  // سند الصرف (109)
+  'بيانات سند الصرف غير صالحة', 'الموظف غير موجود', 'الرصيد غير كاف للصرف',
+  'بيانات تخصيص الفواتير غير صالحة', 'فاتورة الشراء غير صالحة للتخصيص',
+  'الفاتورة لا تخص الطرف المحدد', 'التخصيص يتجاوز المتبقي على الفاتورة',
+  // فاتورة المشتريات (097/108)
+  'بيانات فاتورة المشتريات غير صالحة', 'بند مشتريات غير صالح', 'المورد غير موجود',
+  'أمر الشراء غير صالح للمورد المحدد', 'ملف العهدة غير صالح',
+  'إجمالي فاتورة المشتريات يجب أن يكون موجباً', 'مبلغ الفاتورة أكبر من المتبقي في ملف العهدة',
+  'حسابات المشتريات غير مكتملة', 'حساب ضريبة المشتريات غير موجود',
+  'نسبة خصم المنبع غير صالحة', 'خصم المنبع متاح للشركات المصرية فقط',
+  'مبلغ السداد غير صالح', 'لا يجتمع السداد النقدي مع سداد العهدة على نفس الفاتورة',
+  'بيانات المصروفات الإضافية غير صالحة', 'مبلغ مصروف إضافي غير صالح', 'بند مصروف إضافي غير صالح',
+  'حساب دفع المصروفات الإضافية غير صالح', 'حساب دفع المصروفات الإضافية غير موجود',
+  'لا يمكن تطبيق خصم المنبع على فاتورة مسددة من العهدة', 'حسابات خصم المنبع غير مكتملة',
+  'خصم المنبع يتجاوز قيمة الفاتورة', 'مبلغ السداد يتجاوز المستحق للمورد',
+  // القيود والمخزون
+  'بيانات القيد الأساسية غير مكتملة', 'نوع القيد غير صالح', 'يجب أن يحتوي القيد على سطرين على الأقل',
+  'المستخدم المنشئ لا ينتمي إلى الشركة أو غير نشط',
+  'صنف مخزني غير موجود في بنود الفاتورة', 'حسابات المخزون (1170) أو التكلفة (5100) غير مكتملة',
+  // حرس مشترك
+  'المستخدم غير صالح', 'المشروع غير موجود',
+]);
+
+/** رسائل RPC المحاسبية التي يكملها Postgres بمعاملات (٪) قبل العرض. */
+const ACCOUNTING_RPC_PATTERNS: RegExp[] = [
+  /^حساب مصروف «.+» غير موجود$/,
+  /^الصنف المخزني .+ غير نشط$/,
+  /^الكمية غير متوفرة في المخزون للصنف .+ \(المتاح .+\)$/,
+];
+
+/** يرجع حالة HTTP المناسبة إذا كانت الرسالة رفضاً محاسبياً معروفاً، وإلا null. */
+export function accountingRpcStatus(message: string): number | null {
+  if (!message) return null;
+  if (ACCOUNTING_RPC_MESSAGES.has(message)) return 400;
+  if (ACCOUNTING_RPC_PATTERNS.some((pattern) => pattern.test(message))) return 400;
+  return null;
+}
+
 export function handleApiError(err: unknown) {
   if (err instanceof AuthError || err instanceof BusinessRuleError) return error(err.message, err.status);
 
@@ -248,15 +303,27 @@ export function handleApiError(err: unknown) {
   // route-level check (for example when a fiscal year closes concurrently).
   // Translate only these allow-listed accounting rules; never expose arbitrary
   // database/schema errors to production users.
+  const errorCode = err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code ?? '') : '';
   const databaseMessage = err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string'
     ? String((err as { message: string }).message)
     : '';
+  // الدالة المطلوبة غير مثبتة على قاعدة البيانات — الميجريشنز لم تُطبَّق بعد
+  // (PGRST202 من PostgREST أو "function ... does not exist" من المحرك مباشرة).
+  if (errorCode === 'PGRST202' || errorCode === 'PGRST203'
+    || /could not find the function/i.test(databaseMessage)
+    || /^function public\.\w+.* does not exist$/i.test(databaseMessage)) {
+    console.error('RPC missing on database — pending migration? Detail:', databaseMessage);
+    return error('دالة قاعدة البيانات المطلوبة غير مثبتة. يجب تطبيق تحديثات قاعدة البيانات المعلقة (الميجريشنز) ثم إعادة المحاولة.', 503);
+  }
   if (/لا يمكن الترحيل إلى سنة مالية مقفلة|cannot post to a closed fiscal year/i.test(databaseMessage)) {
     return error('لا يمكن تسجيل العملية لأن تاريخها يقع في سنة مالية مقفلة. أعد فتح السنة المالية أو اختر تاريخاً ضمن سنة مفتوحة.', 409);
   }
   if (/لا توجد سنة مالية مفتوحة تغطي تاريخ العملية/i.test(databaseMessage)) {
     return error('تاريخ العملية خارج نطاق السنة المالية المفتوحة. أنشئ أو افتح سنة مالية تغطي هذا التاريخ ثم أعد المحاولة.', 409);
   }
+  // الرفض المحاسبي المعروف من دوال RPC الذرية: السبب الحقيقي بدل «خطأ في النظام».
+  const rpcStatus = accountingRpcStatus(databaseMessage);
+  if (rpcStatus) return error(databaseMessage, rpcStatus);
 
   if (err instanceof ValidationFailure) return validationError(err.errors ?? err.message);
   if (err instanceof RateLimitExceeded) {

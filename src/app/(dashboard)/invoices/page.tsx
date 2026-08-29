@@ -14,7 +14,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { toast } from '@/components/ui/Toast';
-import { formatDate } from '@/lib/utils';
+import { formatDate, roundMoney } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth-store';
 import { companyDisplayMoney } from '@/lib/company-money';
 import { formatDocumentNumber } from '@/lib/document-number';
@@ -160,13 +160,24 @@ export default function InvoicesPage() {
     if (!form.client_id) { setSaveError('يجب اختيار عميل'); return; }
     const validItems = form.items.filter((i: InvoiceItem) => i.description && i.quantity > 0);
     if (validItems.length === 0) { setSaveError('يجب إضافة صنف واحد على الأقل'); return; }
+    // الكمية وسعر الوحدة بمنزلتين عشريتين كحد أقصى (نفس قاعدة التحقق في
+    // الخادم) — رسالة فورية واضحة بدل خطأ 400 بعد الإرسال.
+    for (const item of validItems) {
+      if (roundMoney(item.unitPrice) !== item.unitPrice) { setSaveError('سعر الوحدة يجب ألا يتجاوز منزلتين عشريتين'); return; }
+      if (roundMoney(item.quantity) !== item.quantity) { setSaveError('كمية البند يجب ألا تتجاوز منزلتين عشريتين'); return; }
+    }
 
     setSaving(true); setSaveError('');
     try {
-      const subtotal = validItems.reduce((sum: number, item: InvoiceItem) => sum + item.total, 0);
+      // نفس المجاميع المقرّبة المعروضة في النموذج — الإرسال بقيم غير مقرّبة
+      // (مثل ضريبة 4.9995) كان يُرفض في التحقق بخطأ 400.
+      const subtotal = roundMoney(validItems.reduce((sum: number, item: InvoiceItem) => sum + item.total, 0));
       const vatRate = form.vat_enabled ? companyVatRate : 0;
-      const vatAmount = subtotal * vatRate;
-      const total = subtotal + vatAmount;
+      const vatAmount = roundMoney(subtotal * vatRate);
+      const total = roundMoney(subtotal + vatAmount);
+      // التحصيل لا يتجاوز إجمالي الفاتورة مهما أدخل المستخدم (السيرفر يرفض
+      // التحصيل الأكبر من الإجمالي برسالة نظام عامة).
+      const collected = Math.min(roundMoney(Number(form.collected_amount) || 0), total);
 
       const res = await fetch('/api/invoices', {
         method: 'POST',
@@ -177,7 +188,7 @@ export default function InvoicesPage() {
           date: form.date,
           dueDate: form.due_date || form.date,
           items: validItems.map((i: InvoiceItem) => ({
-            description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, total: i.total,
+            description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, total: roundMoney(i.total),
             discount: Number(i.discount) || 0,
             item_type: i.item_type || 'service', unit: i.unit || 'وحدة',
             item_code: i.item_code || undefined,
@@ -186,7 +197,7 @@ export default function InvoicesPage() {
           currency_code: form.currency_code || undefined,
           exchange_rate: form.currency_code && form.exchange_rate ? Number(form.exchange_rate) : undefined,
           subtotal, vatRate, vatAmount, vatEnabled: form.vat_enabled, total, notes: form.notes,
-          collected_amount: Number(form.collected_amount) || 0,
+          collected_amount: collected,
           bank_safe_id: form.bank_safe_id || null,
         }),
       });
@@ -265,18 +276,22 @@ export default function InvoicesPage() {
       const item = newItems[index];
       const gross = item.quantity * item.unitPrice;
       const disc = gross * (item.discount || 0) / 100;
-      item.total = gross - disc;
+      // تقريب إلزامي: مبلغ غير مقرّب (مثل 100.005) يُرفض في التحقق ويُحسب
+      // مختلفاً في قاعدة البيانات — البنود بمنزلتين عشريتين دائماً.
+      item.total = roundMoney(gross - disc);
     }
     setForm({ ...form, items: newItems });
   };
 
-  const subtotal = form.items.reduce((sum: number, item: InvoiceItem) => sum + (item.total || 0), 0);
-  const totalDiscount = form.items.reduce((sum: number, item: InvoiceItem) => {
+  // مجاميع مقرّبة بمنزلتين عشريتين — نفس قواعد التقريب في قاعدة البيانات
+  // (round لكل بند ثم للضريبة) حتى يطابق المبلغ المرسل ما يحسبه الـ RPC.
+  const subtotal = roundMoney(form.items.reduce((sum: number, item: InvoiceItem) => sum + (item.total || 0), 0));
+  const totalDiscount = roundMoney(form.items.reduce((sum: number, item: InvoiceItem) => {
     return sum + (item.quantity * item.unitPrice * (item.discount || 0) / 100);
-  }, 0);
-  const vatAmount = form.vat_enabled ? subtotal * companyVatRate : 0;
+  }, 0));
+  const vatAmount = form.vat_enabled ? roundMoney(subtotal * companyVatRate) : 0;
   const vatPct = vatPercentLabel(companyVatRate);
-  const total = subtotal + vatAmount;
+  const total = roundMoney(subtotal + vatAmount);
 
   const filtered = statusTab === 'all' ? invoices : invoices.filter(i => i.status === statusTab);
 

@@ -1,6 +1,8 @@
 /**
- * Route-boundary tests for contracts/[id] POST document upload plus
- * GET/PUT error branches.
+ * Route-boundary tests for contracts/[id].
+ * POST document upload was REMOVED with the contract-document storage
+ * cancellation (migration 116) — the suite asserts the route module no longer
+ * exposes POST at all, plus the GET/PUT error branches.
  */
 process.env.TOKEN_SECRET = 'test-secret-key-for-unit-tests-32chars!';
 import { createToken } from '@/lib/auth';
@@ -74,7 +76,7 @@ jest.mock('@/lib/plan-limits', () => ({
   countUsedStorageBytes: async () => 0,
 }));
 
-import { GET as conGET, PUT as conPUT, POST as conPOST } from '@/app/api/contracts/[id]/route';
+import { GET as conGET, PUT as conPUT } from '@/app/api/contracts/[id]/route';
 import { resetRateLimits } from '@/lib/memory-rate-limit';
 import type { TestBuilder } from './mocks';
 import type { NextRequest } from 'next/server';
@@ -94,12 +96,9 @@ function baseDb() {
     companies: [{ id: C1, is_active: true }],
     subscriptions: [{ id: 's1', company_id: C1, status: 'active', end_date: '2099-01-01', plan_code: 'enterprise',
       subscription_plans: { code: 'enterprise', features_modules: { contracts: true } } }],
-    contracts: [], contract_documents: [],
+    contracts: [],
   } as Record<string, Row[]>;
 }
-
-// A minimal valid PDF payload.
-const pdfBase64 = Buffer.from('%PDF-1.4\n%%EOF').toString('base64');
 
 beforeEach(() => {
   resetRateLimits();
@@ -107,15 +106,14 @@ beforeEach(() => {
 });
 
 describe('contracts/[id] GET/PUT', () => {
-  test('GET returns a contract with project and contact names', async () => {
+  test('GET returns a contract with project and contact names, no documents', async () => {
     mockDb.db.contracts.push({ id: CTID, company_id: C1, name: 'عقد', projects: { name: 'مشروع أ' }, contacts: { name: 'عميل ب' } });
-    mockDb.db.contract_documents.push({ id: 'd1', contract_id: CTID, company_id: C1, filename: 'x.pdf' });
     const res = await conGET(req('admin', 'GET', 'http://localhost/api/contracts/' + CTID), { params: Promise.resolve({ id: CTID }) });
     const body = await res.json();
     expect(body.success).toBe(true);
     expect(body.data.project_name).toBe('مشروع أ');
     expect(body.data.contact_name).toBe('عميل ب');
-    expect(body.data.documents.length).toBe(1);
+    expect(body.data).not.toHaveProperty('documents');
   });
 
   test('GET returns 404 for a missing contract', async () => {
@@ -137,45 +135,11 @@ describe('contracts/[id] GET/PUT', () => {
 });
 
 describe('contracts/[id] POST document upload', () => {
-  test('rejects an invalid contract id', async () => {
-    const res = await conPOST(req('admin', 'POST', 'http://localhost/x', {}), { params: Promise.resolve({ id: 'bad' }) });
-    expect(res.status).toBe(400);
-  });
-
-  test('rejects an invalid body', async () => {
-    const res = await conPOST(req('admin', 'POST', 'http://localhost/x', { filename: 'bad\\name' }), { params: Promise.resolve({ id: CTID }) });
-    expect(res.status).toBe(400);
-  });
-
-  test('rejects invalid base64 data', async () => {
-    const res = await conPOST(req('admin', 'POST', 'http://localhost/x', {
-      filename: 'doc.pdf', content_type: 'application/pdf', file_data: 'not-base64!!!',
-    }), { params: Promise.resolve({ id: CTID }) });
-    expect(res.status).toBe(400);
-  });
-
-  test('rejects content that does not match its type', async () => {
-    const res = await conPOST(req('admin', 'POST', 'http://localhost/x', {
-      filename: 'doc.pdf', content_type: 'application/pdf', file_data: Buffer.from('hello world not a pdf').toString('base64'),
-    }), { params: Promise.resolve({ id: CTID }) });
-    expect(res.status).toBe(400);
-  });
-
-  test('uploads a valid pdf and records document metadata', async () => {
-    mockDb.rpcResults.set('create_contract_document_atomic', { data: { id: 'doc1' }, error: null });
-    const res = await conPOST(req('admin', 'POST', 'http://localhost/x', {
-      filename: 'contract.pdf', content_type: 'application/pdf', file_data: pdfBase64, description: 'نسخة موقعة',
-    }), { params: Promise.resolve({ id: CTID }) });
-    expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(body.success).toBe(true);
-  });
-
-  test('removes the uploaded object when metadata persistence fails with 404', async () => {
-    mockDb.rpcResults.set('create_contract_document_atomic', { data: null, error: { message: 'البيانات غير صالحة' } });
-    const res = await conPOST(req('admin', 'POST', 'http://localhost/x', {
-      filename: 'contract.pdf', content_type: 'application/pdf', file_data: pdfBase64,
-    }), { params: Promise.resolve({ id: CTID }) });
-    expect(res.status).toBe(404);
+  test('the upload route is gone (contract-document storage cancelled)', () => {
+    const route = require('@/app/api/contracts/[id]/route') as Record<string, unknown>;
+    expect(route.POST).toBeUndefined();
+    expect(route.GET).toBeDefined();
+    expect(route.PUT).toBeDefined();
+    expect(route.DELETE).toBeDefined();
   });
 });

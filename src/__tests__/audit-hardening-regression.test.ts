@@ -5,7 +5,7 @@
  * Telegram webhook secret fail-closed policy, money/quantity bounds,
  * Telegram HTML escaping, and the journal-line numeric caps.
  */
-import { hasAllowedMagicBytes, trustedReceiptReference } from '@/lib/safe-input';
+import { trustedReceiptReference } from '@/lib/safe-input';
 import { toCsvCell, recordsToCsv } from '@/lib/csv-export';
 import { verifyWebhookSecret } from '@/lib/webhook-guard';
 import { escapeTelegramHtml } from '@/lib/telegram';
@@ -22,108 +22,9 @@ import {
 
 /* ------------------------- helpers ------------------------- */
 
-const realPng = () => Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  Buffer.from([0x00, 0x00, 0x00, 0x0d]),
-  Buffer.from('IHDR'),
-  Buffer.from([0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00]),
-]);
-
-/** Minimal structurally-valid JPEG: SOI + APP0 + SOF0. */
-const realJpeg = () => Buffer.concat([
-  Buffer.from([0xff, 0xd8]), // SOI
-  Buffer.from([0xff, 0xe0, 0x00, 0x10]), Buffer.from('JFIF\0', 'latin1'), Buffer.from([0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]),
-  Buffer.from([0xff, 0xc0, 0x00, 0x0b]), Buffer.from([0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00]),
-  Buffer.from([0xff, 0xd9]), // EOI
-]);
-
-const realPdf = () => Buffer.concat([
-  Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<</Size 1>>\nstartxref\n0\n'),
-  Buffer.from('%%EOF'),
-]);
-
 /* --------------------- 1. magic bytes --------------------- */
 
-describe('hasAllowedMagicBytes — polyglot/poisoned-file defense', () => {
-  it('accepts a real JPEG structure', () => {
-    expect(hasAllowedMagicBytes(realJpeg(), 'image/jpeg')).toBe(true);
-  });
-  it('accepts a real PNG (signature + IHDR)', () => {
-    expect(hasAllowedMagicBytes(realPng(), 'image/png')).toBe(true);
-  });
-  it('accepts a real PDF (header at 0 + %%EOF trailer)', () => {
-    expect(hasAllowedMagicBytes(realPdf(), 'application/pdf')).toBe(true);
-  });
-
-  it('rejects HTML+JS wearing a JPEG SOI prefix (classic polyglot)', () => {
-    const evil = Buffer.concat([
-      Buffer.from([0xff, 0xd8, 0xff]),
-      Buffer.from('<html><script>alert(1)</script></html>'),
-    ]);
-    expect(hasAllowedMagicBytes(evil, 'image/jpeg')).toBe(false);
-  });
-
-  it('rejects HTML+JS embedding "%PDF-" inside the first KB', () => {
-    const evil = Buffer.concat([
-      Buffer.from('<!--'),
-      Buffer.from('%PDF-1.7'),
-      Buffer.from('--><html><script>alert(document.cookie)</script></html>'),
-      Buffer.alloc(500, 0x41),
-    ]);
-    expect(hasAllowedMagicBytes(evil, 'application/pdf')).toBe(false);
-  });
-
-  it('rejects an HTML file whose first bytes happen to be "%PDF-"', () => {
-    const evil = Buffer.from('%PDF-<html><script>alert(1)</script></html>%%EOF');
-    expect(hasAllowedMagicBytes(evil, 'application/pdf')).toBe(false);
-  });
-
-  it('rejects an EXE passed as PDF (MZ header)', () => {
-    expect(hasAllowedMagicBytes(Buffer.from('MZ\u0090\u0000exe'), 'application/pdf')).toBe(false);
-  });
-
-  it('rejects a PNG signature followed by HTML payload', () => {
-    const evil = Buffer.concat([realPng(), Buffer.from('<script>alert(1)</script>')]);
-    expect(hasAllowedMagicBytes(evil, 'image/png')).toBe(false);
-  });
-
-  it('rejects archive, executable and web signatures across the bounded window', () => {
-    for (const bytes of [
-      Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('Rar!'),
-      Buffer.from('<iframe src=x>'), Buffer.from('<svg onload=alert(1)>'),
-      Buffer.from('onerror = alert(1)'), Buffer.from('javascript:alert(1)'), Buffer.from('<?php echo 1;'),
-    ]) expect(hasAllowedMagicBytes(bytes, 'application/pdf')).toBe(false);
-  });
-
-  it('covers malformed JPEG marker structures', () => {
-    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff]), 'image/jpeg')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xd9]), 'image/jpeg')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0x01, 0, 2]), 'image/jpeg')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 1]), 'image/jpeg')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xd0, 0xff, 0xd9]), 'image/jpeg')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xff, 0xff, 0xd9]), 'image/jpeg')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0, 0, 0, 0]), 'image/jpeg')).toBe(true);
-    expect(hasAllowedMagicBytes(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xd9, 0, 0]), 'image/jpeg')).toBe(true);
-  });
-
-  it('rejects short/wrong PNGs, misplaced/incomplete PDFs and unsupported MIME', () => {
-    expect(hasAllowedMagicBytes(Buffer.from([0x89, 0x50]), 'image/png')).toBe(false);
-    const wrongSignature = Buffer.concat([Buffer.alloc(8), Buffer.from([0, 0, 0, 1]), Buffer.from('IHDR')]);
-    expect(hasAllowedMagicBytes(wrongSignature, 'image/png')).toBe(false);
-    const wrongPng = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from([0, 0, 0, 1]), Buffer.from('IDAT')]);
-    expect(hasAllowedMagicBytes(wrongPng, 'image/png')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from('12345%PDF-1.4\n%%EOF'), 'application/pdf')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from('%PDX-1.4 plain'), 'application/pdf')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from('%PDF-1.4 no trailer'), 'application/pdf')).toBe(false);
-    expect(hasAllowedMagicBytes(realPng(), 'image/gif')).toBe(false);
-  });
-
-  it('rejects garbage buffers for any mime', () => {
-    expect(hasAllowedMagicBytes(Buffer.from('hello world'), 'image/jpeg')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from('hello world'), 'application/pdf')).toBe(false);
-    expect(hasAllowedMagicBytes(Buffer.from([]), 'image/png')).toBe(false);
-  });
-});
+/* --------------------- 2. CSV formula injection --------------------- */
 
 describe('trustedReceiptReference', () => {
   const company = '90000000-0000-4000-8000-000000000001';
@@ -145,8 +46,6 @@ describe('trustedReceiptReference', () => {
     expect(trustedReceiptReference('https://project.supabase.co/storage/v1/object/x', company)).toBeNull();
   });
 });
-
-/* --------------------- 2. CSV formula injection --------------------- */
 
 describe('csv-export — spreadsheet formula injection guard', () => {
   it('neutralizes formula prefixes', () => {

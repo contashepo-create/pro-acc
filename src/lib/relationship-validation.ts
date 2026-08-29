@@ -46,12 +46,6 @@ export const contractUpdateSchema = z.object({
   start_date: date.optional(), end_date: date.optional(), value: money.optional(),
   description: contractFields.description, status: contractStatus.optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, 'لا توجد بيانات للتحديث');
-export const contractDocumentSchema = z.object({
-  filename: requiredText(255).refine((value) => !/[\\/\u0000-\u001f]/.test(value), 'اسم الملف غير صالح'),
-  content_type: z.enum(['image/jpeg', 'image/png', 'application/pdf']),
-  file_data: z.string().min(1), description: shortText(1000).nullable().optional(),
-}).strict();
-
 const tenderFields = {
   title: requiredText(200), client_name: requiredText(200), contact_id: nullableUuid,
   reference_number: shortText(120).nullable().optional(), description: shortText(4000).nullable().optional(),

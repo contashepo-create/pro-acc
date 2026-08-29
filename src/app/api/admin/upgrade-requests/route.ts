@@ -34,10 +34,12 @@ export async function GET(req: NextRequest) {
     const planIds = [...new Set((requests || []).map((r: Row) => r.requested_plan_id).filter(Boolean))];
     const userIds = [...new Set((requests || []).map((r: Row) => r.user_id).filter(Boolean))];
     const s = sb();
-    const [companiesResult, plansResult, usersResult] = await Promise.all([
+    const [companiesResult, plansResult, usersResult, subsResult] = await Promise.all([
       companyIds.length ? s.from('companies').select('id,name,email,phone').in('id', companyIds) : Promise.resolve({ data: [], error: null }),
       planIds.length ? s.from('subscription_plans').select('id,name,code,price_monthly,price_yearly,currency').in('id', planIds) : Promise.resolve({ data: [], error: null }),
       userIds.length ? s.from('users').select('id,name,email').in('id', userIds) : Promise.resolve({ data: [], error: null }),
+      // رقم المشترك الدائم لكل شركة — به يطابق المطور إيصال تليجرام مع الطلب
+      companyIds.length ? s.from('subscriptions').select('company_id, subscriber_number').in('company_id', companyIds) : Promise.resolve({ data: [], error: null }),
     ]);
     if (companiesResult.error) throw companiesResult.error;
     if (plansResult.error) throw plansResult.error;
@@ -45,6 +47,7 @@ export async function GET(req: NextRequest) {
     const companyMap = new Map((companiesResult.data || []).map((row: Row) => [row.id, row]));
     const planMap = new Map((plansResult.data || []).map((row: Row) => [row.id, row]));
     const userMap = new Map((usersResult.data || []).map((row: Row) => [row.id, row]));
+    const subscriberMap = new Map((subsResult.data || []).map((row: Row) => [row.company_id, row.subscriber_number]));
 
     return success({
       requests: await Promise.all((requests || []).map(async (row: Row) => ({
@@ -53,6 +56,7 @@ export async function GET(req: NextRequest) {
         companies: companyMap.get(row.company_id) || null,
         subscription_plans: planMap.get(row.requested_plan_id) || null,
         users: userMap.get(row.user_id) || null,
+        subscriber_number: subscriberMap.get(row.company_id) || null,
       }))),
     });
   } catch (err) {

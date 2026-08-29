@@ -112,6 +112,22 @@
 --   098-fix-schema-gaps.sql
 --   099-tender-bond-accounting.sql
 --   100-tender-bond-accounting-rpcs.sql
+--   101-tender-bond-accounting-fixes.sql
+--   102-drop-abandoned-feature-tables.sql
+--   103-tender-bond-lifecycle-integrity.sql
+--   104-operating-country-sa-eg.sql
+--   105-hr-accounts-and-withholding.sql
+--   106-country-standards-eosb-fiscal.sql
+--   107-eg-fiscal-eosb-step.sql
+--   108-custody-purchase-pay-and-cancel.sql
+--   109-invoice-cash-at-issue-and-returns.sql
+--   110-purchase-returns-rls.sql
+--   111-tenders-contact-fk.sql
+--   112-subscriber-numbers.sql
+--   113-unified-note-numbering.sql
+--   114-random-subscriber-numbers.sql
+--   115-telegram-payment-proof.sql
+--   116-remove-contract-document-storage.sql
 -- ============================================================================
 
 
@@ -24307,4 +24323,4452 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 SELECT 'Migration 100 completed — tender/bond accounting RPCs' as result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 101-tender-bond-accounting-fixes.sql
+-- ----------------------------------------------------------------------------
+
+-- 101: Tender & Bond accounting correctness
+--
+-- Fixes production-breaking issues in 100:
+--   1. Writes to tenders/bonds must set app.relationship_write_company (060 guard)
+--   2. Cash cover (margin) is distinct from LG face value — do not debit the bank
+--      for the full guarantee amount
+--   3. Never drop VAT/commission lines while still crediting them (unbalanced JE)
+--   4. close_lost is idempotent (actual 5410 cost-center balance, not original JEs)
+--   5. convert_won retries still transfer remaining suspense; do not mutate bid→perf
+--   6. tender_expenses writes go through the relationship write guard
+
+ALTER TABLE bonds ADD COLUMN IF NOT EXISTS margin_amount NUMERIC(15,2) NOT NULL DEFAULT 0;
+ALTER TABLE bonds ADD COLUMN IF NOT EXISTS commission_amount NUMERIC(15,2) NOT NULL DEFAULT 0;
+ALTER TABLE tenders ADD COLUMN IF NOT EXISTS lost_close_journal_id UUID REFERENCES journal_entries(id);
+ALTER TABLE tenders ADD COLUMN IF NOT EXISTS convert_journal_id UUID REFERENCES journal_entries(id);
+
+-- Persist cost_center_id (047 dropped caller-supplied costCenterId silently)
+CREATE OR REPLACE FUNCTION create_journal_entry(
+  p_company_id UUID,
+  p_date DATE,
+  p_type TEXT,
+  p_description TEXT,
+  p_created_by UUID,
+  p_lines JSONB
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path=public
+AS $$
+DECLARE
+  v_entry_id UUID;
+  v_number INT;
+  v_total_debit NUMERIC := 0;
+  v_total_credit NUMERIC := 0;
+  v_line JSONB;
+  v_account RECORD;
+  v_debit NUMERIC;
+  v_credit NUMERIC;
+  v_contact_id UUID;
+  v_project_id UUID;
+  v_cost_center_id UUID;
+  v_resolved_lines JSONB := '[]'::JSONB;
+BEGIN
+  IF p_company_id IS NULL OR p_created_by IS NULL OR p_date IS NULL THEN
+    RAISE EXCEPTION 'بيانات القيد الأساسية غير مكتملة';
+  END IF;
+  IF p_type NOT IN ('general', 'opening_balance', 'accrual', 'closing', 'reversing') THEN
+    RAISE EXCEPTION 'نوع القيد غير صالح';
+  END IF;
+  IF jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) < 2 THEN
+    RAISE EXCEPTION 'يجب أن يحتوي القيد على سطرين على الأقل';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM users WHERE id = p_created_by AND company_id = p_company_id AND is_active = true
+  ) THEN
+    RAISE EXCEPTION 'المستخدم المنشئ لا ينتمي إلى الشركة أو غير نشط';
+  END IF;
+
+  FOR v_line IN SELECT value FROM jsonb_array_elements(p_lines)
+  LOOP
+    BEGIN
+      v_debit := COALESCE((v_line->>'debit')::NUMERIC, 0);
+      v_credit := COALESCE((v_line->>'credit')::NUMERIC, 0);
+    EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+      RAISE EXCEPTION 'مبلغ مدين أو دائن غير صالح';
+    END;
+    IF v_debit < 0 OR v_credit < 0 OR (v_debit = 0 AND v_credit = 0) OR (v_debit > 0 AND v_credit > 0) THEN
+      RAISE EXCEPTION 'يجب أن يكون كل سطر مديناً أو دائناً موجباً فقط';
+    END IF;
+    IF v_debit <> ROUND(v_debit, 2) OR v_credit <> ROUND(v_credit, 2)
+       OR v_debit > 9999999999999.99 OR v_credit > 9999999999999.99 THEN
+      RAISE EXCEPTION 'المبالغ يجب ألا تتجاوز منزلتين عشريتين والحد المحاسبي المسموح';
+    END IF;
+
+    BEGIN
+      SELECT id, code, name INTO STRICT v_account
+      FROM accounts
+      WHERE id = (v_line->>'accountId')::UUID
+        AND company_id = p_company_id
+        AND COALESCE(is_active, true) = true
+        AND COALESCE(is_header, false) = false;
+    EXCEPTION WHEN no_data_found THEN
+      RAISE EXCEPTION 'الحساب المحدد غير موجود أو غير نشط أو حساب رئيسي';
+    WHEN invalid_text_representation THEN
+      RAISE EXCEPTION 'معرف الحساب غير صالح';
+    END;
+
+    IF NULLIF(v_line->>'contactId', '') IS NOT NULL THEN
+      BEGIN
+        v_contact_id := (v_line->>'contactId')::UUID;
+      EXCEPTION WHEN invalid_text_representation THEN
+        RAISE EXCEPTION 'معرف الطرف غير صالح';
+      END;
+      IF NOT EXISTS (SELECT 1 FROM contacts WHERE id = v_contact_id AND company_id = p_company_id) THEN
+        RAISE EXCEPTION 'الطرف المحدد لا ينتمي إلى الشركة';
+      END IF;
+    ELSE
+      v_contact_id := NULL;
+    END IF;
+
+    IF NULLIF(v_line->>'projectId', '') IS NOT NULL THEN
+      BEGIN
+        v_project_id := (v_line->>'projectId')::UUID;
+      EXCEPTION WHEN invalid_text_representation THEN
+        RAISE EXCEPTION 'معرف المشروع غير صالح';
+      END;
+      IF NOT EXISTS (SELECT 1 FROM projects WHERE id = v_project_id AND company_id = p_company_id) THEN
+        RAISE EXCEPTION 'المشروع المحدد لا ينتمي إلى الشركة';
+      END IF;
+    ELSE
+      v_project_id := NULL;
+    END IF;
+
+    v_cost_center_id := NULL;
+    IF NULLIF(v_line->>'costCenterId', '') IS NOT NULL THEN
+      BEGIN
+        v_cost_center_id := (v_line->>'costCenterId')::UUID;
+      EXCEPTION WHEN invalid_text_representation THEN
+        RAISE EXCEPTION 'معرف مركز التكلفة غير صالح';
+      END;
+      IF NOT EXISTS (SELECT 1 FROM cost_centers WHERE id = v_cost_center_id AND company_id = p_company_id) THEN
+        RAISE EXCEPTION 'مركز التكلفة المحدد لا ينتمي إلى الشركة';
+      END IF;
+    END IF;
+
+    v_total_debit := v_total_debit + v_debit;
+    v_total_credit := v_total_credit + v_credit;
+    v_resolved_lines := v_resolved_lines || jsonb_build_array(jsonb_build_object(
+      'accountId', v_account.id, 'accountCode', v_account.code, 'accountName', v_account.name,
+      'debit', v_debit, 'credit', v_credit, 'description', NULLIF(v_line->>'description', ''),
+      'contactId', v_contact_id, 'projectId', v_project_id, 'costCenterId', v_cost_center_id
+    ));
+  END LOOP;
+
+  IF ABS(v_total_debit - v_total_credit) > 0.005 THEN
+    RAISE EXCEPTION 'خطأ في الموازنة: مجموع المدين (%) لا يساوي مجموع الدائن (%)', v_total_debit, v_total_credit;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM (
+      SELECT l->>'accountId' AS account_id,
+             SUM((l->>'debit')::NUMERIC) AS debit,
+             SUM((l->>'credit')::NUMERIC) AS credit
+      FROM jsonb_array_elements(v_resolved_lines) AS l
+      GROUP BY l->>'accountId'
+    ) grouped WHERE debit > 0 AND credit > 0
+  ) THEN
+    RAISE EXCEPTION 'لا يجوز ترحيل الحساب نفسه مديناً ودائناً في القيد الواحد';
+  END IF;
+
+  v_number := next_journal_number(p_company_id, EXTRACT(YEAR FROM p_date)::INT);
+  INSERT INTO journal_entries (company_id, number, date, type, description, created_by)
+  VALUES (p_company_id, v_number, p_date, p_type, COALESCE(p_description, ''), p_created_by)
+  RETURNING id INTO v_entry_id;
+
+  INSERT INTO journal_lines (
+    company_id, journal_entry_id, account_id, account_code, account_name,
+    debit, credit, description, contact_id, project_id, cost_center_id
+  )
+  SELECT p_company_id, v_entry_id,
+         (line->>'accountId')::UUID, line->>'accountCode', line->>'accountName',
+         (line->>'debit')::NUMERIC, (line->>'credit')::NUMERIC,
+         NULLIF(line->>'description', ''),
+         NULLIF(line->>'contactId', '')::UUID, NULLIF(line->>'projectId', '')::UUID,
+         NULLIF(line->>'costCenterId', '')::UUID
+  FROM jsonb_array_elements(v_resolved_lines) AS line;
+
+  RETURN jsonb_build_object(
+    'id', v_entry_id, 'number', v_number,
+    'total_debit', v_total_debit, 'total_credit', v_total_credit,
+    'lines_count', jsonb_array_length(v_resolved_lines)
+  );
+END;
+$$;
+
+-- Dedicated posting account for pre-contract costs transferred onto a won project
+DO $$
+DECLARE
+  comp RECORD;
+  v_parent UUID;
+BEGIN
+  FOR comp IN SELECT id FROM companies LOOP
+    SELECT id INTO v_parent FROM accounts WHERE company_id=comp.id AND code='5100' LIMIT 1;
+    INSERT INTO accounts (company_id, code, name, name_en, type, parent_id, is_active, is_header)
+    VALUES (comp.id, '5195', 'تكاليف ما قبل التعاقد', 'Pre-contract Tender Costs', 'expense', v_parent, true, false)
+    ON CONFLICT (company_id, code) DO NOTHING;
+
+    UPDATE accounts SET parent_id = (SELECT id FROM accounts WHERE company_id=comp.id AND code='5200' LIMIT 1)
+    WHERE company_id=comp.id AND code='5291'
+      AND parent_id IS DISTINCT FROM (SELECT id FROM accounts WHERE company_id=comp.id AND code='5200' LIMIT 1);
+  END LOOP;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.ensure_tender_cost_center(
+  p_company_id UUID, p_tender_id UUID
+) RETURNS UUID LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_tender tenders%ROWTYPE;
+  v_cc_id UUID;
+  v_code TEXT;
+BEGIN
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id LIMIT 1;
+  IF NOT FOUND THEN RETURN NULL; END IF;
+
+  IF v_tender.cost_center_id IS NOT NULL THEN
+    RETURN v_tender.cost_center_id;
+  END IF;
+
+  v_code := 'TND-' || UPPER(LEFT(p_tender_id::TEXT, 8));
+
+  INSERT INTO cost_centers (company_id, code, name, description, is_active)
+  VALUES (p_company_id, v_code, 'مناقصة: ' || v_tender.title, 'مركز تكلفة تلقائي للمناقصة', true)
+  ON CONFLICT (company_id, code) DO NOTHING
+  RETURNING id INTO v_cc_id;
+
+  IF v_cc_id IS NULL THEN
+    SELECT id INTO v_cc_id FROM cost_centers WHERE company_id=p_company_id AND code=v_code LIMIT 1;
+  END IF;
+
+  IF v_cc_id IS NOT NULL THEN
+    PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+    UPDATE tenders SET cost_center_id=v_cc_id WHERE id=p_tender_id AND company_id=p_company_id;
+  END IF;
+
+  RETURN v_cc_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.record_tender_expense_atomic(
+  p_company_id UUID,
+  p_tender_id UUID,
+  p_expense_type TEXT,
+  p_amount NUMERIC(15,2),
+  p_vat_amount NUMERIC(15,2) DEFAULT 0,
+  p_bank_safe_id UUID DEFAULT NULL,
+  p_description TEXT DEFAULT NULL,
+  p_date DATE DEFAULT NULL,
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_tender tenders%ROWTYPE;
+  v_cc_id UUID;
+  v_debit_acc UUID;
+  v_debit_code TEXT;
+  v_vat_acc UUID;
+  v_bank_acc UUID;
+  v_bank_safe RECORD;
+  v_je JSONB;
+  v_lines JSONB := '[]'::JSONB;
+  v_expense_id UUID;
+  v_date DATE;
+  v_total NUMERIC;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  IF p_expense_type NOT IN ('karasa','platform_fee','bid_bond_margin','bid_bond_commission','consulting','other') THEN
+    RAISE EXCEPTION 'نوع المصروف غير صالح';
+  END IF;
+
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.status IN ('lost','cancelled') THEN
+    RAISE EXCEPTION 'لا يمكن تسجيل مصروف على مناقصة مغلقة';
+  END IF;
+
+  IF p_amount IS NULL OR p_amount <= 0 OR p_amount <> ROUND(p_amount, 2) THEN
+    RAISE EXCEPTION 'المبلغ غير صالح';
+  END IF;
+  IF p_vat_amount IS NULL OR p_vat_amount < 0 OR p_vat_amount <> ROUND(p_vat_amount, 2) THEN
+    RAISE EXCEPTION 'مبلغ الضريبة غير صالح';
+  END IF;
+
+  v_debit_code := CASE
+    WHEN p_expense_type = 'bid_bond_margin' THEN '1185'
+    WHEN p_expense_type = 'bid_bond_commission' THEN '5291'
+    ELSE '5410'
+  END;
+
+  SELECT id INTO v_debit_acc FROM accounts
+  WHERE company_id=p_company_id AND code=v_debit_code AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  IF v_debit_acc IS NULL THEN
+    RAISE EXCEPTION 'الحساب المحاسبي % غير موجود', v_debit_code;
+  END IF;
+
+  IF p_vat_amount > 0 THEN
+    SELECT id INTO v_vat_acc FROM accounts
+    WHERE company_id=p_company_id AND code='1180' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+    IF v_vat_acc IS NULL THEN
+      RAISE EXCEPTION 'حساب ضريبة القيمة المضافة المدخلة غير موجود';
+    END IF;
+  END IF;
+
+  IF p_bank_safe_id IS NULL THEN
+    RAISE EXCEPTION 'يجب تحديد البنك أو الخزينة';
+  END IF;
+  SELECT * INTO v_bank_safe FROM banks_safes WHERE id=p_bank_safe_id AND company_id=p_company_id AND is_active=true LIMIT 1;
+  IF NOT FOUND THEN RAISE EXCEPTION 'البنك أو الخزينة غير موجودة'; END IF;
+  v_bank_acc := v_bank_safe.account_id;
+  IF v_bank_acc IS NULL THEN
+    RAISE EXCEPTION 'البنك/الخزينة غير مرتبط بحساب محاسبي';
+  END IF;
+
+  v_cc_id := ensure_tender_cost_center(p_company_id, p_tender_id);
+  v_date := COALESCE(p_date, CURRENT_DATE);
+  v_total := p_amount + p_vat_amount;
+
+  v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+    'accountId', v_debit_acc, 'debit', p_amount, 'credit', 0,
+    'description', COALESCE(p_description, 'مصاريف مناقصة'), 'costCenterId', v_cc_id
+  ));
+  IF p_vat_amount > 0 THEN
+    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+      'accountId', v_vat_acc, 'debit', p_vat_amount, 'credit', 0,
+      'description', 'ضريبة القيمة المضافة', 'costCenterId', v_cc_id
+    ));
+  END IF;
+  v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+    'accountId', v_bank_acc, 'debit', 0, 'credit', v_total,
+    'description', COALESCE(p_description, 'سداد مصاريف مناقصة'), 'bankSafeId', p_bank_safe_id
+  ));
+
+  v_je := create_journal_entry(
+    p_company_id, v_date, 'general',
+    COALESCE(p_description, 'مصاريف مناقصة: ' || v_tender.title),
+    p_user_id, v_lines
+  );
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+
+  INSERT INTO tender_expenses (
+    company_id, tender_id, expense_type, amount, vat_amount,
+    bank_safe_id, journal_entry_id, cost_center_id, description, date, created_by
+  ) VALUES (
+    p_company_id, p_tender_id, p_expense_type, p_amount, p_vat_amount,
+    p_bank_safe_id, (v_je->>'id')::UUID, v_cc_id, p_description, v_date, p_user_id
+  )
+  RETURNING id INTO v_expense_id;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'create', 'tender_expense', v_expense_id,
+    jsonb_build_object('tender_id', p_tender_id, 'amount', p_amount, 'vat', p_vat_amount, 'journal_entry_id', v_je->>'id'));
+
+  RETURN jsonb_build_object(
+    'expense_id', v_expense_id,
+    'journal_entry', v_je,
+    'cost_center_id', v_cc_id
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.close_lost_tender_atomic(
+  p_company_id UUID,
+  p_tender_id UUID,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_tender tenders%ROWTYPE;
+  v_cc_id UUID;
+  v_suspense_acc UUID;
+  v_lost_acc UUID;
+  v_suspense_balance NUMERIC := 0;
+  v_je_id UUID;
+  v_je JSONB;
+  v_lines JSONB;
+  v_bond RECORD;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.status <> 'lost' THEN RAISE EXCEPTION 'المناقصة ليست خاسرة'; END IF;
+
+  v_cc_id := v_tender.cost_center_id;
+  IF v_cc_id IS NULL THEN v_cc_id := ensure_tender_cost_center(p_company_id, p_tender_id); END IF;
+
+  SELECT id INTO v_suspense_acc FROM accounts WHERE company_id=p_company_id AND code='5410' AND NOT COALESCE(is_header, false) LIMIT 1;
+  SELECT id INTO v_lost_acc FROM accounts WHERE company_id=p_company_id AND code='5420' AND NOT COALESCE(is_header, false) LIMIT 1;
+
+  IF v_tender.lost_close_journal_id IS NOT NULL THEN
+    v_suspense_balance := 0;
+  ELSIF v_suspense_acc IS NOT NULL THEN
+    SELECT COALESCE(SUM(te.amount), 0) INTO v_suspense_balance
+    FROM tender_expenses te
+    WHERE te.tender_id=p_tender_id AND te.company_id=p_company_id
+      AND te.expense_type NOT IN ('bid_bond_margin','bid_bond_commission');
+  END IF;
+
+  IF v_suspense_balance > 0 THEN
+    IF v_lost_acc IS NULL THEN RAISE EXCEPTION 'حساب مصاريف المناقصات الخاسرة غير موجود'; END IF;
+    v_lines := jsonb_build_array(
+      jsonb_build_object('accountId', v_lost_acc, 'debit', v_suspense_balance, 'credit', 0,
+        'description', 'إقفال مصاريف مناقصة خاسرة', 'costCenterId', v_cc_id),
+      jsonb_build_object('accountId', v_suspense_acc, 'debit', 0, 'credit', v_suspense_balance,
+        'description', 'إقفال مصاريف مناقصة خاسرة', 'costCenterId', v_cc_id)
+    );
+
+    v_je := create_journal_entry(
+      p_company_id, CURRENT_DATE, 'closing',
+      'إقفال مصاريف مناقصة خاسرة: ' || v_tender.title,
+      p_user_id, v_lines
+    );
+    v_je_id := (v_je->>'id')::UUID;
+    PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+    UPDATE tenders SET lost_close_journal_id=v_je_id, updated_at=NOW()
+    WHERE id=p_tender_id AND company_id=p_company_id;
+  END IF;
+
+  FOR v_bond IN
+    SELECT * FROM bonds
+    WHERE tender_id=p_tender_id AND company_id=p_company_id
+      AND type='bid_bond' AND status='active'
+  LOOP
+    PERFORM release_bond_atomic(p_company_id, v_bond.id, p_user_id);
+  END LOOP;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'close_lost', 'tender', p_tender_id,
+    jsonb_build_object('suspense_closed', v_suspense_balance, 'journal_entry_id', v_je_id));
+
+  RETURN jsonb_build_object(
+    'tender_id', p_tender_id,
+    'suspense_closed', v_suspense_balance,
+    'journal_entry_id', v_je_id
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.convert_won_tender_with_accounting_atomic(
+  p_company_id UUID,
+  p_tender_id UUID,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_tender tenders%ROWTYPE;
+  v_result JSONB;
+  v_project_id UUID;
+  v_cc_id UUID;
+  v_suspense_acc UUID;
+  v_project_cost_acc UUID;
+  v_suspense_balance NUMERIC := 0;
+  v_lines JSONB;
+  v_je JSONB;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.status <> 'won' THEN RAISE EXCEPTION 'يمكن تحويل العطاءات الرابحة فقط'; END IF;
+
+  IF v_tender.project_id IS NOT NULL THEN
+    v_project_id := v_tender.project_id;
+  ELSE
+    v_result := convert_won_tender_to_project_atomic(p_company_id, p_tender_id, p_user_id);
+    v_project_id := COALESCE((v_result->'project'->>'id')::UUID, (v_result->>'project_id')::UUID);
+    IF v_project_id IS NULL THEN
+      RAISE EXCEPTION 'فشل إنشاء المشروع';
+    END IF;
+  END IF;
+
+  v_cc_id := v_tender.cost_center_id;
+  IF v_cc_id IS NULL THEN v_cc_id := ensure_tender_cost_center(p_company_id, p_tender_id); END IF;
+
+  PERFORM set_config('app.project_write_company', p_company_id::TEXT, TRUE);
+  UPDATE projects SET cost_center_id=v_cc_id WHERE id=v_project_id AND company_id=p_company_id
+    AND (cost_center_id IS NULL OR cost_center_id IS DISTINCT FROM v_cc_id);
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+  UPDATE bonds SET project_id=v_project_id, updated_at=NOW()
+  WHERE tender_id=p_tender_id AND company_id=p_company_id AND project_id IS NULL;
+
+  SELECT id INTO v_suspense_acc FROM accounts WHERE company_id=p_company_id AND code='5410' AND NOT COALESCE(is_header, false) LIMIT 1;
+  SELECT id INTO v_project_cost_acc FROM accounts
+  WHERE company_id=p_company_id AND code='5195' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  IF v_project_cost_acc IS NULL THEN
+    SELECT id INTO v_project_cost_acc FROM accounts
+    WHERE company_id=p_company_id AND code='5110' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  END IF;
+
+  IF v_tender.convert_journal_id IS NOT NULL THEN
+    v_suspense_balance := 0;
+  ELSIF v_suspense_acc IS NOT NULL THEN
+    SELECT COALESCE(SUM(te.amount), 0) INTO v_suspense_balance
+    FROM tender_expenses te
+    WHERE te.tender_id=p_tender_id AND te.company_id=p_company_id
+      AND te.expense_type NOT IN ('bid_bond_margin','bid_bond_commission');
+  END IF;
+
+  IF v_suspense_balance > 0 THEN
+    IF v_project_cost_acc IS NULL THEN
+      RAISE EXCEPTION 'حساب تكاليف ما قبل التعاقد غير موجود';
+    END IF;
+    v_lines := jsonb_build_array(
+      jsonb_build_object('accountId', v_project_cost_acc, 'debit', v_suspense_balance, 'credit', 0,
+        'description', 'تحويل مصاريف مناقصة إلى تكاليف المشروع', 'costCenterId', v_cc_id, 'projectId', v_project_id),
+      jsonb_build_object('accountId', v_suspense_acc, 'debit', 0, 'credit', v_suspense_balance,
+        'description', 'تحويل مصاريف مناقصة إلى تكاليف المشروع', 'costCenterId', v_cc_id)
+    );
+
+    v_je := create_journal_entry(
+      p_company_id, CURRENT_DATE, 'general',
+      'تحويل مصاريف مناقصة إلى مشروع: ' || v_tender.title,
+      p_user_id, v_lines
+    );
+  END IF;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'convert_with_accounting', 'tender', p_tender_id,
+    jsonb_build_object('project_id', v_project_id, 'costs_transferred', v_suspense_balance));
+
+  RETURN jsonb_build_object(
+    'project_id', v_project_id,
+    'tender_id', p_tender_id,
+    'costs_transferred', v_suspense_balance,
+    'already_processed', v_tender.project_id IS NOT NULL
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.record_bond_issue_atomic(
+  p_company_id UUID,
+  p_payload JSONB,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_bond_id UUID;
+  v_margin_acc UUID;
+  v_comm_acc UUID;
+  v_vat_acc UUID;
+  v_bank_acc UUID;
+  v_bank_safe RECORD;
+  v_lines JSONB := '[]'::JSONB;
+  v_je JSONB;
+  v_type TEXT;
+  v_amount NUMERIC;
+  v_margin NUMERIC := 0;
+  v_commission NUMERIC := 0;
+  v_vat_amount NUMERIC := 0;
+  v_bank_safe_id UUID;
+  v_cash_out NUMERIC;
+  v_tender UUID;
+  v_project UUID;
+  v_contact UUID;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  v_type := p_payload->>'type';
+  BEGIN
+    v_amount := NULLIF(p_payload->>'amount','')::NUMERIC;
+    v_margin := COALESCE(NULLIF(p_payload->>'margin_amount','')::NUMERIC, 0);
+    v_commission := COALESCE(NULLIF(p_payload->>'commission','')::NUMERIC, 0);
+    v_vat_amount := COALESCE(NULLIF(p_payload->>'vat_amount','')::NUMERIC, 0);
+    v_bank_safe_id := NULLIF(p_payload->>'bank_safe_id','')::UUID;
+    v_tender := NULLIF(p_payload->>'tender_id','')::UUID;
+    v_project := NULLIF(p_payload->>'project_id','')::UUID;
+    v_contact := NULLIF(p_payload->>'contact_id','')::UUID;
+  EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+    RAISE EXCEPTION 'بيانات الضمان غير صالحة';
+  END;
+
+  IF v_type NOT IN ('bid_bond','performance_bond','advance_payment','retention','warranty','insurance','other') THEN
+    RAISE EXCEPTION 'نوع الضمان غير صالح';
+  END IF;
+  IF v_amount IS NULL OR v_amount <= 0 OR v_amount <> ROUND(v_amount, 2) THEN RAISE EXCEPTION 'المبلغ غير صالح'; END IF;
+  IF v_margin < 0 OR v_margin <> ROUND(v_margin, 2) OR v_margin > v_amount THEN
+    RAISE EXCEPTION 'الغطاء النقدي غير صالح';
+  END IF;
+  IF v_commission < 0 OR v_commission <> ROUND(v_commission, 2) THEN RAISE EXCEPTION 'العمولة غير صالحة'; END IF;
+  IF v_vat_amount < 0 OR v_vat_amount <> ROUND(v_vat_amount, 2) THEN RAISE EXCEPTION 'مبلغ الضريبة غير صالح'; END IF;
+  IF (p_payload->>'issue_date')::DATE > (p_payload->>'expiry_date')::DATE THEN
+    RAISE EXCEPTION 'تاريخ انتهاء الضمان يسبق تاريخ الإصدار';
+  END IF;
+  IF v_tender IS NOT NULL AND NOT EXISTS(SELECT 1 FROM tenders WHERE id=v_tender AND company_id=p_company_id) THEN
+    RAISE EXCEPTION 'المناقصة غير موجودة';
+  END IF;
+  IF v_project IS NOT NULL AND NOT EXISTS(SELECT 1 FROM projects WHERE id=v_project AND company_id=p_company_id) THEN
+    RAISE EXCEPTION 'المشروع غير موجود';
+  END IF;
+  IF v_contact IS NOT NULL AND NOT EXISTS(SELECT 1 FROM contacts WHERE id=v_contact AND company_id=p_company_id) THEN
+    RAISE EXCEPTION 'جهة الاتصال غير موجودة';
+  END IF;
+
+  IF v_type = 'bid_bond' THEN
+    SELECT id INTO v_margin_acc FROM accounts WHERE company_id=p_company_id AND code='1185' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  ELSE
+    SELECT id INTO v_margin_acc FROM accounts WHERE company_id=p_company_id AND code='1186' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  END IF;
+
+  IF v_bank_safe_id IS NULL THEN RAISE EXCEPTION 'يجب تحديد البنك'; END IF;
+  SELECT * INTO v_bank_safe FROM banks_safes WHERE id=v_bank_safe_id AND company_id=p_company_id AND is_active=true LIMIT 1;
+  IF NOT FOUND THEN RAISE EXCEPTION 'البنك غير موجود'; END IF;
+  v_bank_acc := v_bank_safe.account_id;
+  IF v_bank_acc IS NULL THEN RAISE EXCEPTION 'البنك غير مرتبط بحساب محاسبي'; END IF;
+
+  v_cash_out := v_margin + v_commission + v_vat_amount;
+
+  IF v_margin > 0 AND v_margin_acc IS NULL THEN RAISE EXCEPTION 'حساب خطابات الضمان غير موجود'; END IF;
+  IF v_commission > 0 THEN
+    SELECT id INTO v_comm_acc FROM accounts WHERE company_id=p_company_id AND code='5291' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+    IF v_comm_acc IS NULL THEN RAISE EXCEPTION 'حساب عمولات الضمانات غير موجود'; END IF;
+  END IF;
+  IF v_vat_amount > 0 THEN
+    SELECT id INTO v_vat_acc FROM accounts WHERE company_id=p_company_id AND code='1180' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+    IF v_vat_acc IS NULL THEN RAISE EXCEPTION 'حساب ضريبة القيمة المضافة المدخلة غير موجود'; END IF;
+  END IF;
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+
+  INSERT INTO bonds (
+    company_id, title, type, amount, currency, issue_date, expiry_date,
+    issuing_bank, bank_safe_id, beneficiary_name, project_id, tender_id,
+    contact_id, reference_number, status, notes, created_by,
+    margin_account_id, commission_account_id, margin_amount, commission_amount
+  ) VALUES (
+    p_company_id,
+    BTRIM(p_payload->>'title'),
+    v_type,
+    v_amount,
+    COALESCE(NULLIF(p_payload->>'currency',''), 'SAR'),
+    (p_payload->>'issue_date')::DATE,
+    (p_payload->>'expiry_date')::DATE,
+    NULLIF(BTRIM(p_payload->>'issuing_bank'),''),
+    v_bank_safe_id,
+    NULLIF(BTRIM(p_payload->>'beneficiary_name'),''),
+    v_project,
+    v_tender,
+    v_contact,
+    NULLIF(BTRIM(p_payload->>'reference_number'),''),
+    'active',
+    NULLIF(BTRIM(p_payload->>'notes'),''),
+    p_user_id,
+    v_margin_acc,
+    v_comm_acc,
+    v_margin,
+    v_commission
+  )
+  RETURNING id INTO v_bond_id;
+
+  IF v_cash_out > 0 THEN
+    IF v_margin > 0 THEN
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'accountId', v_margin_acc, 'debit', v_margin, 'credit', 0,
+        'description', 'غطاء نقدي لخطاب ضمان'));
+    END IF;
+    IF v_commission > 0 THEN
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'accountId', v_comm_acc, 'debit', v_commission, 'credit', 0,
+        'description', 'عمولة إصدار خطاب ضمان'));
+    END IF;
+    IF v_vat_amount > 0 THEN
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'accountId', v_vat_acc, 'debit', v_vat_amount, 'credit', 0,
+        'description', 'ضريبة القيمة المضافة'));
+    END IF;
+    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+      'accountId', v_bank_acc, 'debit', 0, 'credit', v_cash_out,
+      'description', 'سداد غطاء/عمولة خطاب ضمان', 'bankSafeId', v_bank_safe_id));
+
+    v_je := create_journal_entry(
+      p_company_id, (p_payload->>'issue_date')::DATE, 'general',
+      'إصدار خطاب ضمان: ' || (p_payload->>'title'),
+      p_user_id, v_lines
+    );
+
+    UPDATE bonds SET journal_entry_id=(v_je->>'id')::UUID WHERE id=v_bond_id AND company_id=p_company_id;
+  END IF;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'create', 'bond', v_bond_id,
+    jsonb_build_object('amount', v_amount, 'margin_amount', v_margin, 'type', v_type, 'journal_entry_id', v_je->>'id'));
+
+  RETURN jsonb_build_object('bond_id', v_bond_id, 'journal_entry', v_je);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.release_bond_atomic(
+  p_company_id UUID,
+  p_bond_id UUID,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_bond bonds%ROWTYPE;
+  v_bank_acc UUID;
+  v_margin_acc UUID;
+  v_margin NUMERIC;
+  v_lines JSONB;
+  v_je JSONB;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  SELECT * INTO v_bond FROM bonds WHERE id=p_bond_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الضمان غير موجود'; END IF;
+  IF v_bond.status IN ('released', 'cancelled') THEN
+    RETURN jsonb_build_object('bond_id', p_bond_id, 'already_processed', true);
+  END IF;
+
+  v_margin := COALESCE(v_bond.margin_amount, 0);
+  v_margin_acc := v_bond.margin_account_id;
+
+  IF v_margin > 0 THEN
+    SELECT account_id INTO v_bank_acc FROM banks_safes WHERE id=v_bond.bank_safe_id AND company_id=p_company_id LIMIT 1;
+    IF v_bank_acc IS NULL THEN RAISE EXCEPTION 'البنك غير مرتبط بحساب'; END IF;
+    IF v_margin_acc IS NULL THEN RAISE EXCEPTION 'حساب غطاء الضمان غير مرتبط'; END IF;
+
+    v_lines := jsonb_build_array(
+      jsonb_build_object('accountId', v_bank_acc, 'debit', v_margin, 'credit', 0,
+        'description', 'استرداد غطاء خطاب ضمان', 'bankSafeId', v_bond.bank_safe_id),
+      jsonb_build_object('accountId', v_margin_acc, 'debit', 0, 'credit', v_margin,
+        'description', 'إلغاء غطاء خطاب ضمان')
+    );
+
+    v_je := create_journal_entry(
+      p_company_id, CURRENT_DATE, 'general',
+      'إلغاء/استرداد خطاب ضمان: ' || v_bond.title,
+      p_user_id, v_lines
+    );
+  END IF;
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+  UPDATE bonds SET status='released', released_at=NOW(),
+    release_journal_entry_id=COALESCE((v_je->>'id')::UUID, release_journal_entry_id),
+    updated_at=NOW()
+  WHERE id=p_bond_id AND company_id=p_company_id;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'release', 'bond', p_bond_id,
+    jsonb_build_object('journal_entry_id', v_je->>'id', 'margin_returned', v_margin));
+
+  RETURN jsonb_build_object('bond_id', p_bond_id, 'journal_entry', v_je);
+END;
+$$;
+
+-- Guard tender_expenses the same way as other relationship tables
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_guard_relationship_writes' AND tgrelid = 'tender_expenses'::regclass
+  ) THEN
+    CREATE TRIGGER trg_guard_relationship_writes
+      BEFORE INSERT OR UPDATE OR DELETE ON tender_expenses
+      FOR EACH ROW EXECUTE FUNCTION guard_relationship_writes();
+  END IF;
+EXCEPTION WHEN undefined_table OR undefined_function THEN
+  RAISE NOTICE 'tender_expenses guard skipped: %', SQLERRM;
+END $$;
+
+DO $$
+BEGIN
+  PERFORM 1;
+  REVOKE ALL ON FUNCTION public.ensure_tender_cost_center(UUID, UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.ensure_tender_cost_center(UUID, UUID) TO service_role;
+
+  REVOKE ALL ON FUNCTION public.record_tender_expense_atomic(UUID,UUID,TEXT,NUMERIC,NUMERIC,UUID,TEXT,DATE,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.record_tender_expense_atomic(UUID,UUID,TEXT,NUMERIC,NUMERIC,UUID,TEXT,DATE,UUID) TO service_role;
+
+  REVOKE ALL ON FUNCTION public.close_lost_tender_atomic(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.close_lost_tender_atomic(UUID,UUID,UUID) TO service_role;
+
+  REVOKE ALL ON FUNCTION public.convert_won_tender_with_accounting_atomic(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.convert_won_tender_with_accounting_atomic(UUID,UUID,UUID) TO service_role;
+
+  REVOKE ALL ON FUNCTION public.record_bond_issue_atomic(UUID,JSONB,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.record_bond_issue_atomic(UUID,JSONB,UUID) TO service_role;
+
+  REVOKE ALL ON FUNCTION public.release_bond_atomic(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.release_bond_atomic(UUID,UUID,UUID) TO service_role;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'privilege grant: %', SQLERRM;
+END $$;
+
+SELECT 'Migration 101 completed — tender/bond accounting fixes' as result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 102-drop-abandoned-feature-tables.sql
+-- ----------------------------------------------------------------------------
+
+-- 102 - Drop empty tables that belong to cancelled / superseded features.
+--
+-- Live inventory (2026-08-27, project vmzcejtatkgmemwlbhtk) showed these
+-- relations exist, have 0 rows, and are not queried by the application.
+-- Objects that are unused in the UI but still written by live RPCs are
+-- intentionally kept (notably custody_invoices, used by
+-- create_purchase_invoice_atomic_v55_internal).
+--
+-- Safety: each table is counted first. Any non-zero count aborts the
+-- migration so production data cannot be deleted by accident.
+--
+-- Does not replace 101. Apply 101 first (tender/bond accounting fixes).
+
+BEGIN;
+
+-- delete_boq_item_atomic (058) still probes progress_claim_items. Rewrite
+-- that check out before the table goes away.
+CREATE OR REPLACE FUNCTION public.delete_boq_item_atomic(
+  p_company_id UUID, p_item_id UUID, p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_old boq_items%ROWTYPE; v_status TEXT;
+BEGIN
+  PERFORM assert_project_actor(p_company_id, p_user_id);
+  SELECT * INTO v_old FROM boq_items WHERE id=p_item_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'بند المقايسة غير موجود'; END IF;
+  SELECT status INTO v_status FROM projects WHERE id=v_old.project_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND OR v_status IN ('completed','cancelled') THEN RAISE EXCEPTION 'المشروع مغلق'; END IF;
+  IF EXISTS(SELECT 1 FROM boq_items WHERE parent_id=p_item_id AND company_id=p_company_id) THEN
+    RAISE EXCEPTION 'لا يمكن حذف بند مستخدم';
+  END IF;
+  PERFORM set_config('app.project_write_company', p_company_id::TEXT, TRUE);
+  DELETE FROM boq_items WHERE id=p_item_id;
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, old_values)
+  VALUES(p_company_id, p_user_id, 'delete', 'boq_item', p_item_id, to_jsonb(v_old));
+  RETURN jsonb_build_object('id', p_item_id, 'deleted', TRUE);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.delete_boq_item_atomic(UUID, UUID, UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_boq_item_atomic(UUID, UUID, UUID) TO service_role;
+
+DO $$
+DECLARE
+  t TEXT;
+  n BIGINT;
+  drop_list TEXT[] := ARRAY[
+    'manufacturing_order_materials',
+    'manufacturing_orders',
+    'manufacturing_bom_lines',
+    'manufacturing_boms',
+    'property_maintenance',
+    'property_leases',
+    'properties',
+    'bank_import_transactions',
+    'bank_imports',
+    'progress_claim_items',
+    'progress_claims',
+    'custody_deposits',
+    'custody_settlements',
+    'withholding_taxes',
+    'portal_access_log',
+    'telegram_actions_log'
+  ];
+BEGIN
+  FOREACH t IN ARRAY drop_list LOOP
+    IF to_regclass('public.' || t) IS NULL THEN
+      CONTINUE;
+    END IF;
+    EXECUTE format('SELECT count(*) FROM public.%I', t) INTO n;
+    IF n > 0 THEN
+      RAISE EXCEPTION 'رفض حذف public.%: الجدول يحتوي على % صف', t, n;
+    END IF;
+  END LOOP;
+
+  FOREACH t IN ARRAY drop_list LOOP
+    IF to_regclass('public.' || t) IS NULL THEN
+      CONTINUE;
+    END IF;
+    EXECUTE format('DROP TABLE public.%I', t);
+    RAISE NOTICE 'dropped public.%', t;
+  END LOOP;
+END $$;
+
+COMMIT;
+
+SELECT 'Migration 102 completed — abandoned empty feature tables dropped' AS result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 103-tender-bond-lifecycle-integrity.sql
+-- ----------------------------------------------------------------------------
+
+-- 103: Tender/bond lifecycle integrity
+--
+-- 1. Persist convert_journal_id so a retry cannot re-post 5410→5195
+-- 2. Cancelled tenders close 5410→5420 the same way as lost
+-- 3. Draft delete is blocked when posted tender_expenses exist
+-- 4. Bond cancel reverses cash cover (1185/1186) like release
+-- 5. Single margin path: bond issue XOR tender expense bid_bond_margin
+
+CREATE OR REPLACE FUNCTION public.record_tender_expense_atomic(
+  p_company_id UUID,
+  p_tender_id UUID,
+  p_expense_type TEXT,
+  p_amount NUMERIC(15,2),
+  p_vat_amount NUMERIC(15,2) DEFAULT 0,
+  p_bank_safe_id UUID DEFAULT NULL,
+  p_description TEXT DEFAULT NULL,
+  p_date DATE DEFAULT NULL,
+  p_user_id UUID DEFAULT NULL
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_tender tenders%ROWTYPE;
+  v_cc_id UUID;
+  v_debit_acc UUID;
+  v_debit_code TEXT;
+  v_vat_acc UUID;
+  v_bank_acc UUID;
+  v_bank_safe RECORD;
+  v_je JSONB;
+  v_lines JSONB := '[]'::JSONB;
+  v_expense_id UUID;
+  v_date DATE;
+  v_total NUMERIC;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  IF p_expense_type NOT IN ('karasa','platform_fee','bid_bond_commission','consulting','other') THEN
+    RAISE EXCEPTION 'نوع المصروف غير صالح';
+  END IF;
+  IF p_expense_type = 'bid_bond_margin' THEN
+    RAISE EXCEPTION 'غطاء خطاب الضمان يُرحَّل عند إصدار الضمان وليس كمصروف مناقصة';
+  END IF;
+
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.status IN ('lost','cancelled') THEN
+    RAISE EXCEPTION 'لا يمكن تسجيل مصروف على مناقصة مغلقة';
+  END IF;
+
+  IF p_amount IS NULL OR p_amount <= 0 OR p_amount <> ROUND(p_amount, 2) THEN
+    RAISE EXCEPTION 'المبلغ غير صالح';
+  END IF;
+  IF p_vat_amount IS NULL OR p_vat_amount < 0 OR p_vat_amount <> ROUND(p_vat_amount, 2) THEN
+    RAISE EXCEPTION 'مبلغ الضريبة غير صالح';
+  END IF;
+
+  v_debit_code := CASE
+    WHEN p_expense_type = 'bid_bond_commission' THEN '5291'
+    ELSE '5410'
+  END;
+
+  SELECT id INTO v_debit_acc FROM accounts
+  WHERE company_id=p_company_id AND code=v_debit_code AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  IF v_debit_acc IS NULL THEN
+    RAISE EXCEPTION 'الحساب المحاسبي % غير موجود', v_debit_code;
+  END IF;
+
+  IF p_vat_amount > 0 THEN
+    SELECT id INTO v_vat_acc FROM accounts
+    WHERE company_id=p_company_id AND code='1180' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+    IF v_vat_acc IS NULL THEN
+      RAISE EXCEPTION 'حساب ضريبة القيمة المضافة المدخلة غير موجود';
+    END IF;
+  END IF;
+
+  IF p_bank_safe_id IS NULL THEN
+    RAISE EXCEPTION 'يجب تحديد البنك أو الخزينة';
+  END IF;
+  SELECT * INTO v_bank_safe FROM banks_safes WHERE id=p_bank_safe_id AND company_id=p_company_id AND is_active=true LIMIT 1;
+  IF NOT FOUND THEN RAISE EXCEPTION 'البنك أو الخزينة غير موجودة'; END IF;
+  v_bank_acc := v_bank_safe.account_id;
+  IF v_bank_acc IS NULL THEN
+    RAISE EXCEPTION 'البنك/الخزينة غير مرتبط بحساب محاسبي';
+  END IF;
+
+  v_cc_id := ensure_tender_cost_center(p_company_id, p_tender_id);
+  v_date := COALESCE(p_date, CURRENT_DATE);
+  v_total := p_amount + p_vat_amount;
+
+  v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+    'accountId', v_debit_acc, 'debit', p_amount, 'credit', 0,
+    'description', COALESCE(p_description, 'مصاريف مناقصة'), 'costCenterId', v_cc_id
+  ));
+  IF p_vat_amount > 0 THEN
+    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+      'accountId', v_vat_acc, 'debit', p_vat_amount, 'credit', 0,
+      'description', 'ضريبة القيمة المضافة', 'costCenterId', v_cc_id
+    ));
+  END IF;
+  v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+    'accountId', v_bank_acc, 'debit', 0, 'credit', v_total,
+    'description', COALESCE(p_description, 'سداد مصاريف مناقصة'), 'bankSafeId', p_bank_safe_id
+  ));
+
+  v_je := create_journal_entry(
+    p_company_id, v_date, 'general',
+    COALESCE(p_description, 'مصاريف مناقصة: ' || v_tender.title),
+    p_user_id, v_lines
+  );
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+
+  INSERT INTO tender_expenses (
+    company_id, tender_id, expense_type, amount, vat_amount,
+    bank_safe_id, journal_entry_id, cost_center_id, description, date, created_by
+  ) VALUES (
+    p_company_id, p_tender_id, p_expense_type, p_amount, p_vat_amount,
+    p_bank_safe_id, (v_je->>'id')::UUID, v_cc_id, p_description, v_date, p_user_id
+  )
+  RETURNING id INTO v_expense_id;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'create', 'tender_expense', v_expense_id,
+    jsonb_build_object('tender_id', p_tender_id, 'amount', p_amount, 'vat', p_vat_amount, 'journal_entry_id', v_je->>'id'));
+
+  RETURN jsonb_build_object(
+    'expense_id', v_expense_id,
+    'journal_entry', v_je,
+    'cost_center_id', v_cc_id
+  );
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.close_lost_tender_atomic(
+  p_company_id UUID,
+  p_tender_id UUID,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_tender tenders%ROWTYPE;
+  v_cc_id UUID;
+  v_suspense_acc UUID;
+  v_lost_acc UUID;
+  v_suspense_balance NUMERIC := 0;
+  v_je_id UUID;
+  v_je JSONB;
+  v_lines JSONB;
+  v_bond RECORD;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.status NOT IN ('lost','cancelled') THEN RAISE EXCEPTION 'المناقصة ليست خاسرة أو ملغاة'; END IF;
+
+  v_cc_id := v_tender.cost_center_id;
+  IF v_cc_id IS NULL THEN v_cc_id := ensure_tender_cost_center(p_company_id, p_tender_id); END IF;
+
+  SELECT id INTO v_suspense_acc FROM accounts WHERE company_id=p_company_id AND code='5410' AND NOT COALESCE(is_header, false) LIMIT 1;
+  SELECT id INTO v_lost_acc FROM accounts WHERE company_id=p_company_id AND code='5420' AND NOT COALESCE(is_header, false) LIMIT 1;
+
+  IF v_tender.lost_close_journal_id IS NOT NULL THEN
+    v_suspense_balance := 0;
+  ELSIF v_suspense_acc IS NOT NULL THEN
+    SELECT COALESCE(SUM(te.amount), 0) INTO v_suspense_balance
+    FROM tender_expenses te
+    WHERE te.tender_id=p_tender_id AND te.company_id=p_company_id
+      AND te.expense_type NOT IN ('bid_bond_margin','bid_bond_commission');
+  END IF;
+
+  IF v_suspense_balance > 0 THEN
+    IF v_lost_acc IS NULL THEN RAISE EXCEPTION 'حساب مصاريف المناقصات الخاسرة غير موجود'; END IF;
+    v_lines := jsonb_build_array(
+      jsonb_build_object('accountId', v_lost_acc, 'debit', v_suspense_balance, 'credit', 0,
+        'description', CASE WHEN v_tender.status='cancelled' THEN 'إقفال مصاريف مناقصة ملغاة' ELSE 'إقفال مصاريف مناقصة خاسرة' END, 'costCenterId', v_cc_id),
+      jsonb_build_object('accountId', v_suspense_acc, 'debit', 0, 'credit', v_suspense_balance,
+        'description', CASE WHEN v_tender.status='cancelled' THEN 'إقفال مصاريف مناقصة ملغاة' ELSE 'إقفال مصاريف مناقصة خاسرة' END, 'costCenterId', v_cc_id)
+    );
+
+    v_je := create_journal_entry(
+      p_company_id, CURRENT_DATE, 'closing',
+      (CASE WHEN v_tender.status='cancelled' THEN 'إقفال مصاريف مناقصة ملغاة: ' ELSE 'إقفال مصاريف مناقصة خاسرة: ' END) || v_tender.title,
+      p_user_id, v_lines
+    );
+    v_je_id := (v_je->>'id')::UUID;
+    PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+    UPDATE tenders SET lost_close_journal_id=v_je_id, updated_at=NOW()
+    WHERE id=p_tender_id AND company_id=p_company_id;
+  END IF;
+
+  FOR v_bond IN
+    SELECT * FROM bonds
+    WHERE tender_id=p_tender_id AND company_id=p_company_id
+      AND type='bid_bond' AND status='active'
+  LOOP
+    PERFORM release_bond_atomic(p_company_id, v_bond.id, p_user_id);
+  END LOOP;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'close_lost', 'tender', p_tender_id,
+    jsonb_build_object('suspense_closed', v_suspense_balance, 'journal_entry_id', v_je_id));
+
+  RETURN jsonb_build_object(
+    'tender_id', p_tender_id,
+    'suspense_closed', v_suspense_balance,
+    'journal_entry_id', v_je_id
+  );
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.convert_won_tender_with_accounting_atomic(
+  p_company_id UUID,
+  p_tender_id UUID,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_tender tenders%ROWTYPE;
+  v_result JSONB;
+  v_project_id UUID;
+  v_cc_id UUID;
+  v_suspense_acc UUID;
+  v_project_cost_acc UUID;
+  v_suspense_balance NUMERIC := 0;
+  v_lines JSONB;
+  v_je JSONB;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.status <> 'won' THEN RAISE EXCEPTION 'يمكن تحويل العطاءات الرابحة فقط'; END IF;
+
+  IF v_tender.project_id IS NOT NULL THEN
+    v_project_id := v_tender.project_id;
+  ELSE
+    v_result := convert_won_tender_to_project_atomic(p_company_id, p_tender_id, p_user_id);
+    v_project_id := COALESCE((v_result->'project'->>'id')::UUID, (v_result->>'project_id')::UUID);
+    IF v_project_id IS NULL THEN
+      RAISE EXCEPTION 'فشل إنشاء المشروع';
+    END IF;
+  END IF;
+
+  v_cc_id := v_tender.cost_center_id;
+  IF v_cc_id IS NULL THEN v_cc_id := ensure_tender_cost_center(p_company_id, p_tender_id); END IF;
+
+  PERFORM set_config('app.project_write_company', p_company_id::TEXT, TRUE);
+  UPDATE projects SET cost_center_id=v_cc_id WHERE id=v_project_id AND company_id=p_company_id
+    AND (cost_center_id IS NULL OR cost_center_id IS DISTINCT FROM v_cc_id);
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+  UPDATE bonds SET project_id=v_project_id, updated_at=NOW()
+  WHERE tender_id=p_tender_id AND company_id=p_company_id AND project_id IS NULL;
+
+  SELECT id INTO v_suspense_acc FROM accounts WHERE company_id=p_company_id AND code='5410' AND NOT COALESCE(is_header, false) LIMIT 1;
+  SELECT id INTO v_project_cost_acc FROM accounts
+  WHERE company_id=p_company_id AND code='5195' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  IF v_project_cost_acc IS NULL THEN
+    SELECT id INTO v_project_cost_acc FROM accounts
+    WHERE company_id=p_company_id AND code='5110' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  END IF;
+
+  IF v_tender.convert_journal_id IS NOT NULL THEN
+    v_suspense_balance := 0;
+  ELSIF v_suspense_acc IS NOT NULL THEN
+    SELECT COALESCE(SUM(te.amount), 0) INTO v_suspense_balance
+    FROM tender_expenses te
+    WHERE te.tender_id=p_tender_id AND te.company_id=p_company_id
+      AND te.expense_type NOT IN ('bid_bond_margin','bid_bond_commission');
+  END IF;
+
+  IF v_suspense_balance > 0 THEN
+    IF v_project_cost_acc IS NULL THEN
+      RAISE EXCEPTION 'حساب تكاليف ما قبل التعاقد غير موجود';
+    END IF;
+    v_lines := jsonb_build_array(
+      jsonb_build_object('accountId', v_project_cost_acc, 'debit', v_suspense_balance, 'credit', 0,
+        'description', 'تحويل مصاريف مناقصة إلى تكاليف المشروع', 'costCenterId', v_cc_id, 'projectId', v_project_id),
+      jsonb_build_object('accountId', v_suspense_acc, 'debit', 0, 'credit', v_suspense_balance,
+        'description', 'تحويل مصاريف مناقصة إلى تكاليف المشروع', 'costCenterId', v_cc_id)
+    );
+
+    v_je := create_journal_entry(
+      p_company_id, CURRENT_DATE, 'general',
+      'تحويل مصاريف مناقصة إلى مشروع: ' || v_tender.title,
+      p_user_id, v_lines
+    );
+    PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+    UPDATE tenders SET convert_journal_id=(v_je->>'id')::UUID, updated_at=NOW()
+    WHERE id=p_tender_id AND company_id=p_company_id;
+  END IF;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'convert_with_accounting', 'tender', p_tender_id,
+    jsonb_build_object('project_id', v_project_id, 'costs_transferred', v_suspense_balance));
+
+  RETURN jsonb_build_object(
+    'project_id', v_project_id,
+    'tender_id', p_tender_id,
+    'costs_transferred', v_suspense_balance,
+    'already_processed', v_tender.project_id IS NOT NULL
+  );
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.record_bond_issue_atomic(
+  p_company_id UUID,
+  p_payload JSONB,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_bond_id UUID;
+  v_margin_acc UUID;
+  v_comm_acc UUID;
+  v_vat_acc UUID;
+  v_bank_acc UUID;
+  v_bank_safe RECORD;
+  v_lines JSONB := '[]'::JSONB;
+  v_je JSONB;
+  v_type TEXT;
+  v_amount NUMERIC;
+  v_margin NUMERIC := 0;
+  v_commission NUMERIC := 0;
+  v_vat_amount NUMERIC := 0;
+  v_bank_safe_id UUID;
+  v_cash_out NUMERIC;
+  v_tender UUID;
+  v_project UUID;
+  v_contact UUID;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  v_type := p_payload->>'type';
+  BEGIN
+    v_amount := NULLIF(p_payload->>'amount','')::NUMERIC;
+    v_margin := COALESCE(NULLIF(p_payload->>'margin_amount','')::NUMERIC, 0);
+    v_commission := COALESCE(NULLIF(p_payload->>'commission','')::NUMERIC, 0);
+    v_vat_amount := COALESCE(NULLIF(p_payload->>'vat_amount','')::NUMERIC, 0);
+    v_bank_safe_id := NULLIF(p_payload->>'bank_safe_id','')::UUID;
+    v_tender := NULLIF(p_payload->>'tender_id','')::UUID;
+    v_project := NULLIF(p_payload->>'project_id','')::UUID;
+    v_contact := NULLIF(p_payload->>'contact_id','')::UUID;
+  EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+    RAISE EXCEPTION 'بيانات الضمان غير صالحة';
+  END;
+
+  IF v_type NOT IN ('bid_bond','performance_bond','advance_payment','retention','warranty','insurance','other') THEN
+    RAISE EXCEPTION 'نوع الضمان غير صالح';
+  END IF;
+  IF v_amount IS NULL OR v_amount <= 0 OR v_amount <> ROUND(v_amount, 2) THEN RAISE EXCEPTION 'المبلغ غير صالح'; END IF;
+  IF v_margin < 0 OR v_margin <> ROUND(v_margin, 2) OR v_margin > v_amount THEN
+    RAISE EXCEPTION 'الغطاء النقدي غير صالح';
+  END IF;
+  IF v_commission < 0 OR v_commission <> ROUND(v_commission, 2) THEN RAISE EXCEPTION 'العمولة غير صالحة'; END IF;
+  IF v_vat_amount < 0 OR v_vat_amount <> ROUND(v_vat_amount, 2) THEN RAISE EXCEPTION 'مبلغ الضريبة غير صالح'; END IF;
+  IF (p_payload->>'issue_date')::DATE > (p_payload->>'expiry_date')::DATE THEN
+    RAISE EXCEPTION 'تاريخ انتهاء الضمان يسبق تاريخ الإصدار';
+  END IF;
+  IF v_tender IS NOT NULL AND NOT EXISTS(SELECT 1 FROM tenders WHERE id=v_tender AND company_id=p_company_id) THEN
+    RAISE EXCEPTION 'المناقصة غير موجودة';
+  END IF;
+  IF v_type = 'bid_bond' AND v_margin > 0 AND v_tender IS NOT NULL AND EXISTS(
+    SELECT 1 FROM tender_expenses
+    WHERE tender_id=v_tender AND company_id=p_company_id AND expense_type='bid_bond_margin'
+  ) THEN
+    RAISE EXCEPTION 'غطاء خطاب الضمان مسجّل مسبقاً كمصروف مناقصة — لا يمكن ترحيله مرتين';
+  END IF;
+  IF v_project IS NOT NULL AND NOT EXISTS(SELECT 1 FROM projects WHERE id=v_project AND company_id=p_company_id) THEN
+    RAISE EXCEPTION 'المشروع غير موجود';
+  END IF;
+  IF v_contact IS NOT NULL AND NOT EXISTS(SELECT 1 FROM contacts WHERE id=v_contact AND company_id=p_company_id) THEN
+    RAISE EXCEPTION 'جهة الاتصال غير موجودة';
+  END IF;
+
+  IF v_type = 'bid_bond' THEN
+    SELECT id INTO v_margin_acc FROM accounts WHERE company_id=p_company_id AND code='1185' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  ELSE
+    SELECT id INTO v_margin_acc FROM accounts WHERE company_id=p_company_id AND code='1186' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+  END IF;
+
+  IF v_bank_safe_id IS NULL THEN RAISE EXCEPTION 'يجب تحديد البنك'; END IF;
+  SELECT * INTO v_bank_safe FROM banks_safes WHERE id=v_bank_safe_id AND company_id=p_company_id AND is_active=true LIMIT 1;
+  IF NOT FOUND THEN RAISE EXCEPTION 'البنك غير موجود'; END IF;
+  v_bank_acc := v_bank_safe.account_id;
+  IF v_bank_acc IS NULL THEN RAISE EXCEPTION 'البنك غير مرتبط بحساب محاسبي'; END IF;
+
+  v_cash_out := v_margin + v_commission + v_vat_amount;
+
+  IF v_margin > 0 AND v_margin_acc IS NULL THEN RAISE EXCEPTION 'حساب خطابات الضمان غير موجود'; END IF;
+  IF v_commission > 0 THEN
+    SELECT id INTO v_comm_acc FROM accounts WHERE company_id=p_company_id AND code='5291' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+    IF v_comm_acc IS NULL THEN RAISE EXCEPTION 'حساب عمولات الضمانات غير موجود'; END IF;
+  END IF;
+  IF v_vat_amount > 0 THEN
+    SELECT id INTO v_vat_acc FROM accounts WHERE company_id=p_company_id AND code='1180' AND is_active=true AND NOT COALESCE(is_header, false) LIMIT 1;
+    IF v_vat_acc IS NULL THEN RAISE EXCEPTION 'حساب ضريبة القيمة المضافة المدخلة غير موجود'; END IF;
+  END IF;
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+
+  INSERT INTO bonds (
+    company_id, title, type, amount, currency, issue_date, expiry_date,
+    issuing_bank, bank_safe_id, beneficiary_name, project_id, tender_id,
+    contact_id, reference_number, status, notes, created_by,
+    margin_account_id, commission_account_id, margin_amount, commission_amount
+  ) VALUES (
+    p_company_id,
+    BTRIM(p_payload->>'title'),
+    v_type,
+    v_amount,
+    COALESCE(NULLIF(p_payload->>'currency',''), 'SAR'),
+    (p_payload->>'issue_date')::DATE,
+    (p_payload->>'expiry_date')::DATE,
+    NULLIF(BTRIM(p_payload->>'issuing_bank'),''),
+    v_bank_safe_id,
+    NULLIF(BTRIM(p_payload->>'beneficiary_name'),''),
+    v_project,
+    v_tender,
+    v_contact,
+    NULLIF(BTRIM(p_payload->>'reference_number'),''),
+    'active',
+    NULLIF(BTRIM(p_payload->>'notes'),''),
+    p_user_id,
+    v_margin_acc,
+    v_comm_acc,
+    v_margin,
+    v_commission
+  )
+  RETURNING id INTO v_bond_id;
+
+  IF v_cash_out > 0 THEN
+    IF v_margin > 0 THEN
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'accountId', v_margin_acc, 'debit', v_margin, 'credit', 0,
+        'description', 'غطاء نقدي لخطاب ضمان'));
+    END IF;
+    IF v_commission > 0 THEN
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'accountId', v_comm_acc, 'debit', v_commission, 'credit', 0,
+        'description', 'عمولة إصدار خطاب ضمان'));
+    END IF;
+    IF v_vat_amount > 0 THEN
+      v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'accountId', v_vat_acc, 'debit', v_vat_amount, 'credit', 0,
+        'description', 'ضريبة القيمة المضافة'));
+    END IF;
+    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+      'accountId', v_bank_acc, 'debit', 0, 'credit', v_cash_out,
+      'description', 'سداد غطاء/عمولة خطاب ضمان', 'bankSafeId', v_bank_safe_id));
+
+    v_je := create_journal_entry(
+      p_company_id, (p_payload->>'issue_date')::DATE, 'general',
+      'إصدار خطاب ضمان: ' || (p_payload->>'title'),
+      p_user_id, v_lines
+    );
+
+    UPDATE bonds SET journal_entry_id=(v_je->>'id')::UUID WHERE id=v_bond_id AND company_id=p_company_id;
+  END IF;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'create', 'bond', v_bond_id,
+    jsonb_build_object('amount', v_amount, 'margin_amount', v_margin, 'type', v_type, 'journal_entry_id', v_je->>'id'));
+
+  RETURN jsonb_build_object('bond_id', v_bond_id, 'journal_entry', v_je);
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.release_bond_atomic(
+  p_company_id UUID,
+  p_bond_id UUID,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_bond bonds%ROWTYPE;
+  v_bank_acc UUID;
+  v_margin_acc UUID;
+  v_margin NUMERIC;
+  v_lines JSONB;
+  v_je JSONB;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  SELECT * INTO v_bond FROM bonds WHERE id=p_bond_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الضمان غير موجود'; END IF;
+  IF v_bond.status IN ('released', 'cancelled') THEN
+    RETURN jsonb_build_object('bond_id', p_bond_id, 'already_processed', true);
+  END IF;
+
+  v_margin := COALESCE(v_bond.margin_amount, 0);
+  v_margin_acc := v_bond.margin_account_id;
+
+  IF v_margin > 0 THEN
+    SELECT account_id INTO v_bank_acc FROM banks_safes WHERE id=v_bond.bank_safe_id AND company_id=p_company_id LIMIT 1;
+    IF v_bank_acc IS NULL THEN RAISE EXCEPTION 'البنك غير مرتبط بحساب'; END IF;
+    IF v_margin_acc IS NULL THEN RAISE EXCEPTION 'حساب غطاء الضمان غير مرتبط'; END IF;
+
+    v_lines := jsonb_build_array(
+      jsonb_build_object('accountId', v_bank_acc, 'debit', v_margin, 'credit', 0,
+        'description', 'استرداد غطاء خطاب ضمان', 'bankSafeId', v_bond.bank_safe_id),
+      jsonb_build_object('accountId', v_margin_acc, 'debit', 0, 'credit', v_margin,
+        'description', 'إلغاء غطاء خطاب ضمان')
+    );
+
+    v_je := create_journal_entry(
+      p_company_id, CURRENT_DATE, 'general',
+      'إلغاء/استرداد خطاب ضمان: ' || v_bond.title,
+      p_user_id, v_lines
+    );
+  END IF;
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+  UPDATE bonds SET status='released', released_at=NOW(),
+    release_journal_entry_id=COALESCE((v_je->>'id')::UUID, release_journal_entry_id),
+    updated_at=NOW()
+  WHERE id=p_bond_id AND company_id=p_company_id;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'release', 'bond', p_bond_id,
+    jsonb_build_object('journal_entry_id', v_je->>'id', 'margin_returned', v_margin));
+
+  RETURN jsonb_build_object('bond_id', p_bond_id, 'journal_entry', v_je, 'already_processed', FALSE, 'status', 'released');
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.cancel_bond_atomic(
+  p_company_id UUID,
+  p_bond_id UUID,
+  p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_bond bonds%ROWTYPE;
+  v_bank_acc UUID;
+  v_margin_acc UUID;
+  v_margin NUMERIC;
+  v_lines JSONB;
+  v_je JSONB;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=true) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+
+  SELECT * INTO v_bond FROM bonds WHERE id=p_bond_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الضمان غير موجود'; END IF;
+  IF v_bond.status IN ('released', 'cancelled') THEN
+    RETURN jsonb_build_object('bond_id', p_bond_id, 'already_processed', true, 'status', v_bond.status);
+  END IF;
+
+  v_margin := COALESCE(v_bond.margin_amount, 0);
+  v_margin_acc := v_bond.margin_account_id;
+
+  IF v_margin > 0 THEN
+    SELECT account_id INTO v_bank_acc FROM banks_safes WHERE id=v_bond.bank_safe_id AND company_id=p_company_id LIMIT 1;
+    IF v_bank_acc IS NULL THEN RAISE EXCEPTION 'البنك غير مرتبط بحساب'; END IF;
+    IF v_margin_acc IS NULL THEN RAISE EXCEPTION 'حساب غطاء الضمان غير مرتبط'; END IF;
+
+    v_lines := jsonb_build_array(
+      jsonb_build_object('accountId', v_bank_acc, 'debit', v_margin, 'credit', 0,
+        'description', 'استرداد غطاء خطاب ضمان', 'bankSafeId', v_bond.bank_safe_id),
+      jsonb_build_object('accountId', v_margin_acc, 'debit', 0, 'credit', v_margin,
+        'description', 'إلغاء غطاء خطاب ضمان')
+    );
+
+    v_je := create_journal_entry(
+      p_company_id, CURRENT_DATE, 'general',
+      'إلغاء خطاب ضمان: ' || v_bond.title,
+      p_user_id, v_lines
+    );
+  END IF;
+
+  PERFORM set_config('app.relationship_write_company', p_company_id::TEXT, TRUE);
+  UPDATE bonds SET status='cancelled',
+    release_journal_entry_id=COALESCE((v_je->>'id')::UUID, release_journal_entry_id),
+    updated_at=NOW()
+  WHERE id=p_bond_id AND company_id=p_company_id;
+
+  INSERT INTO audit_log(company_id, user_id, action, entity_type, entity_id, new_values)
+  VALUES(p_company_id, p_user_id, 'cancel', 'bond', p_bond_id,
+    jsonb_build_object('journal_entry_id', v_je->>'id', 'margin_returned', v_margin));
+
+  RETURN jsonb_build_object('bond_id', p_bond_id, 'journal_entry', v_je, 'already_processed', FALSE, 'status', 'cancelled');
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.delete_draft_tender_atomic(p_company_id UUID,p_tender_id UUID,p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_tender tenders%ROWTYPE;
+BEGIN
+  PERFORM assert_relationship_actor(p_company_id,p_user_id);
+  SELECT * INTO v_tender FROM tenders WHERE id=p_tender_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المناقصة غير موجودة'; END IF;
+  IF v_tender.status<>'draft' OR v_tender.project_id IS NOT NULL THEN RAISE EXCEPTION 'لا يمكن حذف مناقصة دخلت دورة العمل'; END IF;
+  IF EXISTS(SELECT 1 FROM bonds WHERE tender_id=p_tender_id AND company_id=p_company_id) THEN RAISE EXCEPTION 'لا يمكن حذف مناقصة مرتبطة بضمان'; END IF;
+  IF EXISTS(SELECT 1 FROM tender_expenses WHERE tender_id=p_tender_id AND company_id=p_company_id) THEN
+    RAISE EXCEPTION 'لا يمكن حذف مناقصة عليها مصاريف مُرحَّلة';
+  END IF;
+  PERFORM set_config('app.relationship_write_company',p_company_id::TEXT,TRUE);
+  DELETE FROM tenders WHERE id=p_tender_id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values)
+  VALUES(p_company_id,p_user_id,'delete','tender',p_tender_id,to_jsonb(v_tender));
+  RETURN jsonb_build_object('id',p_tender_id,'deleted',TRUE);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.transition_bond_atomic(p_company_id UUID,p_bond_id UUID,p_action TEXT,p_notes TEXT,p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+  PERFORM assert_relationship_actor(p_company_id,p_user_id);
+  IF p_action NOT IN('release','cancel') OR LENGTH(COALESCE(p_notes,''))>2000 THEN RAISE EXCEPTION 'عملية الضمان غير صالحة'; END IF;
+  IF p_action='release' THEN
+    RETURN release_bond_atomic(p_company_id,p_bond_id,p_user_id);
+  END IF;
+  RETURN cancel_bond_atomic(p_company_id,p_bond_id,p_user_id);
+END;
+$$;
+
+DO $$
+BEGIN
+  REVOKE ALL ON FUNCTION public.record_tender_expense_atomic(UUID,UUID,TEXT,NUMERIC,NUMERIC,UUID,TEXT,DATE,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.record_tender_expense_atomic(UUID,UUID,TEXT,NUMERIC,NUMERIC,UUID,TEXT,DATE,UUID) TO service_role;
+  REVOKE ALL ON FUNCTION public.close_lost_tender_atomic(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.close_lost_tender_atomic(UUID,UUID,UUID) TO service_role;
+  REVOKE ALL ON FUNCTION public.convert_won_tender_with_accounting_atomic(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.convert_won_tender_with_accounting_atomic(UUID,UUID,UUID) TO service_role;
+  REVOKE ALL ON FUNCTION public.record_bond_issue_atomic(UUID,JSONB,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.record_bond_issue_atomic(UUID,JSONB,UUID) TO service_role;
+  REVOKE ALL ON FUNCTION public.release_bond_atomic(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.release_bond_atomic(UUID,UUID,UUID) TO service_role;
+  REVOKE ALL ON FUNCTION public.cancel_bond_atomic(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.cancel_bond_atomic(UUID,UUID,UUID) TO service_role;
+  REVOKE ALL ON FUNCTION public.delete_draft_tender_atomic(UUID,UUID,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.delete_draft_tender_atomic(UUID,UUID,UUID) TO service_role;
+  REVOKE ALL ON FUNCTION public.transition_bond_atomic(UUID,UUID,TEXT,TEXT,UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.transition_bond_atomic(UUID,UUID,TEXT,TEXT,UUID) TO service_role;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'privilege grant: %', SQLERRM;
+END $$;
+
+SELECT 'Migration 103 completed — tender/bond lifecycle integrity' as result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 104-operating-country-sa-eg.sql
+-- ----------------------------------------------------------------------------
+
+-- 104: Dual operating country (SA | EG) frozen at first account creation
+--
+-- Country drives VAT, currency, tax authority (ZATCA vs ETA), and
+-- social-insurance default rates. It cannot change after the company row exists.
+
+CREATE OR REPLACE FUNCTION public.operating_country_si_rates(p_code TEXT)
+RETURNS TABLE(employer_rate NUMERIC, employee_rate NUMERIC, label TEXT, tax_authority TEXT)
+LANGUAGE sql IMMUTABLE SET search_path=public AS $$
+  SELECT r.employer_rate, r.employee_rate, r.label, r.tax_authority
+  FROM (
+    VALUES
+      ('EG', 0.1875::NUMERIC, 0.1100::NUMERIC, 'التأمينات الاجتماعية المصرية', 'eta'),
+      ('SA', 0.1175::NUMERIC, 0.0975::NUMERIC, 'التأمينات الاجتماعية (GOSI)', 'zatca')
+  ) AS r(code, employer_rate, employee_rate, label, tax_authority)
+  WHERE r.code = CASE WHEN p_code = 'EG' THEN 'EG' ELSE 'SA' END
+  LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION public.seed_operating_country_profile(p_company_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_code TEXT;
+  v_rates RECORD;
+  v_parent UUID;
+BEGIN
+  SELECT COALESCE(NULLIF(BTRIM(country_code), ''), 'SA') INTO v_code
+  FROM companies WHERE id = p_company_id;
+  IF v_code IS NULL THEN RETURN; END IF;
+
+  SELECT * INTO v_rates FROM operating_country_si_rates(v_code);
+
+  INSERT INTO settings(company_id, key, value)
+  SELECT p_company_id, k, v
+  FROM (VALUES
+    ('gosi_employer_rate', v_rates.employer_rate::TEXT),
+    ('gosi_employee_rate', v_rates.employee_rate::TEXT),
+    ('social_insurance_label', v_rates.label),
+    ('tax_authority', v_rates.tax_authority),
+    ('withholding_enabled', CASE WHEN v_code = 'EG' THEN 'true' ELSE 'false' END),
+    ('operating_country', v_code)
+  ) AS s(k, v)
+  WHERE NOT EXISTS (
+    SELECT 1 FROM settings x WHERE x.company_id = p_company_id AND x.key = s.k
+  );
+
+  IF v_code = 'EG' THEN
+    SELECT id INTO v_parent FROM accounts WHERE company_id = p_company_id AND code = '2100' LIMIT 1;
+    INSERT INTO accounts(company_id, code, name, name_en, type, parent_id, is_active, is_header)
+    SELECT p_company_id, '2165', 'ضريبة خصم المنبع المستحقة', 'Withholding tax payable', 'liability', v_parent, TRUE, FALSE
+    WHERE NOT EXISTS (SELECT 1 FROM accounts WHERE company_id = p_company_id AND code = '2165');
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.trg_companies_operating_country()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path=public AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.country_code IS NULL OR BTRIM(NEW.country_code) = '' THEN
+      NEW.country_code := 'SA';
+    END IF;
+    NEW.country_code := UPPER(BTRIM(NEW.country_code));
+    IF NEW.country_code NOT IN ('SA', 'EG') THEN
+      RAISE EXCEPTION 'دولة التشغيل يجب أن تكون السعودية أو مصر عند إنشاء الحساب';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF OLD.country_code IS DISTINCT FROM NEW.country_code THEN
+    RAISE EXCEPTION 'لا يمكن تغيير دولة التشغيل بعد إنشاء الحساب';
+  END IF;
+  NEW.currency_code := OLD.currency_code;
+  NEW.currency_symbol := OLD.currency_symbol;
+  NEW.locale := OLD.locale;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_companies_operating_country_ins ON companies;
+CREATE TRIGGER trg_companies_operating_country_ins
+  BEFORE INSERT ON companies
+  FOR EACH ROW EXECUTE FUNCTION public.trg_companies_operating_country();
+
+DROP TRIGGER IF EXISTS trg_companies_operating_country_upd ON companies;
+CREATE TRIGGER trg_companies_operating_country_upd
+  BEFORE UPDATE OF country_code, currency_code, currency_symbol, locale ON companies
+  FOR EACH ROW EXECUTE FUNCTION public.trg_companies_operating_country();
+
+CREATE OR REPLACE FUNCTION public.trg_companies_seed_country_profile()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path=public AS $$
+BEGIN
+  PERFORM seed_operating_country_profile(NEW.id);
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_companies_seed_country_profile ON companies;
+CREATE TRIGGER trg_companies_seed_country_profile
+  AFTER INSERT ON companies
+  FOR EACH ROW EXECUTE FUNCTION public.trg_companies_seed_country_profile();
+
+-- Existing tenants keep their country (including any legacy non-SA/EG rows)
+-- and receive SI defaults only when the keys are missing.
+DO $$
+DECLARE rec RECORD;
+BEGIN
+  FOR rec IN SELECT id FROM companies LOOP
+    PERFORM seed_operating_country_profile(rec.id);
+  END LOOP;
+END $$;
+
+-- Payroll fallback follows the company country when settings are absent.
+CREATE OR REPLACE FUNCTION public.payroll_si_rates_for_company(p_company_id UUID)
+RETURNS TABLE(employer_rate NUMERIC, employee_rate NUMERIC)
+LANGUAGE plpgsql STABLE SET search_path=public AS $$
+DECLARE
+  v_code TEXT;
+  v_er NUMERIC;
+  v_ee NUMERIC;
+  v_defaults RECORD;
+BEGIN
+  SELECT country_code INTO v_code FROM companies WHERE id = p_company_id;
+  SELECT * INTO v_defaults FROM operating_country_si_rates(v_code);
+  BEGIN
+    v_er := NULLIF((SELECT value FROM settings WHERE company_id = p_company_id AND key = 'gosi_employer_rate'), '')::NUMERIC;
+  EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+    v_er := NULL;
+  END;
+  BEGIN
+    v_ee := NULLIF((SELECT value FROM settings WHERE company_id = p_company_id AND key = 'gosi_employee_rate'), '')::NUMERIC;
+  EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN
+    v_ee := NULL;
+  END;
+  IF v_er IS NULL OR v_er < 0 OR v_er > 1 THEN v_er := v_defaults.employer_rate; END IF;
+  IF v_ee IS NULL OR v_ee < 0 OR v_ee > 1 THEN v_ee := v_defaults.employee_rate; END IF;
+  employer_rate := v_er;
+  employee_rate := v_ee;
+  RETURN NEXT;
+END;
+$$;
+
+DO $$
+BEGIN
+  REVOKE ALL ON FUNCTION public.operating_country_si_rates(TEXT) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.operating_country_si_rates(TEXT) TO service_role;
+  REVOKE ALL ON FUNCTION public.seed_operating_country_profile(UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.seed_operating_country_profile(UUID) TO service_role;
+  REVOKE ALL ON FUNCTION public.payroll_si_rates_for_company(UUID) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.payroll_si_rates_for_company(UUID) TO service_role;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'privilege grant: %', SQLERRM;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.post_payroll_batch_v49_internal(
+  p_company_id UUID, p_date DATE, p_employee_ids UUID[], p_created_by UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_employee_count INTEGER; v_emp RECORD; v_adv RECORD; v_row JSONB;
+  v_rows JSONB:='[]'::JSONB; v_total_salary NUMERIC:=0; v_total_advance NUMERIC:=0;
+  v_total_gosi_employer NUMERIC:=0; v_total_gosi_employee NUMERIC:=0;
+  v_advance_balance NUMERIC; v_deduction NUMERIC; v_left NUMERIC; v_take NUMERIC;
+  v_salary_account UUID; v_accrued_account UUID; v_advance_account UUID;
+  v_gosi_employer_account UUID; v_gosi_payable_account UUID;
+  v_gosi_employer_rate NUMERIC; v_gosi_employee_rate NUMERIC;
+  v_gosi_employer_amount NUMERIC; v_gosi_employee_amount NUMERIC; v_net_pay NUMERIC;
+  v_lines JSONB; v_journal JSONB; v_journal_id UUID; v_result JSONB;
+BEGIN
+  IF p_date IS NULL OR p_employee_ids IS NULL OR array_length(p_employee_ids,1) IS NULL OR array_length(p_employee_ids,1)>500 THEN
+    RAISE EXCEPTION 'قائمة موظفي الرواتب غير صالحة';
+  END IF;
+  SELECT COUNT(DISTINCT item_id) INTO v_employee_count FROM unnest(p_employee_ids) AS ids(item_id);
+  IF v_employee_count<>array_length(p_employee_ids,1) THEN RAISE EXCEPTION 'لا يمكن تكرار الموظف في دفعة الرواتب'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_company_id::TEXT||':payroll:'||TO_CHAR(p_date,'YYYY-MM'),0));
+  IF EXISTS(SELECT 1 FROM payroll WHERE company_id=p_company_id
+    AND date_trunc('month',date::timestamp)=date_trunc('month',p_date::timestamp)
+    AND employee_id=ANY(p_employee_ids)) THEN
+    RAISE EXCEPTION 'تم إنشاء راتب لأحد الموظفين في هذا التاريخ مسبقاً';
+  END IF;
+  SELECT COUNT(*) INTO v_employee_count FROM employees
+    WHERE company_id=p_company_id AND id=ANY(p_employee_ids) AND COALESCE(is_active,TRUE)=TRUE;
+  IF v_employee_count<>array_length(p_employee_ids,1) THEN RAISE EXCEPTION 'أحد الموظفين غير موجود أو غير نشط'; END IF;
+  PERFORM id FROM employees WHERE company_id=p_company_id AND id=ANY(p_employee_ids) ORDER BY id FOR UPDATE;
+
+  SELECT id INTO v_salary_account FROM accounts WHERE company_id=p_company_id AND code='5210' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  SELECT id INTO v_accrued_account FROM accounts WHERE company_id=p_company_id AND code='2140' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  SELECT id INTO v_advance_account FROM accounts WHERE company_id=p_company_id AND code='1160' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  SELECT id INTO v_gosi_employer_account FROM accounts WHERE company_id=p_company_id AND code='5230' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  SELECT id INTO v_gosi_payable_account FROM accounts WHERE company_id=p_company_id AND code='2155' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  IF v_salary_account IS NULL OR v_accrued_account IS NULL THEN RAISE EXCEPTION 'حسابات الرواتب غير موجودة'; END IF;
+
+  SELECT employer_rate, employee_rate INTO v_gosi_employer_rate, v_gosi_employee_rate
+  FROM payroll_si_rates_for_company(p_company_id);
+  IF v_gosi_employer_account IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'5230','مصروف التأمينات الاجتماعية','expense',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5230');
+    SELECT id INTO v_gosi_employer_account FROM accounts WHERE company_id=p_company_id AND code='5230' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_gosi_payable_account IS NULL THEN
+    INSERT INTO accounts(company_id,code,name,type,is_active,is_header)
+    SELECT p_company_id,'2155','مستحقات التأمينات الاجتماعية','liability',TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2155');
+    SELECT id INTO v_gosi_payable_account FROM accounts WHERE company_id=p_company_id AND code='2155' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF (v_gosi_employer_rate>0 OR v_gosi_employee_rate>0) AND (v_gosi_employer_account IS NULL OR v_gosi_payable_account IS NULL) THEN
+    RAISE EXCEPTION 'تعذر تهيئة حسابات التأمينات الاجتماعية (5230/2155)';
+  END IF;
+
+  FOR v_emp IN SELECT id,ROUND(COALESCE(salary,0),2) AS salary FROM employees
+    WHERE company_id=p_company_id AND id=ANY(p_employee_ids) ORDER BY id
+  LOOP
+    IF v_emp.salary<=0 THEN RAISE EXCEPTION 'راتب أحد الموظفين غير صالح'; END IF;
+    PERFORM id FROM employee_advances
+      WHERE company_id=p_company_id AND employee_id=v_emp.id AND remaining_amount>0 ORDER BY date,id FOR UPDATE;
+    SELECT COALESCE(SUM(remaining_amount),0) INTO v_advance_balance FROM employee_advances
+      WHERE company_id=p_company_id AND employee_id=v_emp.id AND remaining_amount>0;
+    v_deduction:=ROUND(LEAST(v_advance_balance,v_emp.salary*0.5),2);
+    v_gosi_employer_amount:=ROUND(v_emp.salary*v_gosi_employer_rate,2);
+    v_gosi_employee_amount:=ROUND(v_emp.salary*v_gosi_employee_rate,2);
+    v_net_pay:=ROUND(v_emp.salary-v_deduction-v_gosi_employee_amount,2);
+    v_rows:=v_rows||jsonb_build_array(jsonb_build_object(
+      'employee_id',v_emp.id,'salary',v_emp.salary,'advance_deduction',v_deduction,
+      'gosi_employer',v_gosi_employer_amount,'gosi_employee',v_gosi_employee_amount,
+      'net_pay',v_net_pay));
+    v_total_salary:=v_total_salary+v_emp.salary;
+    v_total_advance:=v_total_advance+v_deduction;
+    v_total_gosi_employer:=v_total_gosi_employer+v_gosi_employer_amount;
+    v_total_gosi_employee:=v_total_gosi_employee+v_gosi_employee_amount;
+  END LOOP;
+  IF v_total_advance>0 AND v_advance_account IS NULL THEN RAISE EXCEPTION 'حساب سلف الموظفين غير موجود'; END IF;
+
+  v_lines:=jsonb_build_array(
+    jsonb_build_object('accountId',v_salary_account,'debit',v_total_salary,'credit',0,'description','مصروف الرواتب'),
+    jsonb_build_object('accountId',v_accrued_account,'debit',0,'credit',ROUND(v_total_salary-v_total_advance-v_total_gosi_employee,2),'description','رواتب مستحقة'));
+  IF v_total_advance>0 THEN
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_advance_account,'debit',0,'credit',v_total_advance,'description','تسوية سلف الموظفين'));
+  END IF;
+  IF v_total_gosi_employer+v_total_gosi_employee>0 THEN
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_gosi_payable_account,'debit',0,'credit',ROUND(v_total_gosi_employer+v_total_gosi_employee,2),
+      'description','حصص التأمينات الاجتماعية (موظف + صاحب عمل)'));
+    IF v_total_gosi_employer>0 THEN
+      v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+        'accountId',v_gosi_employer_account,'debit',v_total_gosi_employer,'credit',0,
+        'description','حصة صاحب العمل في التأمينات'));
+    END IF;
+  END IF;
+  v_journal:=create_journal_entry(p_company_id,p_date,'general','رواتب شهر '||TO_CHAR(p_date,'YYYY-MM'),p_created_by,v_lines);
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='payroll_batch',reference_id=v_journal_id WHERE id=v_journal_id AND company_id=p_company_id;
+
+  FOR v_row IN SELECT value FROM jsonb_array_elements(v_rows)
+  LOOP
+    INSERT INTO payroll(company_id,employee_id,date,basic_salary,allowances,deductions,advance_deduction,net_pay,gosi_employer,gosi_employee,journal_entry_id)
+    VALUES(p_company_id,(v_row->>'employee_id')::UUID,p_date,(v_row->>'salary')::NUMERIC,0,0,
+      (v_row->>'advance_deduction')::NUMERIC,(v_row->>'net_pay')::NUMERIC,
+      (v_row->>'gosi_employer')::NUMERIC,(v_row->>'gosi_employee')::NUMERIC,v_journal_id);
+    v_left:=(v_row->>'advance_deduction')::NUMERIC;
+    FOR v_adv IN SELECT id,remaining_amount FROM employee_advances
+      WHERE company_id=p_company_id AND employee_id=(v_row->>'employee_id')::UUID AND remaining_amount>0
+      ORDER BY date,id FOR UPDATE
+    LOOP
+      EXIT WHEN v_left<=0;
+      v_take:=LEAST(v_adv.remaining_amount,v_left);
+      UPDATE employee_advances SET remaining_amount=remaining_amount-v_take WHERE id=v_adv.id AND company_id=p_company_id;
+      v_left:=v_left-v_take;
+    END LOOP;
+    IF v_left>0.005 THEN RAISE EXCEPTION 'تغير رصيد السلف أثناء ترحيل الرواتب'; END IF;
+  END LOOP;
+  SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.employee_id),'[]'::JSONB) INTO v_result
+    FROM payroll p WHERE p.company_id=p_company_id AND p.journal_entry_id=v_journal_id;
+  RETURN jsonb_build_object('journal_entry_id',v_journal_id,'records',v_result,
+    'total_salary',v_total_salary,'total_advance_deduction',v_total_advance,
+    'total_gosi_employer',v_total_gosi_employer,'total_gosi_employee',v_total_gosi_employee);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.post_payroll_batch_v49_internal(UUID,DATE,UUID[],UUID) FROM PUBLIC, anon, authenticated;
+
+-- Re-enrol tenant tables added after 063 (e.g. tender_expenses, ad_notifications)
+-- so they cannot keep a USING (true) policy next to company_id.
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN
+    SELECT c.relname AS tbl, pol.polname AS pol
+    FROM pg_policy pol
+    JOIN pg_class c ON c.oid = pol.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND pol.polpermissive
+      AND coalesce(pg_get_expr(pol.polqual, pol.polrelid), 'true') = 'true'
+      AND EXISTS (
+        SELECT 1 FROM pg_attribute a
+        WHERE a.attrelid = c.oid AND a.attname = 'company_id' AND NOT a.attisdropped
+      )
+      AND pol.polname <> 'tenant_isolation_' || c.relname
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', r.pol, r.tbl);
+  END LOOP;
+
+  FOR r IN
+    SELECT c.relname AS tbl, c.oid AS reloid, c.relrowsecurity AS rls_on
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'r'
+      AND EXISTS (
+        SELECT 1 FROM pg_attribute a
+        WHERE a.attrelid = c.oid AND a.attname = 'company_id' AND NOT a.attisdropped
+      )
+  LOOP
+    IF NOT r.rls_on THEN
+      EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', r.tbl);
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM pg_policy p
+      WHERE p.polrelid = r.reloid
+        AND p.polname = 'tenant_isolation_' || r.tbl
+        AND pg_get_expr(p.polqual, p.polrelid) IS DISTINCT FROM '(company_id = tenant_company_id())'
+    ) THEN
+      EXECUTE format('DROP POLICY IF EXISTS %I ON %I', 'tenant_isolation_' || r.tbl, r.tbl);
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policy p
+      WHERE p.polrelid = r.reloid AND p.polname = 'tenant_isolation_' || r.tbl
+    ) THEN
+      EXECUTE format(
+        'CREATE POLICY %I ON %I
+           FOR ALL
+           USING (company_id = public.tenant_company_id())
+           WITH CHECK (company_id = public.tenant_company_id())',
+        'tenant_isolation_' || r.tbl, r.tbl
+      );
+    END IF;
+  END LOOP;
+END $$;
+
+SELECT 'Migration 104 completed — SA/EG operating country freeze' as result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 105-hr-accounts-and-withholding.sql
+-- ----------------------------------------------------------------------------
+
+-- 105: فك تصادم دليل الرواتب + خصم المنبع على فواتير المشتريات
+--
+-- 5230 كهرباء ومياه و 5240 اتصالات في الدليل الافتراضي، بينما ترحيل
+-- التأمينات ونهاية الخدمة كان يكتب على نفس الرقمين. الحسابات الصحيحة:
+--   2155 مستحقات التأمينات الاجتماعية
+--   5215 مصروف التأمينات الاجتماعية
+--   5216 مصروف مستحقات نهاية الخدمة
+--   2190 التزام نهاية الخدمة (موجود)
+--   2165 خصم المنبع (مصر)
+--
+-- خصم المنبع: عمودان على فاتورة المشتريات + ترحيل يخفض ذمة المورد.
+
+ALTER TABLE purchase_invoices
+  ADD COLUMN IF NOT EXISTS withholding_rate NUMERIC(7,4) NOT NULL DEFAULT 0;
+ALTER TABLE purchase_invoices
+  ADD COLUMN IF NOT EXISTS withholding_amount NUMERIC(15,2) NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'purchase_invoices_withholding_rate_check'
+  ) THEN
+    ALTER TABLE purchase_invoices
+      ADD CONSTRAINT purchase_invoices_withholding_rate_check
+      CHECK (withholding_rate >= 0 AND withholding_rate <= 0.2);
+  END IF;
+END $$;
+
+-- دليل الحسابات لكل الشركات القائمة
+INSERT INTO accounts(company_id, code, name, name_en, type, parent_id, is_active, is_header)
+SELECT c.id, x.code, x.name, x.name_en, x.acc_type,
+  (SELECT a.id FROM accounts a WHERE a.company_id = c.id AND a.code = x.parent_code LIMIT 1),
+  TRUE, FALSE
+FROM companies c
+CROSS JOIN (VALUES
+  ('2155', 'مستحقات التأمينات الاجتماعية', 'Social insurance payable', 'liability', '2100'),
+  ('5215', 'مصروف التأمينات الاجتماعية', 'Social insurance expense', 'expense', '5200'),
+  ('5216', 'مصروف مستحقات نهاية الخدمة', 'End of service expense', 'expense', '5200')
+) AS x(code, name, name_en, acc_type, parent_code)
+WHERE NOT EXISTS (
+  SELECT 1 FROM accounts a WHERE a.company_id = c.id AND a.code = x.code
+);
+
+-- خصم المنبع للشركات المصرية إن غاب
+INSERT INTO accounts(company_id, code, name, name_en, type, parent_id, is_active, is_header)
+SELECT c.id, '2165', 'ضريبة خصم المنبع المستحقة', 'Withholding tax payable', 'liability',
+  (SELECT a.id FROM accounts a WHERE a.company_id = c.id AND a.code = '2100' LIMIT 1),
+  TRUE, FALSE
+FROM companies c
+WHERE COALESCE(NULLIF(BTRIM(c.country_code), ''), 'SA') = 'EG'
+  AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.company_id = c.id AND a.code = '2165');
+
+-- ------------------------------------------------------------
+-- الرواتب: مصروف التأمينات على 5215 لا على 5230
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.post_payroll_batch_v49_internal(
+  p_company_id UUID, p_date DATE, p_employee_ids UUID[], p_created_by UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_employee_count INTEGER; v_emp RECORD; v_adv RECORD; v_row JSONB;
+  v_rows JSONB:='[]'::JSONB; v_total_salary NUMERIC:=0; v_total_advance NUMERIC:=0;
+  v_total_gosi_employer NUMERIC:=0; v_total_gosi_employee NUMERIC:=0;
+  v_advance_balance NUMERIC; v_deduction NUMERIC; v_left NUMERIC; v_take NUMERIC;
+  v_salary_account UUID; v_accrued_account UUID; v_advance_account UUID;
+  v_gosi_employer_account UUID; v_gosi_payable_account UUID;
+  v_gosi_employer_rate NUMERIC; v_gosi_employee_rate NUMERIC;
+  v_gosi_employer_amount NUMERIC; v_gosi_employee_amount NUMERIC; v_net_pay NUMERIC;
+  v_lines JSONB; v_journal JSONB; v_journal_id UUID; v_result JSONB;
+  v_parent UUID;
+BEGIN
+  IF p_date IS NULL OR p_employee_ids IS NULL OR array_length(p_employee_ids,1) IS NULL OR array_length(p_employee_ids,1)>500 THEN
+    RAISE EXCEPTION 'قائمة موظفي الرواتب غير صالحة';
+  END IF;
+  SELECT COUNT(DISTINCT item_id) INTO v_employee_count FROM unnest(p_employee_ids) AS ids(item_id);
+  IF v_employee_count<>array_length(p_employee_ids,1) THEN RAISE EXCEPTION 'لا يمكن تكرار الموظف في دفعة الرواتب'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_company_id::TEXT||':payroll:'||TO_CHAR(p_date,'YYYY-MM'),0));
+  IF EXISTS(SELECT 1 FROM payroll WHERE company_id=p_company_id
+    AND date_trunc('month',date::timestamp)=date_trunc('month',p_date::timestamp)
+    AND employee_id=ANY(p_employee_ids)) THEN
+    RAISE EXCEPTION 'تم إنشاء راتب لأحد الموظفين في هذا التاريخ مسبقاً';
+  END IF;
+  SELECT COUNT(*) INTO v_employee_count FROM employees
+    WHERE company_id=p_company_id AND id=ANY(p_employee_ids) AND COALESCE(is_active,TRUE)=TRUE;
+  IF v_employee_count<>array_length(p_employee_ids,1) THEN RAISE EXCEPTION 'أحد الموظفين غير موجود أو غير نشط'; END IF;
+  PERFORM id FROM employees WHERE company_id=p_company_id AND id=ANY(p_employee_ids) ORDER BY id FOR UPDATE;
+
+  SELECT id INTO v_salary_account FROM accounts WHERE company_id=p_company_id AND code='5210' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  SELECT id INTO v_accrued_account FROM accounts WHERE company_id=p_company_id AND code='2140' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  SELECT id INTO v_advance_account FROM accounts WHERE company_id=p_company_id AND code='1160' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  SELECT id INTO v_gosi_employer_account FROM accounts WHERE company_id=p_company_id AND code='5215' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  SELECT id INTO v_gosi_payable_account FROM accounts WHERE company_id=p_company_id AND code='2155' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  IF v_salary_account IS NULL OR v_accrued_account IS NULL THEN RAISE EXCEPTION 'حسابات الرواتب غير موجودة'; END IF;
+
+  SELECT employer_rate, employee_rate INTO v_gosi_employer_rate, v_gosi_employee_rate
+  FROM payroll_si_rates_for_company(p_company_id);
+  IF v_gosi_employer_account IS NULL THEN
+    SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='5200' LIMIT 1;
+    INSERT INTO accounts(company_id,code,name,name_en,type,parent_id,is_active,is_header)
+    SELECT p_company_id,'5215','مصروف التأمينات الاجتماعية','Social insurance expense','expense',v_parent,TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5215');
+    SELECT id INTO v_gosi_employer_account FROM accounts WHERE company_id=p_company_id AND code='5215' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_gosi_payable_account IS NULL THEN
+    SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='2100' LIMIT 1;
+    INSERT INTO accounts(company_id,code,name,name_en,type,parent_id,is_active,is_header)
+    SELECT p_company_id,'2155','مستحقات التأمينات الاجتماعية','Social insurance payable','liability',v_parent,TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2155');
+    SELECT id INTO v_gosi_payable_account FROM accounts WHERE company_id=p_company_id AND code='2155' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF (v_gosi_employer_rate>0 OR v_gosi_employee_rate>0) AND (v_gosi_employer_account IS NULL OR v_gosi_payable_account IS NULL) THEN
+    RAISE EXCEPTION 'تعذر تهيئة حسابات التأمينات الاجتماعية (5215/2155)';
+  END IF;
+
+  FOR v_emp IN SELECT id,ROUND(COALESCE(salary,0),2) AS salary FROM employees
+    WHERE company_id=p_company_id AND id=ANY(p_employee_ids) ORDER BY id
+  LOOP
+    IF v_emp.salary<=0 THEN RAISE EXCEPTION 'راتب أحد الموظفين غير صالح'; END IF;
+    PERFORM id FROM employee_advances
+      WHERE company_id=p_company_id AND employee_id=v_emp.id AND remaining_amount>0 ORDER BY date,id FOR UPDATE;
+    SELECT COALESCE(SUM(remaining_amount),0) INTO v_advance_balance FROM employee_advances
+      WHERE company_id=p_company_id AND employee_id=v_emp.id AND remaining_amount>0;
+    v_deduction:=ROUND(LEAST(v_advance_balance,v_emp.salary*0.5),2);
+    v_gosi_employer_amount:=ROUND(v_emp.salary*v_gosi_employer_rate,2);
+    v_gosi_employee_amount:=ROUND(v_emp.salary*v_gosi_employee_rate,2);
+    v_net_pay:=ROUND(v_emp.salary-v_deduction-v_gosi_employee_amount,2);
+    v_rows:=v_rows||jsonb_build_array(jsonb_build_object(
+      'employee_id',v_emp.id,'salary',v_emp.salary,'advance_deduction',v_deduction,
+      'gosi_employer',v_gosi_employer_amount,'gosi_employee',v_gosi_employee_amount,
+      'net_pay',v_net_pay));
+    v_total_salary:=v_total_salary+v_emp.salary;
+    v_total_advance:=v_total_advance+v_deduction;
+    v_total_gosi_employer:=v_total_gosi_employer+v_gosi_employer_amount;
+    v_total_gosi_employee:=v_total_gosi_employee+v_gosi_employee_amount;
+  END LOOP;
+  IF v_total_advance>0 AND v_advance_account IS NULL THEN RAISE EXCEPTION 'حساب سلف الموظفين غير موجود'; END IF;
+
+  v_lines:=jsonb_build_array(
+    jsonb_build_object('accountId',v_salary_account,'debit',v_total_salary,'credit',0,'description','مصروف الرواتب'),
+    jsonb_build_object('accountId',v_accrued_account,'debit',0,'credit',ROUND(v_total_salary-v_total_advance-v_total_gosi_employee,2),'description','رواتب مستحقة'));
+  IF v_total_advance>0 THEN
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_advance_account,'debit',0,'credit',v_total_advance,'description','تسوية سلف الموظفين'));
+  END IF;
+  IF v_total_gosi_employer+v_total_gosi_employee>0 THEN
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_gosi_payable_account,'debit',0,'credit',ROUND(v_total_gosi_employer+v_total_gosi_employee,2),
+      'description','حصص التأمينات الاجتماعية (موظف + صاحب عمل)'));
+    IF v_total_gosi_employer>0 THEN
+      v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+        'accountId',v_gosi_employer_account,'debit',v_total_gosi_employer,'credit',0,
+        'description','حصة صاحب العمل في التأمينات'));
+    END IF;
+  END IF;
+  v_journal:=create_journal_entry(p_company_id,p_date,'general','رواتب شهر '||TO_CHAR(p_date,'YYYY-MM'),p_created_by,v_lines);
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='payroll_batch',reference_id=v_journal_id WHERE id=v_journal_id AND company_id=p_company_id;
+
+  FOR v_row IN SELECT value FROM jsonb_array_elements(v_rows)
+  LOOP
+    INSERT INTO payroll(company_id,employee_id,date,basic_salary,allowances,deductions,advance_deduction,net_pay,gosi_employer,gosi_employee,journal_entry_id)
+    VALUES(p_company_id,(v_row->>'employee_id')::UUID,p_date,(v_row->>'salary')::NUMERIC,0,0,
+      (v_row->>'advance_deduction')::NUMERIC,(v_row->>'net_pay')::NUMERIC,
+      (v_row->>'gosi_employer')::NUMERIC,(v_row->>'gosi_employee')::NUMERIC,v_journal_id);
+    v_left:=(v_row->>'advance_deduction')::NUMERIC;
+    FOR v_adv IN SELECT id,remaining_amount FROM employee_advances
+      WHERE company_id=p_company_id AND employee_id=(v_row->>'employee_id')::UUID AND remaining_amount>0
+      ORDER BY date,id FOR UPDATE
+    LOOP
+      EXIT WHEN v_left<=0;
+      v_take:=LEAST(v_adv.remaining_amount,v_left);
+      UPDATE employee_advances SET remaining_amount=remaining_amount-v_take WHERE id=v_adv.id AND company_id=p_company_id;
+      v_left:=v_left-v_take;
+    END LOOP;
+    IF v_left>0.005 THEN RAISE EXCEPTION 'تغير رصيد السلف أثناء ترحيل الرواتب'; END IF;
+  END LOOP;
+  SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.employee_id),'[]'::JSONB) INTO v_result
+    FROM payroll p WHERE p.company_id=p_company_id AND p.journal_entry_id=v_journal_id;
+  RETURN jsonb_build_object('journal_entry_id',v_journal_id,'records',v_result,
+    'total_salary',v_total_salary,'total_advance_deduction',v_total_advance,
+    'total_gosi_employer',v_total_gosi_employer,'total_gosi_employee',v_total_gosi_employee);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.post_payroll_batch_v49_internal(UUID,DATE,UUID[],UUID) FROM PUBLIC, anon, authenticated;
+
+-- ------------------------------------------------------------
+-- نهاية الخدمة: مصروف 5216 لا 5240، ومصر نصف شهر لكل سنة
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.accrue_eosb_batch(
+  p_company_id UUID, p_month_date DATE, p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_expense UUID; v_liability UUID; v_month_end DATE;
+  v_journal JSONB; v_journal_id UUID;
+  v_emp RECORD; v_years NUMERIC; v_factor NUMERIC; v_amount NUMERIC; v_total NUMERIC:=0; v_count INT:=0;
+  v_code TEXT; v_parent UUID;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+  IF p_month_date IS NULL OR p_month_date<>date_trunc('month',p_month_date)::DATE THEN
+    RAISE EXCEPTION 'تاريخ الاستحقاق يجب أن يكون أول الشهر';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_company_id::TEXT||':eosb:'||TO_CHAR(p_month_date,'YYYY-MM'),0));
+  SELECT COALESCE(NULLIF(BTRIM(country_code),''),'SA') INTO v_code FROM companies WHERE id=p_company_id;
+  SELECT id INTO v_expense FROM accounts WHERE company_id=p_company_id AND code='5216'
+    AND COALESCE(is_active,TRUE)=TRUE AND NOT COALESCE(is_header,FALSE);
+  SELECT id INTO v_liability FROM accounts WHERE company_id=p_company_id AND code='2190'
+    AND COALESCE(is_active,TRUE)=TRUE AND NOT COALESCE(is_header,FALSE);
+  IF v_expense IS NULL THEN
+    SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='5200' LIMIT 1;
+    INSERT INTO accounts(company_id,code,name,name_en,type,parent_id,is_active,is_header)
+    SELECT p_company_id,'5216','مصروف مستحقات نهاية الخدمة','End of service expense','expense',v_parent,TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5216');
+    SELECT id INTO v_expense FROM accounts WHERE company_id=p_company_id AND code='5216' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_liability IS NULL THEN
+    SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='2100' LIMIT 1;
+    INSERT INTO accounts(company_id,code,name,name_en,type,parent_id,is_active,is_header)
+    SELECT p_company_id,'2190','مستحقات نهاية الخدمة (مكافآت الموظفين)','End of Service Benefits','liability',v_parent,TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2190');
+    SELECT id INTO v_liability FROM accounts WHERE company_id=p_company_id AND code='2190' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_expense IS NULL OR v_liability IS NULL THEN
+    RAISE EXCEPTION 'تعذر تهيئة حسابات مستحقات نهاية الخدمة (5216/2190)';
+  END IF;
+  v_month_end:=(date_trunc('month',p_month_date::TIMESTAMP)+INTERVAL '1 month -1 day')::DATE;
+
+  FOR v_emp IN
+    SELECT e.id, ROUND(COALESCE(e.salary,0),2) AS salary,
+      ROUND(EXTRACT(EPOCH FROM (v_month_end-e.hire_date))/(86400*365.25),2) AS years
+    FROM employees e
+    WHERE e.company_id=p_company_id AND COALESCE(e.is_active,TRUE)=TRUE
+      AND e.hire_date<=v_month_end AND COALESCE(e.salary,0)>0
+    ORDER BY e.id FOR UPDATE
+  LOOP
+    CONTINUE WHEN EXISTS(SELECT 1 FROM eosb_accruals WHERE company_id=p_company_id AND employee_id=v_emp.id AND date=p_month_date);
+    -- السعودية: نصف شهر للخمس الأولى ثم شهر كامل. مصر: نصف شهر لكل سنة خدمة.
+    v_factor:=CASE
+      WHEN v_code='EG' THEN 0.5
+      WHEN v_emp.years>=5 THEN 1.0
+      ELSE 0.5
+    END;
+    v_amount:=ROUND(v_emp.salary*v_factor/12,2);
+    CONTINUE WHEN v_amount<=0;
+    INSERT INTO eosb_accruals(company_id,employee_id,date,gross_salary,service_years,amount,created_by)
+    VALUES(p_company_id,v_emp.id,p_month_date,v_emp.salary,v_emp.years,v_amount,p_user_id);
+    v_total:=v_total+v_amount; v_count:=v_count+1;
+  END LOOP;
+
+  IF v_total<=0 THEN RETURN jsonb_build_object('status','nothing_to_accrue','month',p_month_date); END IF;
+
+  v_journal:=create_journal_entry(p_company_id,p_month_date,'general',
+    'استحقاق نهاية الخدمة لشهر '||TO_CHAR(p_month_date,'YYYY-MM'),p_user_id,
+    jsonb_build_array(
+      jsonb_build_object('accountId',v_expense,'debit',v_total,'credit',0,'description','مصروف مستحقات نهاية الخدمة'),
+      jsonb_build_object('accountId',v_liability,'debit',0,'credit',v_total,'description','التزام مستحقات نهاية الخدمة')));
+  UPDATE journal_entries SET reference_type='eosb_accrual',reference_id=(SELECT id FROM eosb_accruals
+      WHERE company_id=p_company_id AND date=p_month_date ORDER BY id LIMIT 1)
+  WHERE id=(v_journal->>'id')::UUID AND company_id=p_company_id;
+  UPDATE eosb_accruals SET journal_entry_id=(v_journal->>'id')::UUID
+  WHERE company_id=p_company_id AND date=p_month_date AND journal_entry_id IS NULL;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,new_values)
+  VALUES(p_company_id,p_user_id,'eosb_accrual','employees',
+    jsonb_build_object('month',p_month_date,'total',v_total,'count',v_count,'country',v_code));
+  RETURN jsonb_build_object('status','created','month',p_month_date,'total',v_total,'count',v_count,
+    'journal_entry_id',(v_journal->>'id'));
+END;
+$$;
+REVOKE ALL ON FUNCTION public.accrue_eosb_batch(UUID,DATE,UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.accrue_eosb_batch(UUID,DATE,UUID) TO service_role;
+
+-- ------------------------------------------------------------
+-- فاتورة المشتريات: مصروفات أخرى + خصم منبع يخفض ذمة المورد
+-- ------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.create_purchase_invoice_atomic(
+  UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID
+);
+
+CREATE OR REPLACE FUNCTION public.create_purchase_invoice_atomic(
+  p_company_id UUID,p_supplier_id UUID,p_purchase_order_id UUID,p_project_id UUID,
+  p_custody_id UUID,p_link_to_project BOOLEAN,p_date DATE,p_items JSONB,
+  p_tax_rate NUMERIC,p_notes TEXT,p_user_id UUID,
+  p_other_expenses JSONB DEFAULT '[]'::JSONB,
+  p_payment_account_id UUID DEFAULT NULL,
+  p_withholding_rate NUMERIC DEFAULT 0
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_result JSONB;
+  v_invoice_id UUID;
+  v_inv_number TEXT;
+  v_oe JSONB;
+  v_oe_desc TEXT;
+  v_oe_amount NUMERIC;
+  v_oe_code TEXT;
+  v_oe_account_id UUID;
+  v_oe_acc UUID;
+  v_other_total NUMERIC:=0;
+  v_pay_acc UUID;
+  v_lines JSONB:='[]'::JSONB;
+  v_oe_journal JSONB;
+  v_wh_journal JSONB;
+  v_wh_rate NUMERIC:=COALESCE(p_withholding_rate,0);
+  v_wh_amount NUMERIC:=0;
+  v_subtotal NUMERIC;
+  v_total NUMERIC;
+  v_ap UUID;
+  v_wh_acc UUID;
+  v_country TEXT;
+  v_parent UUID;
+  v_payment_source TEXT;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM set_config('app.custody_write_company',p_company_id::TEXT,TRUE);
+
+  IF v_wh_rate IS NULL OR v_wh_rate<0 OR v_wh_rate>0.2 OR v_wh_rate<>ROUND(v_wh_rate,4)
+  THEN RAISE EXCEPTION 'نسبة خصم المنبع غير صالحة'; END IF;
+  SELECT COALESCE(NULLIF(BTRIM(country_code),''),'SA') INTO v_country FROM companies WHERE id=p_company_id;
+  IF v_wh_rate>0 AND v_country<>'EG' THEN
+    RAISE EXCEPTION 'خصم المنبع متاح للشركات المصرية فقط';
+  END IF;
+
+  IF jsonb_typeof(COALESCE(p_other_expenses,'[]'::JSONB))<>'array' OR jsonb_array_length(p_other_expenses)>100
+  THEN RAISE EXCEPTION 'بيانات المصروفات الإضافية غير صالحة'; END IF;
+  FOR v_oe IN SELECT value FROM jsonb_array_elements(COALESCE(p_other_expenses,'[]'::JSONB)) LOOP
+    BEGIN
+      v_oe_amount:=(v_oe->>'amount')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'مبلغ مصروف إضافي غير صالح'; END;
+    v_oe_desc:=COALESCE(BTRIM(v_oe->>'description'),'');
+    v_oe_code:=COALESCE(v_oe->>'account_code','5400');
+    IF NULLIF(v_oe_desc,'') IS NULL OR LENGTH(v_oe_desc)>200 OR v_oe_amount IS NULL OR v_oe_amount<=0
+      OR v_oe_amount<>ROUND(v_oe_amount,2) THEN RAISE EXCEPTION 'بند مصروف إضافي غير صالح'; END IF;
+    v_other_total:=v_other_total+v_oe_amount;
+  END LOOP;
+
+  v_result:=create_purchase_invoice_atomic_v55_internal(p_company_id,p_supplier_id,p_purchase_order_id,
+    p_project_id,p_custody_id,p_link_to_project,p_date,p_items,p_tax_rate,p_notes,p_user_id);
+  v_invoice_id:=(v_result->>'id')::UUID;
+  v_inv_number:=COALESCE(v_result->>'invoice_number',v_result->>'number');
+  v_subtotal:=COALESCE((v_result->>'subtotal')::NUMERIC,0);
+  v_total:=COALESCE((v_result->>'total')::NUMERIC,0);
+  v_payment_source:=COALESCE(v_result->>'payment_source','ap');
+
+  IF v_other_total>0 THEN
+    IF p_payment_account_id IS NOT NULL THEN
+      SELECT id INTO v_pay_acc FROM accounts WHERE id=p_payment_account_id AND company_id=p_company_id
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      IF v_pay_acc IS NULL THEN RAISE EXCEPTION 'حساب دفع المصروفات الإضافية غير صالح'; END IF;
+    ELSE
+      SELECT id INTO v_pay_acc FROM accounts WHERE company_id=p_company_id AND code='1110'
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      IF v_pay_acc IS NULL THEN RAISE EXCEPTION 'حساب دفع المصروفات الإضافية غير موجود'; END IF;
+    END IF;
+    v_lines:='[]'::JSONB;
+    FOR v_oe IN SELECT value FROM jsonb_array_elements(p_other_expenses) LOOP
+      v_oe_amount:=(v_oe->>'amount')::NUMERIC;
+      v_oe_desc:=COALESCE(BTRIM(v_oe->>'description'),'');
+      v_oe_code:=COALESCE(v_oe->>'account_code','5400');
+      v_oe_account_id:=NULLIF(v_oe->>'account_id','')::UUID;
+      v_oe_acc:=resolve_other_expense_account(p_company_id,v_oe_code,v_oe_account_id);
+      IF v_oe_acc IS NULL THEN RAISE EXCEPTION 'حساب مصروف «%» غير موجود', v_oe_code; END IF;
+      v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+        'accountId',v_oe_acc,'debit',v_oe_amount,'credit',0,'description',v_oe_desc,'projectId',(v_result->>'project_id')::UUID));
+    END LOOP;
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_pay_acc,'debit',0,'credit',v_other_total,'description','مصاريف إضافية فاتورة '||v_inv_number));
+    v_oe_journal:=create_journal_entry(p_company_id,p_date,'general','مصاريف إضافية فاتورة '||v_inv_number,p_user_id,v_lines);
+    UPDATE purchase_invoices SET other_expenses_total=v_other_total WHERE id=v_invoice_id AND company_id=p_company_id;
+  END IF;
+
+  IF v_wh_rate>0 THEN
+    IF v_payment_source<>'ap' THEN
+      RAISE EXCEPTION 'لا يمكن تطبيق خصم المنبع على فاتورة مسددة من العهدة';
+    END IF;
+    v_wh_amount:=ROUND(v_subtotal*v_wh_rate,2);
+    IF v_wh_amount<=0 THEN
+      v_wh_amount:=0;
+    ELSIF v_wh_amount>v_total THEN
+      RAISE EXCEPTION 'خصم المنبع يتجاوز قيمة الفاتورة';
+    ELSE
+      SELECT id INTO v_ap FROM accounts WHERE company_id=p_company_id AND code='2110'
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      SELECT id INTO v_wh_acc FROM accounts WHERE company_id=p_company_id AND code='2165'
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      IF v_wh_acc IS NULL THEN
+        SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='2100' LIMIT 1;
+        INSERT INTO accounts(company_id,code,name,name_en,type,parent_id,is_active,is_header)
+        SELECT p_company_id,'2165','ضريبة خصم المنبع المستحقة','Withholding tax payable','liability',v_parent,TRUE,FALSE
+        WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2165');
+        SELECT id INTO v_wh_acc FROM accounts WHERE company_id=p_company_id AND code='2165'
+          AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      END IF;
+      IF v_ap IS NULL OR v_wh_acc IS NULL THEN RAISE EXCEPTION 'حسابات خصم المنبع غير مكتملة'; END IF;
+      v_wh_journal:=create_journal_entry(p_company_id,p_date,'general','خصم منبع فاتورة '||v_inv_number,p_user_id,
+        jsonb_build_array(
+          jsonb_build_object('accountId',v_ap,'debit',v_wh_amount,'credit',0,'description','خصم منبع','contactId',p_supplier_id),
+          jsonb_build_object('accountId',v_wh_acc,'debit',0,'credit',v_wh_amount,'description','ضريبة خصم المنبع المستحقة')
+        ));
+      UPDATE purchase_invoices
+        SET withholding_rate=v_wh_rate, withholding_amount=v_wh_amount, total=ROUND(total-v_wh_amount,2)
+        WHERE id=v_invoice_id AND company_id=p_company_id;
+      v_total:=ROUND(v_total-v_wh_amount,2);
+    END IF;
+  END IF;
+
+  RETURN v_result||jsonb_build_object(
+    'other_expenses_total',v_other_total,
+    'other_expenses_journal_entry_id',CASE WHEN v_oe_journal IS NULL THEN NULL ELSE v_oe_journal->>'id' END,
+    'withholding_journal_entry_id',CASE WHEN v_wh_journal IS NULL THEN NULL ELSE v_wh_journal->>'id' END,
+    'withholding_rate',v_wh_rate,
+    'withholding_amount',v_wh_amount,
+    'total',v_total);
+END;
+$$;
+
+DO $$
+BEGIN
+  REVOKE ALL ON FUNCTION public.create_purchase_invoice_atomic(
+    UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID,NUMERIC
+  ) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.create_purchase_invoice_atomic(
+    UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID,NUMERIC
+  ) TO service_role;
+EXCEPTION WHEN undefined_function THEN
+  NULL;
+END $$;
+
+SELECT 'Migration 105 completed' AS result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 106-country-standards-eosb-fiscal.sql
+-- ----------------------------------------------------------------------------
+
+-- 106: IAS 19 EOSB as non-current; operating revenue name; posting requires an open year.
+
+-- مكافأة نهاية الخدمة التزام طويل الأجل (خصوم غير متداولة) لا متداول.
+UPDATE accounts child
+SET parent_id = parent.id
+FROM accounts parent
+WHERE child.company_id = parent.company_id
+  AND child.code = '2190'
+  AND parent.code = '2200'
+  AND (child.parent_id IS DISTINCT FROM parent.id);
+
+UPDATE accounts
+SET name = 'إيرادات النشاط',
+    name_en = COALESCE(NULLIF(name_en, ''), 'Operating Revenue')
+WHERE code = '4100'
+  AND name IN ('إيرادات مقاولات', 'إيرادات النشاط');
+
+-- أي ترحيل (عدا إقفال/عكس) يحتاج سنة مالية مفتوحة تغطي التاريخ.
+CREATE OR REPLACE FUNCTION public.enforce_open_fiscal_year()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('fiscal-ledger:'||NEW.company_id::TEXT,0));
+  IF NEW.type IN ('closing','reversing') THEN RETURN NEW; END IF;
+  IF EXISTS (
+    SELECT 1 FROM fiscal_years
+    WHERE company_id=NEW.company_id AND status='closed'
+      AND NEW.date BETWEEN start_date AND end_date
+  ) THEN
+    RAISE EXCEPTION 'لا يمكن الترحيل إلى سنة مالية مقفلة';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM fiscal_years
+    WHERE company_id=NEW.company_id AND status='open'
+      AND NEW.date BETWEEN start_date AND end_date
+  ) THEN
+    RAISE EXCEPTION 'لا توجد سنة مالية مفتوحة تغطي تاريخ العملية';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 107-eg-fiscal-eosb-step.sql
+-- ----------------------------------------------------------------------------
+
+-- 107: Egypt July–June fiscal bootstrap; EOSB 5-year step for SA and EG.
+-- Does not rewrite existing fiscal years (journals may already sit in them).
+
+CREATE OR REPLACE FUNCTION public.bootstrap_company_fiscal_year()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_today DATE := CURRENT_DATE;
+  v_year INTEGER := EXTRACT(YEAR FROM v_today)::INTEGER;
+  v_code TEXT := UPPER(COALESCE(NULLIF(BTRIM(NEW.country_code), ''), 'SA'));
+  v_start DATE;
+  v_end DATE;
+  v_name TEXT;
+BEGIN
+  IF v_code = 'EG' THEN
+    IF EXTRACT(MONTH FROM v_today) >= 7 THEN
+      v_start := make_date(v_year, 7, 1);
+      v_end := make_date(v_year + 1, 6, 30);
+    ELSE
+      v_start := make_date(v_year - 1, 7, 1);
+      v_end := make_date(v_year, 6, 30);
+    END IF;
+    v_name := 'السنة المالية ' || TO_CHAR(v_start, 'YYYY') || '/' || TO_CHAR(v_end, 'YYYY');
+  ELSE
+    v_start := make_date(v_year, 1, 1);
+    v_end := make_date(v_year, 12, 31);
+    v_name := 'السنة المالية ' || v_year;
+  END IF;
+  INSERT INTO fiscal_years(company_id, name, start_date, end_date, status)
+  VALUES (NEW.id, v_name, v_start, v_end, 'open')
+  ON CONFLICT (company_id, name) DO NOTHING;
+  INSERT INTO settings(company_id, key, value)
+  VALUES (NEW.id, 'fiscal_start', v_start::TEXT)
+  ON CONFLICT (company_id, key) DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.bootstrap_company_fiscal_year() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.bootstrap_company_fiscal_year() TO service_role;
+
+-- السعودية ومصر: نصف شهر لكل سنة من الخمس الأولى ثم شهر كامل (معيار 19).
+CREATE OR REPLACE FUNCTION public.accrue_eosb_batch(
+  p_company_id UUID, p_month_date DATE, p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_expense UUID; v_liability UUID; v_month_end DATE;
+  v_journal JSONB;
+  v_emp RECORD; v_factor NUMERIC; v_amount NUMERIC; v_total NUMERIC:=0; v_count INT:=0;
+  v_code TEXT; v_parent UUID;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN
+    RAISE EXCEPTION 'المستخدم غير صالح';
+  END IF;
+  IF p_month_date IS NULL OR p_month_date<>date_trunc('month',p_month_date)::DATE THEN
+    RAISE EXCEPTION 'تاريخ الاستحقاق يجب أن يكون أول الشهر';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_company_id::TEXT||':eosb:'||TO_CHAR(p_month_date,'YYYY-MM'),0));
+  SELECT COALESCE(NULLIF(BTRIM(country_code),''),'SA') INTO v_code FROM companies WHERE id=p_company_id;
+  SELECT id INTO v_expense FROM accounts WHERE company_id=p_company_id AND code='5216'
+    AND COALESCE(is_active,TRUE)=TRUE AND NOT COALESCE(is_header,FALSE);
+  SELECT id INTO v_liability FROM accounts WHERE company_id=p_company_id AND code='2190'
+    AND COALESCE(is_active,TRUE)=TRUE AND NOT COALESCE(is_header,FALSE);
+  IF v_expense IS NULL THEN
+    SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='5200' LIMIT 1;
+    INSERT INTO accounts(company_id,code,name,name_en,type,parent_id,is_active,is_header)
+    SELECT p_company_id,'5216','مصروف مستحقات نهاية الخدمة','End of service expense','expense',v_parent,TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='5216');
+    SELECT id INTO v_expense FROM accounts WHERE company_id=p_company_id AND code='5216' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_liability IS NULL THEN
+    SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='2200' LIMIT 1;
+    IF v_parent IS NULL THEN
+      SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='2100' LIMIT 1;
+    END IF;
+    INSERT INTO accounts(company_id,code,name,name_en,type,parent_id,is_active,is_header)
+    SELECT p_company_id,'2190','مستحقات نهاية الخدمة (مكافآت الموظفين)','End of Service Benefits','liability',v_parent,TRUE,FALSE
+    WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2190');
+    SELECT id INTO v_liability FROM accounts WHERE company_id=p_company_id AND code='2190' AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+  END IF;
+  IF v_expense IS NULL OR v_liability IS NULL THEN
+    RAISE EXCEPTION 'تعذر تهيئة حسابات مستحقات نهاية الخدمة (5216/2190)';
+  END IF;
+  v_month_end:=(date_trunc('month',p_month_date::TIMESTAMP)+INTERVAL '1 month -1 day')::DATE;
+
+  FOR v_emp IN
+    SELECT e.id, ROUND(COALESCE(e.salary,0),2) AS salary,
+      ROUND(EXTRACT(EPOCH FROM (v_month_end-e.hire_date))/(86400*365.25),2) AS years
+    FROM employees e
+    WHERE e.company_id=p_company_id AND COALESCE(e.is_active,TRUE)=TRUE
+      AND e.hire_date<=v_month_end AND COALESCE(e.salary,0)>0
+    ORDER BY e.id FOR UPDATE
+  LOOP
+    CONTINUE WHEN EXISTS(SELECT 1 FROM eosb_accruals WHERE company_id=p_company_id AND employee_id=v_emp.id AND date=p_month_date);
+    v_factor:=CASE WHEN v_emp.years>=5 THEN 1.0 ELSE 0.5 END;
+    v_amount:=ROUND(v_emp.salary*v_factor/12,2);
+    CONTINUE WHEN v_amount<=0;
+    INSERT INTO eosb_accruals(company_id,employee_id,date,gross_salary,service_years,amount,created_by)
+    VALUES(p_company_id,v_emp.id,p_month_date,v_emp.salary,v_emp.years,v_amount,p_user_id);
+    v_total:=v_total+v_amount; v_count:=v_count+1;
+  END LOOP;
+
+  IF v_total<=0 THEN RETURN jsonb_build_object('status','nothing_to_accrue','month',p_month_date); END IF;
+
+  v_journal:=create_journal_entry(p_company_id,p_month_date,'general',
+    'استحقاق نهاية الخدمة لشهر '||TO_CHAR(p_month_date,'YYYY-MM'),p_user_id,
+    jsonb_build_array(
+      jsonb_build_object('accountId',v_expense,'debit',v_total,'credit',0,'description','مصروف مستحقات نهاية الخدمة'),
+      jsonb_build_object('accountId',v_liability,'debit',0,'credit',v_total,'description','التزام مستحقات نهاية الخدمة')));
+  UPDATE journal_entries SET reference_type='eosb_accrual',reference_id=(SELECT id FROM eosb_accruals
+      WHERE company_id=p_company_id AND date=p_month_date ORDER BY id LIMIT 1)
+  WHERE id=(v_journal->>'id')::UUID AND company_id=p_company_id;
+  UPDATE eosb_accruals SET journal_entry_id=(v_journal->>'id')::UUID
+  WHERE company_id=p_company_id AND date=p_month_date AND journal_entry_id IS NULL;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,new_values)
+  VALUES(p_company_id,p_user_id,'eosb_accrual','employees',
+    jsonb_build_object('month',p_month_date,'total',v_total,'count',v_count,'country',v_code));
+  RETURN jsonb_build_object('status','created','month',p_month_date,'total',v_total,'count',v_count,
+    'journal_entry_id',(v_journal->>'id'));
+END;
+$$;
+REVOKE ALL ON FUNCTION public.accrue_eosb_batch(UUID,DATE,UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.accrue_eosb_batch(UUID,DATE,UUID) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 108-custody-purchase-pay-and-cancel.sql
+-- ----------------------------------------------------------------------------
+
+-- 108: عهدة — مصروف فاتورة الشراء على حساب فرعي، سداد ذمة مورد، وإلغاء يعكس التعزيزات
+--
+-- 5100 في الدليل رأس مجموعة تكلفة المشاريع فلا يُرحَّل عليه. فاتورة بلا أمر شراء
+-- كانت تسقط إلى 1140 (مصروفات مقدمة). الصحيح: 5110 مع مشروع، و5400 عاماً.
+-- إلغاء الملف كان يعكس قيد الافتتاح فقط فيترك تعزيزات 1150 معلّقة.
+
+CREATE OR REPLACE FUNCTION public.create_purchase_invoice_atomic_v55_internal(
+  p_company_id UUID,p_supplier_id UUID,p_purchase_order_id UUID,p_project_id UUID,
+  p_custody_id UUID,p_link_to_project BOOLEAN,p_date DATE,p_items JSONB,
+  p_tax_rate NUMERIC,p_notes TEXT,p_user_id UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_invoice purchase_invoices%ROWTYPE; v_order purchase_orders%ROWTYPE; v_custody custodies%ROWTYPE;
+  v_project UUID; v_item JSONB; v_qty NUMERIC; v_price NUMERIC; v_subtotal NUMERIC; v_tax NUMERIC; v_total NUMERIC;
+  v_number INTEGER; v_debit UUID; v_vat UUID; v_credit UUID; v_lines JSONB; v_journal JSONB; v_journal_id UUID;
+  v_last_receipt DATE;
+BEGIN
+  IF p_date IS NULL OR p_tax_rate IS NULL OR p_tax_rate<0 OR p_tax_rate>1 OR p_tax_rate<>round(p_tax_rate,4)
+    OR length(COALESCE(p_notes,''))>2000 THEN RAISE EXCEPTION 'بيانات فاتورة المشتريات غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM contacts WHERE id=p_supplier_id AND company_id=p_company_id
+    AND type IN('supplier','both') AND COALESCE(is_active,TRUE) AND deleted_at IS NULL)
+  THEN RAISE EXCEPTION 'المورد غير موجود'; END IF;
+  v_subtotal:=purchase_items_total(p_items);
+
+  IF p_purchase_order_id IS NOT NULL THEN
+    IF p_custody_id IS NOT NULL THEN RAISE EXCEPTION 'لا يمكن ربط أمر شراء مستلم بعهدة'; END IF;
+    SELECT * INTO v_order FROM purchase_orders WHERE id=p_purchase_order_id AND company_id=p_company_id FOR UPDATE;
+    IF NOT FOUND OR v_order.status<>'received' OR v_order.supplier_id<>p_supplier_id
+    THEN RAISE EXCEPTION 'يجب أن يكون أمر الشراء مستلماً بالكامل وللمورد المحدد'; END IF;
+    IF abs(v_subtotal-v_order.total)>0.005 THEN RAISE EXCEPTION 'إجمالي الفاتورة لا يطابق أمر الشراء'; END IF;
+    IF EXISTS(SELECT 1 FROM purchase_invoices WHERE company_id=p_company_id AND purchase_order_id=p_purchase_order_id
+      AND status<>'cancelled') THEN RAISE EXCEPTION 'تمت فوترة أمر الشراء مسبقاً'; END IF;
+    SELECT max(date) INTO v_last_receipt FROM inventory_transactions
+      WHERE company_id=p_company_id AND reference_type='purchase_order' AND reference_id=p_purchase_order_id;
+    IF v_last_receipt IS NULL OR p_date<v_last_receipt THEN RAISE EXCEPTION 'تاريخ الفاتورة يسبق استلام أمر الشراء'; END IF;
+  END IF;
+
+  IF COALESCE(p_link_to_project,TRUE) AND p_project_id IS NOT NULL THEN
+    IF NOT EXISTS(SELECT 1 FROM projects WHERE id=p_project_id AND company_id=p_company_id)
+    THEN RAISE EXCEPTION 'المشروع غير موجود'; END IF;
+    v_project:=p_project_id;
+  END IF;
+  IF p_custody_id IS NOT NULL THEN
+    SELECT * INTO v_custody FROM custodies WHERE id=p_custody_id AND company_id=p_company_id FOR UPDATE;
+    IF NOT FOUND OR v_custody.status IN('settled','closed') OR v_custody.deleted_at IS NOT NULL
+    THEN RAISE EXCEPTION 'ملف العهدة غير صالح'; END IF;
+    IF COALESCE(p_link_to_project,TRUE) AND v_project IS NULL THEN v_project:=v_custody.project_id; END IF;
+  END IF;
+
+  v_tax:=round(v_subtotal*p_tax_rate,2); v_total:=round(v_subtotal+v_tax,2);
+  IF p_custody_id IS NOT NULL AND v_total>v_custody.remaining_amount+0.005
+  THEN RAISE EXCEPTION 'مبلغ الفاتورة أكبر من المتبقي في ملف العهدة'; END IF;
+
+  IF p_purchase_order_id IS NOT NULL THEN
+    SELECT id INTO v_debit FROM accounts WHERE company_id=p_company_id AND code='2145'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  ELSE
+    -- لا ترحيل على 5100 لأنه رأس مجموعة. مشروع → مواد 5110، وإلا عموميات 5400.
+    SELECT id INTO v_debit FROM accounts WHERE company_id=p_company_id
+      AND code=CASE WHEN v_project IS NOT NULL THEN '5110' ELSE '5400' END
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    IF v_debit IS NULL THEN
+      SELECT id INTO v_debit FROM accounts WHERE company_id=p_company_id
+        AND code=CASE WHEN v_project IS NOT NULL THEN '5400' ELSE '5110' END
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    END IF;
+  END IF;
+  SELECT id INTO v_credit FROM accounts WHERE company_id=p_company_id
+    AND code=CASE WHEN p_custody_id IS NULL THEN '2110' ELSE '1150' END
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_debit IS NULL OR v_credit IS NULL THEN RAISE EXCEPTION 'حسابات المشتريات غير مكتملة'; END IF;
+  IF v_tax>0 THEN
+    SELECT id INTO v_vat FROM accounts WHERE company_id=p_company_id AND code='1180'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    IF v_vat IS NULL THEN RAISE EXCEPTION 'حساب ضريبة المشتريات غير موجود'; END IF;
+  END IF;
+
+  v_number:=next_purchase_invoice_number(p_company_id);
+  INSERT INTO purchase_invoices(company_id,invoice_number,number,date,supplier_id,purchase_order_id,project_id,
+    custody_id,payment_source,subtotal,tax_amount,tax_rate,total,paid_amount,status,notes,created_by)
+  VALUES(p_company_id,v_number::TEXT,v_number,p_date,p_supplier_id,p_purchase_order_id,v_project,p_custody_id,
+    CASE WHEN p_custody_id IS NULL THEN 'ap' ELSE 'custody' END,v_subtotal,v_tax,p_tax_rate,v_total,
+    CASE WHEN p_custody_id IS NULL THEN 0 ELSE v_total END,CASE WHEN p_custody_id IS NULL THEN 'unpaid' ELSE 'paid' END,
+    NULLIF(btrim(p_notes),''),p_user_id) RETURNING * INTO v_invoice;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_qty:=(v_item->>'quantity')::NUMERIC; v_price:=(v_item->>'unit_price')::NUMERIC;
+    INSERT INTO purchase_invoice_items(company_id,purchase_invoice_id,description,quantity,unit_price,total)
+    VALUES(p_company_id,v_invoice.id,btrim(v_item->>'description'),v_qty,v_price,round(v_qty*v_price,2));
+  END LOOP;
+  v_lines:=jsonb_build_array(
+    jsonb_build_object('accountId',v_debit,'debit',v_subtotal,'credit',0,'projectId',v_project,'contactId',p_supplier_id),
+    jsonb_build_object('accountId',v_credit,'debit',0,'credit',v_total,'contactId',p_supplier_id)
+  );
+  IF v_tax>0 THEN v_lines:=v_lines||jsonb_build_array(
+    jsonb_build_object('accountId',v_vat,'debit',v_tax,'credit',0,'projectId',v_project,'contactId',p_supplier_id)
+  ); END IF;
+  v_journal:=create_journal_entry(p_company_id,p_date,'general','فاتورة مشتريات رقم '||v_number,p_user_id,v_lines);
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='purchase_invoice',reference_id=v_invoice.id
+    WHERE id=v_journal_id AND company_id=p_company_id;
+  UPDATE purchase_invoices SET journal_entry_id=v_journal_id WHERE id=v_invoice.id RETURNING * INTO v_invoice;
+  IF p_custody_id IS NOT NULL THEN
+    INSERT INTO custody_transactions(company_id,custody_id,type,amount,description,reference_type,reference_id,created_by,journal_entry_id)
+    VALUES(p_company_id,p_custody_id,'expense',v_total,'فاتورة مشتريات '||v_number,
+      'purchase_invoice',v_invoice.id,p_user_id,v_journal_id);
+    INSERT INTO custody_invoices(company_id,custody_id,purchase_invoice_id,amount,description)
+    VALUES(p_company_id,p_custody_id,v_invoice.id,v_total,'فاتورة '||v_number);
+  END IF;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','purchase_invoice',v_invoice.id,to_jsonb(v_invoice));
+  RETURN to_jsonb(v_invoice);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.cancel_custody_file_v49_internal(
+  p_company_id UUID, p_custody_id UUID, p_created_by UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_file custodies%ROWTYPE; v_tx RECORD; v_reversal UUID; v_last UUID;
+BEGIN
+  SELECT * INTO v_file FROM custodies WHERE id=p_custody_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'ملف العهدة غير موجود'; END IF;
+  IF v_file.status<>'open' THEN RAISE EXCEPTION 'ملف العهدة مغلق'; END IF;
+  IF COALESCE(v_file.total_expenses,0)>0.005 THEN RAISE EXCEPTION 'ملف العهدة عليه حركات ولا يمكن إلغاؤه'; END IF;
+  IF EXISTS(
+    SELECT 1 FROM custody_transactions
+    WHERE custody_id=p_custody_id AND company_id=p_company_id
+      AND type NOT IN ('addition','receipt')
+  ) THEN RAISE EXCEPTION 'ملف العهدة عليه حركات ولا يمكن إلغاؤه'; END IF;
+
+  FOR v_tx IN
+    SELECT journal_entry_id FROM custody_transactions
+    WHERE custody_id=p_custody_id AND company_id=p_company_id
+      AND type IN ('addition','receipt') AND journal_entry_id IS NOT NULL
+    ORDER BY created_at, id
+  LOOP
+    v_last:=post_journal_reversal(p_company_id,v_tx.journal_entry_id,'custody_reversal',p_custody_id,
+      'عكس حركة عهدة '||COALESCE(v_file.file_number,p_custody_id::TEXT),p_created_by);
+    IF v_reversal IS NULL THEN v_reversal:=v_last; END IF;
+  END LOOP;
+  IF v_reversal IS NULL AND v_file.journal_entry_id IS NOT NULL THEN
+    v_reversal:=post_journal_reversal(p_company_id,v_file.journal_entry_id,'custody_reversal',p_custody_id,
+      'عكس افتتاح عهدة '||COALESCE(v_file.file_number,p_custody_id::TEXT),p_created_by);
+  END IF;
+  IF v_reversal IS NULL THEN RAISE EXCEPTION 'قيد افتتاح العهدة غير موجود'; END IF;
+
+  DELETE FROM custody_transactions WHERE custody_id=p_custody_id AND company_id=p_company_id
+    AND type IN ('addition','receipt');
+  UPDATE custodies SET status='settled',remaining_amount=0,total_received=0,total_expenses=0,amount=0,
+    notes=BTRIM(COALESCE(notes,'')||' [ملغى]'),updated_at=NOW()
+  WHERE id=p_custody_id RETURNING * INTO v_file;
+  RETURN to_jsonb(v_file)||jsonb_build_object('reversal_journal_id',v_reversal,'cancelled',TRUE);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.pay_purchase_invoice_from_custody(
+  p_company_id UUID, p_custody_id UUID, p_purchase_invoice_id UUID,
+  p_amount NUMERIC, p_date DATE, p_created_by UUID
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_file custodies%ROWTYPE; v_inv purchase_invoices%ROWTYPE;
+  v_pay NUMERIC; v_remain NUMERIC; v_ap UUID; v_custody_acc UUID;
+  v_journal JSONB; v_journal_id UUID; v_new_paid NUMERIC;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_created_by AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM set_config('app.custody_write_company',p_company_id::TEXT,TRUE);
+
+  SELECT * INTO v_file FROM custodies WHERE id=p_custody_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND OR v_file.deleted_at IS NOT NULL THEN RAISE EXCEPTION 'ملف العهدة غير موجود'; END IF;
+  IF v_file.status IN ('settled','closed') THEN RAISE EXCEPTION 'ملف العهدة مغلق'; END IF;
+
+  SELECT * INTO v_inv FROM purchase_invoices WHERE id=p_purchase_invoice_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'فاتورة المشتريات غير موجودة'; END IF;
+  IF v_inv.status IN ('cancelled','paid') THEN RAISE EXCEPTION 'فاتورة المشتريات غير صالحة للسداد'; END IF;
+  IF COALESCE(v_inv.payment_source,'ap')='custody' THEN
+    RAISE EXCEPTION 'الفاتورة مسددة من عهدة مسبقاً';
+  END IF;
+
+  v_remain:=ROUND(GREATEST(COALESCE(v_inv.total,0)-COALESCE(v_inv.paid_amount,0),0),2);
+  v_pay:=COALESCE(p_amount,v_remain);
+  IF v_pay IS NULL OR v_pay<=0 OR v_pay<>ROUND(v_pay,2) THEN RAISE EXCEPTION 'مبلغ السداد غير صالح'; END IF;
+  IF v_pay>v_remain+0.005 THEN RAISE EXCEPTION 'المبلغ يتجاوز المتبقي على الفاتورة'; END IF;
+  IF v_pay>v_file.remaining_amount+0.005 THEN RAISE EXCEPTION 'المبلغ أكبر من رصيد العهدة'; END IF;
+  IF p_date IS NULL THEN RAISE EXCEPTION 'تاريخ السداد غير صالح'; END IF;
+
+  SELECT id INTO v_ap FROM accounts WHERE company_id=p_company_id AND code='2110'
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  SELECT id INTO v_custody_acc FROM accounts WHERE company_id=p_company_id AND code='1150'
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_ap IS NULL OR v_custody_acc IS NULL THEN RAISE EXCEPTION 'حسابات السداد غير مكتملة'; END IF;
+
+  v_journal:=create_journal_entry(p_company_id,p_date,'general',
+    'سداد فاتورة مشتريات '||COALESCE(v_inv.invoice_number,v_inv.number::TEXT)||' من العهدة',p_created_by,
+    jsonb_build_array(
+      jsonb_build_object('accountId',v_ap,'debit',v_pay,'credit',0,'description','سداد مورد من العهدة','contactId',v_inv.supplier_id,'projectId',v_inv.project_id),
+      jsonb_build_object('accountId',v_custody_acc,'debit',0,'credit',v_pay,'description','خصم من العهدة','contactId',v_inv.supplier_id)
+    ));
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='custody_ap_payment',reference_id=p_purchase_invoice_id
+    WHERE id=v_journal_id AND company_id=p_company_id;
+
+  v_new_paid:=ROUND(COALESCE(v_inv.paid_amount,0)+v_pay,2);
+  UPDATE purchase_invoices
+    SET paid_amount=v_new_paid, status=CASE WHEN v_new_paid>=v_inv.total-0.005 THEN 'paid' ELSE 'partial' END
+    WHERE id=v_inv.id AND company_id=p_company_id RETURNING * INTO v_inv;
+
+  INSERT INTO custody_transactions(company_id,custody_id,type,amount,description,reference_type,reference_id,created_by,journal_entry_id)
+  VALUES(p_company_id,p_custody_id,'expense',v_pay,'سداد فاتورة '||COALESCE(v_inv.invoice_number,v_inv.number::TEXT),
+    'purchase_invoice',v_inv.id,p_created_by,v_journal_id);
+  INSERT INTO custody_invoices(company_id,custody_id,purchase_invoice_id,amount,description,journal_entry_id)
+  VALUES(p_company_id,p_custody_id,v_inv.id,v_pay,'سداد فاتورة '||COALESCE(v_inv.invoice_number,v_inv.number::TEXT),v_journal_id)
+  ON CONFLICT (custody_id, purchase_invoice_id) DO UPDATE
+    SET amount=custody_invoices.amount+EXCLUDED.amount,
+        journal_entry_id=EXCLUDED.journal_entry_id;
+
+  SELECT * INTO v_file FROM custodies WHERE id=p_custody_id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_created_by,'pay_from_custody','purchase_invoice',v_inv.id,
+    jsonb_build_object('custody_id',p_custody_id,'amount',v_pay,'journal_entry_id',v_journal_id));
+  RETURN to_jsonb(v_file)||jsonb_build_object('journal_entry_id',v_journal_id,'paid_amount',v_pay,
+    'invoice_id',v_inv.id,'invoice_status',v_inv.status);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.pay_purchase_invoice_from_custody(UUID,UUID,UUID,NUMERIC,DATE,UUID)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.pay_purchase_invoice_from_custody(UUID,UUID,UUID,NUMERIC,DATE,UUID) TO service_role;
+
+SELECT 'Migration 108 completed' AS result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 109-invoice-cash-at-issue-and-returns.sql
+-- ----------------------------------------------------------------------------
+
+-- 109: تحصيل/سداد نقدي عند إصدار الفاتورة، ورد نقدي عند المرتجع
+--
+-- المعيار (استحقاق + تسوية اختيارية في نفس الترحيل):
+--   فاتورة بيع: ذمة عميل ثم سند قبض فوري (موجود مسبقاً).
+--   فاتورة شراء: ذمة مورد ثم سند صرف فوري من خزينة/بنك.
+--   إشعار دائن (مرتجع مبيعات): تخفيض الذمة ثم رد نقدي اختياري للعميل.
+--   إشعار مدين: زيادة الذمة ثم تحصيل اختياري.
+--   مرتجع مشتريات: تخفيض ذمة المورد ثم قبض رد اختياري من المورد.
+
+ALTER TABLE credit_notes
+  ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(15,2) NOT NULL DEFAULT 0;
+ALTER TABLE credit_notes
+  ADD COLUMN IF NOT EXISTS collected_amount NUMERIC(15,2) NOT NULL DEFAULT 0;
+ALTER TABLE credit_notes
+  ADD COLUMN IF NOT EXISTS settlement_voucher_id UUID;
+
+ALTER TABLE purchase_invoices
+  ADD COLUMN IF NOT EXISTS returned_amount NUMERIC(15,2) NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS purchase_returns (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  number INTEGER NOT NULL,
+  purchase_invoice_id UUID NOT NULL REFERENCES purchase_invoices(id),
+  date DATE NOT NULL,
+  reason TEXT NOT NULL,
+  subtotal NUMERIC(15,2) NOT NULL,
+  vat_amount NUMERIC(15,2) NOT NULL DEFAULT 0,
+  tax_rate NUMERIC(7,4) NOT NULL DEFAULT 0,
+  total NUMERIC(15,2) NOT NULL,
+  refund_amount NUMERIC(15,2) NOT NULL DEFAULT 0,
+  refund_voucher_id UUID,
+  journal_entry_id UUID,
+  status TEXT NOT NULL DEFAULT 'approved',
+  created_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE(company_id, number)
+);
+
+CREATE TABLE IF NOT EXISTS purchase_return_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  purchase_return_id UUID NOT NULL REFERENCES purchase_returns(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  quantity NUMERIC(15,2) NOT NULL,
+  unit_price NUMERIC(15,2) NOT NULL,
+  total NUMERIC(15,2) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_returns_company_invoice
+  ON purchase_returns(company_id, purchase_invoice_id);
+
+CREATE TABLE IF NOT EXISTS purchase_return_sequences (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id),
+  year INTEGER NOT NULL,
+  last_number INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(company_id, year)
+);
+
+CREATE OR REPLACE FUNCTION public.next_purchase_return_number(p_company_id UUID, p_year INTEGER)
+RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_number INTEGER;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('purchase-return-number:' || p_company_id::text));
+  INSERT INTO purchase_return_sequences(company_id, year, last_number)
+  SELECT p_company_id, p_year, COALESCE(max(number), 0) + 1
+  FROM purchase_returns WHERE company_id = p_company_id
+  ON CONFLICT (company_id, year)
+  DO UPDATE SET last_number = purchase_return_sequences.last_number + 1
+  RETURNING last_number INTO v_number;
+  RETURN v_number;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.next_purchase_return_number(UUID, INTEGER) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.next_purchase_return_number(UUID, INTEGER) TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- فاتورة مشتريات: سداد نقدي فوري بعد إنشاء الذمة
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.create_purchase_invoice_atomic(
+  UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID,NUMERIC
+);
+
+CREATE OR REPLACE FUNCTION public.create_purchase_invoice_atomic(
+  p_company_id UUID,p_supplier_id UUID,p_purchase_order_id UUID,p_project_id UUID,
+  p_custody_id UUID,p_link_to_project BOOLEAN,p_date DATE,p_items JSONB,
+  p_tax_rate NUMERIC,p_notes TEXT,p_user_id UUID,
+  p_other_expenses JSONB DEFAULT '[]'::JSONB,
+  p_payment_account_id UUID DEFAULT NULL,
+  p_withholding_rate NUMERIC DEFAULT 0,
+  p_paid_amount NUMERIC DEFAULT 0,
+  p_bank_safe_id UUID DEFAULT NULL
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_result JSONB;
+  v_invoice_id UUID;
+  v_inv_number TEXT;
+  v_oe JSONB;
+  v_oe_desc TEXT;
+  v_oe_amount NUMERIC;
+  v_oe_code TEXT;
+  v_oe_account_id UUID;
+  v_oe_acc UUID;
+  v_other_total NUMERIC:=0;
+  v_pay_acc UUID;
+  v_lines JSONB:='[]'::JSONB;
+  v_oe_journal JSONB;
+  v_wh_journal JSONB;
+  v_wh_rate NUMERIC:=COALESCE(p_withholding_rate,0);
+  v_wh_amount NUMERIC:=0;
+  v_subtotal NUMERIC;
+  v_total NUMERIC;
+  v_ap UUID;
+  v_wh_acc UUID;
+  v_country TEXT;
+  v_parent UUID;
+  v_payment_source TEXT;
+  v_paid NUMERIC:=COALESCE(p_paid_amount,0);
+  v_pay JSONB;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  PERFORM set_config('app.custody_write_company',p_company_id::TEXT,TRUE);
+
+  IF v_wh_rate IS NULL OR v_wh_rate<0 OR v_wh_rate>0.2 OR v_wh_rate<>ROUND(v_wh_rate,4)
+  THEN RAISE EXCEPTION 'نسبة خصم المنبع غير صالحة'; END IF;
+  SELECT COALESCE(NULLIF(BTRIM(country_code),''),'SA') INTO v_country FROM companies WHERE id=p_company_id;
+  IF v_wh_rate>0 AND v_country<>'EG' THEN
+    RAISE EXCEPTION 'خصم المنبع متاح للشركات المصرية فقط';
+  END IF;
+
+  IF v_paid IS NULL OR v_paid<0 OR v_paid<>ROUND(v_paid,2)
+    OR (v_paid>0 AND p_bank_safe_id IS NULL)
+  THEN RAISE EXCEPTION 'مبلغ السداد غير صالح'; END IF;
+  IF v_paid>0 AND p_custody_id IS NOT NULL THEN
+    RAISE EXCEPTION 'لا يجتمع السداد النقدي مع سداد العهدة على نفس الفاتورة';
+  END IF;
+
+  IF jsonb_typeof(COALESCE(p_other_expenses,'[]'::JSONB))<>'array' OR jsonb_array_length(p_other_expenses)>100
+  THEN RAISE EXCEPTION 'بيانات المصروفات الإضافية غير صالحة'; END IF;
+  FOR v_oe IN SELECT value FROM jsonb_array_elements(COALESCE(p_other_expenses,'[]'::JSONB)) LOOP
+    BEGIN
+      v_oe_amount:=(v_oe->>'amount')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'مبلغ مصروف إضافي غير صالح'; END;
+    v_oe_desc:=COALESCE(BTRIM(v_oe->>'description'),'');
+    v_oe_code:=COALESCE(v_oe->>'account_code','5400');
+    IF NULLIF(v_oe_desc,'') IS NULL OR LENGTH(v_oe_desc)>200 OR v_oe_amount IS NULL OR v_oe_amount<=0
+      OR v_oe_amount<>ROUND(v_oe_amount,2) THEN RAISE EXCEPTION 'بند مصروف إضافي غير صالح'; END IF;
+    v_other_total:=v_other_total+v_oe_amount;
+  END LOOP;
+
+  v_result:=create_purchase_invoice_atomic_v55_internal(p_company_id,p_supplier_id,p_purchase_order_id,
+    p_project_id,p_custody_id,p_link_to_project,p_date,p_items,p_tax_rate,p_notes,p_user_id);
+  v_invoice_id:=(v_result->>'id')::UUID;
+  v_inv_number:=COALESCE(v_result->>'invoice_number',v_result->>'number');
+  v_subtotal:=COALESCE((v_result->>'subtotal')::NUMERIC,0);
+  v_total:=COALESCE((v_result->>'total')::NUMERIC,0);
+  v_payment_source:=COALESCE(v_result->>'payment_source','ap');
+
+  IF v_other_total>0 THEN
+    IF p_payment_account_id IS NOT NULL THEN
+      SELECT id INTO v_pay_acc FROM accounts WHERE id=p_payment_account_id AND company_id=p_company_id
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      IF v_pay_acc IS NULL THEN RAISE EXCEPTION 'حساب دفع المصروفات الإضافية غير صالح'; END IF;
+    ELSE
+      SELECT id INTO v_pay_acc FROM accounts WHERE company_id=p_company_id AND code='1110'
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      IF v_pay_acc IS NULL THEN RAISE EXCEPTION 'حساب دفع المصروفات الإضافية غير موجود'; END IF;
+    END IF;
+    v_lines:='[]'::JSONB;
+    FOR v_oe IN SELECT value FROM jsonb_array_elements(p_other_expenses) LOOP
+      v_oe_amount:=(v_oe->>'amount')::NUMERIC;
+      v_oe_desc:=COALESCE(BTRIM(v_oe->>'description'),'');
+      v_oe_code:=COALESCE(v_oe->>'account_code','5400');
+      v_oe_account_id:=NULLIF(v_oe->>'account_id','')::UUID;
+      v_oe_acc:=resolve_other_expense_account(p_company_id,v_oe_code,v_oe_account_id);
+      IF v_oe_acc IS NULL THEN RAISE EXCEPTION 'حساب مصروف «%» غير موجود', v_oe_code; END IF;
+      v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+        'accountId',v_oe_acc,'debit',v_oe_amount,'credit',0,'description',v_oe_desc,'projectId',(v_result->>'project_id')::UUID));
+    END LOOP;
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_pay_acc,'debit',0,'credit',v_other_total,'description','مصاريف إضافية فاتورة '||v_inv_number));
+    v_oe_journal:=create_journal_entry(p_company_id,p_date,'general','مصاريف إضافية فاتورة '||v_inv_number,p_user_id,v_lines);
+    UPDATE purchase_invoices SET other_expenses_total=v_other_total WHERE id=v_invoice_id AND company_id=p_company_id;
+  END IF;
+
+  IF v_wh_rate>0 THEN
+    IF v_payment_source<>'ap' THEN
+      RAISE EXCEPTION 'لا يمكن تطبيق خصم المنبع على فاتورة مسددة من العهدة';
+    END IF;
+    v_wh_amount:=ROUND(v_subtotal*v_wh_rate,2);
+    IF v_wh_amount<=0 THEN
+      v_wh_amount:=0;
+    ELSIF v_wh_amount>v_total THEN
+      RAISE EXCEPTION 'خصم المنبع يتجاوز قيمة الفاتورة';
+    ELSE
+      SELECT id INTO v_ap FROM accounts WHERE company_id=p_company_id AND code='2110'
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      SELECT id INTO v_wh_acc FROM accounts WHERE company_id=p_company_id AND code='2165'
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      IF v_wh_acc IS NULL THEN
+        SELECT id INTO v_parent FROM accounts WHERE company_id=p_company_id AND code='2100' LIMIT 1;
+        INSERT INTO accounts(company_id,code,name,name_en,type,parent_id,is_active,is_header)
+        SELECT p_company_id,'2165','ضريبة خصم المنبع المستحقة','Withholding tax payable','liability',v_parent,TRUE,FALSE
+        WHERE NOT EXISTS(SELECT 1 FROM accounts WHERE company_id=p_company_id AND code='2165');
+        SELECT id INTO v_wh_acc FROM accounts WHERE company_id=p_company_id AND code='2165'
+          AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+      END IF;
+      IF v_ap IS NULL OR v_wh_acc IS NULL THEN RAISE EXCEPTION 'حسابات خصم المنبع غير مكتملة'; END IF;
+      v_wh_journal:=create_journal_entry(p_company_id,p_date,'general','خصم منبع فاتورة '||v_inv_number,p_user_id,
+        jsonb_build_array(
+          jsonb_build_object('accountId',v_ap,'debit',v_wh_amount,'credit',0,'description','خصم منبع','contactId',p_supplier_id),
+          jsonb_build_object('accountId',v_wh_acc,'debit',0,'credit',v_wh_amount,'description','ضريبة خصم المنبع المستحقة')
+        ));
+      UPDATE purchase_invoices
+        SET withholding_rate=v_wh_rate, withholding_amount=v_wh_amount, total=ROUND(total-v_wh_amount,2)
+        WHERE id=v_invoice_id AND company_id=p_company_id;
+      v_total:=ROUND(v_total-v_wh_amount,2);
+    END IF;
+  END IF;
+
+  IF v_paid>v_total+0.005 THEN RAISE EXCEPTION 'مبلغ السداد يتجاوز المستحق للمورد'; END IF;
+  IF v_paid>0 THEN
+    v_pay:=create_voucher_disbursement_atomic(
+      p_company_id,p_date,'supplier',p_supplier_id,NULL,v_paid,p_bank_safe_id,
+      'سداد فوري لفاتورة مشتريات رقم '||v_inv_number,
+      jsonb_build_array(jsonb_build_object('invoice_id',v_invoice_id,'amount',v_paid)),
+      FALSE,p_user_id,FALSE,(v_result->>'project_id')::UUID
+    );
+    SELECT to_jsonb(pi.*) INTO v_result FROM purchase_invoices pi WHERE pi.id=v_invoice_id;
+  END IF;
+
+  RETURN v_result||jsonb_build_object(
+    'other_expenses_total',v_other_total,
+    'other_expenses_journal_entry_id',CASE WHEN v_oe_journal IS NULL THEN NULL ELSE v_oe_journal->>'id' END,
+    'withholding_journal_entry_id',CASE WHEN v_wh_journal IS NULL THEN NULL ELSE v_wh_journal->>'id' END,
+    'withholding_rate',v_wh_rate,
+    'withholding_amount',v_wh_amount,
+    'total',v_total,
+    'voucher_disbursement_id',CASE WHEN v_pay IS NULL THEN NULL ELSE v_pay->>'id' END);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_purchase_invoice_atomic(
+  UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID,NUMERIC,NUMERIC,UUID
+) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_purchase_invoice_atomic(
+  UUID,UUID,UUID,UUID,UUID,BOOLEAN,DATE,JSONB,NUMERIC,TEXT,UUID,JSONB,UUID,NUMERIC,NUMERIC,UUID
+) TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- إشعار دائن: رد نقدي اختياري بعد تخفيض ذمة العميل
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.create_credit_note_atomic(UUID,UUID,UUID,UUID,DATE,TEXT,JSONB,NUMERIC,UUID);
+
+CREATE OR REPLACE FUNCTION public.create_credit_note_atomic(
+  p_company_id UUID, p_invoice_id UUID, p_project_id UUID, p_contact_id UUID,
+  p_date DATE, p_reason TEXT, p_items JSONB, p_tax_rate NUMERIC, p_user_id UUID,
+  p_refund_amount NUMERIC DEFAULT 0, p_bank_safe_id UUID DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_invoice invoices%ROWTYPE;
+  v_note credit_notes%ROWTYPE;
+  v_item JSONB;
+  v_qty NUMERIC;
+  v_price NUMERIC;
+  v_subtotal NUMERIC(15,2):=0;
+  v_tax NUMERIC(15,2);
+  v_total NUMERIC(15,2);
+  v_net NUMERIC(15,2);
+  v_contact UUID:=p_contact_id;
+  v_project UUID:=p_project_id;
+  v_rate NUMERIC:=p_tax_rate;
+  v_number INT;
+  v_ar UUID;
+  v_revenue UUID;
+  v_vat UUID;
+  v_lines JSONB;
+  v_journal JSONB;
+  v_journal_id UUID;
+  v_refund NUMERIC:=COALESCE(p_refund_amount,0);
+  v_pay JSONB;
+  v_new_paid NUMERIC;
+BEGIN
+  IF p_date IS NULL OR NULLIF(btrim(p_reason),'') IS NULL OR length(p_reason)>1000
+    OR jsonb_typeof(p_items)<>'array' OR jsonb_array_length(p_items)=0
+    OR jsonb_array_length(p_items)>200
+  THEN RAISE EXCEPTION 'بيانات الإشعار الدائن غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  IF v_refund IS NULL OR v_refund<0 OR v_refund<>round(v_refund,2)
+    OR (v_refund>0 AND p_bank_safe_id IS NULL)
+  THEN RAISE EXCEPTION 'مبلغ الرد النقدي غير صالح'; END IF;
+
+  IF p_invoice_id IS NOT NULL THEN
+    SELECT * INTO v_invoice FROM invoices
+    WHERE id=p_invoice_id AND company_id=p_company_id FOR UPDATE;
+    IF NOT FOUND OR v_invoice.status='cancelled' THEN RAISE EXCEPTION 'الفاتورة غير صالحة'; END IF;
+    v_contact:=v_invoice.contact_id;
+    v_project:=v_invoice.project_id;
+    v_rate:=COALESCE(v_invoice.vat_rate,v_invoice.tax_rate,0);
+  ELSE
+    IF v_contact IS NOT NULL AND NOT EXISTS(
+      SELECT 1 FROM contacts WHERE id=v_contact AND company_id=p_company_id
+    ) THEN RAISE EXCEPTION 'الطرف غير موجود'; END IF;
+    IF v_project IS NOT NULL AND NOT EXISTS(
+      SELECT 1 FROM projects WHERE id=v_project AND company_id=p_company_id
+    ) THEN RAISE EXCEPTION 'المشروع غير موجود'; END IF;
+  END IF;
+  IF v_rate<0 OR v_rate>1 THEN RAISE EXCEPTION 'نسبة الضريبة غير صالحة'; END IF;
+  IF v_refund>0 AND v_contact IS NULL THEN RAISE EXCEPTION 'العميل مطلوب للرد النقدي'; END IF;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    BEGIN
+      v_qty:=(v_item->>'quantity')::NUMERIC;
+      v_price:=(v_item->>'unit_price')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'بند إشعار غير صالح'; END;
+    IF NULLIF(btrim(v_item->>'description'),'') IS NULL
+      OR length(v_item->>'description')>500 OR v_qty<=0 OR v_price<0
+    THEN RAISE EXCEPTION 'بند إشعار غير صالح'; END IF;
+    v_subtotal:=v_subtotal+round(v_qty*v_price,2);
+  END LOOP;
+  v_subtotal:=round(v_subtotal,2);
+  v_tax:=round(v_subtotal*v_rate,2);
+  v_total:=round(v_subtotal+v_tax,2);
+  IF v_total<=0 THEN RAISE EXCEPTION 'إجمالي الإشعار يجب أن يكون موجباً'; END IF;
+  IF v_refund>v_total+0.005 THEN RAISE EXCEPTION 'مبلغ الرد يتجاوز قيمة الإشعار'; END IF;
+
+  IF p_invoice_id IS NOT NULL THEN
+    v_net:=invoice_net_total(p_company_id,p_invoice_id);
+    IF v_total>v_net+0.005 THEN
+      RAISE EXCEPTION 'يتجاوز الإشعار الرصيد المتبقي للفاتورة (الأصل + المدين − الدائن المعتمد)';
+    END IF;
+    IF v_refund>COALESCE(v_invoice.paid_amount,0)+0.005 THEN
+      RAISE EXCEPTION 'لا يمكن رد مبلغ أكبر من المحصّل على الفاتورة';
+    END IF;
+  END IF;
+
+  SELECT id INTO v_ar FROM accounts WHERE company_id=p_company_id AND code='1130'
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  SELECT id INTO v_revenue FROM accounts WHERE company_id=p_company_id AND code='4100'
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_ar IS NULL OR v_revenue IS NULL THEN RAISE EXCEPTION 'حسابات الإشعار غير مكتملة'; END IF;
+  IF v_tax>0 THEN
+    SELECT id INTO v_vat FROM accounts WHERE company_id=p_company_id AND code='2120'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    IF v_vat IS NULL THEN RAISE EXCEPTION 'حساب ضريبة المبيعات غير موجود'; END IF;
+  END IF;
+
+  v_number:=next_credit_note_number(p_company_id,extract(year FROM p_date)::INT);
+  INSERT INTO credit_notes(
+    company_id,number,note_type,invoice_id,project_id,contact_id,date,reason,subtotal,
+    vat_amount,tax_amount,tax_rate,total,status,created_by,refund_amount
+  ) VALUES(
+    p_company_id,v_number,'credit',p_invoice_id,v_project,v_contact,p_date,btrim(p_reason),
+    v_subtotal,v_tax,v_tax,v_rate,v_total,'approved',p_user_id,v_refund
+  ) RETURNING * INTO v_note;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_qty:=(v_item->>'quantity')::NUMERIC;
+    v_price:=(v_item->>'unit_price')::NUMERIC;
+    INSERT INTO credit_note_items(company_id,credit_note_id,description,quantity,unit_price,total)
+    VALUES(p_company_id,v_note.id,btrim(v_item->>'description'),v_qty,v_price,round(v_qty*v_price,2));
+  END LOOP;
+
+  v_lines:=jsonb_build_array(
+    jsonb_build_object('accountId',v_revenue,'debit',v_subtotal,'credit',0,'projectId',v_project,'contactId',v_contact),
+    jsonb_build_object('accountId',v_ar,'debit',0,'credit',v_total,'contactId',v_contact)
+  );
+  IF v_tax>0 THEN
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_vat,'debit',v_tax,'credit',0,'contactId',v_contact
+    ));
+  END IF;
+  v_journal:=create_journal_entry(
+    p_company_id,p_date,'general','إشعار دائن '||v_number||' - '||btrim(p_reason),
+    p_user_id,v_lines
+  );
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='credit_note',reference_id=v_note.id
+  WHERE id=v_journal_id AND company_id=p_company_id;
+
+  IF v_refund>0 THEN
+    v_pay:=create_voucher_disbursement_atomic(
+      p_company_id,p_date,'client_refund',v_contact,NULL,v_refund,p_bank_safe_id,
+      'رد نقدي لإشعار دائن '||v_number,'[]'::JSONB,FALSE,p_user_id,FALSE,v_project
+    );
+    IF p_invoice_id IS NOT NULL THEN
+      SELECT * INTO v_invoice FROM invoices WHERE id=p_invoice_id AND company_id=p_company_id FOR UPDATE;
+      v_new_paid:=round(GREATEST(0,COALESCE(v_invoice.paid_amount,0)-v_refund),2);
+      UPDATE invoices SET paid_amount=v_new_paid,
+        status=CASE WHEN v_new_paid<=0.005 THEN 'unpaid'
+          WHEN v_new_paid>=invoice_net_total(p_company_id,p_invoice_id)-0.005 THEN 'paid'
+          ELSE 'partial' END
+      WHERE id=p_invoice_id;
+    END IF;
+    UPDATE credit_notes SET settlement_voucher_id=(v_pay->>'id')::UUID
+    WHERE id=v_note.id;
+  END IF;
+
+  UPDATE credit_notes SET journal_entry_id=v_journal_id
+  WHERE id=v_note.id RETURNING * INTO v_note;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','credit_note',v_note.id,to_jsonb(v_note));
+  RETURN to_jsonb(v_note)||jsonb_build_object('settlement_voucher_id',v_note.settlement_voucher_id);
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- إشعار مدين: تحصيل اختياري بعد زيادة ذمة العميل
+-- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.create_debit_note_atomic(UUID,UUID,UUID,UUID,DATE,TEXT,JSONB,NUMERIC,UUID);
+
+CREATE OR REPLACE FUNCTION public.create_debit_note_atomic(
+  p_company_id UUID, p_invoice_id UUID, p_project_id UUID, p_contact_id UUID,
+  p_date DATE, p_reason TEXT, p_items JSONB, p_tax_rate NUMERIC, p_user_id UUID,
+  p_collected_amount NUMERIC DEFAULT 0, p_bank_safe_id UUID DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_invoice invoices%ROWTYPE;
+  v_note credit_notes%ROWTYPE;
+  v_item JSONB;
+  v_qty NUMERIC;
+  v_price NUMERIC;
+  v_subtotal NUMERIC(15,2):=0;
+  v_tax NUMERIC(15,2);
+  v_total NUMERIC(15,2);
+  v_contact UUID:=p_contact_id;
+  v_project UUID:=p_project_id;
+  v_rate NUMERIC:=p_tax_rate;
+  v_number INT;
+  v_ar UUID;
+  v_revenue UUID;
+  v_vat UUID;
+  v_lines JSONB;
+  v_journal JSONB;
+  v_journal_id UUID;
+  v_collected NUMERIC:=COALESCE(p_collected_amount,0);
+  v_receipt JSONB;
+BEGIN
+  IF p_date IS NULL OR NULLIF(btrim(p_reason),'') IS NULL OR length(p_reason)>1000
+    OR jsonb_typeof(p_items)<>'array' OR jsonb_array_length(p_items)=0
+    OR jsonb_array_length(p_items)>200
+  THEN RAISE EXCEPTION 'بيانات الإشعار المدين غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  IF v_collected IS NULL OR v_collected<0 OR v_collected<>round(v_collected,2)
+    OR (v_collected>0 AND p_bank_safe_id IS NULL)
+  THEN RAISE EXCEPTION 'مبلغ التحصيل غير صالح'; END IF;
+  IF v_collected>0 AND p_invoice_id IS NULL THEN
+    RAISE EXCEPTION 'التحصيل الفوري للإشعار المدين يتطلب فاتورة أصل';
+  END IF;
+
+  IF p_invoice_id IS NOT NULL THEN
+    SELECT * INTO v_invoice FROM invoices
+    WHERE id=p_invoice_id AND company_id=p_company_id FOR UPDATE;
+    IF NOT FOUND OR v_invoice.status='cancelled' THEN RAISE EXCEPTION 'الفاتورة غير صالحة'; END IF;
+    v_contact:=v_invoice.contact_id;
+    v_project:=v_invoice.project_id;
+    v_rate:=COALESCE(v_invoice.vat_rate,v_invoice.tax_rate,0);
+  ELSE
+    IF v_contact IS NOT NULL AND NOT EXISTS(
+      SELECT 1 FROM contacts WHERE id=v_contact AND company_id=p_company_id
+    ) THEN RAISE EXCEPTION 'الطرف غير موجود'; END IF;
+    IF v_project IS NOT NULL AND NOT EXISTS(
+      SELECT 1 FROM projects WHERE id=v_project AND company_id=p_company_id
+    ) THEN RAISE EXCEPTION 'المشروع غير موجود'; END IF;
+  END IF;
+  IF v_rate<0 OR v_rate>1 THEN RAISE EXCEPTION 'نسبة الضريبة غير صالحة'; END IF;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    BEGIN
+      v_qty:=(v_item->>'quantity')::NUMERIC;
+      v_price:=(v_item->>'unit_price')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'بند إشعار غير صالح'; END;
+    IF NULLIF(btrim(v_item->>'description'),'') IS NULL
+      OR length(v_item->>'description')>500 OR v_qty<=0 OR v_price<0
+    THEN RAISE EXCEPTION 'بند إشعار غير صالح'; END IF;
+    v_subtotal:=v_subtotal+round(v_qty*v_price,2);
+  END LOOP;
+  v_subtotal:=round(v_subtotal,2);
+  v_tax:=round(v_subtotal*v_rate,2);
+  v_total:=round(v_subtotal+v_tax,2);
+  IF v_total<=0 THEN RAISE EXCEPTION 'إجمالي الإشعار يجب أن يكون موجباً'; END IF;
+  IF v_collected>v_total+0.005 THEN RAISE EXCEPTION 'مبلغ التحصيل يتجاوز قيمة الإشعار'; END IF;
+
+  SELECT id INTO v_ar FROM accounts WHERE company_id=p_company_id AND code='1130'
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  SELECT id INTO v_revenue FROM accounts WHERE company_id=p_company_id AND code='4100'
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_ar IS NULL OR v_revenue IS NULL THEN RAISE EXCEPTION 'حسابات الإشعار غير مكتملة'; END IF;
+  IF v_tax>0 THEN
+    SELECT id INTO v_vat FROM accounts WHERE company_id=p_company_id AND code='2120'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    IF v_vat IS NULL THEN RAISE EXCEPTION 'حساب ضريبة المبيعات غير موجود'; END IF;
+  END IF;
+
+  v_number:=next_debit_note_number(p_company_id,extract(year FROM p_date)::INT);
+  INSERT INTO credit_notes(
+    company_id,number,note_type,invoice_id,project_id,contact_id,date,reason,subtotal,
+    vat_amount,tax_amount,tax_rate,total,status,created_by,collected_amount
+  ) VALUES(
+    p_company_id,v_number,'debit',p_invoice_id,v_project,v_contact,p_date,btrim(p_reason),
+    v_subtotal,v_tax,v_tax,v_rate,v_total,'approved',p_user_id,v_collected
+  ) RETURNING * INTO v_note;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_qty:=(v_item->>'quantity')::NUMERIC;
+    v_price:=(v_item->>'unit_price')::NUMERIC;
+    INSERT INTO credit_note_items(company_id,credit_note_id,description,quantity,unit_price,total)
+    VALUES(p_company_id,v_note.id,btrim(v_item->>'description'),v_qty,v_price,round(v_qty*v_price,2));
+  END LOOP;
+
+  v_lines:=jsonb_build_array(
+    jsonb_build_object('accountId',v_ar,'debit',v_total,'credit',0,'contactId',v_contact),
+    jsonb_build_object('accountId',v_revenue,'debit',0,'credit',v_subtotal,'projectId',v_project,'contactId',v_contact)
+  );
+  IF v_tax>0 THEN
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_vat,'debit',0,'credit',v_tax,'contactId',v_contact
+    ));
+  END IF;
+  v_journal:=create_journal_entry(
+    p_company_id,p_date,'general','إشعار مدين '||v_number||' - '||btrim(p_reason),
+    p_user_id,v_lines
+  );
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='debit_note',reference_id=v_note.id
+  WHERE id=v_journal_id AND company_id=p_company_id;
+
+  IF v_collected>0 THEN
+    v_receipt:=create_voucher_receipt_atomic(
+      p_company_id,p_date,'client',v_contact,v_collected,p_bank_safe_id,
+      'تحصيل فوري لإشعار مدين '||v_number,
+      jsonb_build_array(jsonb_build_object('invoice_id',p_invoice_id,'amount',v_collected)),
+      FALSE,FALSE,p_user_id,v_project
+    );
+    UPDATE credit_notes SET settlement_voucher_id=(v_receipt->>'id')::UUID WHERE id=v_note.id;
+  END IF;
+
+  UPDATE credit_notes SET journal_entry_id=v_journal_id
+  WHERE id=v_note.id RETURNING * INTO v_note;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','debit_note',v_note.id,to_jsonb(v_note));
+  RETURN to_jsonb(v_note)||jsonb_build_object('settlement_voucher_id',v_note.settlement_voucher_id);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.cancel_credit_note_atomic(
+  p_company_id UUID,p_credit_note_id UUID,p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old credit_notes%ROWTYPE; v_note credit_notes%ROWTYPE; v_reversal UUID;
+  v_invoice invoices%ROWTYPE; v_new_paid NUMERIC;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_old FROM credit_notes
+  WHERE id=p_credit_note_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الإشعار غير موجود'; END IF;
+  IF v_old.status='cancelled' THEN
+    RETURN jsonb_build_object('id',p_credit_note_id,'status','cancelled','already_processed',TRUE);
+  END IF;
+  IF v_old.status='approved' AND v_old.journal_entry_id IS NULL THEN
+    RAISE EXCEPTION 'الإشعار المعتمد بلا قيد محاسبي';
+  END IF;
+  IF v_old.settlement_voucher_id IS NOT NULL THEN
+    IF v_old.note_type='debit' THEN
+      PERFORM cancel_voucher_receipt_atomic(p_company_id,v_old.settlement_voucher_id,p_user_id);
+    ELSE
+      PERFORM cancel_voucher_disbursement_atomic(p_company_id,v_old.settlement_voucher_id,p_user_id);
+      IF v_old.invoice_id IS NOT NULL AND COALESCE(v_old.refund_amount,0)>0.005 THEN
+        SELECT * INTO v_invoice FROM invoices
+        WHERE id=v_old.invoice_id AND company_id=p_company_id FOR UPDATE;
+        IF FOUND THEN
+          v_new_paid:=round(COALESCE(v_invoice.paid_amount,0)+v_old.refund_amount,2);
+          UPDATE invoices SET paid_amount=v_new_paid WHERE id=v_invoice.id;
+        END IF;
+      END IF;
+    END IF;
+  END IF;
+  IF v_old.journal_entry_id IS NOT NULL THEN
+    v_reversal:=post_journal_reversal(
+      p_company_id,v_old.journal_entry_id,'credit_note_cancellation',p_credit_note_id,
+      CASE WHEN v_old.note_type='debit' THEN 'إلغاء الإشعار المدين ' ELSE 'إلغاء الإشعار الدائن ' END||v_old.number,
+      p_user_id
+    );
+  END IF;
+  UPDATE credit_notes SET status='cancelled',deleted_at=now()
+  WHERE id=p_credit_note_id RETURNING * INTO v_note;
+  IF v_old.invoice_id IS NOT NULL THEN
+    SELECT * INTO v_invoice FROM invoices WHERE id=v_old.invoice_id AND company_id=p_company_id FOR UPDATE;
+    IF FOUND THEN
+      UPDATE invoices SET status=CASE
+        WHEN COALESCE(paid_amount,0)<=0.005 THEN 'unpaid'
+        WHEN paid_amount>=invoice_net_total(p_company_id,id)-0.005 THEN 'paid'
+        ELSE 'partial' END
+      WHERE id=v_invoice.id;
+    END IF;
+  END IF;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'cancel','credit_note',p_credit_note_id,to_jsonb(v_old),
+    to_jsonb(v_note)||jsonb_build_object('reversal_journal_id',v_reversal));
+  RETURN to_jsonb(v_note)||jsonb_build_object('reversal_journal_id',v_reversal);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_debit_note_atomic(UUID,UUID,UUID,UUID,DATE,TEXT,JSONB,NUMERIC,UUID,NUMERIC,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.create_credit_note_atomic(UUID,UUID,UUID,UUID,DATE,TEXT,JSONB,NUMERIC,UUID,NUMERIC,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.cancel_credit_note_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_debit_note_atomic(UUID,UUID,UUID,UUID,DATE,TEXT,JSONB,NUMERIC,UUID,NUMERIC,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.create_credit_note_atomic(UUID,UUID,UUID,UUID,DATE,TEXT,JSONB,NUMERIC,UUID,NUMERIC,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cancel_credit_note_atomic(UUID,UUID,UUID) TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- مرتجع مشتريات
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.create_purchase_return_atomic(
+  p_company_id UUID, p_purchase_invoice_id UUID, p_date DATE, p_reason TEXT,
+  p_items JSONB, p_user_id UUID,
+  p_refund_amount NUMERIC DEFAULT 0, p_bank_safe_id UUID DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_inv purchase_invoices%ROWTYPE;
+  v_ret purchase_returns%ROWTYPE;
+  v_item JSONB;
+  v_qty NUMERIC;
+  v_price NUMERIC;
+  v_subtotal NUMERIC(15,2):=0;
+  v_tax NUMERIC(15,2);
+  v_total NUMERIC(15,2);
+  v_number INT;
+  v_ap UUID;
+  v_exp UUID;
+  v_vat UUID;
+  v_lines JSONB;
+  v_journal JSONB;
+  v_journal_id UUID;
+  v_refund NUMERIC:=COALESCE(p_refund_amount,0);
+  v_receipt JSONB;
+  v_already NUMERIC;
+  v_new_paid NUMERIC;
+BEGIN
+  IF p_date IS NULL OR NULLIF(btrim(p_reason),'') IS NULL OR length(p_reason)>1000
+    OR jsonb_typeof(p_items)<>'array' OR jsonb_array_length(p_items)=0
+    OR jsonb_array_length(p_items)>200
+  THEN RAISE EXCEPTION 'بيانات مرتجع المشتريات غير صالحة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  IF v_refund IS NULL OR v_refund<0 OR v_refund<>round(v_refund,2)
+    OR (v_refund>0 AND p_bank_safe_id IS NULL)
+  THEN RAISE EXCEPTION 'مبلغ الرد النقدي غير صالح'; END IF;
+
+  SELECT * INTO v_inv FROM purchase_invoices
+  WHERE id=p_purchase_invoice_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND OR v_inv.status='cancelled' THEN RAISE EXCEPTION 'فاتورة المشتريات غير صالحة'; END IF;
+  IF COALESCE(v_inv.payment_source,'ap')='custody' THEN
+    RAISE EXCEPTION 'لا يمكن إرجاع فاتورة مسددة من العهدة من هذا المسار';
+  END IF;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    BEGIN
+      v_qty:=(v_item->>'quantity')::NUMERIC;
+      v_price:=(v_item->>'unit_price')::NUMERIC;
+    EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'بند مرتجع غير صالح'; END;
+    IF NULLIF(btrim(v_item->>'description'),'') IS NULL
+      OR length(v_item->>'description')>500 OR v_qty<=0 OR v_price<0
+    THEN RAISE EXCEPTION 'بند مرتجع غير صالح'; END IF;
+    v_subtotal:=v_subtotal+round(v_qty*v_price,2);
+  END LOOP;
+  v_subtotal:=round(v_subtotal,2);
+  v_tax:=round(v_subtotal*COALESCE(v_inv.tax_rate,0),2);
+  v_total:=round(v_subtotal+v_tax,2);
+  IF v_total<=0 THEN RAISE EXCEPTION 'إجمالي المرتجع يجب أن يكون موجباً'; END IF;
+  v_already:=COALESCE(v_inv.returned_amount,0);
+  IF v_already+v_total>v_inv.total+0.005 THEN
+    RAISE EXCEPTION 'المرتجع يتجاوز قيمة فاتورة المشتريات';
+  END IF;
+  IF v_refund>v_total+0.005 THEN RAISE EXCEPTION 'مبلغ الرد يتجاوز قيمة المرتجع'; END IF;
+  IF v_refund>COALESCE(v_inv.paid_amount,0)+0.005 THEN
+    RAISE EXCEPTION 'لا يمكن قبض رد أكبر من المسدد للمورد';
+  END IF;
+
+  SELECT id INTO v_ap FROM accounts WHERE company_id=p_company_id AND code='2110'
+    AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  IF v_inv.purchase_order_id IS NOT NULL THEN
+    SELECT id INTO v_exp FROM accounts WHERE company_id=p_company_id AND code='2145'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+  ELSE
+    SELECT id INTO v_exp FROM accounts WHERE company_id=p_company_id
+      AND code=CASE WHEN v_inv.project_id IS NOT NULL THEN '5110' ELSE '5400' END
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    IF v_exp IS NULL THEN
+      SELECT id INTO v_exp FROM accounts WHERE company_id=p_company_id
+        AND code=CASE WHEN v_inv.project_id IS NOT NULL THEN '5400' ELSE '5110' END
+        AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    END IF;
+  END IF;
+  IF v_ap IS NULL OR v_exp IS NULL THEN RAISE EXCEPTION 'حسابات مرتجع المشتريات غير مكتملة'; END IF;
+  IF v_tax>0 THEN
+    SELECT id INTO v_vat FROM accounts WHERE company_id=p_company_id AND code='1180'
+      AND COALESCE(is_active,TRUE) AND NOT COALESCE(is_header,FALSE);
+    IF v_vat IS NULL THEN RAISE EXCEPTION 'حساب ضريبة المشتريات غير موجود'; END IF;
+  END IF;
+
+  v_number:=next_purchase_return_number(p_company_id,extract(year FROM p_date)::INT);
+  INSERT INTO purchase_returns(
+    company_id,number,purchase_invoice_id,date,reason,subtotal,vat_amount,tax_rate,total,
+    refund_amount,status,created_by
+  ) VALUES(
+    p_company_id,v_number,p_purchase_invoice_id,p_date,btrim(p_reason),v_subtotal,v_tax,
+    COALESCE(v_inv.tax_rate,0),v_total,v_refund,'approved',p_user_id
+  ) RETURNING * INTO v_ret;
+
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+    v_qty:=(v_item->>'quantity')::NUMERIC;
+    v_price:=(v_item->>'unit_price')::NUMERIC;
+    INSERT INTO purchase_return_items(company_id,purchase_return_id,description,quantity,unit_price,total)
+    VALUES(p_company_id,v_ret.id,btrim(v_item->>'description'),v_qty,v_price,round(v_qty*v_price,2));
+  END LOOP;
+
+  v_lines:=jsonb_build_array(
+    jsonb_build_object('accountId',v_ap,'debit',v_total,'credit',0,'contactId',v_inv.supplier_id),
+    jsonb_build_object('accountId',v_exp,'debit',0,'credit',v_subtotal,'projectId',v_inv.project_id,'contactId',v_inv.supplier_id)
+  );
+  IF v_tax>0 THEN
+    v_lines:=v_lines||jsonb_build_array(jsonb_build_object(
+      'accountId',v_vat,'debit',0,'credit',v_tax,'contactId',v_inv.supplier_id
+    ));
+  END IF;
+  v_journal:=create_journal_entry(
+    p_company_id,p_date,'general','مرتجع مشتريات '||v_number||' - '||btrim(p_reason),
+    p_user_id,v_lines
+  );
+  v_journal_id:=(v_journal->>'id')::UUID;
+  UPDATE journal_entries SET reference_type='purchase_return',reference_id=v_ret.id
+  WHERE id=v_journal_id AND company_id=p_company_id;
+
+  UPDATE purchase_invoices SET returned_amount=round(v_already+v_total,2)
+  WHERE id=v_inv.id;
+
+  IF v_refund>0 THEN
+    v_receipt:=create_voucher_receipt_atomic(
+      p_company_id,p_date,'supplier_refund',v_inv.supplier_id,v_refund,p_bank_safe_id,
+      'رد نقدي من المورد لمرتجع '||v_number,'[]'::JSONB,FALSE,FALSE,p_user_id,v_inv.project_id
+    );
+    v_new_paid:=round(GREATEST(0,COALESCE(v_inv.paid_amount,0)-v_refund),2);
+    UPDATE purchase_invoices SET paid_amount=v_new_paid,
+      status=CASE WHEN v_new_paid<=0.005 THEN 'unpaid'
+        WHEN v_new_paid>=GREATEST(0,total-round(v_already+v_total,2))-0.005 THEN 'paid'
+        ELSE 'partial' END
+    WHERE id=v_inv.id;
+    UPDATE purchase_returns SET refund_voucher_id=(v_receipt->>'id')::UUID WHERE id=v_ret.id;
+  END IF;
+
+  UPDATE purchase_returns SET journal_entry_id=v_journal_id WHERE id=v_ret.id RETURNING * INTO v_ret;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','purchase_return',v_ret.id,to_jsonb(v_ret));
+  RETURN to_jsonb(v_ret);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.cancel_purchase_return_atomic(
+  p_company_id UUID, p_return_id UUID, p_user_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_old purchase_returns%ROWTYPE; v_ret purchase_returns%ROWTYPE; v_reversal UUID;
+  v_inv purchase_invoices%ROWTYPE; v_new_paid NUMERIC; v_new_ret NUMERIC;
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+  SELECT * INTO v_old FROM purchase_returns
+  WHERE id=p_return_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'مرتجع المشتريات غير موجود'; END IF;
+  IF v_old.status='cancelled' THEN
+    RETURN jsonb_build_object('id',p_return_id,'status','cancelled','already_processed',TRUE);
+  END IF;
+  SELECT * INTO v_inv FROM purchase_invoices
+  WHERE id=v_old.purchase_invoice_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'فاتورة المشتريات غير موجودة'; END IF;
+  IF v_old.refund_voucher_id IS NOT NULL THEN
+    PERFORM cancel_voucher_receipt_atomic(p_company_id,v_old.refund_voucher_id,p_user_id);
+    v_new_paid:=round(COALESCE(v_inv.paid_amount,0)+COALESCE(v_old.refund_amount,0),2);
+    UPDATE purchase_invoices SET paid_amount=v_new_paid WHERE id=v_inv.id;
+    SELECT * INTO v_inv FROM purchase_invoices WHERE id=v_inv.id;
+  END IF;
+  IF v_old.journal_entry_id IS NOT NULL THEN
+    v_reversal:=post_journal_reversal(
+      p_company_id,v_old.journal_entry_id,'purchase_return_cancellation',p_return_id,
+      'إلغاء مرتجع مشتريات '||v_old.number,p_user_id
+    );
+  END IF;
+  v_new_ret:=round(GREATEST(0,COALESCE(v_inv.returned_amount,0)-v_old.total),2);
+  UPDATE purchase_invoices SET returned_amount=v_new_ret,
+    status=CASE WHEN COALESCE(paid_amount,0)<=0.005 THEN 'unpaid'
+      WHEN COALESCE(paid_amount,0)>=GREATEST(0,total-v_new_ret)-0.005 THEN 'paid'
+      ELSE 'partial' END
+  WHERE id=v_inv.id;
+  UPDATE purchase_returns SET status='cancelled',deleted_at=now()
+  WHERE id=p_return_id RETURNING * INTO v_ret;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values,new_values)
+  VALUES(p_company_id,p_user_id,'cancel','purchase_return',p_return_id,to_jsonb(v_old),
+    to_jsonb(v_ret)||jsonb_build_object('reversal_journal_id',v_reversal));
+  RETURN to_jsonb(v_ret)||jsonb_build_object('reversal_journal_id',v_reversal);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_purchase_return_atomic(UUID,UUID,DATE,TEXT,JSONB,UUID,NUMERIC,UUID) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.cancel_purchase_return_atomic(UUID,UUID,UUID) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.create_purchase_return_atomic(UUID,UUID,DATE,TEXT,JSONB,UUID,NUMERIC,UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cancel_purchase_return_atomic(UUID,UUID,UUID) TO service_role;
+
+-- سند صرف المورد: المتبقي = الأصل − المرتجع − المدفوع
+CREATE OR REPLACE FUNCTION public.create_voucher_disbursement_atomic(
+  p_company_id UUID,p_date DATE,p_disbursement_type TEXT,p_contact_id UUID,p_employee_id UUID,p_amount NUMERIC,
+  p_bank_safe_id UUID,p_reason TEXT,p_allocations JSONB,p_request_approval BOOLEAN,p_user_id UUID,
+  p_auto_fifo BOOLEAN DEFAULT FALSE,
+  p_project_id UUID DEFAULT NULL
+) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_bank banks_safes%ROWTYPE; v_voucher voucher_disbursements%ROWTYPE; v_number INTEGER; v_counterpart UUID;
+ v_journal JSONB; v_journal_id UUID; v_balance NUMERIC; v_item JSONB; v_invoice purchase_invoices%ROWTYPE;
+ v_alloc NUMERIC; v_alloc_total NUMERIC:=0; v_applied NUMERIC:=0; v_remaining NUMERIC; v_new_paid NUMERIC; v_approval approval_requests%ROWTYPE;
+ v_net NUMERIC;
+BEGIN
+ IF p_date IS NULL OR p_disbursement_type NOT IN ('supplier','employee_advance','subcontractor','client_refund','other')
+  OR p_amount<=0 OR p_amount<>ROUND(p_amount,2) OR NULLIF(BTRIM(p_reason),'') IS NULL OR LENGTH(p_reason)>500
+  OR jsonb_typeof(p_allocations)<>'array' OR jsonb_array_length(p_allocations)>100 THEN RAISE EXCEPTION 'بيانات سند الصرف غير صالحة'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM users WHERE id=p_user_id AND company_id=p_company_id AND is_active=TRUE) THEN RAISE EXCEPTION 'المستخدم غير صالح'; END IF;
+ IF p_contact_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM contacts WHERE id=p_contact_id AND company_id=p_company_id) THEN RAISE EXCEPTION 'الطرف غير موجود'; END IF;
+ IF p_employee_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM employees WHERE id=p_employee_id AND company_id=p_company_id AND is_active=TRUE) THEN RAISE EXCEPTION 'الموظف غير موجود'; END IF;
+ IF p_project_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM projects WHERE id=p_project_id AND company_id=p_company_id) THEN RAISE EXCEPTION 'المشروع غير موجود'; END IF;
+ SELECT * INTO v_bank FROM banks_safes WHERE id=p_bank_safe_id AND company_id=p_company_id AND is_active=TRUE FOR UPDATE;
+ IF NOT FOUND OR v_bank.account_id IS NULL THEN RAISE EXCEPTION 'البنك أو الخزينة غير موجود'; END IF;
+ SELECT id INTO v_counterpart FROM accounts WHERE company_id=p_company_id AND code=CASE p_disbursement_type
+  WHEN 'supplier' THEN '2110' WHEN 'employee_advance' THEN '1160' WHEN 'subcontractor' THEN '2150'
+  WHEN 'client_refund' THEN '1130' ELSE '5400' END AND COALESCE(is_active,TRUE)=TRUE AND COALESCE(is_header,FALSE)=FALSE;
+ IF v_counterpart IS NULL OR v_counterpart=v_bank.account_id THEN RAISE EXCEPTION 'الحساب المقابل غير صالح'; END IF;
+
+ FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+  BEGIN v_alloc:=(v_item->>'amount')::NUMERIC; EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION 'مبلغ التخصيص غير صالح'; END;
+  IF NULLIF(v_item->>'invoice_id','') IS NULL OR v_alloc<=0 OR v_alloc<>ROUND(v_alloc,2) THEN RAISE EXCEPTION 'بيانات تخصيص الفواتير غير صالحة'; END IF;
+  IF EXISTS(SELECT 1 FROM jsonb_array_elements(p_allocations) x WHERE x->>'invoice_id'=v_item->>'invoice_id' GROUP BY x->>'invoice_id' HAVING COUNT(*)>1) THEN RAISE EXCEPTION 'تخصيص فاتورة مكرر'; END IF;
+  SELECT * INTO v_invoice FROM purchase_invoices WHERE id=(v_item->>'invoice_id')::UUID AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND OR v_invoice.status IN ('cancelled','paid') THEN RAISE EXCEPTION 'فاتورة الشراء غير صالحة للتخصيص'; END IF;
+  IF p_contact_id IS NOT NULL AND v_invoice.supplier_id<>p_contact_id THEN RAISE EXCEPTION 'الفاتورة لا تخص الطرف المحدد'; END IF;
+  v_net:=ROUND(v_invoice.total-COALESCE(v_invoice.returned_amount,0),2);
+  IF v_invoice.paid_amount+v_alloc>v_net+0.005 THEN RAISE EXCEPTION 'التخصيص يتجاوز المتبقي على الفاتورة'; END IF;
+  v_alloc_total:=v_alloc_total+v_alloc;
+ END LOOP;
+ IF v_alloc_total>p_amount+0.005 THEN RAISE EXCEPTION 'مجموع التخصيصات يتجاوز مبلغ السند'; END IF;
+
+ v_number:=next_voucher_number(p_company_id,'voucher_disbursements');
+ INSERT INTO voucher_disbursements(company_id,number,date,disbursement_type,contact_id,employee_id,amount,bank_safe_id,reason,created_by,status,project_id)
+ VALUES(p_company_id,v_number,p_date,p_disbursement_type,p_contact_id,p_employee_id,p_amount,p_bank_safe_id,BTRIM(p_reason),p_user_id,
+  CASE WHEN p_request_approval THEN 'pending' ELSE 'approved' END,p_project_id) RETURNING * INTO v_voucher;
+
+ IF p_request_approval THEN
+  INSERT INTO approval_requests(company_id,transaction_type,transaction_id,entity_type,entity_id,amount,requester_id,status,message,description)
+  VALUES(p_company_id,'voucher_disbursement',v_voucher.id::TEXT,'voucher_disbursement',v_voucher.id,p_amount,p_user_id,'pending',BTRIM(p_reason),BTRIM(p_reason)) RETURNING * INTO v_approval;
+  FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+   INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+   VALUES(p_company_id,v_voucher.id,(v_item->>'invoice_id')::UUID,(v_item->>'amount')::NUMERIC,NULL);
+  END LOOP;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,p_user_id,'request_approval','voucher_disbursement',v_voucher.id,jsonb_build_object('approval_id',v_approval.id,'amount',p_amount));
+  RETURN to_jsonb(v_voucher)||jsonb_build_object('requires_approval',TRUE,'approval_id',v_approval.id);
+ END IF;
+
+ v_balance:=get_account_balance(p_company_id,v_bank.account_id,NULL,NULL);
+ IF v_balance+0.005<p_amount THEN RAISE EXCEPTION 'الرصيد غير كاف للصرف'; END IF;
+ v_journal:=create_journal_entry(p_company_id,p_date,'general','سند صرف رقم '||v_number||': '||BTRIM(p_reason),p_user_id,jsonb_build_array(
+  jsonb_build_object('accountId',v_counterpart,'debit',p_amount,'credit',0,'contactId',p_contact_id,'projectId',p_project_id),
+  jsonb_build_object('accountId',v_bank.account_id,'debit',0,'credit',p_amount,'projectId',p_project_id)));
+ v_journal_id:=(v_journal->>'id')::UUID;
+ UPDATE journal_entries SET reference_type='voucher_disbursement',reference_id=v_voucher.id WHERE id=v_journal_id AND company_id=p_company_id;
+ FOR v_item IN SELECT value FROM jsonb_array_elements(p_allocations) LOOP
+  SELECT * INTO v_invoice FROM purchase_invoices WHERE id=(v_item->>'invoice_id')::UUID AND company_id=p_company_id FOR UPDATE;
+  v_alloc:=(v_item->>'amount')::NUMERIC; v_new_paid:=ROUND(v_invoice.paid_amount+v_alloc,2);
+  v_net:=ROUND(v_invoice.total-COALESCE(v_invoice.returned_amount,0),2);
+  UPDATE purchase_invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_net-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+  INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+  VALUES(p_company_id,v_voucher.id,v_invoice.id,v_alloc,v_journal_id);
+  v_applied:=v_applied+v_alloc;
+ END LOOP;
+
+ IF jsonb_array_length(p_allocations)=0 AND COALESCE(p_auto_fifo,FALSE)
+    AND p_disbursement_type IN ('supplier','subcontractor') AND p_contact_id IS NOT NULL THEN
+  v_remaining:=p_amount;
+  FOR v_invoice IN SELECT * FROM purchase_invoices
+   WHERE company_id=p_company_id AND supplier_id=p_contact_id AND status NOT IN ('cancelled','paid')
+   ORDER BY date,number FOR UPDATE LOOP
+   EXIT WHEN v_remaining<=0.005;
+   v_net:=ROUND(v_invoice.total-COALESCE(v_invoice.returned_amount,0),2);
+   v_alloc:=LEAST(v_remaining,ROUND(v_net-v_invoice.paid_amount,2)); CONTINUE WHEN v_alloc<=0;
+   v_new_paid:=ROUND(v_invoice.paid_amount+v_alloc,2);
+   UPDATE purchase_invoices SET paid_amount=v_new_paid,status=CASE WHEN v_new_paid>=v_net-0.005 THEN 'paid' ELSE 'partial' END WHERE id=v_invoice.id;
+   INSERT INTO disbursement_invoice_items(company_id,voucher_disbursement_id,purchase_invoice_id,amount,journal_entry_id)
+   VALUES(p_company_id,v_voucher.id,v_invoice.id,v_alloc,v_journal_id);
+   v_applied:=v_applied+v_alloc; v_remaining:=v_remaining-v_alloc;
+  END LOOP;
+ END IF;
+ UPDATE voucher_disbursements SET journal_entry_id=v_journal_id WHERE id=v_voucher.id RETURNING * INTO v_voucher;
+ INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values) VALUES(p_company_id,p_user_id,'post','voucher_disbursement',v_voucher.id,to_jsonb(v_voucher));
+ RETURN to_jsonb(v_voucher)||jsonb_build_object('requires_approval',FALSE,'allocated_amount',ROUND(v_applied,2),'unapplied_amount',ROUND(p_amount-v_applied,2));
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_voucher_disbursement_atomic(UUID,DATE,TEXT,UUID,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID,BOOLEAN,UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_voucher_disbursement_atomic(UUID,DATE,TEXT,UUID,UUID,NUMERIC,UUID,TEXT,JSONB,BOOLEAN,UUID,BOOLEAN,UUID) TO service_role;
+
+SELECT 'Migration 109 completed' AS result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 110-purchase-returns-rls.sql
+-- ----------------------------------------------------------------------------
+
+-- 110: RLS tenant isolation for the purchase-returns tables (migration 109).
+--
+-- 109 created three tenant tables — purchase_returns, purchase_return_items,
+-- purchase_return_sequences — after 104's catalogue sweep had already run, so
+-- they missed the RLS enrollment. This is the same drift class 027/063 fixed:
+-- a table with a company_id that any role holding table privileges could read
+-- across tenants. The CI smoke suite (smokeTenantIsolationUnderRls) discovers
+-- such tables from the catalogue and fails the build; that is what caught
+-- this.
+--
+-- Fix follows 063/104 exactly: enable RLS, then install the single canonical
+-- isolation policy shape (company_id = tenant_company_id()). Enabling RLS
+-- here cannot lock the application out, by the same reasoning 063 documented:
+-- no table in this schema grants DML to anon/authenticated, the application
+-- runs as the service role, and both the service role and the table owner
+-- bypass RLS. For the roles RLS does bind, this converts silent cross-tenant
+-- access into tenant-scoped access — defence in depth behind the existing
+-- privilege layer.
+
+ALTER TABLE purchase_returns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchase_return_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchase_return_sequences ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation_purchase_returns ON purchase_returns;
+CREATE POLICY tenant_isolation_purchase_returns ON purchase_returns
+  FOR ALL
+  USING (company_id = public.tenant_company_id())
+  WITH CHECK (company_id = public.tenant_company_id());
+
+DROP POLICY IF EXISTS tenant_isolation_purchase_return_items ON purchase_return_items;
+CREATE POLICY tenant_isolation_purchase_return_items ON purchase_return_items
+  FOR ALL
+  USING (company_id = public.tenant_company_id())
+  WITH CHECK (company_id = public.tenant_company_id());
+
+DROP POLICY IF EXISTS tenant_isolation_purchase_return_sequences ON purchase_return_sequences;
+CREATE POLICY tenant_isolation_purchase_return_sequences ON purchase_return_sequences
+  FOR ALL
+  USING (company_id = public.tenant_company_id())
+  WITH CHECK (company_id = public.tenant_company_id());
+
+SELECT 'Migration 110 completed — purchase-returns tables enrolled in RLS tenant isolation' as result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 111-tenders-contact-fk.sql
+-- ----------------------------------------------------------------------------
+
+-- 111: Add the missing FK tenders.contact_id -> contacts(id).
+--
+-- 018 declared tenders.contact_id as a bare UUID. 060's atomic writers
+-- (create/update_tender_atomic) validate that any value they write is a
+-- contact of the same company, but without the constraint PostgREST's
+-- schema cache knows nothing about the relationship, so the tenders list
+-- and detail routes fail with PGRST200 ("Could not find a relationship
+-- between 'tenders' and 'contacts'") when embedding contacts(name). Every
+-- other table the app embeds contacts from (contracts, bonds, invoices,
+-- quotations, projects, ...) has a real FK; this makes tenders conform to
+-- the same convention (plain REFERENCES, NO ACTION on delete, as
+-- contracts.contact_id does).
+--
+-- Before the constraint can exist, clear legacy rows (written before 060's
+-- guards, or hand-edited in production) whose contact no longer exists or
+-- belongs to another tenant. The same-tenant check is deliberate: a value
+-- pointing at another company's contact would pass the FK but leak that
+-- contact's name through the embed, while 060's semantics require the
+-- contact to belong to the tender's company. Nulling matches the embed
+-- behaviour the UI already expects (contacts(name) -> null) and the list
+-- still shows the free-text client_name.
+
+DO $$
+DECLARE v_count INTEGER;
+BEGIN
+  UPDATE tenders t
+  SET contact_id = NULL
+  WHERE t.contact_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM contacts c
+      WHERE c.id = t.contact_id AND c.company_id = t.company_id
+    );
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RAISE NOTICE '111: nullified % legacy tenders.contact_id value(s) pointing at missing or cross-tenant contacts', v_count;
+END $$;
+
+ALTER TABLE tenders
+  ADD CONSTRAINT tenders_contact_id_fkey
+  FOREIGN KEY (contact_id) REFERENCES contacts(id);
+
+SELECT 'Migration 111 completed — tenders.contact_id FK to contacts' as result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 112-subscriber-numbers.sql
+-- ----------------------------------------------------------------------------
+
+-- 112: Every subscriber gets a unique, permanent subscriber_number.
+--
+-- 041 added subscriptions.subscriber_number (TEXT) and subscriber_number_seq
+-- "used by admin companies endpoint" — but no code path ever assigned a value
+-- (register_company, activation-code redemption and upgrade approval all
+-- INSERT without it), so every subscription in production carries NULL: the
+-- settings page fell back to an 8-char UUID fragment and the developer panel
+-- showed "—" for every company. Fix in four layers:
+--
+--   0. Type normalization (production finding 2026-08): in some environments
+--      the column pre-existed as INTEGER before 041, so 041's
+--      ADD COLUMN IF NOT EXISTS ... TEXT was a silent no-op and every
+--      btrim(subscriber_number) died with 42883 (btrim(integer)).
+--      Coerce to TEXT first — the admin search (PostgREST ilike) and the
+--      trigger both require a text column.
+--   1. Collision-proof allocation: every assignment goes through
+--      next_subscriber_number(), which advances the sequence past any value
+--      already present in the table. A plain nextval() can collide with
+--      manually assigned or legacy values (e.g. the sequence at 1000 backfills
+--      a NULL to "1000" while "1001" exists twice, then the duplicate
+--      renumber mints the second "1001" → the UNIQUE below fails).
+--   2. Backfill every NULL/blank row in created_at order, so the earliest
+--      subscribers get the lowest numbers; pre-existing duplicate values are
+--      renumbered (the earliest-created row of each value keeps it).
+--   3. BEFORE INSERT OR UPDATE trigger assigns the next number to any row
+--      saved without one — covers every current and future creation path
+--      (RPCs, admin routes, manual SQL), and re-assigns if a number is ever
+--      cleared, so a subscriber always has exactly one number to send the
+--      developer.
+--   4. UNIQUE constraint so a number always identifies exactly one
+--      subscriber.
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'subscriptions' AND column_name = 'subscriber_number'
+  ) THEN
+    ALTER TABLE subscriptions ADD COLUMN subscriber_number TEXT;
+  ELSIF (
+    SELECT data_type FROM information_schema.columns
+    WHERE table_name = 'subscriptions' AND column_name = 'subscriber_number'
+  ) NOT IN ('text', 'character varying') THEN
+    ALTER TABLE subscriptions
+      ALTER COLUMN subscriber_number TYPE TEXT
+      USING subscriber_number::text;
+  END IF;
+END $$;
+CREATE SEQUENCE IF NOT EXISTS subscriber_number_seq START 1000;
+
+CREATE OR REPLACE FUNCTION public.next_subscriber_number()
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE v_next TEXT;
+BEGIN
+  LOOP
+    v_next := nextval('public.subscriber_number_seq')::text;
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriber_number = v_next);
+  END LOOP;
+  RETURN v_next;
+END
+$$;
+REVOKE ALL ON FUNCTION public.next_subscriber_number() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.next_subscriber_number() TO service_role;
+
+DO $$
+DECLARE v_count INTEGER := 0; v_sub_id UUID;
+BEGIN
+  FOR v_sub_id IN
+    SELECT id FROM subscriptions
+    WHERE subscriber_number IS NULL OR btrim(subscriber_number) = ''
+    ORDER BY created_at, id
+  LOOP
+    UPDATE subscriptions
+    SET subscriber_number = public.next_subscriber_number()
+    WHERE id = v_sub_id;
+    v_count := v_count + 1;
+  END LOOP;
+  RAISE NOTICE '112: assigned subscriber numbers to % subscription(s)', v_count;
+END $$;
+
+DO $$
+DECLARE v_count INTEGER;
+BEGIN
+  WITH dupes AS (
+    SELECT s.id,
+           ROW_NUMBER() OVER (PARTITION BY s.subscriber_number ORDER BY s.created_at, s.id) AS rn
+    FROM subscriptions s
+    WHERE s.subscriber_number IS NOT NULL AND btrim(s.subscriber_number) <> ''
+  )
+  UPDATE subscriptions s
+  SET subscriber_number = public.next_subscriber_number()
+  FROM dupes d
+  WHERE s.id = d.id AND d.rn > 1;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  IF v_count > 0 THEN
+    RAISE NOTICE '112: renumbered % duplicate subscriber_number value(s)', v_count;
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.assign_subscriber_number()
+RETURNS trigger
+LANGUAGE plpgsql SET search_path = public, extensions, pg_temp AS $$
+BEGIN
+  IF NEW.subscriber_number IS NULL OR btrim(NEW.subscriber_number) = '' THEN
+    NEW.subscriber_number := public.next_subscriber_number();
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.assign_subscriber_number() FROM PUBLIC, anon, authenticated;
+
+-- A direct service_role insert (future admin routes) must be able to drive
+-- the allocator's nextval call. anon/authenticated stay out of this by design.
+GRANT USAGE, UPDATE ON SEQUENCE subscriber_number_seq TO service_role;
+
+DROP TRIGGER IF EXISTS trg_subscriptions_assign_subscriber_number ON subscriptions;
+CREATE TRIGGER trg_subscriptions_assign_subscriber_number
+  BEFORE INSERT OR UPDATE ON subscriptions
+  FOR EACH ROW EXECUTE FUNCTION public.assign_subscriber_number();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'subscriptions_subscriber_number_key') THEN
+    ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_subscriber_number_key UNIQUE (subscriber_number);
+  END IF;
+END $$;
+
+COMMENT ON COLUMN subscriptions.subscriber_number IS 'رقم المشترك - فريد ولا يتكرر';
+
+SELECT 'Migration 112 completed — unique subscriber numbers for every subscription' as result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 113-unified-note-numbering.sql
+-- ----------------------------------------------------------------------------
+
+-- 113 — توحيد ترقيم الإشعارات الدائنة والمدينة
+-- ---------------------------------------------------------------------------
+-- عيب حرج اكتشفه الفحص المحاسبي البرمجي (2026-08):
+--   عمود credit_notes.number مقيّد بـ UNIQUE(company_id, number) ويخدم النوعين
+--   معًا (note_type IN ('credit','debit'))، لكن التسلسلين كانا مستقلين:
+--     - next_credit_note_number يغذّي عدّادَه من كل الإشعارات (صحيح)
+--     - next_debit_note_number يغذّي عدّادَه من المدينة فقط (خطأ)
+--   النتيجة: أول إشعار مدينة في السنة يصادم أول إشعار دائن (كلاهما #1) برسالة
+--   23505، وبعد أي خلط بين النوعين ينحرف عدّاد المدينة عن الدائن فتتكرر
+--   الاصطدامات. أي شركة تصدر النوعين في سنة واحدة متضررة حتمًا.
+-- الإصلاح: عدّاد واحد مشترك للنوعين (credit_note_sequences) مع قاع ذاتية
+--   الشفاء على أعلى رقم فعلي في الجدول، فلا يمكن لأي حالة تاريخية أن تُنتج
+--   رقمًا مستخدمًا من قبل.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.next_credit_note_number(p_company_id UUID, p_year INTEGER)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE v_number INTEGER;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('credit-note-number:' || p_company_id::text));
+  INSERT INTO credit_note_sequences(company_id, year, last_number)
+  SELECT p_company_id, p_year, COALESCE(max(number), 0) + 1
+  FROM credit_notes WHERE company_id = p_company_id
+  ON CONFLICT (company_id, year)
+  DO UPDATE SET last_number = GREATEST(credit_note_sequences.last_number,
+    (SELECT COALESCE(max(number), 0) FROM credit_notes
+     WHERE company_id = p_company_id)) + 1
+  RETURNING last_number INTO v_number;
+  RETURN v_number;
+END
+$$;
+REVOKE ALL ON FUNCTION public.next_credit_note_number(UUID, INTEGER) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.next_credit_note_number(UUID, INTEGER) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.next_debit_note_number(p_company_id UUID, p_year INTEGER)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+-- الإشعارات المدينة تشارك عدّاد الدائنة: عمود واحد UNIQUE يخدم النوعين،
+-- فلا بد من عدّاد واحد يرقّمهما معًا (انظر ملاحظة الإصدار 113).
+BEGIN
+  RETURN next_credit_note_number(p_company_id, p_year);
+END
+$$;
+REVOKE ALL ON FUNCTION public.next_debit_note_number(UUID, INTEGER) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.next_debit_note_number(UUID, INTEGER) TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 114-random-subscriber-numbers.sql
+-- ----------------------------------------------------------------------------
+
+-- 114: Un-guessable subscriber numbers (حروف وأرقام، 12 خانة).
+--
+-- Production finding 2026-08: migration 112 allocated subscriber_number from
+-- subscriber_number_seq (1000, 1001, 1002, …). A sequential number lets anyone
+-- who knows one subscriber number enumerate the neighbours and use them in
+-- support/social-engineering attacks against OTHER companies ("أنا المشترك
+-- #1001 وأ فقدت الوصول"). The number is also displayed inside the product, so
+-- it must not leak the population order or size.
+--
+-- Fix, without touching the trigger or the UNIQUE constraint from 112:
+--   1. next_subscriber_number() is replaced with a random allocator:
+--      12 characters from an unambiguous alphabet (no 0/O/1/I/L) grouped as
+--      XXXX-XXXX-XXXX (~31^12 ≈ 8×10^17 combinations), retried on collision.
+--      A caller would need to guess a specific 12-char string — as hard as
+--      guessing a password of the same length, and each company keeps exactly
+--      one permanent number to cite in support conversations.
+--   2. Every EXISTING subscription is re-numbered once, in created_at order.
+--      The previously issued numbers are all pure sequence digits, i.e. all
+--      guessable, so keeping any of them would defeat the purpose. This is a
+--      one-time change: the random numbers issued here are permanent and are
+--      never re-issued again (the trigger only fills NULL/blank values).
+--   3. subscriber_number_seq is dropped — the sequence allocator is gone so
+--      no future code path can accidentally reintroduce sequential numbers.
+--
+-- The 112 trigger (assign_subscriber_number) and UNIQUE constraint stay: any
+-- row inserted without a number still receives one, and duplicates remain
+-- impossible.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE OR REPLACE FUNCTION public.next_subscriber_number()
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_alphabet CONSTANT TEXT := 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; -- no 0/O/1/I/L
+  v_code TEXT;
+  v_i INT;
+BEGIN
+  LOOP
+    v_code := '';
+    FOR v_i IN 1..12 LOOP
+      v_code := v_code || substr(v_alphabet, 1 + floor(random() * length(v_alphabet))::INT, 1);
+      IF v_i IN (4, 8) THEN
+        v_code := v_code || '-';
+      END IF;
+    END LOOP;
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriber_number = v_code);
+  END LOOP;
+  RETURN v_code;
+END
+$$;
+REVOKE ALL ON FUNCTION public.next_subscriber_number() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.next_subscriber_number() TO service_role;
+
+-- One-time re-issue: every subscriber_number that is NULL/blank or a legacy
+-- pure-digit (sequential) value is replaced with a random code. Rows keep
+-- their history; only the displayed number changes.
+DO $$
+DECLARE
+  v_sub_id UUID;
+  v_count INTEGER := 0;
+BEGIN
+  FOR v_sub_id IN
+    SELECT id FROM subscriptions
+    WHERE subscriber_number IS NULL
+       OR btrim(subscriber_number) = ''
+       OR btrim(subscriber_number) ~ '^[0-9]+$'
+    ORDER BY created_at, id
+  LOOP
+    UPDATE subscriptions
+    SET subscriber_number = public.next_subscriber_number()
+    WHERE id = v_sub_id;
+    v_count := v_count + 1;
+  END LOOP;
+  RAISE NOTICE '114: re-issued % subscriber number(s) as unguessable codes', v_count;
+END $$;
+
+-- Re-check duplicates after re-issue (defensive; the random allocator already
+-- collision-checks, but a unique violation here must never block production).
+DO $$
+DECLARE v_count INTEGER;
+BEGIN
+  WITH dupes AS (
+    SELECT s.id,
+           ROW_NUMBER() OVER (PARTITION BY s.subscriber_number ORDER BY s.created_at, s.id) AS rn
+    FROM subscriptions s
+    WHERE s.subscriber_number IS NOT NULL AND btrim(s.subscriber_number) <> ''
+  )
+  UPDATE subscriptions s
+  SET subscriber_number = public.next_subscriber_number()
+  FROM dupes d
+  WHERE s.id = d.id AND d.rn > 1;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  IF v_count > 0 THEN
+    RAISE NOTICE '114: renumbered % duplicate subscriber_number value(s)', v_count;
+  END IF;
+END $$;
+
+-- The sequential allocator is retired for good.
+DROP SEQUENCE IF EXISTS public.subscriber_number_seq;
+
+COMMENT ON COLUMN subscriptions.subscriber_number IS
+  'رقم المشترك - عشوائي غير قابل للتخمين (12 خانة حروف وأرقام) وفريد ولا يتغير';
+
+SELECT 'Migration 114 completed — subscriber numbers are now random, 12-char and unguessable' AS result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 115-telegram-payment-proof.sql
+-- ----------------------------------------------------------------------------
+
+-- 115: Payment proofs move to Telegram; upgrade/renewal flow practicality.
+--
+-- Production decision 2026-08: customers no longer upload receipt images into
+-- the platform. The proof screenshot is sent by the customer to the developer
+-- on Telegram (out-of-band), and the request itself carries the transfer
+-- metadata (method, amount, date, time, notes). Reasons:
+--   * one less private-document surface to store, sign and police;
+--   * the developer reviews the actual screenshot in the chat where the
+--     customer sent it, next to their conversation history;
+--   * every request announces itself on the admin bot with the company's
+--     permanent subscriber number, so matching screenshot ↔ request is trivial.
+--
+-- Changes:
+--   1. create_upgrade_request_atomic / create_addon_request_atomic no longer
+--      accept (or store) a receipt reference. Any non-NULL value is rejected —
+--      the receipt channel is Telegram only, so stale clients cannot smuggle
+--      uploads back in.
+--   2. review_upgrade_request / review_addon_request no longer demand a stored
+--      receipt file for approval. The admin confirms payment visually in
+--      Telegram; the guard that mattered (full catalogue price + a transfer
+--      date + a pending→approved single transition) stays intact.
+
+-- ---------------------------------------------------------------------------
+-- 1. Creation RPCs — receipt reference rejected, NULL stored.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.create_addon_request_atomic(
+  p_company_id UUID,p_user_id UUID,p_addon_type TEXT,p_quantity INTEGER,p_duration_type TEXT,
+  p_payment_method_code TEXT,p_payment_date DATE,p_payment_time TEXT,p_receipt_image_url TEXT,p_notes TEXT
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_unit NUMERIC(10,2); v_total NUMERIC(10,2); v_request addon_requests%ROWTYPE;
+BEGIN
+  IF NOT EXISTS(
+    SELECT 1 FROM users u JOIN companies c ON c.id=u.company_id
+    WHERE u.id=p_user_id AND u.company_id=p_company_id AND u.is_active=TRUE AND c.is_active=TRUE
+  ) THEN RAISE EXCEPTION 'invalid tenant actor'; END IF;
+  IF p_addon_type IS NULL OR p_addon_type NOT IN('extra_user','extra_branch','storage_gb')
+    OR p_quantity IS NULL OR p_quantity NOT BETWEEN 1 AND 100
+    OR p_duration_type IS NULL OR p_duration_type NOT IN('monthly','yearly')
+    OR p_payment_date IS NULL OR p_payment_date>CURRENT_DATE OR p_payment_date<CURRENT_DATE-3650
+    OR (p_payment_time IS NOT NULL AND p_payment_time !~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$')
+    OR length(COALESCE(p_notes,''))>2000
+    OR p_receipt_image_url IS NOT NULL
+    OR NOT EXISTS(SELECT 1 FROM payment_methods WHERE code=p_payment_method_code AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'invalid addon request'; END IF;
+  v_unit:=CASE p_addon_type
+    WHEN 'extra_user' THEN CASE WHEN p_duration_type='monthly' THEN 5 ELSE 48 END
+    WHEN 'extra_branch' THEN CASE WHEN p_duration_type='monthly' THEN 10 ELSE 96 END
+    WHEN 'storage_gb' THEN CASE WHEN p_duration_type='monthly' THEN 3 ELSE 30 END
+  END;
+  v_total:=v_unit*p_quantity;
+  INSERT INTO addon_requests(company_id,user_id,addon_type,quantity,duration_type,unit_price_usd,
+    total_amount_usd,payment_method_code,payment_amount,payment_date,payment_time,receipt_image_url,notes,status)
+  VALUES(p_company_id,p_user_id,p_addon_type,p_quantity,p_duration_type,v_unit,v_total,
+    p_payment_method_code,v_total,p_payment_date,p_payment_time,NULL,NULLIF(trim(p_notes),''),'pending')
+  RETURNING * INTO v_request;
+  INSERT INTO company_messages(company_id,user_id,subject,body,type,status)
+  VALUES(p_company_id,p_user_id,format('طلب إضافة: %s ×%s',p_addon_type,p_quantity),
+    format('النوع: %s، الكمية: %s، المدة: %s، المبلغ: $%s، طريقة الدفع: %s، الإيصال: عبر تليجرام',
+      p_addon_type,p_quantity,p_duration_type,v_total,p_payment_method_code),'addon_request','open');
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','addon_request',v_request.id::TEXT,
+    jsonb_build_object('addon_type',p_addon_type,'quantity',p_quantity,'duration_type',p_duration_type,'amount',v_total,'receipt_channel','telegram'));
+  RETURN jsonb_build_object('id',v_request.id,'status',v_request.status,'total_amount_usd',v_total);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.create_upgrade_request_atomic(
+  p_company_id UUID,p_user_id UUID,p_requested_plan_id UUID,p_duration_type TEXT,
+  p_payment_method_code TEXT,p_payment_amount NUMERIC,p_payment_date DATE,p_payment_time TEXT,
+  p_receipt_image_url TEXT,p_notes TEXT
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_plan subscription_plans%ROWTYPE; v_current_plan UUID; v_expected NUMERIC(15,2); v_request upgrade_requests%ROWTYPE;
+BEGIN
+  IF NOT EXISTS(
+    SELECT 1 FROM users u JOIN companies c ON c.id=u.company_id
+    WHERE u.id=p_user_id AND u.company_id=p_company_id AND u.is_active=TRUE AND c.is_active=TRUE
+  ) THEN RAISE EXCEPTION 'invalid tenant actor'; END IF;
+  SELECT * INTO v_plan FROM subscription_plans WHERE id=p_requested_plan_id AND is_active=TRUE;
+  v_expected:=CASE WHEN p_duration_type='monthly' THEN v_plan.price_monthly
+    WHEN p_duration_type='yearly' THEN v_plan.price_yearly ELSE NULL END;
+  IF v_plan.id IS NULL OR v_expected IS NULL OR v_expected<=0 OR p_payment_amount IS DISTINCT FROM v_expected
+    OR p_payment_date IS NULL OR p_payment_date>CURRENT_DATE OR p_payment_date<CURRENT_DATE-3650
+    OR (p_payment_time IS NOT NULL AND p_payment_time !~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$')
+    OR length(COALESCE(p_notes,''))>2000
+    OR p_receipt_image_url IS NOT NULL
+    OR NOT EXISTS(SELECT 1 FROM payment_methods WHERE code=p_payment_method_code AND is_active=TRUE)
+  THEN RAISE EXCEPTION 'invalid upgrade request'; END IF;
+  SELECT plan_id INTO v_current_plan FROM subscriptions WHERE company_id=p_company_id
+    ORDER BY created_at DESC LIMIT 1;
+  INSERT INTO upgrade_requests(company_id,user_id,current_plan_id,requested_plan_id,duration_type,
+    payment_method_code,payment_amount,payment_date,payment_time,receipt_image_url,notes,status)
+  VALUES(p_company_id,p_user_id,v_current_plan,p_requested_plan_id,p_duration_type,p_payment_method_code,
+    v_expected,p_payment_date,p_payment_time::TIME,NULL,NULLIF(trim(p_notes),''),'pending')
+  RETURNING * INTO v_request;
+  INSERT INTO company_messages(company_id,user_id,subject,body,type,status)
+  VALUES(p_company_id,p_user_id,format('طلب ترقية إلى %s',v_plan.code),
+    format('الباقة: %s، المدة: %s، المبلغ: %s %s، طريقة الدفع: %s، الإيصال: عبر تليجرام',
+      v_plan.code,p_duration_type,v_expected,v_plan.currency,p_payment_method_code),'upgrade','open');
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'create','upgrade_request',v_request.id::TEXT,
+    jsonb_build_object('plan_id',p_requested_plan_id,'duration_type',p_duration_type,'amount',v_expected,'receipt_channel','telegram'));
+  RETURN jsonb_build_object('id',v_request.id,'status',v_request.status,'plan_code',v_plan.code,
+    'payment_amount',v_expected,'created_at',v_request.created_at);
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 2. Review RPCs — approval no longer requires a stored receipt file.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.review_upgrade_request(
+  p_request_id UUID,
+  p_admin_id UUID,
+  p_decision TEXT,
+  p_notes TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_req upgrade_requests%ROWTYPE;
+  v_plan subscription_plans%ROWTYPE;
+  v_sub subscriptions%ROWTYPE;
+  v_expected NUMERIC;
+  v_months INT;
+  v_end DATE;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM admin_users WHERE id = p_admin_id AND is_active = true) THEN
+    RAISE EXCEPTION 'inactive admin';
+  END IF;
+  IF p_decision NOT IN ('approved', 'rejected') THEN RAISE EXCEPTION 'invalid decision'; END IF;
+
+  SELECT * INTO v_req FROM upgrade_requests WHERE id = p_request_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'request not found'; END IF;
+  IF v_req.status <> 'pending' THEN RAISE EXCEPTION 'request was already reviewed'; END IF;
+
+  IF p_decision = 'rejected' THEN
+    UPDATE upgrade_requests SET status = 'rejected', admin_notes = left(p_notes, 2000),
+      reviewed_by = p_admin_id, reviewed_at = now(), updated_at = now()
+    WHERE id = p_request_id;
+    INSERT INTO admin_audit_log(admin_id, action, details, target_type, target_id)
+    VALUES (p_admin_id, 'reject_upgrade_request', left(p_notes, 2000), 'upgrade_request', p_request_id::text);
+    RETURN jsonb_build_object('status', 'rejected', 'company_id', v_req.company_id);
+  END IF;
+
+  SELECT * INTO v_plan FROM subscription_plans
+  WHERE id = v_req.requested_plan_id AND is_active = true;
+  IF NOT FOUND THEN RAISE EXCEPTION 'requested plan is unavailable'; END IF;
+  v_months := CASE WHEN v_req.duration_type = 'yearly' THEN 12 ELSE 1 END;
+  v_expected := CASE WHEN v_req.duration_type = 'yearly'
+    THEN COALESCE(v_plan.price_yearly, 0) ELSE COALESCE(v_plan.price_monthly, 0) END;
+
+  -- The receipt screenshot arrives on Telegram (out-of-band); approval needs a
+  -- recorded transfer date and the full catalogue amount, not a stored file.
+  IF v_req.payment_date IS NULL
+     OR COALESCE(v_req.payment_amount, 0) < v_expected
+     OR v_expected <= 0 THEN
+    RAISE EXCEPTION 'verified payment proof and full plan amount are required';
+  END IF;
+
+  SELECT * INTO v_sub FROM subscriptions
+  WHERE company_id = v_req.company_id
+  ORDER BY created_at DESC LIMIT 1 FOR UPDATE;
+  v_end := GREATEST(COALESCE(v_sub.end_date, CURRENT_DATE), CURRENT_DATE)
+           + make_interval(months => v_months);
+
+  IF v_sub.id IS NULL THEN
+    INSERT INTO subscriptions(company_id, plan_id, plan_code, status, start_date, end_date, updated_at)
+    VALUES(v_req.company_id, v_plan.id, v_plan.code, 'active', CURRENT_DATE, v_end, now());
+  ELSE
+    UPDATE subscriptions
+    SET plan_id = v_plan.id, plan_code = v_plan.code, status = 'active',
+        end_date = v_end, updated_at = now()
+    WHERE id = v_sub.id;
+  END IF;
+
+  UPDATE upgrade_requests
+  SET status = 'approved', admin_notes = left(p_notes, 2000),
+      reviewed_by = p_admin_id, reviewed_at = now(), updated_at = now()
+  WHERE id = p_request_id;
+  INSERT INTO admin_audit_log(admin_id, action, details, target_type, target_id)
+  VALUES (p_admin_id, 'approve_upgrade_request',
+    format('company=%s plan=%s months=%s amount=%s', v_req.company_id, v_plan.code, v_months, v_req.payment_amount),
+    'upgrade_request', p_request_id::text);
+
+  RETURN jsonb_build_object(
+    'status', 'approved', 'company_id', v_req.company_id,
+    'plan_code', v_plan.code, 'plan_name', v_plan.name,
+    'months', v_months, 'end_date', v_end
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.review_addon_request(
+  p_request_id UUID,
+  p_admin_id UUID,
+  p_decision TEXT,
+  p_notes TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_req addon_requests%ROWTYPE;
+  v_sub subscriptions%ROWTYPE;
+  v_prev_users INT;
+  v_prev_branches INT;
+  v_new_users INT;
+  v_new_branches INT;
+  v_months INT;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM admin_users WHERE id = p_admin_id AND is_active = true) THEN
+    RAISE EXCEPTION 'inactive admin';
+  END IF;
+  IF p_decision NOT IN ('approved', 'rejected') THEN RAISE EXCEPTION 'invalid decision'; END IF;
+
+  SELECT * INTO v_req FROM addon_requests WHERE id = p_request_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'request not found'; END IF;
+  IF v_req.status <> 'pending' THEN RAISE EXCEPTION 'request was already reviewed'; END IF;
+
+  IF p_decision = 'rejected' THEN
+    UPDATE addon_requests SET status = 'rejected', admin_notes = left(p_notes, 2000),
+      reviewed_by = p_admin_id, reviewed_at = now(), updated_at = now()
+    WHERE id = p_request_id;
+    INSERT INTO admin_audit_log(admin_id, action, details, target_type, target_id)
+    VALUES (p_admin_id, 'reject_addon_request', left(p_notes, 2000), 'addon_request', p_request_id::text);
+    RETURN jsonb_build_object('status', 'rejected', 'company_id', v_req.company_id);
+  END IF;
+
+  -- Payment proof lives in the Telegram chat; require the transfer metadata.
+  IF v_req.payment_date IS NULL
+     OR COALESCE(v_req.payment_amount, 0) < v_req.total_amount_usd THEN
+    RAISE EXCEPTION 'verified payment proof and full amount are required';
+  END IF;
+
+  SELECT * INTO v_sub FROM subscriptions
+  WHERE company_id = v_req.company_id
+  ORDER BY created_at DESC LIMIT 1 FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'company has no subscription'; END IF;
+
+  v_prev_users := COALESCE(v_sub.extra_users, 0);
+  v_prev_branches := COALESCE(v_sub.extra_branches, 0);
+  v_new_users := v_prev_users + CASE WHEN v_req.addon_type = 'extra_user' THEN v_req.quantity ELSE 0 END;
+  v_new_branches := v_prev_branches + CASE WHEN v_req.addon_type = 'extra_branch' THEN v_req.quantity ELSE 0 END;
+  v_months := CASE WHEN v_req.duration_type = 'yearly' THEN 12 ELSE 1 END;
+
+  UPDATE subscriptions
+  SET extra_users = v_new_users,
+      extra_branches = v_new_branches,
+      extra_storage_gb = COALESCE(extra_storage_gb, 0)
+        + CASE WHEN v_req.addon_type = 'storage_gb' THEN v_req.quantity ELSE 0 END,
+      updated_at = now()
+  WHERE id = v_sub.id;
+
+  UPDATE addon_requests
+  SET status = 'approved', admin_notes = left(p_notes, 2000),
+      reviewed_by = p_admin_id, reviewed_at = now(), updated_at = now()
+  WHERE id = p_request_id;
+
+  INSERT INTO addon_grant_audit(
+    company_id, request_id, admin_id, addon_type, quantity, months_granted,
+    previous_extra_users, previous_extra_branches, new_extra_users, new_extra_branches, note
+  ) VALUES (
+    v_req.company_id, v_req.id, p_admin_id, v_req.addon_type, v_req.quantity, v_months,
+    v_prev_users, v_prev_branches, v_new_users, v_new_branches, left(p_notes, 2000)
+  );
+  INSERT INTO admin_audit_log(admin_id, action, details, target_type, target_id)
+  VALUES (p_admin_id, 'approve_addon_request',
+    format('company=%s type=%s quantity=%s', v_req.company_id, v_req.addon_type, v_req.quantity),
+    'addon_request', p_request_id::text);
+
+  RETURN jsonb_build_object(
+    'status', 'approved', 'company_id', v_req.company_id,
+    'addon_type', v_req.addon_type, 'quantity', v_req.quantity,
+    'extra_users', v_new_users, 'extra_branches', v_new_branches
+  );
+END;
+$$;
+
+-- Self-service cancellation of a still-pending request frees the
+-- partial-unique "one pending request" slot, so a customer who typo'd the
+-- amount can withdraw and resubmit without developer involvement.
+
+CREATE OR REPLACE FUNCTION public.cancel_own_subscription_request(
+  p_company_id UUID,
+  p_user_id UUID,
+  p_request_id UUID,
+  p_kind TEXT
+) RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_count INTEGER;
+BEGIN
+  IF NOT EXISTS(
+    SELECT 1 FROM users u WHERE u.id=p_user_id AND u.company_id=p_company_id AND u.is_active=TRUE
+  ) THEN RAISE EXCEPTION 'invalid tenant actor'; END IF;
+  IF p_kind NOT IN ('upgrade','addon') THEN RAISE EXCEPTION 'invalid request kind'; END IF;
+
+  IF p_kind = 'upgrade' THEN
+    UPDATE upgrade_requests SET status='cancelled', updated_at=now()
+    WHERE id=p_request_id AND company_id=p_company_id AND user_id=p_user_id AND status='pending';
+  ELSE
+    UPDATE addon_requests SET status='cancelled', updated_at=now()
+    WHERE id=p_request_id AND company_id=p_company_id AND user_id=p_user_id AND status='pending';
+  END IF;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  IF v_count = 0 THEN RAISE EXCEPTION 'request not found or already reviewed'; END IF;
+
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,new_values)
+  VALUES(p_company_id,p_user_id,'cancel', p_kind || '_request', p_request_id::TEXT,
+    jsonb_build_object('by','owner'));
+  RETURN jsonb_build_object('id',p_request_id,'status','cancelled');
+END;
+$$;
+REVOKE ALL ON FUNCTION public.cancel_own_subscription_request(UUID,UUID,UUID,TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.cancel_own_subscription_request(UUID,UUID,UUID,TEXT) TO service_role;
+
+REVOKE ALL ON FUNCTION public.create_addon_request_atomic(UUID,UUID,TEXT,INTEGER,TEXT,TEXT,DATE,TEXT,TEXT,TEXT) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.create_upgrade_request_atomic(UUID,UUID,UUID,TEXT,TEXT,NUMERIC,DATE,TEXT,TEXT,TEXT) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.review_upgrade_request(UUID, UUID, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.review_addon_request(UUID, UUID, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.create_addon_request_atomic(UUID,UUID,TEXT,INTEGER,TEXT,TEXT,DATE,TEXT,TEXT,TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION public.create_upgrade_request_atomic(UUID,UUID,UUID,TEXT,TEXT,NUMERIC,DATE,TEXT,TEXT,TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION public.review_upgrade_request(UUID, UUID, TEXT, TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION public.review_addon_request(UUID, UUID, TEXT, TEXT) TO service_role;
+
+SELECT 'Migration 115 completed — payment proofs via Telegram, cancellable pending requests' AS result;
+
+-- ----------------------------------------------------------------------------
+-- BEGIN 116-remove-contract-document-storage.sql
+-- ----------------------------------------------------------------------------
+
+-- 116: إلغاء ميزة «مستندات العقود» من التخزين نهائياً.
+--
+-- كانت الميزة ترفع ملفات (PDF/صور) إلى دلو Supabase Storage الخاص
+-- (contract-documents) وتخزن بياناتها في جدول contract_documents. اتُّخذ قرار
+-- بعدم تخزين أي ملفات داخل قاعدة البيانات/التخزين حتى لا تزدحم مساحة المشروع —
+-- نفس سياسة إيصالات الدفع (الميجريشن 115): الملفات تتبادل عبر تليجرام.
+--
+-- ماذا يفعل هذا الميجريشن:
+--   1. يعيد كتابة delete_draft_contract_atomic بلا مسارات تخزين (كان يجمّع
+--      مسارات الملفات من الجدول المحذوف).
+--   2. يسقط دالة create_contract_document_atomic وجدول contract_documents
+--      (مع سياسته RLS وفهارسه — كلها كائنات تابعة).
+--   3. يعيد تركيب محفزات حراسة العلاقات دون contract_documents (محفز الجدول
+--      المحذوف يسقط معه تلقائياً — إعادة الحلقة تجعل القائمة صريحة).
+--   4. يحاول إسقاط صف دلو contract-documents حرساً (محمول: يتخطى الخطوة على
+--      محركات PostgreSQL بلا مخطط storage مثل بيئات الاختبار).
+--      (حذف الكائنات عبر SQL ممنوع على Supabase [storage.protect_delete] —
+--       تفريغ المساحة الفعلي يتم عبر scripts/purge-contract-documents-storage.mjs
+--       بواجهة Storage API الرسمية.)
+
+CREATE OR REPLACE FUNCTION public.delete_draft_contract_atomic(p_company_id UUID,p_contract_id UUID,p_user_id UUID)
+RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_old contracts%ROWTYPE;
+BEGIN
+  PERFORM assert_relationship_actor(p_company_id,p_user_id);
+  SELECT * INTO v_old FROM contracts WHERE id=p_contract_id AND company_id=p_company_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'العقد غير موجود'; END IF;
+  IF v_old.status<>'draft' THEN RAISE EXCEPTION 'لا يمكن حذف عقد دخل دورة العمل'; END IF;
+  PERFORM set_config('app.relationship_write_company',p_company_id::TEXT,TRUE);
+  DELETE FROM contracts WHERE id=p_contract_id;
+  INSERT INTO audit_log(company_id,user_id,action,entity_type,entity_id,old_values)
+  VALUES(p_company_id,p_user_id,'delete','contract',p_contract_id,to_jsonb(v_old));
+  RETURN jsonb_build_object('id',p_contract_id,'deleted',TRUE);
+END;
+$$;
+
+DROP FUNCTION IF EXISTS public.create_contract_document_atomic(UUID,UUID,TEXT,TEXT,TEXT,INTEGER,TEXT,UUID);
+DROP TABLE IF EXISTS public.contract_documents;
+
+DO $$ DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['crm_contacts','crm_followups','contracts','tenders','tender_cost_items','bonds','project_tasks','reminder_log'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_guard_relationship_writes ON %I',t);
+    EXECUTE format('CREATE TRIGGER trg_guard_relationship_writes BEFORE INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION guard_relationship_writes()',t);
+  END LOOP;
+END $$;
+
+-- Supabase forbids direct SQL deletes on storage.objects (storage.protect_delete
+-- trigger raises 42501). Object purge + bucket removal therefore happen via the
+-- Storage API — run scripts/purge-contract-documents-storage.mjs once (or delete
+-- the bucket from the Supabase dashboard). Here we only attempt the bucket-row
+-- delete guarded, in case the bucket was already emptied by hand.
+DO $$
+BEGIN
+  IF to_regclass('storage.buckets') IS NOT NULL THEN
+    BEGIN
+      DELETE FROM storage.buckets WHERE id = 'contract-documents';
+      RAISE NOTICE 'contract-documents bucket row removed';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'bucket row not removed by SQL (%) — purge objects and delete the bucket via scripts/purge-contract-documents-storage.mjs', SQLERRM;
+    END;
+  END IF;
+END $$;
+
+SELECT 'Migration 116 completed' AS result;
 

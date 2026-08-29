@@ -81,7 +81,7 @@ function baseDb() {
     companies: [{ id: C1, is_active: true }],
     subscriptions: [{ id: 's1', company_id: C1, status: 'active', end_date: '2099-01-01', plan_code: 'enterprise',
       subscription_plans: { code: 'enterprise', features_modules: { tenders: true, contracts: true, cash: true } } }],
-    tenders: [], tender_cost_items: [], contracts: [], contract_documents: [], bonds: [],
+    tenders: [], tender_cost_items: [], contracts: [], bonds: [],
   } as Record<string, Row[]>;
 }
 
@@ -183,14 +183,13 @@ describe('tenders/[id] DELETE + POST', () => {
 });
 
 describe('contracts/[id]', () => {
-  test('GET returns contract with documents', async () => {
-    mockDb = makeDb({ ...baseDb(), contracts: [{ id: CTID, company_id: C1, title: 'عقد', projects: { name: 'مشروع' }, contacts: { name: 'عميل' } }],
-      contract_documents: [{ id: 'doc1', contract_id: CTID, company_id: C1, filename: 'a.pdf' }] });
+  test('GET returns contract fields without documents (storage cancelled)', async () => {
+    mockDb = makeDb({ ...baseDb(), contracts: [{ id: CTID, company_id: C1, title: 'عقد', projects: { name: 'مشروع' }, contacts: { name: 'عميل' } }] });
     const res = await contractGET(req('admin', 'GET', `http://localhost/x/${CTID}`), { params: Promise.resolve({ id: CTID }) });
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.data.project_name).toBe('مشروع');
-    expect(json.data.documents).toHaveLength(1);
+    expect(json.data).not.toHaveProperty('documents');
   });
 
   test('GET rejects invalid id and returns 404', async () => {

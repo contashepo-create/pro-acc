@@ -15,7 +15,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { LoadingSkeleton } from '@/components/ui/LoadingSkeleton';
 import { ActionButtons } from '@/components/ui/ActionButtons';
 import { RecordViewModal } from '@/components/ui/RecordViewModal';
-import { formatDate, escapeHtml } from '@/lib/utils';
+import { formatDate, escapeHtml, roundMoney } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth-store';
 import { companyDisplayMoney } from '@/lib/company-money';
 import { fetchRecord, applyDates, recordOrRow, toDateInput } from '@/lib/form-utils';
@@ -166,10 +166,11 @@ export default function PurchaseInvoicesPage() {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, []);
 
-  const subtotal = form.items.reduce((s: number, it: PurchaseItem) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0);
-  const taxAmount = subtotal * ((Number(form.tax_percent) || 0) / 100);
-  const otherExpensesTotal = (form.other_expenses || []).reduce((s: number, o: OtherExpense) => s + (Number(o.amount) || 0), 0);
-  const grandTotal = subtotal + taxAmount + otherExpensesTotal;
+  // مجاميع مقرّبة بمنزلتين عشريتين — مطابقة لقواعد التقريب في قاعدة البيانات.
+  const subtotal = roundMoney(form.items.reduce((s: number, it: PurchaseItem) => s + (Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0));
+  const taxAmount = roundMoney(subtotal * ((Number(form.tax_percent) || 0) / 100));
+  const otherExpensesTotal = roundMoney((form.other_expenses || []).reduce((s: number, o: OtherExpense) => s + (Number(o.amount) || 0), 0));
+  const grandTotal = roundMoney(subtotal + taxAmount + otherExpensesTotal);
   const addOtherExpense = () => setForm({ ...form, other_expenses: [...(form.other_expenses || []), { description: '', amount: 0 }] });
   const updateOtherExpense = (i: number, patch: Partial<OtherExpense>) => {
     const list = [...(form.other_expenses || [])];
@@ -218,7 +219,11 @@ export default function PurchaseInvoicesPage() {
       if (!it.description.trim()) return 'أدخل بيان كل بند';
       if (!(Number(it.quantity) > 0)) return 'الكمية يجب أن تكون أكبر من صفر';
       if (Number(it.unit_price) < 0) return 'السعر لا يمكن أن يكون سالباً';
+      if (roundMoney(Number(it.unit_price)) !== Number(it.unit_price)) return 'السعر يجب ألا يتجاوز منزلتين عشريتين';
+      if (roundMoney(Number(it.quantity)) !== Number(it.quantity)) return 'الكمية يجب ألا تتجاوز منزلتين عشريتين';
     }
+    // السداد الفوري لا يتجاوز إجمالي الفاتورة (السيرفر يرفضه برسالة عامة).
+    if ((Number(form.paid_amount) || 0) > grandTotal + 0.005) return 'مبلغ السداد يتجاوز إجمالي الفاتورة';
     return '';
   };
 
@@ -247,7 +252,7 @@ export default function PurchaseInvoicesPage() {
             other_expenses: (form.other_expenses || []).filter((o: OtherExpense) => String(o.description || '').trim() && Number(o.amount) > 0),
             payment_account_id: form.payment_account_id || null,
             withholding_rate: withholdingEnabled ? (Number(form.withholding_percent) || 0) / 100 : 0,
-            paid_amount: Number(form.paid_amount) || 0,
+            paid_amount: Math.min(roundMoney(Number(form.paid_amount) || 0), grandTotal),
             bank_safe_id: form.bank_safe_id || null,
           };
 

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import {
   Save, Palette, Sun, Moon, Check, Info, CreditCard, Mail, Phone,
-  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, ExternalLink, Trash2, Key, Globe, MessageSquare, Download,
+  Building2, Calendar, AlertCircle, Bot, Send, RefreshCw, ExternalLink, Trash2, Key, Globe, MessageSquare, Download, Copy,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -102,6 +102,17 @@ interface TelegramSettings {
   const [subscription, setSubscription] = useState<SettingsSubscription | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettingsData>({});
   const [subLoading, setSubLoading] = useState(true);
+  const [copiedSubNumber, setCopiedSubNumber] = useState(false);
+
+  const copySubscriberNumber = async () => {
+    const num = subscription?.subscriber_number;
+    if (!num) return;
+    try {
+      await navigator.clipboard.writeText(num);
+      setCopiedSubNumber(true);
+      setTimeout(() => setCopiedSubNumber(false), 2000);
+    } catch { /* المتصفح لا يدعم النسخ التلقائي */ }
+  };
 
   // Telegram Settings State
   const [telegramAllowed, setTelegramAllowed] = useState(true);
@@ -752,45 +763,50 @@ interface TelegramSettings {
         </Card>
       )}
 
-      {/* Subscription */}
+      {/* Subscription — بطاقة موحدة: رقم المشترك + ملخص الاشتراك + أزرار الإدارة.
+          التفاصيل الكاملة والترقية في صفحة /subscription حتى لا تتكرر نفس
+          المعلومات في قسمين */}
       {tab === 'subscription' && (
         <div className="space-y-4 max-w-2xl">
           {subLoading ? (
             <Card><div className="text-center py-8 text-text-muted">جاري التحميل...</div></Card>
           ) : subscription ? (
             <>
-              {/* Subscriber Number Card - Prominent */}
-              <div className="bg-gradient-to-br from-accent/10 to-transparent border border-accent/20 rounded-2xl p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-text-muted mb-1">رقم المشترك</p>
-                    <p className="text-3xl font-bold text-accent font-mono" dir="ltr">
-                      #{subscription.subscriber_number || subscription.id?.substring(0, 8) || '—'}
-                    </p>
-                  </div>
-                  <div className="w-14 h-14 rounded-2xl bg-accent/20 flex items-center justify-center">
-                    <CreditCard size={28} className="text-accent" />
-                  </div>
-                </div>
-                <p className="text-xs text-text-muted mt-3">رقم فريد دائم لا يتغير — استخدمه عند التواصل مع الدعم</p>
-              </div>
-
-              {/* Subscription Details */}
               <div className="bg-bg-primary border border-border rounded-2xl overflow-hidden">
-                <div className="px-6 py-4 border-b border-border">
-                  <h4 className="font-bold text-text-primary">تفاصيل الاشتراك</h4>
+                {/* رقم المشترك — العنصر الأبرز في البطاقة */}
+                <div className="bg-gradient-to-br from-accent/10 to-transparent p-6 border-b border-border">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-text-muted mb-1">رقم المشترك</p>
+                      <div className="flex items-center gap-3">
+                        <p className="text-3xl font-bold text-accent font-mono" dir="ltr">
+                          {subscription.subscriber_number ? `#${subscription.subscriber_number}` : '—'}
+                        </p>
+                        {subscription.subscriber_number && (
+                          <button
+                            onClick={copySubscriberNumber}
+                            title="نسخ رقم المشترك"
+                            className="p-2 rounded-lg text-text-muted hover:text-accent hover:bg-accent/10 transition-colors"
+                          >
+                            {copiedSubNumber ? <Check size={16} className="text-success" /> : <Copy size={16} />}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="w-14 h-14 rounded-2xl bg-accent/20 flex items-center justify-center">
+                      <CreditCard size={28} className="text-accent" />
+                    </div>
+                  </div>
+                  <p className="text-xs text-text-muted mt-3">
+                    رقم فريد دائم لا يمكن تخمينه ولا يتغير — أرسله مع إيصال الدفع على تليجرام واستخدمه عند التواصل مع الدعم
+                  </p>
                 </div>
+
+                {/* ملخص الاشتراك — صفوف مختصرة فقط، والتفاصيل الكاملة في صفحة الباقات */}
                 <div className="divide-y divide-border">
                   <div className="flex items-center justify-between px-6 py-3">
                     <div className="flex items-center gap-3">
                       <Building2 size={18} className="text-text-muted" />
-                      <span className="text-sm text-text-muted">اسم المشترك</span>
-                    </div>
-                    <span className="font-bold text-text-primary">{company?.name || '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between px-6 py-3">
-                    <div className="flex items-center gap-3">
-                      <CreditCard size={18} className="text-text-muted" />
                       <span className="text-sm text-text-muted">الباقة</span>
                     </div>
                     <span className="font-bold text-accent">{subscription.plan_name || 'تجريبي'}</span>
@@ -809,7 +825,7 @@ interface TelegramSettings {
                       <Calendar size={18} className="text-text-muted" />
                       <span className="text-sm text-text-muted">تاريخ الانتهاء</span>
                     </div>
-                    <span className="font-medium text-text-primary" dir="ltr">{subscription.end_date}</span>
+                    <span className="font-medium text-text-primary" dir="ltr">{subscription.end_date || '—'}</span>
                   </div>
                   <div className="flex items-center justify-between px-6 py-3">
                     <div className="flex items-center gap-3">
@@ -829,12 +845,14 @@ interface TelegramSettings {
                   اشتراكك ينتهي قريباً — يرجى التجديد
                 </div>
               )}
-              <Button onClick={() => window.location.href = '/subscription'} leftIcon={<CreditCard size={16} />}>
-                ترقية / تجديد الاشتراك
-              </Button>
-              <a href="/export-data" className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-bg-secondary border border-border text-text-secondary hover:text-amber-400 text-sm transition-colors">
-                <Download size={16} /> تصدير تقارير بياناتي (Excel / CSV)
-              </a>
+              <div className="flex flex-wrap gap-3">
+                <Button onClick={() => window.location.href = '/subscription'} leftIcon={<CreditCard size={16} />}>
+                  إدارة الاشتراك — ترقية / تجديد
+                </Button>
+                <a href="/export-data" className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-bg-secondary border border-border text-text-secondary hover:text-amber-400 text-sm transition-colors">
+                  <Download size={16} /> تصدير تقارير بياناتي (Excel / CSV)
+                </a>
+              </div>
             </>
           ) : (
             <Card><div className="text-center py-8 text-text-muted">لا يوجد اشتراك. <a href="/subscription" className="text-accent">اشترك الآن</a></div></Card>

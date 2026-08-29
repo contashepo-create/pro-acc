@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, Loader2, Check, X, DollarSign, Image as ImageIcon, Calendar, RefreshCw } from 'lucide-react';
+import { ChevronLeft, Loader2, Check, X, DollarSign, Image as ImageIcon, Calendar, RefreshCw, Hash, Send } from 'lucide-react';
 import Link from 'next/link';
 import { MasterPasswordModal } from '@/components/ui/MasterPasswordModal';
 
@@ -16,7 +16,8 @@ interface UpgradeRequest {
   payment_amount: number;
   payment_date: string;
   payment_time: string;
-  receipt_image_url: string;
+  receipt_image_url: string | null;
+  subscriber_number?: string | null;
   notes: string;
   created_at: string;
   companies: { name: string; email: string; phone: string };
@@ -108,13 +109,25 @@ export default function UpgradeRequestsPage() {
               </div>
 
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm bg-bg-secondary rounded-xl p-3 border border-border">
+                {req.subscriber_number && (
+                  <div className="sm:col-span-2 flex items-center gap-2 font-mono" dir="ltr">
+                    <Hash size={14} className="text-accent" />
+                    <span className="text-accent font-bold">#{req.subscriber_number}</span>
+                    <span className="text-xs text-text-muted font-sans">— طابق إيصال تليجرام مع هذا الرقم</span>
+                  </div>
+                )}
                 <div>تاريخ التحويل: {req.payment_date} {req.payment_time}</div>
                 <div>المبلغ: {req.payment_amount}</div>
                 <div className="col-span-2">ملاحظات: {req.notes || 'لا يوجد'}</div>
-                {req.receipt_image_url && (
+                {/* الإيصالات تصل على تليجرام — الرابط فقط لسجلات قديمة قبل تعطيل الرفع */}
+                {req.receipt_image_url ? (
                   <div className="col-span-2 flex items-center gap-2">
                     <ImageIcon size={14} className="text-accent" />
-                    <a href={req.receipt_image_url} target="_blank" className="text-accent hover:underline text-xs font-semibold">عرض صورة الإيصال</a>
+                    <a href={req.receipt_image_url} target="_blank" className="text-accent hover:underline text-xs font-semibold">عرض صورة الإيصال (سجل قديم)</a>
+                  </div>
+                ) : (
+                  <div className="col-span-2 flex items-center gap-2 text-[#229ED9] text-xs font-semibold">
+                    <Send size={13} /> الإيصال عبر تليجرام — طابقه مع رقم المشترك
                   </div>
                 )}
               </div>

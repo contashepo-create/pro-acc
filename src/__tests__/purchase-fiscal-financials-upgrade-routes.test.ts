@@ -66,7 +66,7 @@ import { POST as closePOST } from '@/app/api/fiscal/[id]/close/route';
 import { POST as closingPOST } from '@/app/api/fiscal/closing/route';
 import { POST as reversingPOST } from '@/app/api/fiscal/reversing/route';
 import { GET as finGET } from '@/app/api/projects/[id]/financials/route';
-import { GET as upgGET, POST as upgPOST } from '@/app/api/subscription/upgrade-request/route';
+import { GET as upgGET, POST as upgPOST, DELETE as upgDELETE } from '@/app/api/subscription/upgrade-request/route';
 import { resetRateLimits } from '@/lib/memory-rate-limit';
 
 const C1 = 'company-1';
@@ -171,12 +171,37 @@ describe('subscription/upgrade-request', () => {
     expect(json.data.requests).toHaveLength(1);
   });
 
-  test('POST creates an upgrade request', async () => {
+  test('POST creates an upgrade request (receipts are Telegram-only now)', async () => {
     mockDb.rpcResults.set('create_upgrade_request_atomic', { data: { id: ID1 }, error: null });
+    const res = await upgPOST(req('admin', 'POST', 'http://localhost/x', {
+      requested_plan_id: ID1, duration_type: 'monthly', payment_method_code: 'bank', payment_amount: 100, payment_date: '2026-01-01',
+    }));
+    expect(res.status).toBe(201);
+  });
+
+  test('POST rejects a stored receipt reference — proof goes via Telegram', async () => {
     const res = await upgPOST(req('admin', 'POST', 'http://localhost/x', {
       requested_plan_id: ID1, duration_type: 'monthly', payment_method_code: 'bank', payment_amount: 100, payment_date: '2026-01-01',
       receipt_image_url: `${C1}/payment-proofs/receipt.jpg`,
     }));
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.message).toContain('تليجرام');
+  });
+
+  test('DELETE cancels the caller own pending request', async () => {
+    mockDb.rpcResults.set('cancel_own_subscription_request', { data: { id: ID1, status: 'cancelled' }, error: null });
+    const res = await upgDELETE(req('admin', 'DELETE', `http://localhost/x?id=${ID1}`));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.request.status).toBe('cancelled');
+  });
+
+  test('DELETE rejects an invalid id and maps not-found', async () => {
+    const res1 = await upgDELETE(req('admin', 'DELETE', 'http://localhost/x?id=nope'));
+    expect(res1.status).toBe(400);
+    mockDb.rpcResults.set('cancel_own_subscription_request', { data: null, error: { message: 'request not found or already reviewed' } });
+    const res2 = await upgDELETE(req('admin', 'DELETE', `http://localhost/x?id=${ID1}`));
+    expect(res2.status).toBe(404);
   });
 });

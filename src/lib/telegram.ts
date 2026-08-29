@@ -53,6 +53,11 @@ export async function sendAdminNotification(text: string): Promise<boolean> {
     return false;
   }
 
+  // Bounded delivery (same as sendTelegramCode): the notification rides along
+  // request paths such as new upgrade/add-on requests, so a hung Telegram API
+  // must never stall the customer's submission.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const res = await fetch(`${TELEGRAM_API}/bot${token}/sendMessage`, {
       method: 'POST',
@@ -62,9 +67,12 @@ export async function sendAdminNotification(text: string): Promise<boolean> {
         text,
         parse_mode: 'HTML',
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
     return res.ok;
   } catch (err) {
+    clearTimeout(timeout);
     console.warn('Telegram notification error:', err);
     return false;
   }

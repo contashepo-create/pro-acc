@@ -12,7 +12,7 @@
 
 ## قواعد إضافة ميجريشن جديد
 1. أنشئ ملفاً جديداً داخل `src/migrations/` باسم `NNN-وصف-قصير.sql` حيث `NNN` هو
-   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `107`).
+   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `116`).
    لا تعتمد على الرقم المكتوب هنا — اقرأه من القرص حتى لا يتقادم:
    ```bash
    ls src/migrations/*.sql | sed 's#.*/##' | cut -d- -f1 | sort -n | tail -1
@@ -148,3 +148,49 @@ existing advisory lock, with a self-healing floor at the actual table max
 used number. Covered by
 `src/__tests__/migration-113-unified-note-numbering.db.test.ts` (both
 orderings + legacy floor, PGlite full schema).
+
+### 114-random-subscriber-numbers.sql
+Replaces 112's sequential allocator (`subscriber_number_seq`: 1000, 1001, …)
+with a random one — a sequential number let anyone who learned one subscriber
+number enumerate the neighbours and use them in support/social-engineering
+attacks against OTHER companies. `next_subscriber_number()` now mints a
+12-character code from an unambiguous alphabet (no 0/O/1/I/L) grouped as
+`XXXX-XXXX-XXXX` (~31¹² combinations), collision-checked against the live
+table. Every legacy all-digit number is re-issued once (one-time change, in
+`created_at` order) and `subscriber_number_seq` is dropped so no future code
+path can reintroduce sequential numbers. The 112 trigger and UNIQUE
+constraint stay untouched. SQL contract covered by
+`src/__tests__/subscriber-number-telegram-proof.test.ts`.
+
+### 115-telegram-payment-proof.sql
+Payment proofs move out of the platform: customers send the receipt
+screenshot to the developer on Telegram, and the request carries only the
+transfer metadata (method, amount, date, time, notes).
+- `create_upgrade_request_atomic` / `create_addon_request_atomic` no longer
+  accept a receipt reference — any non-NULL value is rejected so stale
+  clients cannot smuggle uploads back in (`/api/upload/receipt` was removed).
+- `review_upgrade_request` / `review_addon_request` no longer require a
+  stored receipt file for approval; the full-amount + transfer-date guards
+  stay intact (the admin confirms the screenshot in the Telegram chat).
+- New `cancel_own_subscription_request` RPC lets the owner cancel their own
+  still-pending request, freeing the partial-unique "one pending request"
+  slot so a typo'd request can be resubmitted without developer help.
+
+New upgrade/add-on requests also announce themselves on the admin bot
+(`sendAdminNotification`) with the company's permanent subscriber number, so
+matching the incoming Telegram receipt to the panel request is trivial.
+
+### 116-remove-contract-document-storage.sql
+Cancels the contract-documents storage feature entirely (same policy as 115:
+no files stored on the platform's database/storage).
+- Drops `create_contract_document_atomic` and the `contract_documents` table.
+- Rewrites `delete_draft_contract_atomic` without storage-path collection.
+- Re-attaches the relationship write-guard triggers without the dropped table.
+- Attempts the `contract-documents` bucket-row delete guarded; Supabase forbids
+  SQL deletes on `storage.objects` (`storage.protect_delete` → 42501), so the
+  actual object purge + bucket deletion run ONCE via the Storage API:
+  `node scripts/purge-contract-documents-storage.mjs` (reads the service-role
+  key from .env.local) — or delete the bucket from the Supabase dashboard.
+- `/api/contracts/[id]` POST (upload) and `/api/contracts/[id]/documents/[id]`
+  (signed download) were removed from the app; contract GET no longer returns
+  a `documents` array.

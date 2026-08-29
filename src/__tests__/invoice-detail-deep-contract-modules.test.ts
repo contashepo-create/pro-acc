@@ -80,7 +80,7 @@ function baseDb() {
     subscriptions: [{ id: 's1', company_id: C1, status: 'active', end_date: '2099-01-01', plan_code: 'enterprise',
       subscription_plans: { code: 'enterprise', features_modules: { invoices: true, contracts: true } } }],
     invoices: [], invoice_items: [], contacts: [], projects: [], journal_entries: [], journal_lines: [],
-    contracts: [], contract_documents: [], custom_modules: [],
+    contracts: [], custom_modules: [],
   } as Record<string, Row[]>;
 }
 

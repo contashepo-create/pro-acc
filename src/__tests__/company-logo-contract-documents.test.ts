@@ -1,6 +1,7 @@
 /**
- * Route-boundary tests for company identity + contract documents:
- * /api/company/logo and /api/contracts/[id]/documents/[documentId].
+ * Route-boundary tests for company identity: /api/company/logo.
+ * (The contract-document download route was removed with the storage
+ * cancellation — migration 116.)
  *
  * (The self-service JSON data-export routes were removed entirely — clients
  * download TABLES via /api/company/export-download, Excel/CSV only; see
@@ -67,7 +68,6 @@ let mockDb: ReturnType<typeof makeDb>;
 jest.mock('@/lib/supabase-client', () => ({ getSupabase: () => mockDb }));
 
 import { GET as logoGET, POST as logoPOST } from '@/app/api/company/logo/route';
-import { GET as contractDocGET } from '@/app/api/contracts/[id]/documents/[documentId]/route';
 import { resetRateLimits } from '@/lib/memory-rate-limit';
 
 const C1 = 'company-1';
@@ -117,44 +117,5 @@ describe('company/logo', () => {
     mockDb = makeDb({ ...baseDb(), users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'manager' }] });
     const res = await logoPOST(req('manager', 'POST', 'http://localhost/api/company/logo', { logo_url: 'https://cdn.example.com/logo.png' }));
     expect(res.status).toBe(403);
-  });
-});
-
-describe('contracts/[id]/documents/[documentId] GET', () => {
-  test('rejects an invalid id or document id', async () => {
-    const res = await contractDocGET(req('admin', 'GET', 'http://localhost/x'), { params: Promise.resolve({ id: 'bad', documentId: DOC_ID }) });
-    expect(res.status).toBe(400);
-  });
-
-  test('returns 404 for an unknown document', async () => {
-    const res = await contractDocGET(req('admin', 'GET', 'http://localhost/x'), { params: Promise.resolve({ id: CID, documentId: DOC_ID }) });
-    expect(res.status).toBe(404);
-  });
-
-  test('returns 410 for a legacy inline document reference', async () => {
-    mockDb = makeDb({ ...baseDb(), contract_documents: [{ id: DOC_ID, contract_id: CID, company_id: C1, file_data: 'data:application/pdf;base64,x', filename: 'doc.pdf', content_type: 'application/pdf' }] });
-    const res = await contractDocGET(req('admin', 'GET', 'http://localhost/x'), { params: Promise.resolve({ id: CID, documentId: DOC_ID }) });
-    expect(res.status).toBe(410);
-  });
-
-  test('rejects an unsafe object path (500)', async () => {
-    mockDb = makeDb({ ...baseDb(), contract_documents: [{ id: DOC_ID, contract_id: CID, company_id: C1, file_data: 'storage:contract-documents/../../etc/passwd', filename: 'doc.pdf', content_type: 'application/pdf' }] });
-    const res = await contractDocGET(req('admin', 'GET', 'http://localhost/x'), { params: Promise.resolve({ id: CID, documentId: DOC_ID }) });
-    expect(res.status).toBe(500);
-  });
-
-  test('streams a stored document', async () => {
-    mockDb = makeDb({ ...baseDb(), contract_documents: [{ id: DOC_ID, contract_id: CID, company_id: C1, file_data: `storage:contract-documents/${C1}/${CID}/a.pdf`, filename: 'doc.pdf', content_type: 'application/pdf' }] });
-    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true, body: '%PDF-1.4', headers: { get: () => '10' },
-    } as unknown as Response);
-    try {
-      const res = await contractDocGET(req('admin', 'GET', 'http://localhost/x'), { params: Promise.resolve({ id: CID, documentId: DOC_ID }) });
-      expect(res.status).toBe(200);
-      expect(res.headers.get('Content-Type')).toBe('application/pdf');
-      expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
-    } finally {
-      fetchMock.mockRestore();
-    }
   });
 });
