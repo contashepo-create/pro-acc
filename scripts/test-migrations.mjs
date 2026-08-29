@@ -495,19 +495,24 @@ async function smokeAdminEntitlements(ids) {
   assert.equal(supportTicket.status,'open');
   assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_type='support_ticket' AND entity_id=$1`,[supportTicket.id])).rows[0].count),1);
 
-  const addonCreated=(await db.query(`SELECT create_addon_request_atomic($1,$2,'storage_gb',2,'monthly',$3,CURRENT_DATE,'12:30',$4,'paid') result`,[
+  // 115: receipt images are rejected — proof goes via Telegram; the request
+  // carries only the transfer metadata (p_receipt_image_url must be NULL).
+  await assert.rejects(()=>db.query(`SELECT create_addon_request_atomic($1,$2,'storage_gb',2,'monthly',$3,CURRENT_DATE,'12:30',$4,'paid')`,[
     ids.company,ids.user,paymentMethod,`${ids.company}/receipts/addon.png`,
+  ]));
+  const addonCreated=(await db.query(`SELECT create_addon_request_atomic($1,$2,'storage_gb',2,'monthly',$3,CURRENT_DATE,'12:30',NULL,'paid') result`,[
+    ids.company,ids.user,paymentMethod,
   ])).rows[0].result;
   assert.equal(Number(addonCreated.total_amount_usd),6);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND type='addon_request'`,[ids.company])).rows[0].count),1);
-  await assert.rejects(()=>db.query(`SELECT create_addon_request_atomic($1,$2,'storage_gb',2,'monthly',$3,CURRENT_DATE,'12:30',$4,'duplicate')`,[
-    ids.company,ids.user,paymentMethod,`${ids.company}/receipts/addon-2.png`,
+  await assert.rejects(()=>db.query(`SELECT create_addon_request_atomic($1,$2,'storage_gb',2,'monthly',$3,CURRENT_DATE,'12:30',NULL,'duplicate')`,[
+    ids.company,ids.user,paymentMethod,
   ]));
   assert.equal(Number((await db.query(`SELECT count(*) count FROM company_messages WHERE company_id=$1 AND type='addon_request'`,[ids.company])).rows[0].count),1);
   assert.equal(Number((await db.query(`SELECT count(*) count FROM audit_log WHERE entity_type='addon_request' AND company_id=$1`,[ids.company])).rows[0].count),1);
 
-  const upgradeCreated=(await db.query(`SELECT create_upgrade_request_atomic($1,$2,$3,'monthly',$4,25.50,CURRENT_DATE,'13:00',$5,'paid') result`,[
-    ids.company,ids.user,plan.id,paymentMethod,`${ids.company}/receipts/upgrade.png`,
+  const upgradeCreated=(await db.query(`SELECT create_upgrade_request_atomic($1,$2,$3,'monthly',$4,25.50,CURRENT_DATE,'13:00',NULL,'paid') result`,[
+    ids.company,ids.user,plan.id,paymentMethod,
   ])).rows[0].result;
   assert.equal(upgradeCreated.plan_code,'runtime_secure');
   await db.query(`UPDATE upgrade_requests SET status='rejected' WHERE id=$1`,[upgradeCreated.id]);
@@ -528,8 +533,8 @@ async function smokeAdminEntitlements(ids) {
   await assert.rejects(()=>db.query(`SELECT create_support_ticket_atomic($1,$2,'Cross tenant','Cross tenant message','technical',NULL)`,[
     ids.company,otherUser,
   ]));
-  await assert.rejects(()=>db.query(`SELECT create_upgrade_request_atomic($1,$2,$3,'monthly',$4,25.50,CURRENT_DATE,NULL,$5,NULL)`,[
-    ids.company,otherUser,plan.id,paymentMethod,`${ids.company}/receipts/cross.png`,
+  await assert.rejects(()=>db.query(`SELECT create_upgrade_request_atomic($1,$2,$3,'monthly',$4,25.50,CURRENT_DATE,NULL,NULL,NULL)`,[
+    ids.company,otherUser,plan.id,paymentMethod,
   ]));
   await db.query(`INSERT INTO addon_requests(id,company_id,user_id,addon_type,quantity,duration_type,unit_price_usd,total_amount_usd,status)
     VALUES($1,$2,$3,'extra_user',1,'monthly',10,10,'pending')`,[mismatchedAddon,ids.company,otherUser]);
