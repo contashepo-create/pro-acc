@@ -14,17 +14,45 @@ export async function GET(request: NextRequest) {
     const { page, pageSize } = getPaginationParams(request.url);
     const s = sb();
 
-    const { count: total, error: countErr } = await s.from('companies')
-      .select('*', { count: 'exact', head: true });
+    // Server-side search (q): name / tax number / CR, or the subscriber
+    // number. The number lives on subscriptions, so resolve the matching
+    // company id set first, then constrain both the count and the page —
+    // the developer panel relies on this to handle a subscriber by the
+    // number they send over chat, no matter how many companies exist.
+    const q = (new URL(request.url).searchParams.get('q') || '').trim();
+    let searchIds: string[] | null = null;
+    if (q) {
+      const safe = q.replace(/[%_\\]/g, '');
+      const [nameRes, numRes] = await Promise.all([
+        s.from('companies')
+          .select('id')
+          .or(`name.ilike.%${safe}%,tax_number.ilike.%${safe}%,commercial_registration.ilike.%${safe}%`),
+        s.from('subscriptions').select('company_id').ilike('subscriber_number', `%${safe}%`),
+      ]);
+      if (nameRes.error) throw nameRes.error;
+      if (numRes.error) throw numRes.error;
+      const ids = new Set<string>();
+      (nameRes.data || []).forEach((r: Row) => ids.add(String(r.id)));
+      (numRes.data || []).forEach((r: Row) => { if (r.company_id) ids.add(String(r.company_id)); });
+      searchIds = [...ids];
+      if (searchIds.length === 0) {
+        return success({ companies: [], total: 0, page, pageSize });
+      }
+    }
+
+    const { count: total, error: countErr } = await (searchIds
+      ? s.from('companies').select('*', { count: 'exact', head: true }).in('id', searchIds)
+      : s.from('companies').select('*', { count: 'exact', head: true }));
     if (countErr) throw countErr;
 
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    const { data: companies, error: err } = await s.from('companies')
+    let listQuery = s.from('companies')
       .select('id, name, commercial_registration, tax_number, address, phone, email, is_active, created_at, country, country_code, currency_code, vat_rate')
-      .order('created_at', { ascending: false })
-      .range(from, to);
+      .order('created_at', { ascending: false });
+    if (searchIds) listQuery = listQuery.in('id', searchIds);
+    const { data: companies, error: err } = await listQuery.range(from, to);
     if (err) throw err;
 
     const companyIds = (companies || []).map((c: Row) => c.id);

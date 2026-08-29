@@ -2,10 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Loader2, UserPlus, ShieldCheck } from 'lucide-react';
+import { Eye, EyeOff, Loader2, UserPlus, ShieldCheck, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
 import { useAuthStore } from '@/store/auth-store';
-import { getOperatingCountriesList } from '@/lib/countries';
+import { getOperatingCountriesList, getCountryConfig } from '@/lib/countries';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -19,8 +19,12 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [confirming, setConfirming] = useState(false);
   const [captcha, setCaptcha] = useState<{ id: string; question: string } | null>(null);
   const [captchaAnswer, setCaptchaAnswer] = useState('');
+
+  const countryConfig = getCountryConfig(country);
+  const taxAuthorityLabel = countryConfig.taxAuthority === 'zatca' ? 'الهيئة العامة للزكاة والدخل (ZATCA)' : countryConfig.taxAuthority === 'eta' ? 'هيئة الضرائب المصرية (ETA)' : countryConfig.taxAuthority;
 
   useEffect(() => {
     // Fetch CAPTCHA challenge
@@ -32,7 +36,10 @@ export default function RegisterPage() {
       .catch(() => {});
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // The operating country is irreversible (migration 104 freezes it, the
+  // platform has no reset — 088), so the first click only opens an explicit
+  // final-confirmation step; the real registration runs from it.
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     if (!companyName.trim()) { setError('يرجى إدخال اسم الشركة'); return; }
@@ -40,8 +47,13 @@ export default function RegisterPage() {
     if (!email.trim()) { setError('يرجى إدخال البريد الإلكتروني'); return; }
     if (!password || password.length < 8) { setError('كلمة المرور يجب أن تكون 8 أحرف على الأقل'); return; }
     if (!captcha || !captchaAnswer) { setError('يرجى إكمال التحقق الأمني'); return; }
+    setConfirming(true);
+  };
 
+  const doRegister = async () => {
+    if (!captcha) return;
     setLoading(true);
+    setError('');
     try {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
@@ -54,6 +66,7 @@ export default function RegisterPage() {
         checkSession();
       } else {
         setError(data.message || 'حدث خطأ');
+        setConfirming(false);
         // Refresh CAPTCHA on failure
         setCaptchaAnswer('');
         fetch('/api/auth/register')
@@ -63,6 +76,7 @@ export default function RegisterPage() {
       }
     } catch {
       setError('حدث خطأ في الاتصال بالخادم');
+      setConfirming(false);
     } finally {
       setLoading(false);
     }
@@ -137,9 +151,21 @@ export default function RegisterPage() {
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
-          <p className="text-xs text-text-muted mt-1">
-            تُثبَّت عند إنشاء الحساب: الضريبة والعملة والتأمينات وفاتورة الزكاة/ETA تتبع هذه الدولة ولا يمكن تغييرها لاحقاً.
-          </p>
+          <div className="mt-2 rounded-xl border-2 border-danger bg-danger-light/60 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle size={20} className="text-danger shrink-0" />
+              <p className="text-sm font-bold text-danger">قرار نهائي — لا رجعة فيه</p>
+            </div>
+            <p className="text-sm text-text-primary leading-relaxed">
+              بمجرد اختيار الدولة ({getOperatingCountriesList().map((c) => c.label).join(' أو ')}) تُثبَّت على حسابك للأبد:
+              ضريبة القيمة المضافة، العملة، التأمينات الاجتماعية، السنة المالية وجهة الإيرادات
+              (ZATCA في السعودية أو ETA في مصر).
+            </p>
+            <p className="text-sm font-semibold text-danger mt-2">
+              لا يمكن تغيير الدولة لاحقاً — ولا تصفير بيانات الشركة — ولا البدء من جديد.
+              إن أردت نظام دولة أخرى، فالطريق الوحيد هو إنشاء حساب جديد.
+            </p>
+          </div>
         </div>
 
         <div>
@@ -188,18 +214,54 @@ export default function RegisterPage() {
           </div>
         )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="btn btn-primary w-full h-11 text-base"
-        >
-          {loading ? (
-            <Loader2 size={20} className="animate-spin" />
-          ) : (
-            <UserPlus size={20} />
-          )}
-          {loading ? 'جاري إنشاء الحساب...' : 'إنشاء حساب جديد'}
-        </button>
+        {confirming ? (
+          <div className="rounded-xl border-2 border-danger bg-danger-light/60 p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={20} className="text-danger shrink-0" />
+              <p className="text-sm font-bold text-danger">تأكيد أخير — لا رجعة في هذا القرار</p>
+            </div>
+            <p className="text-sm text-text-primary leading-relaxed">
+              ستُنشئ حساب شركتك على نظام <span className="font-bold">{countryConfig.name}</span>:
+              العملة {countryConfig.currencySymbol} ({countryConfig.currencyCode})، ضريبة القيمة المضافة {Math.round(countryConfig.vatRate * 100)}٪،
+              السنة المالية وجهة الإيرادات {taxAuthorityLabel}.
+              <span className="font-semibold text-danger">
+                {' '}بمجرد الإنشاء: لا تغيير للدولة، ولا تصفير للبيانات، ولا بدء من جديد.
+              </span>
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                disabled={loading}
+                className="btn btn-secondary flex-1 h-11 text-sm"
+              >
+                تراجع
+              </button>
+              <button
+                type="button"
+                onClick={doRegister}
+                disabled={loading}
+                className="btn btn-danger flex-1 h-11 text-sm"
+              >
+                {loading ? <Loader2 size={18} className="animate-spin" /> : <AlertTriangle size={18} />}
+                {loading ? 'جاري الإنشاء...' : 'أفهم — أنشئ الحساب'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="submit"
+            disabled={loading}
+            className="btn btn-primary w-full h-11 text-base"
+          >
+            {loading ? (
+              <Loader2 size={20} className="animate-spin" />
+            ) : (
+              <UserPlus size={20} />
+            )}
+            {loading ? 'جاري إنشاء الحساب...' : 'إنشاء حساب جديد'}
+          </button>
+        )}
       </form>
 
       <div className="mt-6 text-center space-y-2">
