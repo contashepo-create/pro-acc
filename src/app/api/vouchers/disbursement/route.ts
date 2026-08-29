@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     // SECURITY: Validate disbursementType against an allowlist before
     // interpolating into the PostgREST `.or()` filter to prevent filter
     // injection (cross-company data leak).
-    const DISBURSEMENT_TYPE_WHITELIST = new Set(['supplier', 'employee_advance', 'subcontractor', 'client_refund', 'other']);
+    const DISBURSEMENT_TYPE_WHITELIST = new Set(['supplier', 'supplier_advance', 'employee_advance', 'subcontractor', 'client_refund', 'salary', 'custody', 'owner_drawings', 'loan_repayment', 'other']);
     const safeDisbType = disbType && DISBURSEMENT_TYPE_WHITELIST.has(disbType) ? disbType : null;
 
     const offset = (page - 1) * pageSize;
@@ -107,6 +107,7 @@ export async function POST(request: NextRequest) {
       disbursement_type: body.disbursement_type || body.disbursementType,
       contact_id: blankToNull(body.contact_id || body.contactId),
       employee_id: blankToNull(body.employee_id || body.employeeId),
+      counterpart_account_id: blankToNull(body.counterpart_account_id || body.counterpartAccountId),
       project_id: blankToNull(body.project_id || body.projectId),
       amount: typeof body.amount === 'string' ? parseFloat(body.amount) : body.amount,
       bank_safe_id: body.bank_safe_id || body.bankSafeId,
@@ -153,6 +154,7 @@ export async function POST(request: NextRequest) {
       p_user_id: auth.userId,
       p_auto_fifo: autoFifo,
       p_project_id: parsed.data.project_id || null,
+      p_counterpart_account_id: parsed.data.counterpart_account_id || null,
     });
     if (createErr) throw createErr;
     const voucher = data as Row;

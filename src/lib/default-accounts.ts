@@ -68,6 +68,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccount[] = [
   { code: '3100', name: 'رأس المال', nameEn: 'Capital', type: 'equity', parentCode: '3000' },
   { code: '3200', name: 'الأرباح المحتجزة', nameEn: 'Retained Earnings', type: 'equity', parentCode: '3000' },
   { code: '3300', name: 'أرباح العام', nameEn: 'Current Year Earnings', type: 'equity', parentCode: '3000' },
+  { code: '3400', name: 'المسحوبات الشخصية', nameEn: 'Owner Drawings', type: 'equity', parentCode: '3000' },
 
   // الإيرادات - Revenue 4000-4999
   { code: '4000', name: 'الإيرادات', nameEn: 'Revenue', type: 'revenue', isHeader: true },

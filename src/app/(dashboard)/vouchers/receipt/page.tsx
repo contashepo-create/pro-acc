@@ -27,6 +27,7 @@ interface ReceiptRow {
   date?: string;
   receipt_type: string;
   contact_name?: string;
+  employee_name?: string;
   amount: number;
   bank_name?: string;
   status?: string;
@@ -40,6 +41,7 @@ interface ReceiptForm {
   receipt_type: string;
   bank_safe_id: string;
   contact_id: string;
+  employee_id: string;
   project_id: string;
   amount: number;
   reason: string;
@@ -53,6 +55,7 @@ const emptyForm = (): ReceiptForm => ({
   receipt_type: 'client',
   bank_safe_id: '',
   contact_id: '',
+  employee_id: '',
   project_id: '',
   amount: 0,
   reason: '',
@@ -66,6 +69,7 @@ export default function ReceiptPage() {
   const [banks, setBanks] = useState<BankOption[]>([]);
   const [clients, setClients] = useState<PartyOption[]>([]);
   const [suppliers, setSuppliers] = useState<PartyOption[]>([]);
+  const [employees, setEmployees] = useState<PartyOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
   const [openInvoices, setOpenInvoices] = useState<OpenInvoice[]>([]);
@@ -84,22 +88,24 @@ export default function ReceiptPage() {
     try {
       if (showSkeleton) setLoading(true);
       setError('');
-      const [recRes, bankRes, cliRes, supRes, projRes, curRes] = await Promise.all([
+      const [recRes, bankRes, cliRes, supRes, empRes, projRes, curRes] = await Promise.all([
         fetch('/api/vouchers/receipt'),
         fetch('/api/banks?pageSize=500'),
         fetch('/api/contacts?type=client&pageSize=500'),
         fetch('/api/contacts?type=supplier&pageSize=500'),
+        fetch('/api/employees'),
         fetch('/api/projects'),
         fetch('/api/currencies'),
       ]);
-      const [recJson, bankJson, cliJson, supJson, projJson, curJson] = await Promise.all([
-        recRes.json(), bankRes.json(), cliRes.json(), supRes.json(), projRes.json(), curRes.json(),
+      const [recJson, bankJson, cliJson, supJson, empJson, projJson, curJson] = await Promise.all([
+        recRes.json(), bankRes.json(), cliRes.json(), supRes.json(), empRes.json(), projRes.json(), curRes.json(),
       ]);
       if (recJson.success) setReceipts(recJson.data?.receipts || []);
       else setError(recJson.message || 'فشل');
       if (bankJson.success) setBanks(bankJson.data?.banks || []);
       if (cliJson.success) setClients(cliJson.data?.contacts || cliJson.data?.clients || []);
       if (supJson.success) setSuppliers(supJson.data?.contacts || []);
+      if (empJson.success) setEmployees(empJson.data?.employees || []);
       if (projJson.success) setProjects(projJson.data?.rows || projJson.data?.projects || projJson.data || []);
       if (curJson.success) setCurrencies(curJson.data || []);
     } catch {
@@ -142,8 +148,12 @@ export default function ReceiptPage() {
     if (!form.bank_safe_id) { setSaveError('يجب اختيار الخزينة أو البنك'); return; }
     if (!form.amount || form.amount <= 0) { setSaveError('يجب إدخال مبلغ صحيح'); return; }
     if (!form.reason.trim()) { setSaveError('البيان مطلوب'); return; }
-    if ((form.receipt_type === 'client' || form.receipt_type === 'supplier_refund') && !form.contact_id) {
-      setSaveError(form.receipt_type === 'client' ? 'العميل مطلوب لتحصيل الذمم' : 'المورد مطلوب لاسترداد المورد');
+    if (['client', 'client_advance', 'supplier_refund', 'supplier_advance_return'].includes(form.receipt_type) && !form.contact_id) {
+      setSaveError('الطرف مطلوب لهذا النوع من سند القبض');
+      return;
+    }
+    if (form.receipt_type === 'employee_repayment' && !form.employee_id) {
+      setSaveError('الموظف مطلوب لتسديد سلفة الموظف');
       return;
     }
 
@@ -175,6 +185,7 @@ export default function ReceiptPage() {
           receipt_type: form.receipt_type,
           bank_safe_id: form.bank_safe_id,
           contact_id: form.contact_id || null,
+          employee_id: form.employee_id || null,
           project_id: form.project_id || null,
           amount: form.amount,
           reason: form.reason.trim(),
@@ -219,6 +230,7 @@ export default function ReceiptPage() {
       receipt_type: String(src.receipt_type ?? 'client'),
       bank_safe_id: String(src.bank_safe_id ?? ''),
       contact_id: String(src.contact_id ?? ''),
+      employee_id: String(src.employee_id ?? ''),
       project_id: String(src.project_id ?? ''),
       amount: Number(src.amount) || 0,
       reason: String(src.reason ?? ''),
@@ -253,7 +265,12 @@ export default function ReceiptPage() {
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'success' | 'info' | 'accent'; label: string }> = {
       client: { variant: 'success', label: 'عميل' },
+      client_advance: { variant: 'success', label: 'دفعة مقدمة عميل' },
       supplier_refund: { variant: 'info', label: 'استرداد مورد' },
+      supplier_advance_return: { variant: 'info', label: 'استرداد سلفة مورد' },
+      employee_repayment: { variant: 'accent', label: 'تسديد سلفة' },
+      owner_capital: { variant: 'accent', label: 'رأس مال' },
+      loan: { variant: 'info', label: 'قرض وارد' },
       general: { variant: 'accent', label: 'عام' },
     };
     const m = map[type] || { variant: 'info', label: type };
@@ -281,7 +298,9 @@ export default function ReceiptPage() {
     },
   ];
 
-  const parties = form.receipt_type === 'supplier_refund' ? suppliers : clients;
+  const contactTypes = ['client', 'client_advance', 'supplier_refund', 'supplier_advance_return'];
+  const supplierTypes = ['supplier_refund', 'supplier_advance_return'];
+  const parties = supplierTypes.includes(form.receipt_type) ? suppliers : clients;
   const bankLabel = (bank: BankOption) => bank.type === 'safe' ? `${bank.name} — خزينة` : bank.type === 'bank' ? `${bank.name} — بنك` : bank.name;
 
   if (loading) return <LoadingSkeleton variant="table" count={8} />;
@@ -291,7 +310,7 @@ export default function ReceiptPage() {
     <div className="space-y-6">
       <PageHeader
         title="سندات القبض"
-        description="تحصيل عميل أو استرداد مورد أو قبض عام — يُرحَّل مدين الخزينة ودائن الطرف، ويُربط بالمشروع إن وُجد"
+        description="تحصيل عميل أو سلفة أو استرداد مورد أو تسديد سلفة أو رأس مال أو قرض — يُرحَّل مدين الخزينة ودائن الحساب الصحيح"
         actions={
           <Button onClick={() => { setEditingReceipt(null); setForm(emptyForm()); setOpenInvoices([]); setAllocations({}); setAutoFifo(true); setShowModal(true); }} leftIcon={<Plus size={18} />}>
             إضافة سند قبض
@@ -319,7 +338,7 @@ export default function ReceiptPage() {
       >
         <div className="space-y-4">
           <p className="text-xs text-text-muted">
-            تحصيل العميل يخفض الذمم 1130. الاسترداد من المورد يخفض الدائنين 2110. القبض العام يُرحَّل على إيرادات أخرى 4200. المشروع اختياري: إن رُبط ظهر في ربح المشروع، وإلا بقي في نتيجة الشركة.
+            تحصيل العميل 1130، دفعة مقدمة من عميل 2180، استرداد مورد 2110، استرداد سلفة مورد 1190، تسديد سلفة موظف 1160، رأس مال 3100، قرض 2130، وقبض عام 4200.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
@@ -327,15 +346,20 @@ export default function ReceiptPage() {
               label="نوع السند"
               value={form.receipt_type}
               onChange={(v) => {
-                setForm({ ...form, receipt_type: v, contact_id: '' });
+                setForm({ ...form, receipt_type: v, contact_id: '', employee_id: '' });
                 setOpenInvoices([]);
                 setAllocations({});
                 setPartyBalance('');
               }}
               options={[
-                { value: 'client', label: 'تحصيل من عميل' },
-                { value: 'supplier_refund', label: 'استرداد من مورد' },
-                { value: 'general', label: 'قبض عام (إيراد آخر)' },
+                { value: 'client', label: 'تحصيل من عميل (ذمم 1130)' },
+                { value: 'client_advance', label: 'دفعة مقدمة من عميل (2180)' },
+                { value: 'supplier_refund', label: 'استرداد من مورد (2110)' },
+                { value: 'supplier_advance_return', label: 'استرداد سلفة مورد (1190)' },
+                { value: 'employee_repayment', label: 'تسديد سلفة موظف (1160)' },
+                { value: 'owner_capital', label: 'زيادة رأس مال (3100)' },
+                { value: 'loan', label: 'قرض وارد (2130)' },
+                { value: 'general', label: 'قبض عام — إيراد آخر (4200)' },
               ]}
             />
             <Select
@@ -360,15 +384,23 @@ export default function ReceiptPage() {
               onChange={(v) => setForm({ ...form, bank_safe_id: v })}
               options={[{ value: '', label: 'اختر الخزينة أو البنك' }, ...banks.map((b) => ({ value: b.id, label: bankLabel(b) }))]}
             />
-            {form.receipt_type !== 'general' && (
+            {contactTypes.includes(form.receipt_type) && (
               <Select
-                label={form.receipt_type === 'client' ? 'العميل' : 'المورد'}
+                label={supplierTypes.includes(form.receipt_type) ? 'المورد' : 'العميل'}
                 value={form.contact_id}
                 onChange={(v) => {
                   setForm({ ...form, contact_id: v });
                   void loadPartyContext(v, form.receipt_type);
                 }}
-                options={[{ value: '', label: form.receipt_type === 'client' ? 'اختر عميلاً' : 'اختر مورداً' }, ...parties.map((c) => ({ value: c.id, label: c.name }))]}
+                options={[{ value: '', label: supplierTypes.includes(form.receipt_type) ? 'اختر مورداً' : 'اختر عميلاً' }, ...parties.map((c) => ({ value: c.id, label: c.name }))]}
+              />
+            )}
+            {form.receipt_type === 'employee_repayment' && (
+              <Select
+                label="الموظف"
+                value={form.employee_id}
+                onChange={(v) => setForm({ ...form, employee_id: v })}
+                options={[{ value: '', label: 'اختر موظفاً' }, ...employees.map((e) => ({ value: e.id, label: e.name }))]}
               />
             )}
             <Select

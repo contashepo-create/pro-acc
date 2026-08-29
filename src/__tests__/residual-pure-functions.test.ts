@@ -182,6 +182,10 @@ describe('remaining shared validation callbacks', () => {
     expect(receiptVoucherCreateSchema.safeParse(receiptBase).success).toBe(false);
     expect(receiptVoucherCreateSchema.safeParse({ ...receiptBase, contact_id: UUID2 }).success).toBe(true);
     expect(receiptVoucherCreateSchema.safeParse({ ...receiptBase, receipt_type: 'general' }).success).toBe(true);
+    expect(receiptVoucherCreateSchema.safeParse({ ...receiptBase, receipt_type: 'loan' }).success).toBe(true);
+    expect(receiptVoucherCreateSchema.safeParse({ ...receiptBase, receipt_type: 'client_advance' }).success).toBe(false);
+    expect(receiptVoucherCreateSchema.safeParse({ ...receiptBase, receipt_type: 'employee_repayment' }).success).toBe(false);
+    expect(receiptVoucherCreateSchema.safeParse({ ...receiptBase, receipt_type: 'employee_repayment', employee_id: UUID2 }).success).toBe(true);
     const voucher = {
       date: '2026-08-20', disbursement_type: 'other', amount: 100,
       bank_safe_id: UUID1, reason: 'pay', invoice_items: [
@@ -194,6 +198,10 @@ describe('remaining shared validation callbacks', () => {
     expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, contact_id: UUID2 }).success).toBe(true);
     expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, disbursement_type: 'employee_advance' }).success).toBe(false);
     expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, disbursement_type: 'employee_advance', employee_id: UUID2 }).success).toBe(true);
+    expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, disbursement_type: 'supplier_advance' }).success).toBe(false);
+    expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, disbursement_type: 'owner_drawings' }).success).toBe(true);
+    expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, disbursement_type: 'salary' }).success).toBe(false);
+    expect(disbursementVoucherCreateSchema.safeParse({ ...disbursementBase, disbursement_type: 'salary', employee_id: UUID2 }).success).toBe(true);
     const movement = { item_id: UUID1, warehouse_id: UUID2, type: 'add', quantity: 0 };
     expect(inventoryMovementSchema.safeParse(movement).success).toBe(false);
     expect(inventoryMovementSchema.safeParse({ ...movement, type: 'adjust' }).success).toBe(true);

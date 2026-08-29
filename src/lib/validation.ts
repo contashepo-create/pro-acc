@@ -337,7 +337,7 @@ export const purchaseReceiveSchema = z.object({
 // --------------- Voucher Receipt ---------------
 
 export const voucherReceiptSchema = z.object({
-  type: z.enum(['client', 'supplier_refund', 'general'] as const, {
+  type: z.enum(['client', 'client_advance', 'supplier_refund', 'supplier_advance_return', 'employee_repayment', 'owner_capital', 'loan', 'general'] as const, {
     message: 'نوع سند القبض غير صالح',
   }),
   contactId: z.string().uuid('رقم الطرف غير صالح').optional().nullable(),
@@ -360,7 +360,7 @@ export const voucherReceiptSchema = z.object({
 // --------------- Voucher Disbursement ---------------
 
 export const voucherDisbursementSchema = z.object({
-  type: z.enum(['supplier', 'client_refund', 'employee_advance', 'other'] as const, {
+  type: z.enum(['supplier', 'supplier_advance', 'client_refund', 'employee_advance', 'subcontractor', 'salary', 'custody', 'owner_drawings', 'loan_repayment', 'other'] as const, {
     message: 'نوع سند الصرف غير صالح',
   }),
   contactId: z.string().uuid('رقم الطرف غير صالح').optional().nullable(),
@@ -400,10 +400,12 @@ export const voucherUpdateSchema = z.object({
  */
 export const receiptVoucherCreateSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }),
-  receipt_type: z.enum(['client', 'supplier_refund', 'general'] as const, {
+  receipt_type: z.enum(['client', 'client_advance', 'supplier_refund', 'supplier_advance_return', 'employee_repayment', 'owner_capital', 'loan', 'general'] as const, {
     message: 'نوع سند القبض غير صالح',
   }),
   contact_id: z.string().uuid('رقم الطرف غير صالح').optional().nullable(),
+  employee_id: z.string().uuid('رقم الموظف غير صالح').optional().nullable(),
+  counterpart_account_id: z.string().uuid('الحساب المقابل غير صالح').optional().nullable(),
   project_id: z.string().uuid('رقم المشروع غير صالح').optional().nullable(),
   amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
   bank_safe_id: z.string().uuid('رقم الخزينة/البنك غير صالح'),
@@ -417,8 +419,11 @@ export const receiptVoucherCreateSchema = z.object({
   currency_code: z.string().regex(/^[A-Za-z]{3}$/, 'رمز العملة يجب أن يكون 3 أحرف').optional().nullable(),
   exchange_rate: z.number().positive('سعر الصرف يجب أن يكون موجباً').optional().nullable(),
 }).strict().superRefine((voucher, ctx) => {
-  if ((voucher.receipt_type === 'client' || voucher.receipt_type === 'supplier_refund') && !voucher.contact_id) {
+  if (['client', 'client_advance', 'supplier_refund', 'supplier_advance_return'].includes(voucher.receipt_type) && !voucher.contact_id) {
     ctx.addIssue({ code: 'custom', path: ['contact_id'], message: 'الطرف مطلوب لهذا النوع من سند القبض' });
+  }
+  if (voucher.receipt_type === 'employee_repayment' && !voucher.employee_id) {
+    ctx.addIssue({ code: 'custom', path: ['employee_id'], message: 'الموظف مطلوب لتسديد سلفة الموظف' });
   }
   const ids = voucher.invoice_items?.map((item) => item.invoice_id) || [];
   if (new Set(ids).size !== ids.length) {
@@ -431,11 +436,12 @@ export const receiptVoucherCreateSchema = z.object({
  */
 export const disbursementVoucherCreateSchema = z.object({
   date: z.string().refine(isValidDateString, { message: 'التاريخ غير صالح' }),
-  disbursement_type: z.enum(['supplier', 'employee_advance', 'subcontractor', 'client_refund', 'other'] as const, {
+  disbursement_type: z.enum(['supplier', 'supplier_advance', 'employee_advance', 'subcontractor', 'client_refund', 'salary', 'custody', 'owner_drawings', 'loan_repayment', 'other'] as const, {
     message: 'نوع سند الصرف غير صالح',
   }),
   contact_id: z.string().uuid('رقم الطرف غير صالح').optional().nullable(),
   employee_id: z.string().uuid('رقم الموظف غير صالح').optional().nullable(),
+  counterpart_account_id: z.string().uuid('الحساب المقابل غير صالح').optional().nullable(),
   project_id: z.string().uuid('رقم المشروع غير صالح').optional().nullable(),
   amount: z.number().positive('المبلغ يجب أن يكون أكبر من صفر'),
   bank_safe_id: z.string().uuid('رقم الخزينة/البنك غير صالح'),
@@ -446,12 +452,12 @@ export const disbursementVoucherCreateSchema = z.object({
   })).optional(),
   auto_fifo: z.boolean().optional(),
 }).strict().superRefine((voucher, ctx) => {
-  const contactRequired = ['supplier', 'subcontractor', 'client_refund'].includes(voucher.disbursement_type);
+  const contactRequired = ['supplier', 'supplier_advance', 'subcontractor', 'client_refund'].includes(voucher.disbursement_type);
   if (contactRequired && !voucher.contact_id) {
     ctx.addIssue({ code: 'custom', path: ['contact_id'], message: 'الطرف مطلوب لهذا النوع من سند الصرف' });
   }
-  if (voucher.disbursement_type === 'employee_advance' && !voucher.employee_id) {
-    ctx.addIssue({ code: 'custom', path: ['employee_id'], message: 'الموظف مطلوب لسلفة الموظف' });
+  if (['employee_advance', 'salary', 'custody'].includes(voucher.disbursement_type) && !voucher.employee_id) {
+    ctx.addIssue({ code: 'custom', path: ['employee_id'], message: 'الموظف مطلوب لهذا النوع من سند الصرف' });
   }
   const ids = voucher.invoice_items?.map((item) => item.invoice_id) || [];
   if (new Set(ids).size !== ids.length) {

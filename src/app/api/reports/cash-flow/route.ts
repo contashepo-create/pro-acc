@@ -101,7 +101,10 @@ function allocate(
 
 function classify(code: string): 'operating' | 'investing' | 'financing' {
   if (code.startsWith('12') || code.startsWith('13')) return 'investing';
-  if (code.startsWith('22') || code.startsWith('31') || code.startsWith('32')) return 'financing';
+  if (
+    code.startsWith('22') || code.startsWith('31') || code.startsWith('32') || code.startsWith('34')
+    || code.startsWith('213') || code.startsWith('221')
+  ) return 'financing';
   return 'operating';
 }
 

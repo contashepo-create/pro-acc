@@ -31,18 +31,18 @@ export interface SchemaContext {
 // sales-invoice writer — the seed must include it or every company setup
 // inside these tests fails with 'حسابات المخزون (1170) ... غير مكتملة'.
 const COA_SEED = [
-  '1000', '1110', '1130', '1150', '1160', '1170', '1180', '1230', '1290',
-  '2120', '2140',
-  '3000', '3100', '3200',
-  '4100', '4210',
-  '5100', '5450',
+  '1000', '1110', '1130', '1150', '1160', '1170', '1180', '1190', '1230', '1290',
+  '2110', '2120', '2130', '2140', '2150', '2180',
+  '3000', '3100', '3200', '3400',
+  '4100', '4200', '4210',
+  '5100', '5400', '5450',
 ].map((code) => ({
   code,
   name: `حساب ${code}`,
   name_en: `Account ${code}`,
-  type: code === '4100' || code === '4210' ? 'revenue'
-    : code === '5100' || code === '5450' ? 'expense'
-    : ['2120', '2140'].includes(code) ? 'liability'
+  type: code === '4100' || code === '4210' || code === '4200' ? 'revenue'
+    : code === '5100' || code === '5450' || code === '5400' ? 'expense'
+    : ['2110', '2120', '2130', '2140', '2150', '2180'].includes(code) ? 'liability'
     : code.startsWith('3') ? 'equity'
     : 'asset',
   parent_code: null,

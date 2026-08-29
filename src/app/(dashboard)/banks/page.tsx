@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus } from 'lucide-react';
+import { ArrowLeftRight, Plus } from 'lucide-react';
+import { toast } from '@/components/ui/Toast';
+import { localDateISO } from '@/lib/fiscal-calendar';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { DataTable } from '@/components/ui/DataTable';
 import { Button } from '@/components/ui/Button';
@@ -35,6 +37,10 @@ export default function BanksPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [form, setForm] = useState<BankForm>({ name: '', type: 'bank', account_number: '', opening_balance: 0 });
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [transferSaving, setTransferSaving] = useState(false);
+  const [transferError, setTransferError] = useState('');
+  const [transfer, setTransfer] = useState({ from_id: '', to_id: '', amount: 0, date: localDateISO(), reason: '' });
 
   const fetchData = async () => {
     try {
@@ -100,6 +106,34 @@ export default function BanksPage() {
     }
   };
 
+  const handleTransfer = async () => {
+    if (!transfer.from_id || !transfer.to_id) { setTransferError('اختر الخزينة المصدر والوجهة'); return; }
+    if (!transfer.amount || transfer.amount <= 0) { setTransferError('يجب إدخال مبلغ صحيح'); return; }
+    if (!transfer.reason.trim()) { setTransferError('سبب التحويل مطلوب'); return; }
+    setTransferSaving(true); setTransferError('');
+    try {
+      const res = await fetch('/api/banks/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from_id: transfer.from_id,
+          to_id: transfer.to_id,
+          amount: transfer.amount,
+          date: transfer.date,
+          reason: transfer.reason.trim(),
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success('تم التحويل بين الخزائن');
+        setShowTransfer(false);
+        setTransfer({ from_id: '', to_id: '', amount: 0, date: localDateISO(), reason: '' });
+        fetchData();
+      } else setTransferError(json.message || 'فشل التحويل');
+    } catch { setTransferError('خطأ في الاتصال بالخادم'); }
+    finally { setTransferSaving(false); }
+  };
+
   const handleDelete = async (bank: BankRow) => {
     try {
       const res = await fetch(`/api/banks/${bank.id}`, { method: 'DELETE' });
@@ -152,7 +186,7 @@ export default function BanksPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="البنوك والخزائن" description="إدارة الحسابات البنكية والخزائن النقدية" actions={<Button onClick={() => { setEditingBank(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة بنك/خزينة</Button>} />
+      <PageHeader title="البنوك والخزائن" description="إدارة الحسابات البنكية والخزائن النقدية — يمكن التحويل بينها بقيد مدين الوجهة ودائن المصدر" actions={<div className="flex gap-2"><Button variant="secondary" onClick={() => { setTransferError(''); setShowTransfer(true); }} leftIcon={<ArrowLeftRight size={18} />}>تحويل بين خزائن</Button><Button onClick={() => { setEditingBank(null); setShowModal(true); }} leftIcon={<Plus size={18} />}>إضافة بنك/خزينة</Button></div>} />
       {banks.length === 0 ? <EmptyState title="لا توجد بنوك أو خزائن" actionLabel="إضافة بنك/خزينة" onAction={() => setShowModal(true)} /> : <DataTable columns={columns} data={banks} searchable searchKeys={['name', 'account_number']} />}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingBank(null); }} title={editingBank ? `تعديل: ${editingBank.name}` : 'إضافة بنك/خزينة'} size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => { setShowModal(false); setEditingBank(null); }}>إلغاء</Button><Button onClick={handleSave} disabled={saving}>{saving ? 'جاري الحفظ...' : 'حفظ'}</Button></div>}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -161,6 +195,16 @@ export default function BanksPage() {
           <Input label="رقم الحساب" value={form.account_number} onChange={(e)=>setForm({...form, account_number: e.target.value})} placeholder="1234567890" />
           <Input label="الرصيد الافتتاحي" type="number" disabled={!!editingBank} value={form.opening_balance} onChange={(e)=>setForm({...form, opening_balance: parseFloat(e.target.value) || 0})} placeholder="0" />
           {saveError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{saveError}</div>}
+        </div>
+      </Modal>
+      <Modal isOpen={showTransfer} onClose={() => setShowTransfer(false)} title="تحويل بين خزائن أو بنوك" size="lg" footer={<div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setShowTransfer(false)}>إلغاء</Button><Button onClick={handleTransfer} disabled={transferSaving}>{transferSaving ? 'جاري التحويل...' : 'تحويل'}</Button></div>}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Select label="من" value={transfer.from_id} onChange={(v) => setTransfer({ ...transfer, from_id: v })} options={[{ value: '', label: 'اختر المصدر' }, ...banks.filter((b) => b.is_active !== false).map((b) => ({ value: b.id, label: `${b.name} (${money(b.balance)})` }))]} />
+          <Select label="إلى" value={transfer.to_id} onChange={(v) => setTransfer({ ...transfer, to_id: v })} options={[{ value: '', label: 'اختر الوجهة' }, ...banks.filter((b) => b.is_active !== false && b.id !== transfer.from_id).map((b) => ({ value: b.id, label: b.name }))]} />
+          <Input label="التاريخ" type="date" value={transfer.date} onChange={(e) => setTransfer({ ...transfer, date: e.target.value })} />
+          <Input label="المبلغ" type="number" value={transfer.amount} onChange={(e) => setTransfer({ ...transfer, amount: parseFloat(e.target.value) || 0 })} />
+          <Input label="البيان" className="col-span-2" value={transfer.reason} onChange={(e) => setTransfer({ ...transfer, reason: e.target.value })} placeholder="سبب التحويل" />
+          {transferError && <div className="col-span-2 bg-danger/10 border border-danger/20 text-danger text-sm rounded-lg p-3">{transferError}</div>}
         </div>
       </Modal>
     </div>
