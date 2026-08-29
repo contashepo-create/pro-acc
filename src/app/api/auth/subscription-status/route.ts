@@ -15,6 +15,8 @@ export async function GET(request: NextRequest) {
       plan_code: access.planCode,
       end_date: access.endDate,
       status: access.status,
+      // رقم المشترك الدائم — يعرض في تاب الاشتراك بالإعدادات للتواصل مع الدعم
+      subscriber_number: access.subscriberNumber,
       reason: access.reason || null,
       features: access.features,
     });

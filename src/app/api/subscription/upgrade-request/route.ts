@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase-client';
-import { requireApiAuth, handleApiError, success, error, parseBody, requireModulePermission } from '@/lib/api-helpers';
-import { trustedReceiptReference } from '@/lib/safe-input';
+import { requireApiAuth, requireModulePermission, handleApiError, success, error, parseBody } from '@/lib/api-helpers';
+import { sendAdminNotification, escapeTelegramHtml } from '@/lib/telegram';
+
+import type { Row } from '@/lib/types';
 
 const sb = () => getSupabase();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -56,8 +58,12 @@ export async function POST(request: NextRequest) {
     if (paymentTime && !/^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(paymentTime)) return error('وقت الدفع غير صالح');
     if (body.notes !== undefined && typeof body.notes !== 'string') return error('الملاحظات غير صالحة');
     if (notes && notes.length > 2000) return error('الملاحظات طويلة جداً');
-    const receiptReference = trustedReceiptReference(body.receipt_image_url, auth.companyId);
-    if (!receiptReference) return error('يجب رفع إيصال الدفع عبر التخزين الآمن أولاً');
+    // Receipt images are no longer accepted: the screenshot is sent to the
+    // developer on Telegram. Reject any stale reference explicitly so old
+    // clients cannot silently reintroduce uploads.
+    if (body.receipt_image_url !== undefined && body.receipt_image_url !== null && body.receipt_image_url !== '') {
+      return error('لم نعد نقبل رفع صور الإيصالات. أرسل صورة الإيصال عبر تليجرام من نافذة الطلب.', 400);
+    }
 
     // Tenant ownership, catalogue price, active payment method, duplicate
     // protection, request, admin message and audit share one transaction.
@@ -70,14 +76,88 @@ export async function POST(request: NextRequest) {
       p_payment_amount: paymentAmount,
       p_payment_date: paymentDate,
       p_payment_time: paymentTime,
-      p_receipt_image_url: receiptReference,
+      p_receipt_image_url: null,
       p_notes: notes,
     });
     if (createError?.code === '23505') return error('لديك طلب ترقية معلق بالفعل', 409);
     if (createError) throw createError;
 
-    return success({ request: data, message: 'تم إرسال طلب الترقية. سيتم مراجعته من الإدارة قريباً' }, 201);
+    // Best-effort admin-bot announcement with the subscriber reference so the
+    // developer can match the incoming Telegram receipt to this request.
+    // Never fails the request when Telegram is unreachable.
+    void notifyAdminOfUpgradeRequest(auth.companyId, auth.userId, data as Row | null, {
+      plan_id: requestedPlanId,
+      duration_type: String(durationType),
+      payment_method_code: paymentMethod,
+      payment_amount: paymentAmount,
+      payment_date: paymentDate,
+      payment_time: paymentTime,
+      notes,
+    });
+
+    return success({ request: data, message: 'تم إرسال طلب الترقية. أرسل صورة الإيصال عبر تليجرام وسيتم المراجعة قريباً' }, 201);
   } catch (err) {
     return handleApiError(err);
+  }
+}
+
+/** DELETE ?id=… — the owner withdraws their own still-pending request. */
+export async function DELETE(request: NextRequest) {
+  try {
+    const auth = await requireApiAuth(request, { skipModuleGuard: true });
+    const id = request.nextUrl.searchParams.get('id') || '';
+    if (!UUID.test(id)) return error('id غير صالح');
+
+    const { data, error: cancelError } = await sb().rpc('cancel_own_subscription_request', {
+      p_company_id: auth.companyId,
+      p_user_id: auth.userId,
+      p_request_id: id,
+      p_kind: 'upgrade',
+    });
+    if (cancelError) {
+      const message = String(cancelError.message || '');
+      if (/not found/i.test(message)) return error('الطلب غير موجود أو تمت مراجعته مسبقاً', 404);
+      throw cancelError;
+    }
+    return success({ request: data, message: 'تم إلغاء الطلب' });
+  } catch (err) {
+    return handleApiError(err);
+  }
+}
+
+async function notifyAdminOfUpgradeRequest(
+  companyId: string,
+  userId: string,
+  created: Row | null,
+  details: {
+    plan_id: string; duration_type: string; payment_method_code: string;
+    payment_amount: number; payment_date: string; payment_time: string | null; notes: string | null;
+  },
+): Promise<void> {
+  try {
+    const s = sb();
+    const [companyRes, subRes, planRes] = await Promise.all([
+      s.from('companies').select('name, email, phone').eq('id', companyId).maybeSingle(),
+      s.from('subscriptions').select('subscriber_number, plan_code').eq('company_id', companyId)
+        .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+      s.from('subscription_plans').select('name, currency').eq('id', details.plan_id).maybeSingle(),
+    ]);
+    const company = (companyRes.data || {}) as Row;
+    const sub = (subRes.data || {}) as Row;
+    const plan = (planRes.data || {}) as Row;
+    const lines = [
+      '🔔 <b>طلب ترقية/تجديد جديد</b>',
+      `🏢 الشركة: ${escapeTelegramHtml(String(company.name || '—'))}`,
+      `#️⃣ رقم المشترك: <code>${escapeTelegramHtml(String(sub.subscriber_number || '—'))}</code>`,
+      `📦 الباقة المطلوبة: ${escapeTelegramHtml(String(plan.name || '—'))} (${details.duration_type === 'yearly' ? 'سنوي' : 'شهري'})`,
+      `💵 المبلغ: ${details.payment_amount} ${escapeTelegramHtml(String(plan.currency || 'USD'))}`,
+      `💳 طريقة الدفع: ${escapeTelegramHtml(details.payment_method_code)}`,
+      `📅 تاريخ التحويل: ${details.payment_date}${details.payment_time ? ` ${details.payment_time}` : ''}`,
+      `🧾 الإيصال: يُرسله العميل على تليجرام`,
+    ];
+    if (details.notes) lines.push(`📝 ملاحظات: ${escapeTelegramHtml(details.notes.slice(0, 300))}`);
+    await sendAdminNotification(lines.join('\n'));
+  } catch (e) {
+    console.warn('[upgrade-request] admin notification failed:', e);
   }
 }

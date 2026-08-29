@@ -29,9 +29,17 @@ export async function GET(req: NextRequest) {
     if (status !== 'all') query = query.eq('status', status);
     const { data, error: queryError } = await query;
     if (queryError) throw queryError;
+    // رقم المشترك الدائم لكل شركة — به يطابق المطور إيصال تليجرام مع الطلب
+    const companyIds = [...new Set((data || []).map((row: Row) => row.company_id).filter(Boolean))];
+    const subsResult = companyIds.length
+      ? await sb().from('subscriptions').select('company_id, subscriber_number').in('company_id', companyIds)
+      : { data: [] as Row[] | null, error: null };
+    if (subsResult.error) throw subsResult.error;
+    const subscriberMap = new Map(((subsResult.data || []) as Row[]).map((row: Row) => [row.company_id, row.subscriber_number]));
     const requests = await Promise.all((data || []).map(async (row: Row) => ({
       ...row,
       receipt_image_url: await signPrivateReceiptReference(sb(), row.receipt_image_url == null ? null : String(row.receipt_image_url)),
+      subscriber_number: subscriberMap.get(row.company_id) || null,
     })));
     return success({ requests });
   } catch (err) {

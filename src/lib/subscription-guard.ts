@@ -49,6 +49,8 @@ export interface SubscriptionAccess {
   daysRemaining: number;
   features: Record<string, boolean>;
   isExpired: boolean;
+  /** Permanent, unguessable subscriber reference (subscriptions.subscriber_number). */
+  subscriberNumber: string | null;
   reason?: string;
 }
 
@@ -70,14 +72,14 @@ const EXPIRED_ACCESS_WHITELIST: (path: string) => boolean = (() => {
     '/api/auth/subscription',  // read own plan
     '/api/auth/subscription-status',
     '/api/auth/subscribe',              // initiate a payment; never activates a paid plan
-    '/api/subscription/upgrade-request',    // submit payment proof
+    '/api/subscription/upgrade-request',    // submit payment proof metadata
     '/api/subscription/activate-code',      // enter activation code
     '/api/subscription/addon-request',      // buy add-ons while renewing
     '/api/support',
     '/api/support/',
     '/api/company/export-download',  // TABLE export (Excel/CSV) of the company's own data
-    '/api/upload/receipt',           // attach a payment receipt while renewing
     '/api/payment-methods',          // list active payment methods on the renewal page
+    '/api/app-settings',             // support contacts (Telegram handle) shown on the renewal page
   ];
   // More specific matcher
   return (p: string) => {
@@ -177,7 +179,7 @@ export async function getSubscriptionAccess(companyId: string): Promise<Subscrip
   const { data: sub } = await s
     .from('subscriptions')
     .select(`
-      id, status, start_date, end_date, trial_end_date, plan_code,
+      id, status, start_date, end_date, trial_end_date, plan_code, subscriber_number,
       subscription_plans(code, name, trial_days, features_modules)
     `)
     .eq('company_id', companyId)
@@ -195,6 +197,7 @@ export async function getSubscriptionAccess(companyId: string): Promise<Subscrip
       daysRemaining: 0,
       features: {},
       isExpired: true,
+      subscriberNumber: null,
       reason: 'no_subscription',
     };
   }
@@ -263,6 +266,9 @@ export async function getSubscriptionAccess(companyId: string): Promise<Subscrip
     daysRemaining,
     features,
     isExpired,
+    subscriberNumber: subr.subscriber_number != null && String(subr.subscriber_number).trim() !== ''
+      ? String(subr.subscriber_number)
+      : null,
     reason,
   };
 }
