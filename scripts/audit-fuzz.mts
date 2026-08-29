@@ -227,41 +227,6 @@ if (safeInput.trustedReceiptReference(`${companyId}/receipt-1.pdf`, companyId) !
   finding('HIGH', 'helper/trustedReceiptReference', 'rejected valid company object path');
 }
 
-// hasAllowedMagicBytes — positive & negative & polyglot attempts.
-// Positive samples are structurally VALID files (the hardened checker
-// requires structure, not just a prefix).
-const magic = safeInput.hasAllowedMagicBytes;
-const validJpeg = Buffer.concat([
-  Buffer.from([0xff, 0xd8]),
-  Buffer.from([0xff, 0xe0, 0x00, 0x10]), Buffer.from('JFIF\u0000', 'latin1'), Buffer.from([0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]),
-  Buffer.from([0xff, 0xc0, 0x00, 0x0b]), Buffer.from([0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00]),
-  Buffer.from([0xff, 0xd9]),
-]);
-const validPng = Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  Buffer.from([0x00, 0x00, 0x00, 0x0d]), Buffer.from('IHDR'),
-  Buffer.from([0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00]),
-]);
-const validPdf = Buffer.concat([Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<</Size 1>>\nstartxref\n0\n'), Buffer.from('%%EOF')]);
-if (!magic(validJpeg, 'image/jpeg')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real JPEG structure');
-if (!magic(validPng, 'image/png')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real PNG structure');
-if (!magic(validPdf, 'application/pdf')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'rejected real PDF structure');
-if (magic(Buffer.from('MZ\u0090\u0000exe'), 'application/pdf')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'accepted EXE as PDF');
-if (magic(Buffer.from('<html><script>alert(1)</script></html>'), 'application/pdf')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'accepted HTML as PDF');
-// polyglot: HTML payload with %PDF- header inside first 1KB
-const polyglotPdf = Buffer.concat([Buffer.from('<!--'), Buffer.from('%PDF-1.7'), Buffer.from('--><script>alert(1)</script>'), Buffer.alloc(500, 0x41)]);
-if (magic(polyglotPdf, 'application/pdf')) {
-  finding('HIGH', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML+JS file with "%PDF-" bytes inside first 1KB passes PDF validation');
-}
-// polyglot: HTML with FF D8 FF prefix passes JPEG check
-const polyglotJpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from('<html><script>alert(1)</script>')]);
-if (magic(polyglotJpg, 'image/jpeg')) {
-  finding('HIGH', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML+JS file starting with FF D8 FF passes JPEG validation');
-}
-// polyglot: PNG header followed by HTML payload
-const polyglotPng = Buffer.concat([validPng, Buffer.from('<script>alert(1)</script>')]);
-if (magic(polyglotPng, 'image/png')) finding('HIGH', 'helper/hasAllowedMagicBytes', 'POLYGLOT ACCEPTED: HTML after PNG header passes validation');
-
 // generateUBLInvoice — XML injection resistance
 const ublBase: Parameters<typeof generateUBLInvoice>[0] = {
   uuid: '00000000-0000-4000-8000-000000000000',

@@ -1470,15 +1470,16 @@ async function smokeAtomicWriters(ids) {
   await assert.rejects(()=>db.query(`SELECT create_contract_atomic($1,$2::jsonb,$3)`,[
     c,JSON.stringify({title:'Cross contract',project_id:foreignProject.id,start_date:'2026-04-01',end_date:'2026-12-31',value:1}),u,
   ]));
-  const document=(await db.query(`SELECT create_contract_document_atomic($1,$2,'contract.pdf','application/pdf',$3,100,'runtime',$4) result`,[
+  // 116: contract-document storage is cancelled — the upload RPC and the
+  // table are dropped, and the draft-contract delete no longer reports
+  // storage paths.
+  await assert.rejects(()=>db.query(`SELECT create_contract_document_atomic($1,$2,'contract.pdf','application/pdf',$3,100,'runtime',$4)`,[
     c,draftContract.id,`storage:contract-documents/${c}/${draftContract.id}/runtime.pdf`,u,
-  ])).rows[0].result;
-  assert.ok(document.id);
-  await assert.rejects(()=>db.query(`INSERT INTO contract_documents(contract_id,company_id,filename,uploaded_by) VALUES($1,$2,'direct.pdf',$3)`,[
-    draftContract.id,c,u,
   ]));
+  assert.equal((await db.query(`SELECT to_regclass('public.contract_documents') reg`)).rows[0].reg,null);
   const deletedContract=(await db.query(`SELECT delete_draft_contract_atomic($1,$2,$3) result`,[c,draftContract.id,u])).rows[0].result;
-  assert.equal(deletedContract.storage_paths.length,1);
+  assert.equal(deletedContract.deleted,true);
+  assert.equal(deletedContract.storage_paths,undefined);
   const activeContract=(await db.query(`SELECT create_contract_atomic($1,$2::jsonb,$3) result`,[
     c,JSON.stringify({title:'Active contract',start_date:'2026-04-01',end_date:'2026-12-31',value:500,status:'active'}),u,
   ])).rows[0].result;

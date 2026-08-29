@@ -97,9 +97,9 @@ describe('contracts/[id] DELETE branches', () => {
     expect(res2.status).toBe(409);
   });
 
-  test('cleans storage paths that belong to this contract and filters unsafe ones', async () => {
+  test('deletes without storage cleanup (contract-document storage cancelled)', async () => {
     mockDb.rpcResults.set('delete_draft_contract_atomic', {
-      data: { storage_paths: [`${C1}/${ID1}/a.pdf`, '../../evil.pdf'] }, error: null,
+      data: { id: ID1, deleted: true }, error: null,
     });
     const res = await conDELETE(req('admin', 'DELETE', `http://localhost/x/${ID1}`), { params: Promise.resolve({ id: ID1 }) });
     expect(res.status).toBe(200);

@@ -2,15 +2,15 @@
  * Tests for security-oriented input validation (safe-input.ts).
  * Pure functions — no external dependencies.
  *
- * Covers: path traversal, URL validation, payment proof trust boundaries,
- * file magic-byte verification, and polyglot/injection defense.
+ * Covers: path traversal, URL validation, and payment proof trust boundaries.
+ * (magic-byte file checks were removed with the contract-document storage
+ * upload feature they served.)
  */
 
 import {
   safeInternalPath,
   safeHttpsUrl,
   trustedReceiptReference,
-  hasAllowedMagicBytes,
 } from '@/lib/safe-input';
 
 describe('safeInternalPath', () => {
@@ -138,73 +138,5 @@ describe('trustedReceiptReference', () => {
       if (original !== undefined) process.env.NEXT_PUBLIC_SUPABASE_URL = original;
       else delete process.env.NEXT_PUBLIC_SUPABASE_URL;
     }
-  });
-});
-
-describe('hasAllowedMagicBytes', () => {
-  // Valid PNG: 8-byte signature + IHDR at offset 12
-  const validPng = Buffer.alloc(20);
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(validPng, 0);
-  // IHDR chunk: 4-byte length (13) + "IHDR"
-  validPng.writeUInt32BE(13, 8);
-  Buffer.from('IHDR').copy(validPng, 12);
-
-  test('accepts valid PNG', () => {
-    expect(hasAllowedMagicBytes(validPng, 'image/png')).toBe(true);
-  });
-
-  test('rejects PNG with wrong magic bytes', () => {
-    const bad = Buffer.from('not a png at all');
-    expect(hasAllowedMagicBytes(bad, 'image/png')).toBe(false);
-  });
-
-  test('rejects PNG without IHDR', () => {
-    const noIhdr = Buffer.alloc(20);
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(noIhdr, 0);
-    Buffer.from('XXXX').copy(noIhdr, 12);
-    expect(hasAllowedMagicBytes(noIhdr, 'image/png')).toBe(false);
-  });
-
-  test('rejects EXE files disguised as images', () => {
-    const exe = Buffer.alloc(100);
-    exe[0] = 0x4d; // M
-    exe[1] = 0x5a; // Z
-    expect(hasAllowedMagicBytes(exe, 'image/png')).toBe(false);
-    expect(hasAllowedMagicBytes(exe, 'image/jpeg')).toBe(false);
-  });
-
-  test('rejects HTML polyglots in image MIME', () => {
-    const html = Buffer.from('<html><script>alert(1)</script>');
-    expect(hasAllowedMagicBytes(html, 'image/png')).toBe(false);
-    expect(hasAllowedMagicBytes(html, 'image/jpeg')).toBe(false);
-  });
-
-  test('rejects PHP in image MIME', () => {
-    const php = Buffer.from('<?php system("id"); ?>');
-    expect(hasAllowedMagicBytes(php, 'image/png')).toBe(false);
-  });
-
-  // Valid PDF: %PDF-1.4 header + %%EOF trailer
-  test('accepts valid PDF', () => {
-    const pdfContent = '%PDF-1.4\n1 0 obj\n<< >>\nendobj\nxref\n0 1\ntrailer\n<<>>\nstartxref\n9\n%%EOF\n';
-    const pdf = Buffer.from(pdfContent);
-    expect(hasAllowedMagicBytes(pdf, 'application/pdf')).toBe(true);
-  });
-
-  test('rejects PDF without %%EOF trailer', () => {
-    const pdf = Buffer.from('%PDF-1.4\n1 0 obj\n<< >>\nendobj\n');
-    expect(hasAllowedMagicBytes(pdf, 'application/pdf')).toBe(false);
-  });
-
-  test('rejects empty buffer', () => {
-    expect(hasAllowedMagicBytes(Buffer.alloc(0), 'image/png')).toBe(false);
-  });
-
-  // iframe injection
-  test('rejects SVG/iframe injection payloads', () => {
-    const svg = Buffer.from('<svg onload="alert(1)">');
-    expect(hasAllowedMagicBytes(svg, 'image/png')).toBe(false);
-    const iframe = Buffer.from('<iframe src="http://evil.com">');
-    expect(hasAllowedMagicBytes(iframe, 'image/jpeg')).toBe(false);
   });
 });

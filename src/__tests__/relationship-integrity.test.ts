@@ -68,4 +68,13 @@ describe('relationship lifecycle routes and database guards', () => {
     expect(migration).toContain('invalid tender cost tenant link');
     expect(migration).toContain('invalid reminder tenant link');
   });
+
+  it('116 re-attaches relationship guards without contract_documents and drops its storage', () => {
+    const migration = read('src/migrations/116-remove-contract-document-storage.sql');
+    expect(migration).toContain("ARRAY['crm_contacts','crm_followups','contracts','tenders','tender_cost_items','bonds','project_tasks','reminder_log']");
+    expect(migration).toContain('DROP TABLE IF EXISTS public.contract_documents');
+    expect(migration).toContain('DROP FUNCTION IF EXISTS public.create_contract_document_atomic');
+    expect(migration).toContain("bucket_id='contract-documents'");
+    expect(migration).not.toContain('FROM contract_documents WHERE');
+  });
 });

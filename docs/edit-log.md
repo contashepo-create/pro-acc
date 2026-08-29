@@ -4811,3 +4811,19 @@ src/store/auth-store.ts
 
 ### ملاحظة تشغيلية للمطور
 إذا استمر ظهور «دالة قاعدة البيانات المطلوبة غير مثبتة» بعد التحديث: طبّق الميجريشنز المعلقة على قاعدة البيانات الحية (`npx tsx src/migrations/run.ts`) — أرقام الإصدارات من 097 فما فوق تضيف معاملات العملة/السداد للدوال الذرية.
+
+## 2026-08-29 — إلغاء مرفقات مستندات العقود من التخزين (ميجريشن 116)
+
+### القرار
+بعد إلغاء إيصالات الدفع المخزنة (115) أُلغيت آخر ميزة ترفع ملفات إلى تخزين Supabase: مستندات العقود (PDF/صور في دلو `contract-documents`). الهدف: صفر ملفات على قاعدة البيانات/التخزين حتى لا تزدحم المساحة — الملفات تتبادل خارجياً (تليجرام).
+
+### ما نُفّذ
+1. **(ميجريشن 116)** يسقط `create_contract_document_atomic` وجدول `contract_documents` بسياسته وفهارسه، ويعيد كتابة `delete_draft_contract_atomic` بلا تجميع مسارات تخزين، ويعيد تركيب محفزات حراسة العلاقات دون الجدول المحذوف، و**يفرّغ دلو `contract-documents` من كائناته ويمسح الدلو** من `storage` (خطوة محمولة تتخطى محركات بلا مخطط storage) — يحرر مساحة Supabase فعلياً.
+2. **التطبيق**: حذف `POST /api/contracts/[id]` (الرفع) و`GET /api/contracts/[id]/documents/[documentId]` (التنزيل الموقّع) بالكامل؛ GET العقد لم يعد يرجع `documents`؛ DELETE بلا تنظيف تخزين.
+3. **المكتبات**: حذف `contractDocumentSchema` من relationship-validation، و`hasAllowedMagicBytes` ومساعداته من safe-input، و`countUsedStorageBytes` من plan-limits (لم يعد له مستدعٍ — لم يعد هناك رفع يُحسب).
+4. **الاختبارات**: تحديث 10 ملفات اختبار (contract-detail-post يثبت الآن أن POST لم يعد موجوداً؛ relationship-integrity يثبت محتوى 116؛ إعادة كتابة plan-storage-functions على hasModule فقط؛ audit-hardening وsafe-input وresidual-pure-functions بلا دوال الملفات المحذوفة).
+5. **العقود نفسها بقيت كاملة** (إنشاء/تعديل/انتقال حالة/حذف مسودة عبر الـ RPCs الذرية) — أُلغي فقط مرفق الملفات.
+
+### التحقق
+- `npm run test:migrations` ناجح (يشمل تأكيدات 116: الجدول والدالة محلّيان، حذف المسودة يعمل بلا storage_paths).
+- `npx tsc --noEmit` نظيف · eslint 0 أخطاء (67 تحذيراً تراثياً) · jest **205 مجموعات / 2213 اختبار ناجح** · `npm run build` ناجح · إعادة توليد `supabase-full-schema.sql` (117 ميجريشن).

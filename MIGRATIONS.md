@@ -12,7 +12,7 @@
 
 ## قواعد إضافة ميجريشن جديد
 1. أنشئ ملفاً جديداً داخل `src/migrations/` باسم `NNN-وصف-قصير.sql` حيث `NNN` هو
-   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `115`).
+   **الرقم التسلسلي التالي غير المستخدم** (آخر رقم حالياً: `116`).
    لا تعتمد على الرقم المكتوب هنا — اقرأه من القرص حتى لا يتقادم:
    ```bash
    ls src/migrations/*.sql | sed 's#.*/##' | cut -d- -f1 | sort -n | tail -1
@@ -179,3 +179,15 @@ transfer metadata (method, amount, date, time, notes).
 New upgrade/add-on requests also announce themselves on the admin bot
 (`sendAdminNotification`) with the company's permanent subscriber number, so
 matching the incoming Telegram receipt to the panel request is trivial.
+
+### 116-remove-contract-document-storage.sql
+Cancels the contract-documents storage feature entirely (same policy as 115:
+no files stored on the platform's database/storage).
+- Drops `create_contract_document_atomic`, the `contract_documents` table and
+  the private `contract-documents` storage bucket (objects deleted first, so
+  Supabase storage space is actually freed).
+- Rewrites `delete_draft_contract_atomic` without storage-path collection.
+- Re-attaches the relationship write-guard triggers without the dropped table.
+- `/api/contracts/[id]` POST (upload) and `/api/contracts/[id]/documents/[id]`
+  (signed download) were removed from the app; contract GET no longer returns
+  a `documents` array.

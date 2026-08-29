@@ -4,7 +4,7 @@ import { getCountryConfig, getCountriesList, COUNTRIES } from '@/lib/countries';
 import { safeInternalPath, safeHttpsUrl } from '@/lib/safe-input';
 import { telegramConfigSchema, pushSubscriptionSchema, pushQueueSchema, complaintPatchSchema, adminComplaintPatchSchema, adminSupportPatchSchema } from '@/lib/communication-validation';
 import {
-  crmCreateSchema, crmUpdateSchema, contractCreateSchema, contractUpdateSchema, contractDocumentSchema,
+  crmCreateSchema, crmUpdateSchema, contractCreateSchema, contractUpdateSchema,
   tenderCreateSchema, tenderUpdateSchema, tenderCostItemSchema, bondCreateSchema,
   bondUpdateSchema, ganttCreateSchema, ganttUpdateSchema, taskDependencyCreateSchema,
 } from '@/lib/relationship-validation';
@@ -145,8 +145,6 @@ describe('remaining relationship schema callbacks', () => {
     expect(contractUpdateSchema.safeParse({}).success).toBe(false);
     expect(contractUpdateSchema.safeParse({ title: 'Updated' }).success).toBe(true);
     expect(contractUpdateSchema.safeParse({ project_id: UUID1 }).success).toBe(true);
-    expect(contractDocumentSchema.safeParse({ filename: 'invoice.pdf', content_type: 'application/pdf', file_data: 'x' }).success).toBe(true);
-    expect(contractDocumentSchema.safeParse({ filename: '../bad.pdf', content_type: 'application/pdf', file_data: 'x' }).success).toBe(false);
   });
 
   test('validates tender dates, updates and positive cost items', () => {
