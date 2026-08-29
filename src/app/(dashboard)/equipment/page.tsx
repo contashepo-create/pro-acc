@@ -33,6 +33,11 @@ interface EquipmentRow {
   projects?: { name?: string };
 }
 interface NameOption { id: string; name: string; }
+
+/** صمام أمان: أي شكل غير متوقع من الـ API يتحول لمصفوفة فارغة بدل انهيار العرض. */
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
 interface EquipmentForm {
   equipment_id: string;
   project_id: string;
@@ -61,8 +66,12 @@ export default function EquipmentCostsPage() {
       const [eqJson, projJson, asJson] = await Promise.all([eqRes.json(), projRes.json(), asRes.json()]);
       if (eqJson.success) setRows(eqJson.data?.rows ?? []);
       else setError(eqJson.message || 'فشل التحميل');
-      if (projJson.success) setProjects(projJson.data?.rows ?? projJson.data ?? []);
-      if (asJson.success) setAssets(asJson.data?.rows ?? asJson.data ?? []);
+      // /api/projects يعيد { rows: [...] } بينما /api/fixed-assets يعيد
+      // { assets: [...] } — القراءة الخاطئة (rows للمسارين) جعلت الحالة كائنًا
+      // بدل مصفوفة، فانهار assets.map أثناء تصيير الصفحة كاملةً (خطأ
+      // "نعتذر عن هذا الخطأ" في الإنتاج). Array.isArray صمام أمان إضافي.
+      if (projJson.success) setProjects(asArray(projJson.data?.rows));
+      if (asJson.success) setAssets(asArray(asJson.data?.assets));
     } catch { setError('فشل تحميل البيانات'); }
     finally { setLoading(false); }
   };

@@ -41,9 +41,13 @@ describe('equipment costs page renders', () => {
       success: true,
       data: { rows: [{ id: 'p1', name: 'مشروع برج' }], total: 1 },
     };
+    // REAL shape: /api/fixed-assets returns { assets: [...] } — NOT rows.
+    // The earlier mock used data.rows, which masked the production crash
+    // ("نعتذر عن هذا الخطأ" — assets.map is not a function). See
+    // scripts/equipment-live-repro.ts + equipment-live-replay.test.tsx.
     responses['assets'] = {
       success: true,
-      data: { rows: [{ id: 'a1', name: 'حفارة' }], total: 1 },
+      data: { assets: [{ id: 'a1', name: 'حفارة' }], total: 1 },
     };
   });
 
