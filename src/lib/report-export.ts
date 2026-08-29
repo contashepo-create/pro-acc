@@ -95,11 +95,16 @@ const INVENTORY_TYPE: Record<string, string> = {
   in: 'إضافة', out: 'صرف', transfer: 'تحويل', transfer_in: 'تحويل وارد', transfer_out: 'تحويل صادر', adjust: 'تسوية',
 };
 const RECEIPT_TYPE: Record<string, string> = {
-  client: 'تحصيل من عميل', supplier_refund: 'استرداد من مورد', general: 'عام',
+  client: 'تحصيل من عميل', client_advance: 'دفعة مقدمة من عميل',
+  supplier_refund: 'استرداد من مورد', supplier_advance_return: 'استرداد دفعة مقدمة لمورد',
+  employee_repayment: 'تسديد سلفة موظف', owner_capital: 'زيادة رأس مال',
+  loan: 'قرض وارد', general: 'عام',
 };
 const DISBURSEMENT_TYPE: Record<string, string> = {
-  supplier: 'سداد مورد', employee_advance: 'سلفة موظف', subcontractor: 'سداد مقاول باطن',
-  client_refund: 'استرداد لعميل', other: 'أخرى',
+  supplier: 'سداد مورد', supplier_advance: 'دفعة مقدمة لمورد',
+  employee_advance: 'سلفة موظف', subcontractor: 'سداد مقاول باطن',
+  client_refund: 'استرداد لعميل', salary: 'صرف راتب', custody: 'عهدة موظف',
+  owner_drawings: 'مسحوبات المالك', loan_repayment: 'سداد قرض', other: 'أخرى',
 };
 const CUSTODY_TX_TYPE: Record<string, string> = {
   add: 'إضافة لعهدة', expense: 'صرف من عهدة', settle: 'تسوية', refund: 'رد عهدة',

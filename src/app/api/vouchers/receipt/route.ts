@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     // it into the PostgREST `.or()` filter. Unvalidated user input here is a
     // PostgREST filter-injection vector that could widen the filter to other
     // companies' rows.
-    const RECEIPT_TYPE_WHITELIST = new Set(['client', 'supplier_refund', 'general']);
+    const RECEIPT_TYPE_WHITELIST = new Set(['client', 'client_advance', 'supplier_refund', 'supplier_advance_return', 'employee_repayment', 'owner_capital', 'loan', 'general']);
     const safeReceiptType = receiptType && RECEIPT_TYPE_WHITELIST.has(receiptType) ? receiptType : null;
 
     const offset = (page - 1) * pageSize;
@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
       .select(`
         *,
         contacts(name),
+        employees(name),
         banks_safes(name),
         journal_entries(number)
       `, { count: 'exact' })
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest) {
       count = fallbackResult.count || 0;
     }
 
-    const receipts = await hydratePartyNames(s, auth.companyId, data || [], { contacts: true });
+    const receipts = await hydratePartyNames(s, auth.companyId, data || [], { contacts: true, employees: true });
 
     return success({
       receipts,
@@ -106,6 +107,8 @@ export async function POST(request: NextRequest) {
       date: body.date,
       receipt_type: body.receipt_type || body.receiptType,
       contact_id: blankToNull(body.contact_id || body.contactId),
+      employee_id: blankToNull(body.employee_id || body.employeeId),
+      counterpart_account_id: blankToNull(body.counterpart_account_id || body.counterpartAccountId),
       project_id: blankToNull(body.project_id || body.projectId),
       amount: typeof body.amount === 'string' ? parseFloat(body.amount) : body.amount,
       bank_safe_id: body.bank_safe_id || body.bankSafeId,
@@ -156,6 +159,8 @@ export async function POST(request: NextRequest) {
       ...(parsed.data.currency_code
         ? { p_currency_code: parsed.data.currency_code, p_exchange_rate: parsed.data.exchange_rate ?? null }
         : {}),
+      p_counterpart_account_id: parsed.data.counterpart_account_id || null,
+      p_employee_id: parsed.data.employee_id || null,
     });
     if (createErr) throw createErr;
     const voucher = data as Row;

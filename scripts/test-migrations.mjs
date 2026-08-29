@@ -250,6 +250,8 @@ async function seedLedger() {
     ['5210', 'Salaries', 'expense', false], ['5260', 'Depreciation expense', 'expense', false], ['5400', 'General expense', 'expense', false],
     ['2110', 'Payables', 'liability', false], ['2140', 'Accrued salaries', 'liability', false], ['2145', 'Goods received not invoiced', 'liability', false], ['2150', 'Subcontractor payables', 'liability', false], ['2160', 'Retentions', 'liability', false], ['2180', 'Customer advances', 'liability', false],
     ['1160', 'Advances', 'asset', false], ['1150', 'Custodies', 'asset', false], ['1170', 'Inventory', 'asset', false],
+    ['1190', 'Supplier advances', 'asset', false], ['2130', 'Short-term loans', 'liability', false],
+    ['3400', 'Owner drawings', 'equity', false],
     ['1180', 'VAT input', 'asset', false], ['2120', 'VAT output', 'liability', false],
   ];
   ids.accounts = {};
@@ -1301,6 +1303,24 @@ async function smokeAtomicWriters(ids) {
   const editableReceipt=(await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','general',NULL,10,$2,'general','[]'::jsonb,FALSE,FALSE,$3) result`,[c,b,u])).rows[0].result;
   assert.equal(Number((await db.query(`SELECT update_voucher_receipt_atomic($1,$2,NULL,NULL,FALSE,12,NULL,'updated',$3) result`,[c,editableReceipt.id,u])).rows[0].result.amount),12);
   assert.equal((await db.query(`SELECT cancel_voucher_receipt_atomic($1,$2,$3) result`,[c,editableReceipt.id,u])).rows[0].result.status,'cancelled');
+  const capitalReceipt=(await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','owner_capital',NULL,25,$2,'capital in','[]'::jsonb,FALSE,FALSE,$3) result`,[c,b,u])).rows[0].result;
+  assert.equal((await db.query(`SELECT a.code FROM journal_lines l JOIN accounts a ON a.id=l.account_id WHERE l.journal_entry_id=$1 AND l.credit>0`,[capitalReceipt.journal_entry_id])).rows[0].code,'3100');
+  const loanReceipt=(await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','loan',NULL,40,$2,'loan in','[]'::jsonb,FALSE,FALSE,$3) result`,[c,b,u])).rows[0].result;
+  assert.equal((await db.query(`SELECT a.code FROM journal_lines l JOIN accounts a ON a.id=l.account_id WHERE l.journal_entry_id=$1 AND l.credit>0`,[loanReceipt.journal_entry_id])).rows[0].code,'2130');
+  const drawings=(await db.query(`SELECT create_voucher_disbursement_atomic($1,'2026-02-02','owner_drawings',NULL,NULL,15,$2,'drawings','[]'::jsonb,FALSE,$3) result`,[c,b,u])).rows[0].result;
+  assert.equal((await db.query(`SELECT a.code FROM journal_lines l JOIN accounts a ON a.id=l.account_id WHERE l.journal_entry_id=$1 AND l.debit>0`,[drawings.journal_entry_id])).rows[0].code,'3400');
+  const voucherAdvance=(await db.query(`SELECT create_voucher_disbursement_atomic($1,'2026-02-02','employee_advance',NULL,$2,30,$3,'staff advance','[]'::jsonb,FALSE,$4) result`,[c,e,b,u])).rows[0].result;
+  assert.equal(Number((await db.query(`SELECT remaining_amount FROM employee_advances WHERE voucher_disbursement_id=$1`,[voucherAdvance.id])).rows[0].remaining_amount),30);
+  const repay=(await db.query(`SELECT create_voucher_receipt_atomic($1,'2026-02-02','employee_repayment',NULL,10,$2,'repay','[]'::jsonb,FALSE,FALSE,$3,NULL,NULL,NULL,NULL,$4) result`,[c,b,u,e])).rows[0].result;
+  assert.equal(Number((await db.query(`SELECT remaining_amount FROM employee_advances WHERE voucher_disbursement_id=$1`,[voucherAdvance.id])).rows[0].remaining_amount),20);
+  await assert.rejects(()=>db.query(`SELECT cancel_voucher_disbursement_atomic($1,$2,$3)`,[c,voucherAdvance.id,u]));
+  await db.query(`SELECT cancel_voucher_receipt_atomic($1,$2,$3)`,[c,repay.id,u]);
+  assert.equal(Number((await db.query(`SELECT remaining_amount FROM employee_advances WHERE voucher_disbursement_id=$1`,[voucherAdvance.id])).rows[0].remaining_amount),30);
+  assert.equal((await db.query(`SELECT cancel_voucher_disbursement_atomic($1,$2,$3) result`,[c,voucherAdvance.id,u])).rows[0].result.status,'cancelled');
+  assert.equal((await db.query(`SELECT status FROM employee_advances WHERE voucher_disbursement_id=$1`,[voucherAdvance.id])).rows[0].status,'cancelled');
+  const transfer=(await db.query(`SELECT transfer_between_safes_atomic($1,$2,$3,80,'2026-02-02','move cash',$4) result`,[c,b,newBank.rows[0].result.id,u])).rows[0].result;
+  assert.ok(transfer.journal_entry_id);
+  await assert.rejects(()=>db.query(`SELECT transfer_between_safes_atomic($1,$2,$2,10,'2026-02-02','same',$3)`,[c,b,u]));
   const gatewayInvoice='71000000-0000-4000-8000-000000000002';
   const paymentRecord='72000000-0000-4000-8000-000000000001';
   await db.query(`INSERT INTO invoices(id,company_id,number,date,due_date,contact_id,subtotal,vat_rate,vat_amount,total,paid_amount,status) VALUES($1,$2,102,'2026-02-01','2026-03-01',$3,100,0,0,100,0,'unpaid')`,[gatewayInvoice,c,contact]);

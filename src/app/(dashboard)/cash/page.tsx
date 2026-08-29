@@ -370,6 +370,13 @@ export default function CashPage() {
               onChange={(v) => setForm({...form, contact_id: v})}
               options={[{ value: '', label: 'بدون' }, ...contacts.map((c) => ({ value: c.id, label: c.name }))]}
             />
+            <Select
+              label="المشروع (اختياري — ربح المشروع وإلا نتيجة الشركة)"
+              value={form.project_id}
+              disabled={!!editingTransaction}
+              onChange={(v) => setForm({...form, project_id: v})}
+              options={[{ value: '', label: 'بدون مشروع — عام للشركة' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+            />
             <Input label="البيان" value={form.reason} onChange={(e) => setForm({...form, reason: e.target.value})} placeholder="سبب المعاملة" className="col-span-2" />
             <label className="col-span-2 flex items-center gap-2 text-xs text-text-secondary cursor-pointer select-none">
               <input type="checkbox" checked={advancedAccounts} onChange={(e) => setAdvancedAccounts(e.target.checked)} />

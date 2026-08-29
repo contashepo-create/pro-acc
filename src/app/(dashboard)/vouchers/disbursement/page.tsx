@@ -144,12 +144,12 @@ export default function DisbursementPage() {
     if (!form.bank_safe_id) { setSaveError('يجب اختيار الخزينة أو البنك'); return; }
     if (!form.amount || form.amount <= 0) { setSaveError('يجب إدخال مبلغ صحيح'); return; }
     if (!form.reason.trim()) { setSaveError('البيان مطلوب'); return; }
-    if (['supplier', 'subcontractor', 'client_refund'].includes(form.disbursement_type) && !form.contact_id) {
+    if (['supplier', 'supplier_advance', 'subcontractor', 'client_refund'].includes(form.disbursement_type) && !form.contact_id) {
       setSaveError('الطرف مطلوب لهذا النوع من سند الصرف');
       return;
     }
-    if (form.disbursement_type === 'employee_advance' && !form.employee_id) {
-      setSaveError('الموظف مطلوب لسلفة الموظف');
+    if (['employee_advance', 'salary', 'custody'].includes(form.disbursement_type) && !form.employee_id) {
+      setSaveError('الموظف مطلوب لهذا النوع من سند الصرف');
       return;
     }
     const invoiceItems = Object.entries(allocations)
@@ -251,9 +251,14 @@ export default function DisbursementPage() {
   const typeBadge = (type: string) => {
     const map: Record<string, { variant: 'danger' | 'warning' | 'info' | 'accent'; label: string }> = {
       supplier: { variant: 'danger', label: 'مورد' },
+      supplier_advance: { variant: 'danger', label: 'سلفة مورد' },
       client_refund: { variant: 'warning', label: 'رد عميل' },
       employee_advance: { variant: 'info', label: 'سلفة موظف' },
+      salary: { variant: 'info', label: 'راتب' },
+      custody: { variant: 'info', label: 'عهدة' },
       subcontractor: { variant: 'accent', label: 'مقاول باطن' },
+      owner_drawings: { variant: 'warning', label: 'مسحوبات' },
+      loan_repayment: { variant: 'warning', label: 'سداد قرض' },
       other: { variant: 'accent', label: 'مصروف عام' },
     };
     const m = map[type] || { variant: 'accent', label: type };
@@ -296,7 +301,7 @@ export default function DisbursementPage() {
     <div className="space-y-6">
       <PageHeader
         title="سندات الصرف"
-        description="سداد مورد أو مقاول أو رد عميل أو سلفة أو مصروف عام — يُرحَّل مدين المقابل ودائن الخزينة"
+        description="سداد مورد أو سلفة أو راتب أو مسحوبات أو سداد قرض — يُرحَّل مدين الحساب الصحيح ودائن الخزينة"
         actions={
           <Button onClick={() => { setEditingDisbursement(null); setForm(emptyForm()); setOpenInvoices([]); setAllocations({}); setAutoFifo(true); setShowModal(true); }} leftIcon={<Plus size={18} />}>
             إضافة سند صرف
@@ -324,7 +329,7 @@ export default function DisbursementPage() {
       >
         <div className="space-y-4">
           <p className="text-xs text-text-muted">
-            دفعة المورد 2110، مقاول الباطن 2150، رد العميل 1130، سلفة الموظف 1160، وغيرها مصروف إداري 5400. المشروع اختياري لتكلفة المشروع وإلا يبقى مصروفاً عمومياً للشركة.
+            مورد 2110، سلفة مورد 1190، مقاول 2150، رد عميل 1130، سلفة موظف 1160، راتب 2140، عهدة 1150، مسحوبات 3400، سداد قرض 2130، ومصروف عام 5400.
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="التاريخ" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
@@ -338,11 +343,16 @@ export default function DisbursementPage() {
                 setPartyBalance('');
               }}
               options={[
-                { value: 'supplier', label: 'دفعة مورد' },
-                { value: 'subcontractor', label: 'دفعة مقاول باطن' },
-                { value: 'client_refund', label: 'رد إلى عميل' },
-                { value: 'employee_advance', label: 'سلفة موظف' },
-                { value: 'other', label: 'مصروف عام للشركة' },
+                { value: 'supplier', label: 'دفعة مورد (2110)' },
+                { value: 'supplier_advance', label: 'دفعة مقدمة لمورد (1190)' },
+                { value: 'subcontractor', label: 'دفعة مقاول باطن (2150)' },
+                { value: 'client_refund', label: 'رد إلى عميل (1130)' },
+                { value: 'employee_advance', label: 'سلفة موظف (1160)' },
+                { value: 'salary', label: 'صرف راتب (2140)' },
+                { value: 'custody', label: 'عهدة موظف (1150)' },
+                { value: 'owner_drawings', label: 'مسحوبات المالك (3400)' },
+                { value: 'loan_repayment', label: 'سداد قرض (2130)' },
+                { value: 'other', label: 'مصروف عام للشركة (5400)' },
               ]}
             />
             <Select
@@ -364,7 +374,7 @@ export default function DisbursementPage() {
                 className="col-span-2"
               />
             )}
-            {form.disbursement_type === 'employee_advance' && (
+            {['employee_advance', 'salary', 'custody'].includes(form.disbursement_type) && (
               <Select
                 label="الموظف"
                 value={form.employee_id}
