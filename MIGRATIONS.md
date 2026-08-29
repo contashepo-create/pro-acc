@@ -97,3 +97,54 @@ storage path and Telegram message id, so the retention policy can delete old
 artifacts from storage AND from the Telegram chat, keeping only the last N
 copies. The table has no `company_id` by design (it journals the whole
 database); tenant routes never touch it.
+
+### 110-purchase-returns-rls.sql
+Enrolls the three purchase-returns tables created by 109 (`purchase_returns`,
+`purchase_return_items`, `purchase_return_sequences`) in RLS tenant isolation
+with the canonical `tenant_isolation_<tbl>` policy — 109 ran after 104's
+catalogue sweep, so they were the only tenant tables left without RLS.
+
+### 111-tenders-contact-fk.sql
+Adds the missing `tenders.contact_id -> contacts(id)` FK. Without it,
+PostgREST could not embed `contacts(name)` on `tenders` (PGRST200 on the
+tenders list/detail routes). Legacy rows pointing at a missing or
+cross-tenant contact are nullified first (the UI falls back to `client_name`).
+
+### 112-subscriber-numbers.sql
+Guarantees every subscriber a unique, permanent `subscriptions.subscriber_number`
+(the number a subscriber sends the developer): backfills NULL/blank rows from
+`subscriber_number_seq` in `created_at` order, a `BEFORE INSERT OR UPDATE`
+trigger (`assign_subscriber_number`, re-assigns if the value is ever cleared)
+covers every current/future creation path, and
+`subscriptions_subscriber_number_key` UNIQUE makes a number identify exactly
+one subscriber. Numbers are shown to the subscriber on
+Settings → Subscription, and the developer panel (zerocold → companies)
+supports server-side lookup by the number via `GET /api/admin/companies?q=…`.
+
+Two production findings (2026-08) harden it further:
+- **Type normalization** — in some environments the column pre-existed as
+  INTEGER before 041, so 041's `ADD COLUMN IF NOT EXISTS … TEXT` was a silent
+  no-op and the backfill died with `42883: function btrim(integer) does not
+  exist`. 112 now coerces any non-text `subscriber_number` to TEXT
+  (`USING …::text`) before anything else runs.
+- **Collision-proof allocation** — every assignment (backfill, duplicate
+  renumber, trigger) goes through `next_subscriber_number()`, which advances
+  the sequence past any value already in the table. A plain `nextval()` can
+  collide with legacy/manual values (sequence at 1000 + existing
+  "1001","1001" → the renumber mints a second "1001" and the UNIQUE fails).
+
+### 113-unified-note-numbering.sql
+Fixes a critical numbering collision found by the programmatic accounting
+audit (2026-08): `credit_notes.number` is `UNIQUE(company_id, number)` and
+serves BOTH note types, but the two sequence functions seeded from independent
+sources — `next_credit_note_number` from all notes, `next_debit_note_number`
+from debit notes only. Result: the first debit note of a year re-seeded from
+0 and hit `23505` against the first credit note's #1 (and any mixed
+credit/debit sequence drifted the debit counter into taken numbers). Any
+company issuing both note types in a year was deterministically affected.
+Both functions now share one counter (`credit_note_sequences`) under the
+existing advisory lock, with a self-healing floor at the actual table max
+(`GREATEST(counter, max(number)) + 1`) so stale/legacy state can never mint a
+used number. Covered by
+`src/__tests__/migration-113-unified-note-numbering.db.test.ts` (both
+orderings + legacy floor, PGlite full schema).

@@ -27,8 +27,11 @@ export interface SchemaContext {
 }
 
 /* ---------- chart of accounts seed (same as test-migrations.mjs) ---------- */
+// NOTE: migration 094 (inventory COGS) made 1170 a hard requirement of the
+// sales-invoice writer — the seed must include it or every company setup
+// inside these tests fails with 'حسابات المخزون (1170) ... غير مكتملة'.
 const COA_SEED = [
-  '1000', '1110', '1130', '1150', '1160', '1180', '1230', '1290',
+  '1000', '1110', '1130', '1150', '1160', '1170', '1180', '1230', '1290',
   '2120', '2140',
   '3000', '3200',
   '4100',

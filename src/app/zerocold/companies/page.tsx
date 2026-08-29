@@ -22,7 +22,7 @@ interface Company {
   created_at: string;
   is_active: boolean;
   subscription?: {
-    subscriber_number: number | null;
+    subscriber_number: string | number | null;
     plan_code: string;
     plan_name: string;
     status: string;
@@ -36,7 +36,7 @@ interface EditForm { name: string; commercial_registration: string; tax_number: 
 interface DetailUser { id: string; name: string; email: string; role: string; }
 interface DetailData {
   company?: { email?: string; phone?: string; address?: string; country?: string; commercial_registration?: string; tax_number?: string };
-  subscription?: { subscriber_number?: number; end_date?: string; subscription_plans?: { name?: string } };
+  subscription?: { subscriber_number?: string | number; end_date?: string; subscription_plans?: { name?: string } };
   stats?: { user_count?: number; project_count?: number };
   users?: DetailUser[];
 }
@@ -44,6 +44,7 @@ interface DetailData {
 export default function ZerocoldCompaniesPage() {
   const router = useRouter();
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -57,15 +58,18 @@ export default function ZerocoldCompaniesPage() {
   const [mpAction, setMpAction] = useState<null | { kind: 'toggle' | 'extend' | 'cancel' | 'edit'; company?: Company }>(null);
   const [detailData, setDetailData] = useState<DetailData | null>(null);
 
-  const fetchCompanies = async () => {
+  const fetchCompanies = async (q?: string) => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/admin/companies');
+      const trimmed = (q || '').trim();
+      const query = trimmed ? `?q=${encodeURIComponent(trimmed)}` : '';
+      const res = await fetch('/api/admin/companies' + query);
       if (res.status === 401) { router.replace('/zerocold/login'); return; }
       const body = await res.json();
       if (!body.success) { setError(body.message || 'حدث خطأ'); return; }
       setCompanies(body.data?.companies || []);
+      setTotal(body.data?.total || 0);
     } catch { setError('حدث خطأ في الاتصال بالخادم'); }
     finally { setLoading(false); }
   };
@@ -81,8 +85,14 @@ export default function ZerocoldCompaniesPage() {
     }
   };
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps -- standard fetch pattern
-  useEffect(() => { fetchCompanies(); fetchPlans(); }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch pattern
+  useEffect(() => { fetchPlans(); }, []);
+
+  // Server-side search (debounced): the subscriber number lives on
+  // subscriptions and the list is paginated, so client-side filtering could
+  // never find a subscriber outside the loaded page — the API does it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- debounced search
+  useEffect(() => { const t = setTimeout(() => { fetchCompanies(search); }, 250); return () => clearTimeout(t); }, [search]);
 
   const openDetail = async (company: Company) => {
     setSelectedCompany(company);
@@ -128,7 +138,7 @@ export default function ZerocoldCompaniesPage() {
     const body = await res.json();
     if (!body.success) throw new Error(body.message || 'فشلت العملية');
     setMpAction(null);
-    fetchCompanies();
+    fetchCompanies(search);
   };
 
   const doEdit = async () => {
@@ -140,17 +150,11 @@ export default function ZerocoldCompaniesPage() {
         body: JSON.stringify({ action: 'edit_company', ...editForm }),
       });
       const body = await res.json();
-      if (body.success) { setShowEditModal(false); setMasterPassword(''); fetchCompanies(); }
+      if (body.success) { setShowEditModal(false); setMasterPassword(''); fetchCompanies(search); }
       else alert(body.message || 'فشل');
     } catch { alert('خطأ في الاتصال'); }
     finally { setActionLoading(null); }
   };
-
-  const filtered = companies.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.tax_number?.toLowerCase().includes(search.toLowerCase()) ||
-    (c.subscription?.subscriber_number?.toString() || '').includes(search)
-  );
 
   if (loading) {
     return <div className="min-h-screen bg-bg-primary flex items-center justify-center"><Loader2 size={32} className="text-text-secondary animate-spin" /></div>;
@@ -164,9 +168,9 @@ export default function ZerocoldCompaniesPage() {
           <div className="flex items-center gap-3">
             <Link href="/zerocold/" className="p-2 rounded-lg hover:bg-bg-card"><ChevronLeft size={18} className="text-text-secondary" /></Link>
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-accent-hover flex items-center justify-center"><Building2 className="w-5 h-5 text-white" /></div>
-            <div><h1 className="text-lg font-bold text-text-primary">إدارة الشركات</h1><p className="text-[0.7rem] text-text-muted">{companies.length} شركة</p></div>
+            <div><h1 className="text-lg font-bold text-text-primary">إدارة الشركات</h1><p className="text-[0.7rem] text-text-muted">{total} شركة</p></div>
           </div>
-          <button onClick={fetchCompanies} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-accent"><RefreshCw size={16} /></button>
+          <button onClick={() => fetchCompanies(search)} className="p-2 rounded-xl bg-bg-card border border-border text-text-secondary hover:text-accent"><RefreshCw size={16} /></button>
         </div>
 
         {/* Search */}
@@ -179,10 +183,10 @@ export default function ZerocoldCompaniesPage() {
         {error && <div className="bg-red-950/40 border border-red-800/40 text-red-400 text-sm rounded-xl px-4 py-2.5 text-center mb-4">{error}</div>}
 
         {/* Table */}
-        {filtered.length === 0 && !error ? (
+        {companies.length === 0 && !error ? (
           <div className="bg-bg-card border border-border rounded-xl p-8 text-center">
             <Building2 size={32} className="text-text-muted mx-auto mb-2 opacity-50" />
-            <p className="text-text-muted text-sm">لا توجد شركات</p>
+            <p className="text-text-muted text-sm">{search ? 'لا توجد نتائج مطابقة للبحث' : 'لا توجد شركات'}</p>
           </div>
         ) : (
           <div className="bg-bg-card border border-border rounded-xl overflow-x-auto">
@@ -200,7 +204,7 @@ export default function ZerocoldCompaniesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(c => (
+                  {companies.map(c => (
                     <tr key={c.id} className="border-b border-border last:border-0 hover:bg-bg-secondary">
                       <td className="p-3">
                         <div className="flex items-center gap-2">

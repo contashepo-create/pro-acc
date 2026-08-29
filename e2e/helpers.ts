@@ -61,6 +61,13 @@ export async function registerOrLogin(page: Page) {
 
   await page.getByRole('button', { name: /إنشاء حساب|تسجيل/i }).click();
 
+  // Registration is two-step: the first click opens a final-confirmation
+  // panel (the operating country is irreversible). Confirm from it.
+  const confirmBtn = page.getByRole('button', { name: /أفهم/i });
+  if (await confirmBtn.isVisible({ timeout: 2500 }).catch(() => false)) {
+    await confirmBtn.click();
+  }
+
   // Either redirects to dashboard (new) or shows error (existing user)
   const result = await Promise.race([
     page.waitForURL('**/dashboard**', { timeout: 10_000 }).then(() => 'dashboard' as const),

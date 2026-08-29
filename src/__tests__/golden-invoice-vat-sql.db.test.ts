@@ -117,16 +117,18 @@ describe('Golden invoice VAT — SQL level', () => {
   });
 
   test('Case 5: line with discount, 15 % VAT', async () => {
-    // qty=3, price=100, discount=50 → gross=300, net=250
-    // VAT = 250 × 0.15 = 37.50 → total = 287.50
+    // qty=3, price=100, discount=50(%). Migration 093 (invoice-line-discount-
+    // percent) changed discount from an absolute amount to a percentage —
+    // engine (093→097) and the invoices UI both compute gross×discount/100.
+    // gross=300 → net = 300 − 150 = 150 → VAT = 150 × 0.15 = 22.50 → total 172.50
     const inv = await createInvoice(
       0.15,
       true,
       makeItems([{ description: 'سلعة مخفضة', quantity: 3, unitPrice: 100, discount: 50 }]),
     );
-    expect(Number(inv.subtotal)).toBe(250);
-    expect(Number(inv.vat_amount)).toBe(37.5);
-    expect(Number(inv.total)).toBe(287.5);
+    expect(Number(inv.subtotal)).toBe(150);
+    expect(Number(inv.vat_amount)).toBe(22.5);
+    expect(Number(inv.total)).toBe(172.5);
   });
 
   test('Journal entry is balanced (debit = credit) for every golden invoice', async () => {
