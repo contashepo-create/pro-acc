@@ -138,6 +138,19 @@ export function parseNumber(value: string | number | null | undefined): number {
   return isNaN(parsed) ? 0 : parsed;
 }
 
+/**
+ * تقريب مبلغ مالي إلى منزلتين عشريتين بنصف خانة نحو الأعلى (مطابق لـ ROUND في
+ * PostgreSQL على NUMERIC). الضروري قبل إرسال أي مبلغ من الواجهة: التحقق في
+ * lib/validation يرفض الأرقام التي لا تمثل منزلتين عشريتين تماماً (مثل
+ * 33.33 × 0.15 = 4.9995)، وقاعدة البيانات تُقرّب كل خطوة بنفسها.
+ */
+export function roundMoney(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  // +1e-9 يعالج انحراف الفاصلة العائمة (2.675*100 = 267.4999999…) بنفس اتجاه
+  // تقريب PostgreSQL (نصف الخانة نحو الأعلى) دون قلب قيم حقيقية أدنى من النصف.
+  return Math.sign(value) * Math.round(Math.abs(value * 100) + 1e-9) / 100;
+}
+
 export function paginate<T>(items: T[], page: number, pageSize: number): { items: T[]; total: number; page: number; pageSize: number; totalPages: number } {
   const total = items.length;
   const totalPages = Math.ceil(total / pageSize) || 1;

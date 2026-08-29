@@ -2,6 +2,7 @@
 
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { roundMoney } from '@/lib/utils';
 
 export interface BankSafeOption {
   id: string;
@@ -55,13 +56,17 @@ export function CashSettlementFields({
 }: CashSettlementFieldsProps) {
   const copy = COPY[mode];
   const numeric = Number(amount) || 0;
-  const remaining = Math.max(0, Math.round((total - numeric) * 100) / 100);
+  const roundedTotal = roundMoney(total);
+  const remaining = Math.max(0, roundMoney(total - numeric));
   const method = numeric <= 0 ? 'none' : (Math.abs(numeric - total) < 0.005 ? 'full' : 'partial');
 
   const setMethod = (value: string) => {
     if (value === 'none') onAmountChange('0');
-    else if (value === 'full') onAmountChange(total > 0 ? String(Number(total.toFixed(2))) : '0');
-    else onAmountChange(numeric > 0 && numeric < total ? String(numeric) : '');
+    // الكامل دائماً الإجمالي المقرّب بمنزلتين عشريتين (المبلغ غير المقرّب
+    // يُرفض في التحقق، والأكبر من الإجمالي يرفضه السيرفر).
+    else if (value === 'full') onAmountChange(roundedTotal > 0 ? String(roundedTotal) : '0');
+    // الجزئي لا يتجاوز الإجمالية مهما كُتب في الحقل.
+    else onAmountChange(numeric > 0 && numeric < total ? String(roundMoney(Math.min(numeric, roundedTotal))) : '');
   };
 
   return (
