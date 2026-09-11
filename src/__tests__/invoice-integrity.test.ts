@@ -124,7 +124,16 @@ const SAFE = '00000000-0000-4000-8000-0000000000b1';
 function baseDb() {
   return {
     users: [{ id: 'u1', company_id: C1, is_active: true, token_version: 0, role: 'admin' }],
-    companies: [{ id: C1, is_active: true, token_version: 0, name: 'شركة الاختبار', tax_number: '312345678901234' }],
+    companies: [{
+      id: C1,
+      is_active: true,
+      token_version: 0,
+      name: 'شركة الاختبار',
+      tax_number: '312345678901234',
+      // This suite exercises tax-artifact generation; production keeps this
+      // optional feature disabled unless it is explicitly enabled per tenant.
+      optional_features: { tax_barcode: true },
+    }],
     contacts: [{ id: CLIENT, company_id: C1, name: 'عميل' }],
     projects: [] as Row[],
     accounts: [
