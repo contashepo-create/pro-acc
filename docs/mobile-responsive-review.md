@@ -1,7 +1,7 @@
 # مراجعة الاستجابة للموبايل (Responsive / Mobile) — تقرير شامل
 
 **التاريخ:** 2026-08-12
-**النطاق:** جميع صفحات المشروع (لوحة التحكم + صفحة المطور Zerocold) على الشاشات الصغيرة والمتوسطة (360px → 1024px) والمتصفحات غير اللابتوب.
+**النطاق:** جميع صفحات المشروع (لوحة التحكم + صفحة المطور لوحة الإدارة) على الشاشات الصغيرة والمتوسطة (360px → 1024px) والمتصفحات غير اللابتوب.
 **المنهجية:** مراجعة كودية منهجية لكل الصفحات والمكوّنات المشتركة، مع تحديد الأنماط المكسورة واستبدالها بأنماط استجابية صحيحة. (لم يتسنَّ تشغيل التطبيق كاملاً في بيئة الفحص لغياب بيانات الاتصال بـ Supabase والخطوط، لذا نوصي بمعاينة بصرية نهائية — راجع القسم الأخير.)
 
 ---
@@ -32,9 +32,9 @@
 تحويل `grid grid-cols-2 gap-4` و `grid-cols-2 gap-3` و `grid-cols-3 gap-4`
 إلى `grid grid-cols-1 sm:grid-cols-2/3 gap-4`.
 > النتيجة: على الجوال (‏<640px) تتكدّس الأعمدة عمودياً، وعلى الشاشات الأكبر يعود نفس التصميم السابق تماماً.
-> **الأثر في:** clients، invoices، vouchers، purchases، project*، employees، custodies، fixed-assets، boq، reports، inventory*، subscription، settings، permissions، pos، zerocold/app-settings، zerocold/reports وغيرها.
+> **الأثر في:** clients، invoices، vouchers، purchases، project*، employees، custodies، fixed-assets، boq، reports، inventory*، subscription، settings، permissions، pos، لوحة الإدارة/app-settings، لوحة الإدارة/reports وغيرها.
 
-### 2.3 جداول المحرِّرات (تمرير أفقي بدل القص) — `journal`، `credit-notes`، `purchases/*`، `quotations`، `zerocold/*`
+### 2.3 جداول المحرِّرات (تمرير أفقي بدل القص) — `journal`، `credit-notes`، `purchases/*`، `quotations`، `لوحة الإدارة/*`
 تحويل حاويات الجداول من `overflow-hidden` إلى `overflow-x-auto`
 حتى لا يُقصّ جدول يحتوي أعمدة ذات `min-w-[280px]` / `w-28` على شاشة الجوال، بل يُمرَّر أفقياً.
 
@@ -83,6 +83,6 @@
 - `src/app/(dashboard)/clients/[id]/statement/page.tsx`
 - `src/app/(dashboard)/reports/page.tsx`
 - + ~25 صفحة أخرى (banks، boq، cash، contacts، custodies، daily-workers، employee-advances، employees، fixed-assets، inventory*، permissions، pos، progress-billing، project-expenses، projects، settings، subcontractors، subscription، suppliers، vouchers/*)
-- + صفحات المطوّر Zerocold: `app-settings`، `codes`، `companies`، `logs`، `reports`، `upgrade-requests`
+- + صفحات المطوّر لوحة الإدارة: `app-settings`، `codes`، `companies`، `logs`، `reports`، `upgrade-requests`
 
 **التحقق:** `npx tsc --noEmit` يمرّ بدون أخطاء بعد كل التعديلات.

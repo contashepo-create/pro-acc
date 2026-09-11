@@ -281,7 +281,7 @@ actualProfit = journal.revenue > 0 ? journal.profit : (netInvoiced - totalExpens
 | assistant | 1 | | accounts | 1 |
 
 ## 5.3 جرد نقاط نهاية API (كل كود API بعدد الـ routes)
-- **admin (zerocold):** 36 | **reports:** 16 | **auth:** 13 | **vouchers:** 8 | **fiscal:** 7
+- **admin (لوحة الإدارة):** 36 | **reports:** 16 | **auth:** 13 | **vouchers:** 8 | **fiscal:** 7
 - **company:** 6 | **subcontractors:** 5 | **projects:** 5 | **custodies:** 5 | **settings:** 4
 - **purchases:** 4 | **inventory:** 4 | **backup:** 4 | **subscription:** 3 | **portal:** 3
 - **permissions:** 3 | **notifications:** 3 | **invoices:** 3 | **fixed-assets:** 3 | **equipment:** 3

@@ -55,7 +55,15 @@ export async function getCompanyPlanLimits(companyId: string): Promise<PlanLimit
   const plan = (subr.subscription_plans ?? null) as Row | null;
 
   const baseUsers = Number(plan?.max_users ?? 1);
-  const extraUsers = Number(subr.extra_users ?? 0);
+  const extraUsersFromSubscription = Number(subr.extra_users ?? 0);
+  // Developer grants are fail-closed and never increase a plan unless the
+  // additional-users feature was explicitly enabled for this company.
+  const { data: companyEntitlements } = await s.from('companies').select('optional_features, additional_users_limit').eq('id', companyId).maybeSingle();
+  const optional = (companyEntitlements?.optional_features || {}) as Record<string, unknown>;
+  const manualExtraUsers = optional.additional_users === true
+    ? Math.min(10, Math.max(0, Number(companyEntitlements?.additional_users_limit || 0)))
+    : 0;
+  const extraUsers = Math.max(extraUsersFromSubscription, manualExtraUsers);
   const extraBranches = Number(subr.extra_branches ?? 0);
   const extraStorageGb = Number(subr.extra_storage_gb ?? 0);
   // Backward-compat: if the column is missing but addons_json tracks storage purchases,

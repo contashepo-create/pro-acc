@@ -51,9 +51,11 @@ export async function GET(
     if (!invoice || (invoice as Record<string, unknown>).status === 'cancelled') return notFound();
 
     const { data: operating, error: operatingError } = await s.from('companies')
-      .select('country_code')
+      .select('country_code, optional_features')
       .eq('id', auth.companyId)
       .maybeSingle();
+    const optionalFeatures = ((operating as Record<string, unknown> | null)?.optional_features || {}) as Record<string, unknown>;
+    if (optionalFeatures.tax_barcode !== true) return error('الباركود الضريبي غير مفعل لهذه الشركة', 403);
     if (operatingError) throw operatingError;
     if (String((operating as { country_code?: string } | null)?.country_code || 'SA') === 'EG') {
       return success({

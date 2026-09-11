@@ -6,7 +6,7 @@ import Link from 'next/link';
 import {
   ShieldAlert, LayoutDashboard, Building2, Users, Database, Activity, LogOut, Loader2,
   MessageSquare, MessageSquareWarning, Megaphone, Settings, CreditCard, Key,
-  Package, Headphones, Menu, ChevronLeft, ChevronRight,
+  Package, Headphones, Menu, ChevronLeft, ChevronRight, Sparkles,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { href: '/zerocold/plans', label: 'الباقات', icon: CreditCard },
   { href: '/zerocold/subscriptions', label: 'الاشتراكات', icon: Package },
   { href: '/zerocold/addon-requests', label: 'طلبات الإضافات', icon: Package },
+  { href: '/zerocold/optional-features', label: 'مميزات إضافية', icon: Sparkles },
   { href: '/zerocold/codes', label: 'أكواد التفعيل', icon: Key },
   { href: '/zerocold/support', label: 'تذاكر الدعم', icon: Headphones },
   { href: '/zerocold/app-settings', label: 'إعدادات التطبيق', icon: Settings },

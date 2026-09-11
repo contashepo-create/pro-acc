@@ -54,7 +54,7 @@
 | تشفير كلمات المرور | ✅ scrypt + ملح عشوائي 32 بايت + مقارنة `timingSafeEqual` |
 | JWT | ✅ HS256 مثبّت صراحةً (رفض أي `alg` آخر)، تحقق timing-safe، صلاحية 7 أيام |
 | إبطال الجلسات | ✅ `token_version` يُرفع عند الخروج وتغيير كلمة المرور (الرمز المسروق يموت) |
-| سر الإدارة | ✅ `ADMIN_TOKEN_SECRET` منفصل عن `TOKEN_SECRET` — رموز المستخدمين لا تفتح `/api/admin/*` |
+| سر الإدارة | ✅ `سر جلسة الإدارة` منفصل عن `TOKEN_SECRET` — رموز المستخدمين لا تفتح `/api/admin/*` |
 | تسجيل الدخول | ✅ تحديد معدل مبني على قاعدة البيانات (بريد+IP)، رسالة موحّدة ضد التعداد، فحص `is_active` للشركة والمستخدم، منع حسابات مكررة بنفس البريد (fail-closed) |
 | التسجيل | ✅ Turnstile إجباري في الإنتاج، captcha رياضي موقّع HMAC كبديل تطوير، رفض نطاقات البريد المؤقتة |
 | تأكيد البريد | ✅ مطلوب قبل إصدار جلسة في الإنتاج، رمز 64 خانة سداسية مخزّن **مُجزّأً** (hash) ومستهلك ذرّياً (مرة واحدة فقط — مُثبت حياً) |
@@ -63,11 +63,11 @@
 | بوابات العملاء (Portal) | ✅ Magic-link موقّع بسر منفصل + إعادة فحص جهة الاتصال والشركة في كل طلب |
 | ملفات تعريف الارتباط | ✅ HttpOnly + SameSite=Lax + Secure في الإنتاج |
 
-### 3.2 لوحة الإدارة (`/api/admin/*`, `/zerocold/*`)
+### 3.2 لوحة الإدارة (`/api/admin/*`, `/لوحة الإدارة/*`)
 
 | الفحص | النتيجة |
 |---|---|
-| الحارس المركزي | ✅ `admin-guard` يرفض أي JWT غير موقّع بـ `ADMIN_TOKEN_SECRET` ويفحص `admin_users.is_active` + `token_version` من قاعدة البيانات |
+| الحارس المركزي | ✅ `admin-guard` يرفض أي JWT غير موقّع بـ `سر جلسة الإدارة` ويفحص `admin_users.is_active` + `token_version` من قاعدة البيانات |
 | دخول الإدارة | ✅ تحديد معدل + كلمة مرور scrypt + 2FA تيليجرام (رمز يُرسل للمشرف) |
 | حماية الصفحات | ✅ proxy يعيد توجيه غير المسجلين قبل تسليم أي HTML |
 | استعادة قاعدة البيانات عبر الويب | ✅ **معطّلة نهائياً** (كانت RCE-class سابقاً) — ترجع 403 وتسجّل المحاولة |
@@ -150,7 +150,7 @@ if (mime === 'image/jpeg' || mime === 'image/jpg')
 | CSRF مركزي | ✅ proxy يتحقق من Origin/Referer لكل طلبات `/api` مغيّرة للحالة (رفض `null` origin، مطابقة المضيف) |
 | طبقات CSRF | ✅ SameSite=Lax + فحص Origin + مساعد double-submit متاح |
 | استثناءات CSRF | ✅ فقط `/api/telegram/webhook` و`/callback` (لا تحمل كعكات) |
-| حماية الصفحات | ✅ صفحات dashboard وzerocold تتحقق من JWT خادمياً قبل تسليم HTML + صفحات admin-only (settings/users/permissions/subscription/fiscal) ممنوعة لغير المدير خادمياً |
+| حماية الصفحات | ✅ صفحات dashboard ولوحة الإدارة تتحقق من JWT خادمياً قبل تسليم HTML + صفحات admin-only (settings/users/permissions/subscription/fiscal) ممنوعة لغير المدير خادمياً |
 | رؤوس أمنية | ✅ HSTS preload، X-Frame-Options DENY (إنتاج)، nosniff، CORP، COOP، Permissions-Policy، CSP |
 | تحديد المعدل | ✅ دخول/نسيان كلمة المرور عبر قاعدة بيانات؛ كتابة/قراءة عبر memory limiter تلقائياً في `requireApiAuth` |
 | ملاحظة | 🔵 رؤوس `Origin`/`Referer` الغائبة تمر (ضرورة لعملاء curl/سيرفر-لسيرفر) — حماية CSRF الفعلية من SameSite والكعكة httpOnly |

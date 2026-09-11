@@ -12,6 +12,7 @@ import '@fontsource/plus-jakarta-sans/700.css';
 import Providers from '@/components/Providers';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
 import { VisitorTracker } from '@/components/VisitorTracker';
+import { CookieConsent } from '@/components/CookieConsent';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -58,6 +59,7 @@ export default function RootLayout({
         />
         <ThemeInitializer />
         <VisitorTracker />
+        <CookieConsent />
         <Providers>{children}</Providers>
       </body>
     </html>

@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
@@ -8,9 +9,9 @@ const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@accweb.com';
 const FROM_NAME = process.env.FROM_NAME || 'AccWeb';
 const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
 
-let transporter: nodemailer.Transporter | null = null;
+let transporter: Transporter | null = null;
 
-function getTransporter(): nodemailer.Transporter | null {
+function getTransporter(): Transporter | null {
   if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
     return null;
   }

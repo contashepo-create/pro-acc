@@ -54,7 +54,7 @@
 |------|----------|----------|
 | Supabase dashboard / PITR | Platform owner | Managed credentials |
 | `scripts/restore-global-backup.ts` | Platform developer | Verified signed dump from the developer backup journal |
-| `/api/admin/database/backup` / `restore` (zerocold) | Platform admin | Master password; the web restore endpoint is **permanently closed** (returns 403 and audit-logs the attempt) |
+| `/api/admin/database/backup` / `restore` (لوحة الإدارة) | Platform admin | Master password; the web restore endpoint is **permanently closed** (returns 403 and audit-logs the attempt) |
 
 No company-facing role reaches any of these.
 
