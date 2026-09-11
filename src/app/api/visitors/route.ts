@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { randomBytes } from 'crypto';
 import { success, error, requireAdmin, handleApiError } from '@/lib/api-helpers';
 import { getSupabase } from '@/lib/supabase-client';
 
@@ -24,6 +25,12 @@ export async function POST(request: NextRequest) {
       return error('تم تجاوز حد تسجيل الزيارات', 429);
     }
     const ua = (request.headers.get('user-agent') || '').slice(0, 512);
+    const existingVisitorId = request.cookies.get('visitor_id')?.value;
+    const visitorId = existingVisitorId && /^[a-f0-9]{32}$/.test(existingVisitorId)
+      ? existingVisitorId : randomBytes(16).toString('hex');
+    // Use hosting-provided coarse location only; never call a third-party IP
+    // geolocation service or expose the visitor IP to the browser.
+    const country = (request.headers.get('x-vercel-ip-country') || request.headers.get('cf-ipcountry') || '').slice(0, 2).toUpperCase() || null;
     const raw = await request.json().catch(() => ({ path: '/' })) as { path?: unknown };
     const path = typeof raw.path === 'string' && raw.path.startsWith('/')
       ? raw.path.slice(0, 512)
@@ -32,6 +39,8 @@ export async function POST(request: NextRequest) {
 
     await s.from('visitor_logs').insert({
       ip_address: ip,
+      visitor_id: visitorId,
+      country,
       user_agent: ua,
       path: path || '/',
     });
@@ -40,9 +49,10 @@ export async function POST(request: NextRequest) {
     const today = new Date().toISOString().split('T')[0];
 
     // Count unique visitors today
-    const { count: uniqueCount } = await s.from('visitor_logs')
-      .select('ip_address', { count: 'exact', head: true })
+    const { data: uniqueRows } = await s.from('visitor_logs')
+      .select('visitor_id')
       .gte('created_at', today);
+    const uniqueCount = new Set((uniqueRows || []).map((row) => row.visitor_id).filter(Boolean)).size;
 
     const { data: existing } = await s.from('visitor_stats')
       .select('visits')
@@ -65,7 +75,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return success({ ok: true });
+    const response = success({ ok: true });
+    response.cookies.set('visitor_id', visitorId, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 60 * 60 * 24 * 365 });
+    return response;
   } catch {
     return success({ ok: true });
   }

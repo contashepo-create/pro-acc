@@ -178,8 +178,10 @@ export async function POST(request: NextRequest) {
     let zatcaQRData: string | null = null;
     try {
       const { data: companyForQr } = await s.from('companies')
-        .select('country_code').eq('id', auth.companyId).maybeSingle();
+        .select('country_code, optional_features').eq('id', auth.companyId).maybeSingle();
       const operatingCountry = String((companyForQr as Row | null)?.country_code || 'SA');
+      const optionalFeatures = (((companyForQr as Row | null)?.optional_features || {}) as Record<string, unknown>);
+      if (optionalFeatures.tax_barcode !== true) throw new Error('tax barcode feature is disabled');
       const taxSnapshot = invoice.tax_snapshot as Row | undefined;
       const seller = taxSnapshot?.seller as Row | undefined;
       const sellerName = typeof seller?.name === 'string' ? seller.name.trim() : '';

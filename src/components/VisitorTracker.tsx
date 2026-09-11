@@ -10,6 +10,8 @@ export function VisitorTracker() {
     const ignored = ['/api/', '/_next/', '/zerocold'];
     if (ignored.some((p) => pathname.startsWith(p))) return;
 
+    if (typeof window !== 'undefined' && localStorage.getItem('cookie_consent') !== 'accepted') return;
+
     const timer = setTimeout(() => {
       fetch('/api/visitors', {
         method: 'POST',
